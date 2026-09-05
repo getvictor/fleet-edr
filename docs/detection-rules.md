@@ -211,7 +211,7 @@ Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plis
 ## dyld_insert
 
 **DYLD injection on exec**  
-Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).
+Flags an env(1) invocation that sets DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH for the command it runs.
 
 | | |
 | --- | --- |
@@ -224,7 +224,7 @@ Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shel
 
 ### Description
 
-Detects the classic macOS code-injection primitive: launching a process with `DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into the new process before main(). The rule fires on the leading argv slot only (the `VAR=value /path/to/bin` shell form, or the `env VAR=value /path/to/bin` invocation), so substring noise (curl POST data, echo, etc.) does not false-positive.
+Detects the classic macOS code-injection primitive: launching a process with `DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into the new process before main(). The rule fires on an `env VAR=value /path/to/bin` invocation only, matching the assignments env itself applies rather than any argument containing the text, so substring noise (curl POST data, echo, etc.) does not false-positive.
 
 The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw event payload for responders.
 
@@ -235,7 +235,7 @@ The matching dylib path is redacted in alert text (a sensitive payload location)
 
 ### Limitations
 
-- Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.
+- Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not, and never was despite earlier wording here: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records (issue #791). Capturing the environment is tracked as issue #862.
 - DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.
 
 ## shell_from_office

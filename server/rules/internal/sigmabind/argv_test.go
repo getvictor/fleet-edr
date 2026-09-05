@@ -95,6 +95,7 @@ func TestCommandArguments(t *testing.T) {
 
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-leading-assignment-is-distinguished-from-a-later-argument
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-shell-form-assignment-is-not-reported
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-s-operand-is-not-an-assignment
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-after-the-end-of-options-marker-belongs-to-the-command
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-name-a-shell-would-reject-does-not-end-the-run
@@ -106,9 +107,12 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
 //
-// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
-// different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
-// only one of them is an injection. That is the reason this field exists.
+// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. Two env invocations carrying the
+// same assignment text in different positions join to different CommandLine strings, so a `CommandLine|contains` match cannot tell
+// them apart, and only one of them is an injection. That is the reason this field exists.
+//
+// The shell form appears here only as a NEGATIVE. It is not a shape the field declines to report; it is a shape no agent can send,
+// which issue #791 measured and which the rows below pin so the distinction cannot quietly reverse.
 func TestEnvAssignments(t *testing.T) {
 	t.Parallel()
 
@@ -118,9 +122,13 @@ func TestEnvAssignments(t *testing.T) {
 		argv []string
 		want []string
 	}{
-		{"shell form: the assignment is argv[0]", "/usr/bin/true",
-			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
-		{"the same text as a later argument is NOT an assignment", "/usr/bin/true",
+		{"the shell form reports nothing, because it never reaches us", "/usr/bin/true",
+			// Issue #791. ESF serialises the argument vector and never the environment a shell applies, so
+			// `DYLD_INSERT_LIBRARIES=x /usr/bin/true` arrives as `argv == ["/usr/bin/true"]`. This shape is what a synthetic
+			// event looks like, not what an agent sends: measured at zero across 670,185 real exec events, and structurally
+			// zero rather than rare. The field used to report it, which made the rule advertise a case it could not detect.
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, nil},
+		{"and neither does the same text as a later argument", "/usr/bin/true",
 			[]string{"/usr/bin/true", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}, nil},
 		{"env form: leading assignments", "/usr/bin/env",
 			[]string{"env", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
@@ -130,7 +138,7 @@ func TestEnvAssignments(t *testing.T) {
 			[]string{"env", "A=1", "prog", "C=3"}, []string{"A=1"}},
 		{"a shim path ending in /env counts as env", "/opt/homebrew/bin/env",
 			[]string{"env", "A=1", "prog"}, []string{"A=1"}},
-		{"a non-env binary gets only argv[0]", "/bin/sh",
+		{"a non-env binary reports nothing", "/bin/sh",
 			[]string{"sh", "A=1", "B=2"}, nil},
 		{"no assignments", "/usr/bin/true", []string{"/usr/bin/true"}, nil},
 		{"empty argv", "/usr/bin/env", nil, nil},
@@ -300,7 +308,11 @@ func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/true", tc.argv...), "EnvAssignments"))
+			// Driven through env, because #791 removed the shell form: an ordinary binary now reports nothing whatever its
+			// argv holds, so this table would pass vacuously against /usr/bin/true and stop testing isAssignment at all.
+			argv := append([]string{"env"}, tc.argv...)
+			argv = append(argv, "prog")
+			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/env", argv...), "EnvAssignments"))
 		})
 	}
 }

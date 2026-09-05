@@ -79,23 +79,29 @@ func commandArguments(argv []string) []string {
 //     is a real injection whose assignment used to be invisible, because `-i` contains no "=" and ended the scan before it. The
 //     same held for `-u NAME`, `-P path`, `-S string` and anything after `--`.
 //
-//   - For anything else it is argv[0] alone, which is the shell's `VAR=value cmd` form as the dyld_insert rule describes it.
-//     Worth knowing: that branch appears to be unreachable in practice. ESF serialises only es_exec_arg, so the environment a shell
-//     applies is never in argv, and argv[0] is an assignment in 0 of 670,185 real exec events on a dev host. The branch is
-//     reproduced here because this field's contract is to match the Go matcher exactly; issue #791 covers the rule.
+//   - For anything else it is EMPTY. A shell's `VAR=value cmd` form is not in the argument vector at all: ESF serialises only
+//     es_exec_arg, so the environment a shell applies never appears there, and argv[0] was an assignment in 0 of 670,185 real
+//     exec events on a dev host. This used to report argv[0], which made the dyld_insert rule advertise a shape no agent can
+//     send (issue #791).
 //
-// This is what makes the field worth computing. `DYLD_INSERT_LIBRARIES=x /bin/true` and `/bin/true DYLD_INSERT_LIBRARIES=x` join to
-// DIFFERENT CommandLine strings, since argv is joined in order, but they carry the same assignment text and only the first is an
-// injection. A rule written as `CommandLine|contains: 'DYLD_INSERT_LIBRARIES='` matches both, because a substring match is exactly
-// the operation that discards position.
+// This is what makes the field worth computing. `env DYLD_INSERT_LIBRARIES=x /bin/true` and `env /bin/true DYLD_INSERT_LIBRARIES=x`
+// join to DIFFERENT CommandLine strings, since argv is joined in order, but they carry the same assignment text and only the first
+// is an injection. A rule written as `CommandLine|contains: 'DYLD_INSERT_LIBRARIES='` matches both, because a substring match is
+// exactly the operation that discards position.
 //
 // The window is decided by the resolved executable path rather than by argv[0], since argv[0] is whatever the caller chose to pass.
 func envAssignments(path string, argv []string) []string {
 	if path != "/usr/bin/env" && !strings.HasSuffix(path, "/env") {
-		// Not env: the window is argv[0] alone, the shell's `VAR=value cmd` form.
-		if len(argv) > 0 && isAssignment(argv[0]) {
-			return []string{argv[0]}
-		}
+		// Not env: nothing to report, because a shell's `VAR=value cmd` form never reaches us.
+		//
+		// This used to scan argv[0] for the shell form, and issue #791 measured that branch as unreachable: across 670,185 real
+		// exec events from a dev host, argv[0] was an assignment ZERO times. The reason is structural rather than a sampling
+		// artefact, which is what makes removing it safe. ESF serialises `es_exec_arg` only, so the environment a shell applies
+		// to a child is never in the argument vector: `DYLD_INSERT_LIBRARIES=x /bin/true` reaches the server as
+		// `argv == ["/bin/true"]`, with the assignment nowhere in the event.
+		//
+		// It stays unreachable even after the exec environment is captured (issue #862), because that adds a separate field
+		// rather than putting assignments into argv. So this is not a branch waiting for data; it is a branch no agent can feed.
 		return nil
 	}
 

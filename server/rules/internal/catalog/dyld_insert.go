@@ -15,11 +15,17 @@ import (
 // DYLD_LIBRARY_PATH in its environment. Those env vars tell dyld to load arbitrary
 // dylibs, a classic macOS code-injection technique.
 //
-// Known limitation: the ESF extension does not (yet) capture the full env map, so this
-// rule only catches the "explicit prefix" cases: either the env vars appear in argv
-// (shell style `VAR=x /bin/true`) or the caller invoked `env VAR=x target`. Inherited
-// env vars are invisible until the extension learns to serialise them; that extension
-// change is tracked alongside the data-lifecycle work in the best-practices checklist.
+// Known limitation: the ESF extension does not capture the environment, so this rule catches ONE shape, an explicit
+// `env VAR=x target` invocation, and nothing else.
+//
+// It used to claim a second, the shell form `VAR=x /bin/true`, and issue #791 measured that claim as false. ESF serialises
+// `es_exec_arg` only, so a shell's assignments never appear in the argument vector: that command reaches the server as
+// `argv == ["/bin/true"]`, with the assignment nowhere in the event. Across 670,185 real exec events from a dev host, argv[0]
+// was an assignment ZERO times, and the reason is structural rather than a small sample. The rule was therefore advertising
+// coverage it could not have, which is worse than a documented gap because nobody goes looking for it.
+//
+// Inherited environment variables remain invisible for the same reason, and capturing the DYLD_* subset is tracked as #862.
+// That would add a field rather than put assignments into argv, so the shell form stays out of reach here even then.
 //
 // MITRE ATT&CK: T1574.006 (Hijack Execution Flow: Dynamic Linker Hijacking)
 type DyldInsert struct{}
@@ -42,12 +48,12 @@ func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 func (r *DyldInsert) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).",
+		Summary: "Flags an env(1) invocation that sets DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH for the command it runs.",
 		Description: "Detects the classic macOS code-injection primitive: launching a process with " +
 			"`DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into " +
-			"the new process before main(). The rule fires on the leading argv slot only (the `VAR=value /path/to/bin` " +
-			"shell form, or the `env VAR=value /path/to/bin` invocation), so substring noise (curl POST data, echo, etc.) does " +
-			"not false-positive.\n\n" +
+			"the new process before main(). The rule fires on an `env VAR=value /path/to/bin` invocation only, matching the " +
+			"assignments env itself applies rather than any argument containing the text, so substring noise (curl POST data, " +
+			"echo, etc.) does not false-positive.\n\n" +
 			"The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw " +
 			"event payload for responders.",
 		Severity:   api.SeverityHigh,
@@ -57,7 +63,7 @@ func (r *DyldInsert) Doc() api.Documentation {
 			"Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch: investigate why an admin script is setting these vars at all.",
 		},
 		Limitations: []string{
-			"Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.",
+			"Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not, and never was despite earlier wording here: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records (issue #791). Capturing the environment is tracked as issue #862.",
 			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.",
 		},
 	}

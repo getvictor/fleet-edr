@@ -1,4 +1,4 @@
-# Server detection rules engine: env's option prefix delta
+# Server detection rules engine: narrow the dylib-injection rule delta
 
 ## MODIFIED Requirements
 

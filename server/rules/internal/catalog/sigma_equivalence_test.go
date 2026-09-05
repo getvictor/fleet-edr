@@ -343,7 +343,7 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 	})
 }
 
-// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries, with one documented exception.
+// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries, with THREE documented exceptions.
 //
 // The exception runs the OPPOSITE way to the launch-agent one, which is why it is stated separately rather than folded into the
 // same helper. That conversion only ever removes findings; this one deliberately ADDS them. #792 fixed a bug in the Go matcher,
@@ -351,8 +351,10 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 // was written to catch. The frozen oracle in this file still reproduces that bug on purpose, since its job is to say what the Go
 // matcher did rather than what it should have done.
 //
-// So the divergence is asserted rather than excused, and in both directions at once: where the two differ, the input MUST be an
-// env invocation whose assignments sit behind an option prefix, and the detection MUST be the side that fires. Anything else is a
+// So each divergence is asserted rather than excused, by shape and by direction. The detection fires where the matcher did not
+// for an env invocation whose assignments sit behind an option prefix; the matcher fires where the detection does not for an
+// invocation env would refuse, and for a non-env invocation whose argv[0] is an assignment, which is the shape issue #791
+// removed. Anything else is a real regression. Anything else is a
 // real regression. In particular this pins that no divergence appears for a non-env path, for an env invocation with no option
 // prefix, or in the narrowing direction.
 func TestEquivalence_DyldInsert(t *testing.T) {
@@ -373,13 +375,26 @@ func TestEquivalence_DyldInsert(t *testing.T) {
 				require.True(t, hidesAnAssignmentBehindAnEnvOption(path, argv),
 					"undocumented ADDED finding: path=%q argv=%q", path, argv)
 			case goFires && !sigmaFires:
-				require.True(t, envWouldRefuseTheInvocation(path, argv),
+				require.True(t, envWouldRefuseTheInvocation(path, argv) || readsOnlyTheShellForm(path, argv),
 					"undocumented REMOVED finding: path=%q argv=%q", path, argv)
 			}
 			return
 		}
 		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
 	})
+}
+
+// readsOnlyTheShellForm reports the second shape whose finding this conversion REMOVES: a non-env invocation whose argv[0] is an
+// assignment, which the legacy Go matcher read and the narrowed rule does not.
+//
+// Issue #791 measured that shape as unreachable in production, at zero across 670,185 exec events, because ESF serialises the
+// argument vector and never the environment a shell applies. The property generator produces it freely, which is exactly why the
+// divergence has to be stated here rather than discovered as a flake.
+func readsOnlyTheShellForm(path string, argv []string) bool {
+	if path == "/usr/bin/env" || strings.HasSuffix(path, "/env") {
+		return false
+	}
+	return len(argv) > 0 && strings.Contains(argv[0], "=")
 }
 
 // envWouldRefuseTheInvocation reports the shapes for which env exits before executing anything, so the corrected parser reports
@@ -519,10 +534,13 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 
 	// The same trap on the other side: Sigma's |startswith folds case, so it would match a lowercased assignment key that
 	// strings.HasPrefix in the Go matcher rejects.
-	require.Empty(t, legacyMatchDyldArg("/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
-	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
-	require.NotEmpty(t, legacyMatchDyldArg("/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
-	require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
+	// The env form, since #791 narrowed the rule to it. The case-folding trap this pins is unchanged by that narrowing.
+	lower := []string{"env", "dyld_insert_libraries=/tmp/x", "prog"}
+	upper := []string{"env", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"}
+	require.Empty(t, legacyMatchDyldArg("/usr/bin/env", lower))
+	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", lower))
+	require.NotEmpty(t, legacyMatchDyldArg("/usr/bin/env", upper))
+	require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", upper))
 
 	// The binary half of the launch-agent rule, the same trap #793's review found in the keychain one.
 	require.False(t, legacyLaunchAgentFires("/bin/LAUNCHCTL", []string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}))
@@ -563,7 +581,8 @@ func TestLiveSymbolsStillAgreeWithTheShippedDetections(t *testing.T) {
 	t.Run("every dyldPrefixes entry is one the shipped detection matches", func(t *testing.T) {
 		t.Parallel()
 		for _, prefix := range dyldPrefixes {
-			require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/true", []string{prefix + "/tmp/x"}),
+			// The env form, since #791 narrowed the rule to it: the shell form this used to pass never reaches the server.
+			require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", []string{"env", prefix + "/tmp/x", "prog"}),
 				"the detection must fire on %q, or a finding built from it would name nothing", prefix)
 		}
 	})
@@ -572,7 +591,7 @@ func TestLiveSymbolsStillAgreeWithTheShippedDetections(t *testing.T) {
 		t.Parallel()
 		// A variable the detection accepts but the slice does not would produce a finding with an empty variable name.
 		for _, candidate := range []string{"DYLD_FRAMEWORK_PATH=", "DYLD_FALLBACK_LIBRARY_PATH=", "DYLD_PRINT_LIBRARIES="} {
-			if !evalCompiled(t, dyldDetection(), "/usr/bin/true", []string{candidate + "/tmp/x"}) {
+			if !evalCompiled(t, dyldDetection(), "/usr/bin/env", []string{"env", candidate + "/tmp/x", "prog"}) {
 				continue
 			}
 			require.Contains(t, dyldPrefixes, candidate,
