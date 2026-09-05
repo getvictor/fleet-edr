@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -710,4 +711,106 @@ func TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent(t *testing
 	require.NoError(t, err)
 	assert.NotErrorIs(t, err, api.ErrRetryBatch,
 		"parent-chain lookups keep skip semantics; the retryable class covers the pid an event is about, not its ancestry")
+}
+
+// launchdChainEvents builds a shell started directly by the given pid that then execs out of /tmp, which is the shape both
+// shell-chain rules fire on. Parameterised by the claimed parent pid so the pid 1 and pid 0 cases share one fixture: the whole
+// point of issue #831 is that those two must not be treated alike.
+func launchdChainEvents(hostID string, parentPID int) []api.Event {
+	forkPayload := fmt.Sprintf(`{"child_pid":100,"parent_pid":%d}`, parentPID)
+	shellPayload := fmt.Sprintf(
+		`{"pid":100,"ppid":%d,"path":"/bin/zsh","args":["zsh","-c","/tmp/payload"],"uid":501,"gid":20}`, parentPID)
+	payloadExec := fmt.Sprintf(
+		`{"pid":100,"ppid":%d,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`, parentPID)
+	return []api.Event{
+		{EventID: hostID + "-fork", HostID: hostID, TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(forkPayload)},
+		{EventID: hostID + "-exec-zsh", HostID: hostID, TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(shellPayload)},
+		{EventID: hostID + "-exec-payload", HostID: hostID, TimestampNs: 2200, EventType: "exec",
+			Payload: json.RawMessage(payloadExec)},
+	}
+}
+
+// spec:server-detection-rules-engine/a-launchd-parented-chain-names-pid-1-and-can-be-suppressed/a-launchd-parented-chain-names-pid-1
+// spec:server-detection-rules-engine/a-launchd-parented-chain-names-pid-1-and-can-be-suppressed/an-exclusion-for-another-path-leaves-a-launchd-parented-chain-firing
+// spec:server-detection-rules-engine/a-launchd-parented-chain-names-pid-1-and-can-be-suppressed/a-claimed-parent-of-process-0-is-not-named-as-pid-1
+//
+// TestSuspiciousExecLaunchdParent covers issue #831 on the exec arm: a shell launchd started has no parent process ROW, and naming
+// that absence left the alert unsuppressable, because every exclusion match type needs a row to read and parentExcluded therefore
+// returned false before consulting any resolver.
+//
+// The pid 0 row is the reason this is a table rather than two tests. Pid 0 is the kernel and pid 1 is launchd, so folding them
+// together would both state something false and let an exclusion written for launchd silence a chain that was never launchd's.
+func TestSuspiciousExecLaunchdParent(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		parentPID  int
+		glob       string
+		wantFires  bool
+		wantNamed  string
+		wantAbsent string
+		why        string
+	}{
+		{
+			name: "a chain started by pid 1 names launchd", parentPID: 1, glob: "",
+			wantFires: true, wantNamed: "/sbin/launchd", wantAbsent: "(unknown)",
+			why: "pid 1 is what the parent IS, and naming it is what an operator writes an exclusion against",
+		},
+		{
+			name: "an exclusion for pid 1 suppresses it", parentPID: 1, glob: "/sbin/launchd",
+			wantFires: false,
+			why:       "the class was unsuppressable before this, leaving disabling the whole rule as the only option",
+		},
+		{
+			name: "an exclusion for another path leaves it firing", parentPID: 1, glob: "/usr/libexec/sshd-session",
+			wantFires: true, wantNamed: "/sbin/launchd",
+			why: "suppression must be no broader than what the operator wrote",
+		},
+		{
+			name: "an exclusion for pid 1 does NOT suppress a chain claiming pid 0", parentPID: 0, glob: "/sbin/launchd",
+			wantFires: true, wantAbsent: "/sbin/launchd",
+			why: "process 0 is the kernel; naming it launchd would be false and would over-suppress",
+		},
+		{
+			// Mutation testing found this gap: with a glob that cannot match the placeholder, dropping the guard changes
+			// nothing, so the case has to use one that would. A catch-all glob is a plausible thing for an operator to write.
+			name: "a catch-all glob does not match a parent that has no path", parentPID: 0, glob: "*",
+			wantFires: true,
+			why:       "the placeholder for an unnameable parent is not a path, so matching a path pattern against it would be an accident rather than a decision",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCatalogStore(t)
+			ctx := t.Context()
+			events := launchdChainEvents("h831", tc.parentPID)
+			require.NoError(t, s.InsertEvents(ctx, events))
+			materialize(t, s, events)
+
+			rule := &SuspiciousExec{}
+			if tc.glob != "" {
+				rule = &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+					{ruleID: "suspicious_exec", matchType: api.ExclusionMatchParentPathGlob, value: tc.glob},
+				}}}
+			}
+			findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+			require.NoError(t, err)
+
+			if !tc.wantFires {
+				assert.Empty(t, findings, tc.why)
+				return
+			}
+			require.Len(t, findings, 1, tc.why)
+			if tc.wantNamed != "" {
+				assert.Contains(t, findings[0].Description, tc.wantNamed, tc.why)
+			}
+			if tc.wantAbsent != "" {
+				assert.NotContains(t, findings[0].Description, tc.wantAbsent, tc.why)
+			}
+		})
+	}
 }

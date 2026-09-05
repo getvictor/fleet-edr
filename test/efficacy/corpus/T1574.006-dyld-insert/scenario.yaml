@@ -1,12 +1,16 @@
 # T1574.006 Hijack Execution Flow: Dynamic Linker Hijacking.
 #
-# Synthetic attacker execs a binary with DYLD_INSERT_LIBRARIES injected into
-# the environment. The dyld_insert rule scans the exec event's args for
-# `DYLD_INSERT_LIBRARIES=...` (typically delivered via /usr/bin/env or a
-# direct exec with the env block populated), fires a high severity alert
-# (matches expected.yaml's severity pin).
-# The wire format the agent emits puts injected env vars into the args
-# array on macOS, mirroring how ESF surfaces them via es_event_exec_t.
+# Synthetic attacker runs a binary through /usr/bin/env with
+# DYLD_INSERT_LIBRARIES set for it. The dyld_insert rule reads the
+# assignments env itself performs and fires a high severity alert (matches
+# expected.yaml's severity pin).
+#
+# This comment used to say the agent puts injected env vars into the args
+# array, mirroring es_event_exec_t. That is NOT what ESF does: it serialises
+# es_exec_arg only, so a shell's assignments never reach the args array and
+# the rule cannot see them. Issue #791 measured argv[0] as an assignment in
+# 0 of 670,185 real exec events. The env invocation below is the shape that
+# does reach us, and the only one this rule detects.
 name: "T1574.006 dyld injection via env DYLD_INSERT_LIBRARIES=..."
 host:
   id: AAAA1574-0006-0000-0000-000000000006

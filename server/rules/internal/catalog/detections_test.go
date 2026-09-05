@@ -182,18 +182,22 @@ func TestRedactedDyldAssignment(t *testing.T) {
 
 	cases := []struct {
 		name string
+		path string
 		argv []string
 		want string
 	}{
-		{"insert libraries", []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib"}, "DYLD_INSERT_LIBRARIES=<redacted>"},
-		{"library path", []string{"DYLD_LIBRARY_PATH=/tmp/evil"}, "DYLD_LIBRARY_PATH=<redacted>"},
-		{"no assignment", []string{"/usr/bin/true"}, ""},
-		{"an unrelated assignment", []string{"PATH=/bin"}, ""},
+		// The env form throughout, since #791 narrowed the rule to it: a leading assignment on an ordinary binary never reaches
+		// the server, so a fixture using that shape would assert on data no agent can send.
+		{"insert libraries", "/usr/bin/env", []string{"env", "DYLD_INSERT_LIBRARIES=/tmp/evil.dylib", "prog"}, "DYLD_INSERT_LIBRARIES=<redacted>"},
+		{"library path", "/usr/bin/env", []string{"env", "DYLD_LIBRARY_PATH=/tmp/evil", "prog"}, "DYLD_LIBRARY_PATH=<redacted>"},
+		{"no assignment", "/usr/bin/true", []string{"/usr/bin/true"}, ""},
+		{"an unrelated assignment", "/usr/bin/env", []string{"env", "PATH=/bin", "prog"}, ""},
+		{"a leading assignment on an ordinary binary names nothing", "/bin/ls", []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib", "/bin/ls"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 0, "path": "/usr/bin/true", "args": tc.argv})
+			payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 0, "path": tc.path, "args": tc.argv})
 			require.NoError(t, err)
 			se, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload})
 			require.NoError(t, err)

@@ -139,7 +139,7 @@ Until issue #776 this rule also fired on the same chain making an outbound conne
 
 - The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
 - Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.
-- A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. A shell started directly by launchd has no parent to name, so those alerts still read `(unknown)` and still fire. Skipped chains are counted per rule on the server's detection traces.
+- A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. Skipped chains are counted per rule on the server's detection traces. A shell started directly by launchd is a different case: it has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.
 
 ## shell_network_connect
 
@@ -176,6 +176,7 @@ Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-d
 - The window bounds how long after the shell exec a connection still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
 - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not fire; a lookup to a publicly routable resolver still does.
 - Exclusions saved against `suspicious_exec` before the split (issue #776) do not apply here, because exclusions are keyed by rule id. Re-add any that should silence this shape too.
+- A shell started directly by launchd has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.
 
 ## persistence_launchagent
 
@@ -210,7 +211,7 @@ Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plis
 ## dyld_insert
 
 **DYLD injection on exec**  
-Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).
+Flags an env(1) invocation that sets DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH for the command it runs.
 
 | | |
 | --- | --- |
@@ -223,7 +224,7 @@ Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shel
 
 ### Description
 
-Detects the classic macOS code-injection primitive: launching a process with `DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into the new process before main(). The rule fires on the leading argv slot only (the `VAR=value /path/to/bin` shell form, or the `env VAR=value /path/to/bin` invocation), so substring noise (curl POST data, echo, etc.) does not false-positive.
+Detects the classic macOS code-injection primitive: launching a process with `DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into the new process before main(). The rule fires on an `env VAR=value /path/to/bin` invocation only, matching the assignments env itself applies rather than any argument containing the text, so substring noise (curl POST data, echo, etc.) does not false-positive.
 
 The matching dylib path is redacted in alert text (a sensitive payload location) but kept in the raw event payload for responders.
 
@@ -234,7 +235,7 @@ The matching dylib path is redacted in alert text (a sensitive payload location)
 
 ### Limitations
 
-- Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.
+- Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not, and never was despite earlier wording here: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records (issue #791). Capturing the environment is tracked as issue #862.
 - DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.
 
 ## shell_from_office
