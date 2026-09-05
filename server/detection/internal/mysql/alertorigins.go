@@ -80,8 +80,9 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 	// source and host_id, so `origin = '' AND rule_id IN (...)` cannot be satisfied by a lookup however it is written. Walking the
 	// primary key is what makes the scan happen once.
 	//
-	// So this reads the table once per boot, including the boot after everything is already credited, and NOT adding an index to
-	// avoid that is deliberate. An index on origin would not help: our own rules keep an empty origin permanently and on purpose,
+	// So this reads the table once per boot (and once per replica through a rolling restart, since DoOnceIfLeader excludes
+	// overlapping callers rather than repeated ones), including the boot after everything is already credited. Tracked as #872,
+	// whose fix is durable completion state rather than an index, and NOT adding an index is deliberate. An index on origin would not help: our own rules keep an empty origin permanently and on purpose,
 	// so `origin = ''` stays a high-cardinality match forever rather than emptying out after the first pass. An index on rule_id
 	// would help, and it would tax every alert INSERT, on the hot detection path, for the life of the deployment, to save one
 	// scan per boot on a leader-only path that runs off the request path while the server is still coming up. The scan is the
