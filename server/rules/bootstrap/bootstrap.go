@@ -671,6 +671,16 @@ func ImportedRejections() []RefusedRule {
 // whether they sit in the same directory or not.
 const storedCorpusRoot = "."
 
+// maxDocumentBytes and maxCorpusDocuments bound what a corpus may cost to validate and to load.
+//
+// Both are what a trust boundary needs and neither is what storage allows: the content column is MEDIUMTEXT (16 MiB) and nothing
+// caps the row count. A cap belongs here rather than in the schema because it is a policy about untrusted input, which is exactly
+// what the rulecontent migration said when it declined to make the column width the thing that bounds a rule.
+const (
+	maxDocumentBytes   = 64 * 1024
+	maxCorpusDocuments = 4096
+)
+
 // CorpusValidator validates a proposed rule-content document set by loading it, and satisfies rulecontentapi.Validator.
 //
 // The whole point is that it runs the SAME loader the corpus load runs, over the same root, so "valid" means exactly "this
@@ -699,6 +709,22 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	//
 	// This is the one class of mistake this whole surface must not make, so it is refused rather than warned about: the operator
 	// meant to add a rule, and the alternative is a rule that exists everywhere except where it matters.
+	// Bounded before parsing, because parsing is the expensive part and this is a trust boundary. Storage takes MEDIUMTEXT, which
+	// is 16 MiB per row and unlimited rows, and the cost of a corpus is not paid once: every edit revalidates the whole set, and
+	// every replica reparses it on each version change. Without a bound an operator can make each of those arbitrarily slow using
+	// nothing but valid rules, which is a denial of service that needs no malformed input at all.
+	//
+	// The numbers are far above real content and far below where it hurts, the same shape as the other limits here. The largest
+	// vendored rule is a few kilobytes against a 64 KiB per-document cap, and the corpus is 69 rules against a 4096 cap.
+	if len(docs) > maxCorpusDocuments {
+		return nil, fmt.Errorf("a corpus may hold at most %d documents, and this one has %d", maxCorpusDocuments, len(docs))
+	}
+	for _, d := range docs {
+		if len(d.Content) > maxDocumentBytes {
+			return nil, fmt.Errorf("%s: rule content may be at most %d bytes, and this is %d", d.Path, maxDocumentBytes, len(d.Content))
+		}
+	}
+
 	for _, d := range docs {
 		// Canonical first. rulecontentapi.FS strips ONE leading slash while storage keys the raw path, so "/authored/x.yml" and
 		// "authored/x.yml" are two rows that collapse to one entry when the loader is handed them: validation sees a single

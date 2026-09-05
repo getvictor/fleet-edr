@@ -2,6 +2,16 @@
 
 ## ADDED Requirements
 
+### Requirement: The read surface does not carry the write surface
+
+The system SHALL NOT make rule-content writes reachable from the handle it publishes for reading. A read handle whose underlying type also carries the write operations can be converted to one that writes, so every guarantee the authoring path makes about validation would hold only for callers that chose to use it.
+
+#### Scenario: A read handle cannot be converted into a write handle
+
+- **GIVEN** the handle the system publishes for reading rule content
+- **WHEN** a consumer attempts to convert it to one that writes
+- **THEN** the conversion does not succeed
+
 ### Requirement: Operators author rule content
 
 The system SHALL let an authorised operator create, replace, and delete a rule document in the stored corpus.
@@ -57,7 +67,11 @@ The system SHALL distinguish a document that breaks the corpus from one the corp
 
 Rule identities SHALL be compared the way the system that stores them compares them, not the way the language that loads them does. Identity is persisted alongside per-rule settings and alert deduplication, where comparison is case-insensitive, so two documents whose identities differ only by case name one rule everywhere it matters: tuning one would tune the other and their alerts would deduplicate together, while the corpus itself would show two distinct rules.
 
+Rule identifiers SHALL be restricted to a character set over which case is the only way two identifiers can differ and still compare equal where they are stored. Reproducing an accent-insensitive collation outside the store is not reliably possible, and every approximation fails in the direction that admits a colliding pair, so the identifier space is narrowed rather than the comparison widened.
+
 The system SHALL refuse a submitted document whose path the loader does not inspect. Such a document would be stored, reported as successful, and never evaluated anywhere, which is the opposite of what an operator adding a rule intends.
+
+The system SHALL bound both the size of a submitted document and the number of documents in a corpus. The whole corpus is revalidated on every edit and reparsed by every replica whenever it changes, so an operator submitting nothing but valid rules could otherwise make both arbitrarily expensive, which is a denial of service requiring no malformed input.
 
 A proposed corpus in which NO document can run SHALL be refused, and that includes a proposal to store nothing at all. An empty corpus does not mean "no rules": the system keeps the rule set already in force when the store is empty, so rules an operator deleted would go on running while the deletion reported success, with no surface anywhere that would show it.
 
@@ -74,6 +88,12 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 - **GIVEN** a corpus already holding a rule whose identity a submitted document would also claim
 - **WHEN** an operator submits it
 - **THEN** it is refused, because accepting it would refuse the whole corpus at the next load
+
+#### Scenario: An identifier outside the permitted character set is refused
+
+- **GIVEN** a proposed corpus containing a rule identifier outside the permitted character set
+- **WHEN** an operator submits it
+- **THEN** it is refused, because whether it collides with another identifier cannot be decided outside the store
 
 #### Scenario: Two rule identities differing only by case are refused
 
@@ -92,6 +112,12 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 - **GIVEN** a rule document whose pattern exceeds the affordable-matching limit, alongside a rule that runs
 - **WHEN** an operator submits it
 - **THEN** it is written, the rule is not loaded, and the operator is warned naming the field and the limit it exceeded
+
+#### Scenario: An oversized corpus is refused
+
+- **GIVEN** a proposed corpus exceeding the permitted document size or document count
+- **WHEN** an operator submits it
+- **THEN** it is refused before it is parsed
 
 #### Scenario: A corpus in which nothing can run is refused
 

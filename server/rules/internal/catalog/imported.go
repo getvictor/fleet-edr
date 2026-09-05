@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -139,9 +140,26 @@ func checkStemLengths(names []string) error {
 		if err := checkRuleIDLength(name, id); err != nil {
 			return err
 		}
+		if !ruleIDCharset.MatchString(id) {
+			return fmt.Errorf("%s: rule id %q may contain only letters, digits, underscore and hyphen", name, id)
+		}
 	}
 	return nil
 }
+
+// ruleIDCharset is what a rule identifier may contain, and restricting it is what makes identity DECIDABLE rather than
+// approximated.
+//
+// The id is stored in columns collated utf8mb4_0900_ai_ci, so MySQL decides whether two ids are the same, and that collation is
+// accent-insensitive as well as case-insensitive: "naive_rule" and "naïve_rule" are one value to it. Reproducing that judgement in
+// Go means reproducing a UCA collation, and the obvious approximations do not: strings.ToLower handles case and leaves accents
+// alone, while NFD-and-strip-marks handles accents but still misses expansions such as the one that makes ss and the sharp s
+// equal. An approximation here fails in the direction that matters, letting through a pair the database will then merge.
+//
+// So the charset is narrowed instead of the comparison being widened. Over this set, case is the ONLY way two ids can differ and
+// still collate equal, which makes strings.ToLower an exact model of ai_ci rather than a hopeful one. Every rule in the vendored
+// corpus already conforms, and a rule identifier has no need of anything outside it.
+var ruleIDCharset = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func checkDuplicateStems(names []string) error {
 	type claim struct{ file, id string }
@@ -152,6 +170,10 @@ func checkDuplicateStems(names []string) error {
 		// detection_rule_settings and alerts, whose rule_id columns take the schema default collation (utf8mb4_0900_ai_ci), and
 		// both carry a unique key over it: uk_detection_rule_settings_rule_scope and uk_alerts_dedup. So "Foo" and "foo" are one
 		// value to MySQL however distinct they look here.
+		//
+		// ToLower is EXACT here rather than approximate, and only because ruleIDCharset ran first. That collation is also
+		// accent-insensitive, which lowercasing does nothing about; over letters, digits, underscore and hyphen there are no
+		// accents to be insensitive to, so case is the only way two ids can differ and still collate equal.
 		//
 		// Comparing them as exact Go strings therefore lets a corpus load two rules that the rest of the system cannot tell
 		// apart: tuning one would tune the other, and their alerts would deduplicate into a single row. The corpus path column is

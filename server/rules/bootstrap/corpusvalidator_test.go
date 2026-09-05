@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -69,7 +70,10 @@ func TestCorpusValidator_RefusesACollidingIdentity(t *testing.T) {
 // and the limit, so an operator who meant it to run knows exactly what to change.
 func TestCorpusValidator_UnaffordablePatternIsReportedNotSilent(t *testing.T) {
 	t.Parallel()
-	huge := strings.Repeat("a", 100000)
+	// Above maxValueCost (4096) but comfortably under the per-document size cap, so this reaches the COST check rather than
+	// tripping the size bound first. An earlier version used 100,000 and stopped testing what its name says the moment the size
+	// bound landed.
+	huge := strings.Repeat("a", 5000)
 	warnings, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
 		ruleDoc("imported/runnable.yml", "11111111-1111-4111-8111-111111111111", "Runnable", simpleDetection),
 		ruleDoc("authored/expensive.yml", "33333333-3333-4333-8333-333333333333", "Expensive",
@@ -214,4 +218,66 @@ func TestCorpusValidator_RefusesStemsCollidingOnlyByCase(t *testing.T) {
 	require.Error(t, err, "two ids MySQL cannot distinguish must not both be storable")
 	assert.Contains(t, err.Error(), "case-insensitively",
 		"the reason must say WHY, since both files look distinct to anyone reading the corpus")
+}
+
+// spec:rule-content/authored-content-is-validated-by-the-loader/an-identifier-outside-the-permitted-character-set-is-refused
+//
+// TestCorpusValidator_RefusesAnIdentifierOutsideTheCharset is what makes the case-fold above exact rather than hopeful.
+//
+// utf8mb4_0900_ai_ci is accent-insensitive as well as case-insensitive, so "naive_rule" and "naïve_rule" are one value to MySQL
+// while strings.ToLower keeps them apart. Rather than chase a UCA collation in Go, where the obvious approximations all fail in
+// the direction that lets a colliding pair through, the charset is narrowed so that case is the only way two ids can differ and
+// still collate equal.
+func TestCorpusValidator_RefusesAnIdentifierOutsideTheCharset(t *testing.T) {
+	t.Parallel()
+	for _, stem := range []string{"naïve_rule", "rule with spaces", "rule.with.dots", "rule:colon"} {
+		t.Run(stem, func(t *testing.T) {
+			t.Parallel()
+			_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+				ruleDoc("imported/runnable.yml", "11111111-1111-4111-8111-111111111111", "Runnable", simpleDetection),
+				ruleDoc("authored/"+stem+".yml", "77777777-7777-4777-8777-777777777777", "Odd", simpleDetection),
+			})
+			require.Error(t, err, "an identifier outside the charset makes collation undecidable here")
+		})
+	}
+}
+
+// TestCorpusValidator_AccentedIdentifiersWouldCollateEqual is the evidence for why the charset is narrowed rather than the
+// comparison widened. It pins the gap in the obvious approximation, so nobody later "simplifies" the charset check away on the
+// grounds that lowercasing already handles it.
+func TestCorpusValidator_AccentedIdentifiersWouldCollateEqual(t *testing.T) {
+	t.Parallel()
+	assert.NotEqual(t, strings.ToLower("naive_rule"), strings.ToLower("naïve_rule"),
+		"lowercasing keeps these apart, while the collation storing them does not: that gap is the reason for the charset")
+}
+
+// spec:rule-content/authored-content-is-validated-by-the-loader/an-oversized-corpus-is-refused
+//
+// TestCorpusValidator_BoundsTheCorpus covers the denial of service that needs no malformed input at all. Every edit revalidates
+// the whole set and every replica reparses it on each version change, so an operator with only valid rules can make both
+// arbitrarily slow unless something bounds the corpus.
+func TestCorpusValidator_BoundsTheCorpus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one oversized document", func(t *testing.T) {
+		t.Parallel()
+		huge := ruleDoc("authored/big.yml", "88888888-8888-4888-8888-888888888888", "Big", simpleDetection)
+		huge.Content = append(huge.Content, []byte("\n# "+strings.Repeat("p", maxDocumentBytes))...)
+		_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{huge})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at most")
+	})
+
+	t.Run("too many documents", func(t *testing.T) {
+		t.Parallel()
+		docs := make([]rulecontentapi.Document, 0, maxCorpusDocuments+1)
+		for i := range maxCorpusDocuments + 1 {
+			docs = append(docs, rulecontentapi.Document{
+				Path: fmt.Sprintf("authored/rule_%d.yml", i), Content: []byte("title: x\n"),
+			})
+		}
+		_, err := CorpusValidator{}.Validate(t.Context(), docs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at most")
+	})
 }
