@@ -194,6 +194,8 @@ func TestBufferedEvalStats_AFailedWriteDiscardsThatWindow(t *testing.T) {
 		"the second window is written whole, with nothing carried over from the first")
 }
 
+// spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/a-graceful-shutdown-writes-what-it-had-accumulated
+//
 // TestBufferedEvalStats_FlushLoopWritesOnShutdown covers the graceful-shutdown criterion. The final write deliberately does not
 // use the cancelled context, which would fail it immediately, so this also pins that the flush actually reaches the store.
 func TestBufferedEvalStats_FlushLoopWritesOnShutdown(t *testing.T) {
