@@ -32,6 +32,8 @@ Three constraints apply, and a corpus that breaks any of them is refused as a wh
 
 **At most 255 characters,** which is the width of every column that stores one.
 
+**Not already used by a rule the product ships.** Stored rules are added to the ones built into the server, and nothing downstream tells the two apart, so a stored `suspicious_exec.yml` would produce two rules that share one set of per-rule settings and one alert deduplication key.
+
 **Unique ignoring case.** `Keychain_Dump.yml` and `keychain_dump.yml` are the same rule as far as per-rule settings and alert deduplication are concerned, so a corpus carrying both would show two rules that cannot be tuned or triaged separately. Storage itself is case-sensitive, which is what lets both files exist; the refusal is what stops them being loaded together.
 
 ## What else a corpus must satisfy

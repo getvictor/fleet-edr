@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"path"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -747,6 +749,26 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 		if n := utf8.RuneCountInString(d.Path); n > maxDocumentPathLen {
 			return nil, fmt.Errorf("%s: rule content path may be at most %d characters, and this is %d",
 				d.Path, maxDocumentPathLen, n)
+		}
+	}
+
+	// Against the rules this project registers in code, which the loader cannot see. checkDuplicateStems compares a corpus only
+	// against ITSELF; NewWithCorpus then appends the result to the built-in list and checks nothing. So a corpus file named
+	// suspicious_exec.yml yields a second rule under an id this project already uses, and because per-rule settings and alert
+	// deduplication are keyed by that id, tuning one would tune both and their alerts would merge.
+	//
+	// Folded on both sides for the same reason the corpus-internal check is: the columns holding the id compare it
+	// case-insensitively, so Suspicious_Exec collides just as surely as suspicious_exec.
+	builtIn := make(map[string]string, 16)
+	for _, id := range catalog.BuiltInRuleIDs() {
+		builtIn[strings.ToLower(id)] = id
+	}
+	for _, d := range docs {
+		stem := strings.TrimSuffix(path.Base(d.Path), path.Ext(d.Path))
+		if claimed, taken := builtIn[strings.ToLower(stem)]; taken {
+			return nil, fmt.Errorf("%s: rule id %q is already the id of a rule this deployment ships (%q); "+
+				"per-rule settings and alert deduplication are keyed by it, so the two could not be told apart",
+				d.Path, stem, claimed)
 		}
 	}
 

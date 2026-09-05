@@ -67,6 +67,8 @@ The system SHALL distinguish a document that breaks the corpus from one the corp
 
 Rule identities SHALL be compared the way the system that stores them compares them, not the way the language that loads them does. Identity is persisted alongside per-rule settings and alert deduplication, where comparison is case-insensitive, so two documents whose identities differ only by case name one rule everywhere it matters: tuning one would tune the other and their alerts would deduplicate together, while the corpus itself would show two distinct rules.
 
+The system SHALL refuse a submitted document whose rule identifier is already used by a rule the deployment ships in code. Stored rules are added to those, and nothing downstream distinguishes the two: per-rule settings and alert deduplication are keyed by the identifier, so the pair could not be tuned or triaged separately while the catalog listed both.
+
 Rule identifiers SHALL be restricted to a character set over which case is the only way two identifiers can differ and still compare equal where they are stored. Reproducing an accent-insensitive collation outside the store is not reliably possible, and every approximation fails in the direction that admits a colliding pair, so the identifier space is narrowed rather than the comparison widened.
 
 The system SHALL refuse a submitted document whose path the loader does not inspect. Such a document would be stored, reported as successful, and never evaluated anywhere, which is the opposite of what an operator adding a rule intends.
@@ -88,6 +90,12 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 - **GIVEN** a corpus already holding a rule whose identity a submitted document would also claim
 - **WHEN** an operator submits it
 - **THEN** it is refused, because accepting it would refuse the whole corpus at the next load
+
+#### Scenario: An identifier already used by a shipped rule is refused
+
+- **GIVEN** a proposed document whose rule identifier is already used by a rule the deployment ships
+- **WHEN** an operator submits it
+- **THEN** it is refused, because the two could not be tuned or triaged separately
 
 #### Scenario: An identifier outside the permitted character set is refused
 

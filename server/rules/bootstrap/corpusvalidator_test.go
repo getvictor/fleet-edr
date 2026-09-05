@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
+	"github.com/fleetdm/edr/server/rules/internal/catalog"
 )
 
 // ruleDoc renders a minimal but real Sigma document, so these tests exercise the actual loader rather than a shape invented here.
@@ -299,4 +300,35 @@ func TestCorpusValidator_RefusesAnOverlongPath(t *testing.T) {
 	})
 	require.Error(t, err, "a path storage cannot hold must be refused here, not by the database")
 	assert.Contains(t, err.Error(), "at most 255 characters")
+}
+
+// spec:rule-content/authored-content-is-validated-by-the-loader/an-identifier-already-used-by-a-shipped-rule-is-refused
+//
+// TestCorpusValidator_RefusesAnIdentifierAlreadyShipped covers a collision the loader structurally cannot see.
+//
+// checkDuplicateStems compares a corpus against ITSELF, which is all the loader is given. NewWithCorpus then appends those rules
+// to the list this project registers in code and checks nothing. So a corpus file named suspicious_exec.yml produces a second rule
+// under an id already in use, and because per-rule settings and alert deduplication are keyed by that id, tuning one would tune
+// both while the catalog listed two rules under one identity.
+func TestCorpusValidator_RefusesAnIdentifierAlreadyShipped(t *testing.T) {
+	t.Parallel()
+	for _, stem := range []string{"suspicious_exec", "Suspicious_Exec", "dyld_insert"} {
+		t.Run(stem, func(t *testing.T) {
+			t.Parallel()
+			_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+				ruleDoc("authored/"+stem+".yml", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Shadow", simpleDetection),
+			})
+			require.Error(t, err, "a corpus rule must not claim an id this deployment already ships")
+			assert.Contains(t, err.Error(), "already the id of a rule this deployment ships")
+		})
+	}
+}
+
+// TestBuiltInRuleIDs_IsNotEmpty guards the check above against the way it would fail silently. If BuiltInRuleIDs ever returned
+// nothing, every collision test would still pass by never colliding, and the guard would be inert.
+func TestBuiltInRuleIDs_IsNotEmpty(t *testing.T) {
+	t.Parallel()
+	ids := catalog.BuiltInRuleIDs()
+	require.NotEmpty(t, ids, "an empty list would make the collision check silently inert")
+	assert.Contains(t, ids, "suspicious_exec")
 }
