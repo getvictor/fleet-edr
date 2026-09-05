@@ -8,7 +8,9 @@ The system SHALL let an authorised operator create, replace, and delete a rule d
 
 A write SHALL make the document and the corpus version durable together, so a replica that polls the version never learns of a change it cannot then read.
 
-A write SHALL be applied only to the corpus state it was validated against, and SHALL be refused when the corpus has moved since. Validation and the write are otherwise a check-then-act: two operators writing documents whose rule identities collide would each validate against a corpus lacking the other, both pass, and the corpus that lands would claim one identity twice, which every replica then refuses entirely. A write that fails at any point SHALL leave the corpus exactly as it was, document and version together, rather than a partially applied change.
+A write SHALL be applied only to the corpus state it was validated against, and SHALL be refused when the corpus has moved since. Validation and the write are otherwise a check-then-act: two operators writing documents whose rule identities collide would each validate against a corpus lacking the other, both pass, and the corpus that lands would claim one identity twice, which every replica then refuses entirely. A write SHALL be applied atomically: the document and the version change together, or neither changes. There is no state in which one moved and the other did not.
+
+A caller that observes a failure SHALL NOT conclude the write did not apply. Committing is not an operation whose outcome is always reported: a commit can succeed and the response be lost, leaving the caller with an error for a write that took effect. Atomicity is a property of the corpus, not a promise about what an error means, and the corpus version is the authority on what actually happened.
 
 Deleting a document SHALL remove it from the corpus, so the rule it defined stops being evaluated once replicas converge. Deleting a document that is not there SHALL report that it was not there rather than reporting success, because an operator deleting a rule needs to know whether they deleted the one they meant.
 
@@ -30,9 +32,9 @@ Deleting a document SHALL remove it from the corpus, so the rule it defined stop
 - **WHEN** an operator deletes it
 - **THEN** the operator is told it was not found, and the corpus version is unchanged
 
-#### Scenario: A failed write changes nothing
+#### Scenario: A write that fails before it is applied changes nothing
 
-- **GIVEN** a write that cannot be applied
+- **GIVEN** a write that fails before it is applied
 - **WHEN** it fails
 - **THEN** neither the document nor the corpus version has changed
 

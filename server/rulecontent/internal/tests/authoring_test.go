@@ -4,6 +4,7 @@ package tests
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,7 @@ func TestPutDocument_CreatesAndReplaces(t *testing.T) {
 	before, err := s.Version(ctx)
 	require.NoError(t, err)
 
-	created, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("first")}, -1)
+	created, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("first")}, before)
 	require.NoError(t, err)
 	assert.Greater(t, created, before, "a write moves the version, or a replica never learns to re-read")
 
@@ -35,7 +36,7 @@ func TestPutDocument_CreatesAndReplaces(t *testing.T) {
 	assert.Equal(t, "imported/a.yml", docs[0].Path)
 	assert.Equal(t, "first", string(docs[0].Content))
 
-	replaced, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("second")}, -1)
+	replaced, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("second")}, created)
 	require.NoError(t, err)
 	assert.Greater(t, replaced, created)
 
@@ -59,7 +60,9 @@ func TestPutDocument_LeavesOtherDocumentsAlone(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = s.PutDocument(ctx, api.Document{Path: "imported/b.yml", Content: []byte("b-edited")}, -1)
+	seeded, err := s.Version(ctx)
+	require.NoError(t, err)
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/b.yml", Content: []byte("b-edited")}, seeded)
 	require.NoError(t, err)
 
 	docs, err := s.Documents(ctx)
@@ -81,7 +84,7 @@ func TestDeleteDocument_RemovesAndBumpsTheVersion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	after, err := s.DeleteDocument(ctx, "imported/a.yml", -1)
+	after, err := s.DeleteDocument(ctx, "imported/a.yml", seeded)
 	require.NoError(t, err)
 	assert.Greater(t, after, seeded)
 
@@ -106,7 +109,7 @@ func TestDeleteDocument_NotFoundLeavesTheVersionAlone(t *testing.T) {
 	seeded, err := s.Replace(ctx, []api.Document{{Path: "imported/a.yml", Content: []byte("a")}})
 	require.NoError(t, err)
 
-	_, err = s.DeleteDocument(ctx, "imported/never-existed.yml", -1)
+	_, err = s.DeleteDocument(ctx, "imported/never-existed.yml", seeded)
 	require.Error(t, err)
 	require.ErrorIs(t, err, api.ErrDocumentNotFound, "callers branch on this, so it must be matchable with errors.Is")
 
@@ -119,7 +122,7 @@ func TestDeleteDocument_NotFoundLeavesTheVersionAlone(t *testing.T) {
 	assert.Len(t, docs, 1, "and it must not have removed anything either")
 }
 
-// spec:rule-content/operators-author-rule-content/a-failed-write-changes-nothing
+// spec:rule-content/operators-author-rule-content/a-write-that-fails-before-it-is-applied-changes-nothing
 //
 // TestPutDocument_AFailedWriteLeavesTheVersionAlone pins that the version bump is inside the same transaction as the document
 // write, and it matters because the bump happens FIRST. Every replica polls that counter, so a write that failed after moving it
@@ -138,7 +141,7 @@ func TestPutDocument_AFailedWriteLeavesTheVersionAlone(t *testing.T) {
 	_, err = s.PutDocument(ctx, api.Document{
 		Path:    "imported/" + strings.Repeat("x", 300) + ".yml",
 		Content: []byte("content"),
-	}, -1)
+	}, before)
 	require.Error(t, err, "a path the column cannot hold must fail rather than silently truncate")
 
 	after, err := s.Version(ctx)
@@ -209,4 +212,50 @@ func TestDeleteDocument_RefusesAStaleVersion(t *testing.T) {
 	docs, err := s.Documents(ctx)
 	require.NoError(t, err)
 	assert.Len(t, docs, 3, "nothing removed on a stale view")
+}
+
+// TestPutDocument_ConcurrentWritesAgainstOneVersionSerialise is the test the sequential ones could not be.
+//
+// The stale-version tests drive their writes in order, so the version comparison alone refuses the second and they pass whether or
+// not the meta row is locked. That left the lock itself uncovered, and review rightly asked for evidence rather than a note saying
+// it was untestable.
+//
+// Two writers validated against the SAME version is the shape that matters, because it is what two operators editing at once
+// actually produce. Exactly one may win. Without SELECT ... FOR UPDATE both readers see the same version under REPEATABLE READ,
+// both conclude they are current, and both commit, which is the corpus claiming one rule identity twice that this whole mechanism
+// exists to prevent.
+func TestPutDocument_ConcurrentWritesAgainstOneVersionSerialise(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	base, err := s.Version(ctx)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, path := range []string{"authored/first.yml", "authored/second.yml"} {
+		wg.Go(func() {
+			_, errs[i] = s.PutDocument(ctx, api.Document{Path: path, Content: []byte("x")}, base)
+		})
+	}
+	wg.Wait()
+
+	won := 0
+	for _, err := range errs {
+		if err == nil {
+			won++
+			continue
+		}
+		require.ErrorIs(t, err, api.ErrCorpusChanged, "the loser must be refused for the reason the caller retries on")
+	}
+	assert.Equal(t, 1, won, "exactly one write may be applied against a given version")
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	assert.Len(t, docs, 1, "and only the winner's document may be stored")
+
+	after, err := s.Version(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, base+1, after, "one write, one bump")
 }

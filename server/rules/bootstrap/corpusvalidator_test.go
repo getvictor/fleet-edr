@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -156,4 +157,39 @@ func TestCorpusValidator_RefusesAnEmptyCorpus(t *testing.T) {
 	_, err := CorpusValidator{}.Validate(t.Context(), nil)
 	require.Error(t, err, "emptying the corpus leaves the previous rules running indefinitely")
 	assert.Contains(t, err.Error(), "no document in the proposed corpus can run")
+}
+
+// TestCorpusValidator_RefusesANonCanonicalPath covers an aliasing bug review found, whose shape is worth stating because nothing
+// about it is visible at the call site.
+//
+// rulecontentapi.FS strips ONE leading slash, while storage keys the raw path. So "/authored/x.yml" and "authored/x.yml" are two
+// rows that collapse to a single entry the moment the loader is handed them: validation sees one document and passes, both rows
+// persist, and every later load silently keeps whichever one the map ends up with. The operator is told both writes succeeded.
+func TestCorpusValidator_RefusesANonCanonicalPath(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/authored/x.yml", "./authored/x.yml", "authored/../authored/x.yml", "authored/x.yml/"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+				ruleDoc("imported/runnable.yml", "11111111-1111-4111-8111-111111111111", "Runnable", simpleDetection),
+				ruleDoc(path, "66666666-6666-4666-8666-666666666666", "Aliased", simpleDetection),
+			})
+			require.Error(t, err, "a path that aliases another must not be storable")
+		})
+	}
+}
+
+// TestCorpusValidator_AliasedPathsWouldCollapse is the evidence for WHY the check above exists, rather than an assertion that it
+// does. It pins the underlying behaviour of the projection, so if FS ever stops stripping the slash this test says so and the
+// guard can be revisited instead of being cargo-culted forward.
+func TestCorpusValidator_AliasedPathsWouldCollapse(t *testing.T) {
+	t.Parallel()
+	docs := []rulecontentapi.Document{
+		{Path: "/authored/x.yml", Content: []byte("first")},
+		{Path: "authored/x.yml", Content: []byte("second")},
+	}
+	fsys := rulecontentapi.FS(docs)
+	entries, err := fs.ReadDir(fsys, "authored")
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "two stored rows project to ONE file, which is the whole problem")
 }

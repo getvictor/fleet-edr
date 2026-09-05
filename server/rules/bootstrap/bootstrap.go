@@ -700,6 +700,13 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	// This is the one class of mistake this whole surface must not make, so it is refused rather than warned about: the operator
 	// meant to add a rule, and the alternative is a rule that exists everywhere except where it matters.
 	for _, d := range docs {
+		// Canonical first. rulecontentapi.FS strips ONE leading slash while storage keys the raw path, so "/authored/x.yml" and
+		// "authored/x.yml" are two rows that collapse to one entry when the loader is handed them: validation sees a single
+		// document, both persist, and every later load silently drops whichever the map does not keep. fs.ValidPath rejects the
+		// leading slash along with "..", ".", the empty path and a trailing slash, all of which alias or escape in the same way.
+		if !fs.ValidPath(d.Path) {
+			return nil, fmt.Errorf("%q: rule content needs a plain relative path, with no leading slash and no . or .. segments", d.Path)
+		}
 		if !catalog.IsCorpusFile(d.Path) {
 			return nil, fmt.Errorf("%s: rule content must be a .yml file, or the loader will not read it", d.Path)
 		}

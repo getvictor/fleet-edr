@@ -203,14 +203,15 @@ func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion
 // version the first produced, rather than both reading the old one and both deciding they are current. Without the lock, the
 // comparison below would be its own check-then-act, which is the race it exists to close.
 //
-// expectedVersion < 0 skips the check, which only the seed path has any business doing: it runs before anything could have
-// validated a corpus to compare against.
+// There is no bypass. An earlier revision took a negative sentinel meaning "do not check", on the theory that the seed would need
+// it; the seed goes through ReplaceIfEmpty and never comes here, so the sentinel had no caller and was purely an escape hatch from
+// the contract Writer states. A guard with no input that reaches it is dead code, and one that lets a future caller skip
+// validation is worse than dead.
 //
-// NOTE ON COVERAGE, measured: removing FOR UPDATE is a MISSED mutation and will stay one. The stale-version tests drive the two
-// writes in sequence, so the comparison alone is enough to refuse the second and they pass either way. What the lock adds is only
-// visible with two writers in flight at once, where without it both read the same version, both find themselves current, and both
-// proceed. Catching that needs a test that can hold one transaction open while another starts, which is a different kind of test
-// from these. The version check ITSELF is covered, and dropping it fails.
+// The lock is COVERED, and it took the right kind of test to do it. The sequential stale-version tests pass with or without FOR
+// UPDATE, because the comparison alone refuses a write that comes second. Two writers holding ONE version is the shape that
+// distinguishes them: with the lock, exactly one wins; without it both read the same version under REPEATABLE READ, both conclude
+// they are current, and both commit. Removing FOR UPDATE now fails that test with two documents stored where one was allowed.
 func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion int64, write func(tx *sqlx.Tx) error) (int64, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -222,7 +223,7 @@ func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion 
 	if err := tx.GetContext(ctx, &current, "SELECT version FROM rule_corpus_meta WHERE id = 1 FOR UPDATE"); err != nil {
 		return 0, fmt.Errorf("lock rule corpus version: %w", err)
 	}
-	if expectedVersion >= 0 && current != expectedVersion {
+	if current != expectedVersion {
 		return 0, fmt.Errorf("%w: validated against %d, corpus is now at %d", api.ErrCorpusChanged, expectedVersion, current)
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
