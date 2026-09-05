@@ -252,7 +252,24 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	// Issue #837 made one of them load-bearing: per-rule evaluation statistics are now written by a flush rather than on the
 	// drain path, so without Run the cross-context statistics test sees an empty table. Run returns no error, unlike the two
 	// above, so there is nothing to surface.
-	go rulesCtx.Run(ctx)
+	//
+	// JOINED on cleanup, unlike the two above, and review found why it has to be: cancelling the context makes this Run flush
+	// to the database on its way out, and t.Cleanup runs last-registered-first, so full.Open's own cleanup would otherwise be
+	// free to drop the test schema while that write is still in flight. That is a flaky test waiting to happen, in every test
+	// that builds a stack rather than only the one that reads the table.
+	rulesDone := make(chan struct{})
+	go func() {
+		defer close(rulesDone)
+		rulesCtx.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-rulesDone:
+		case <-time.After(30 * time.Second):
+			t.Error("rules.Run did not return; its shutdown flush may still be writing to a schema about to be dropped")
+		}
+	})
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
