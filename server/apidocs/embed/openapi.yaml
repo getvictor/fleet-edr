@@ -1127,7 +1127,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RuleContentChangeResult"
         "400":
-          description: Malformed JSON, an oversize body, or a blank `reason`.
+          description: Malformed JSON, or a blank `reason`.
           content:
             application/json:
               schema:
