@@ -95,6 +95,7 @@ func TestCommandArguments(t *testing.T) {
 
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-leading-assignment-is-distinguished-from-a-later-argument
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-shell-form-assignment-is-not-reported
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-s-operand-is-not-an-assignment
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-after-the-end-of-options-marker-belongs-to-the-command
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-name-a-shell-would-reject-does-not-end-the-run
@@ -118,9 +119,13 @@ func TestEnvAssignments(t *testing.T) {
 		argv []string
 		want []string
 	}{
-		{"shell form: the assignment is argv[0]", "/usr/bin/true",
-			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
-		{"the same text as a later argument is NOT an assignment", "/usr/bin/true",
+		{"the shell form reports nothing, because it never reaches us", "/usr/bin/true",
+			// Issue #791. ESF serialises the argument vector and never the environment a shell applies, so
+			// `DYLD_INSERT_LIBRARIES=x /usr/bin/true` arrives as `argv == ["/usr/bin/true"]`. This shape is what a synthetic
+			// event looks like, not what an agent sends: measured at zero across 670,185 real exec events, and structurally
+			// zero rather than rare. The field used to report it, which made the rule advertise a case it could not detect.
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, nil},
+		{"and neither does the same text as a later argument", "/usr/bin/true",
 			[]string{"/usr/bin/true", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}, nil},
 		{"env form: leading assignments", "/usr/bin/env",
 			[]string{"env", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
@@ -300,7 +305,11 @@ func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/true", tc.argv...), "EnvAssignments"))
+			// Driven through env, because #791 removed the shell form: an ordinary binary now reports nothing whatever its
+			// argv holds, so this table would pass vacuously against /usr/bin/true and stop testing isAssignment at all.
+			argv := append([]string{"env"}, tc.argv...)
+			argv = append(argv, "prog")
+			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/env", argv...), "EnvAssignments"))
 		})
 	}
 }
