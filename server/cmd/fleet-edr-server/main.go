@@ -158,11 +158,24 @@ func run() error {
 	//
 	// Contrast the revocation snapshots below, which ARE loaded synchronously and are fatal on failure: those gate an allow-all
 	// security decision on the hot path, and serving before they are loaded would honour a revoked credential. This gates nothing.
+	// Its own context, cancelled and WAITED FOR by a defer registered here rather than left to ride on the lifecycle context, and
+	// the placement is the point. Defers run last-registered-first, and `db.Close()` is registered above this, so it would
+	// otherwise run while this goroutine still held a live context: any later fatal step would tear down into a pool waiting on
+	// an unindexed scan to finish. Registering the cancel HERE puts it ahead of that close, and waiting for the goroutine means
+	// the pool has its connection back before anything tries to shut it down.
+	backfillCtx, stopBackfill := context.WithCancel(ctx)
+	backfillDone := make(chan struct{})
+	defer func() {
+		stopBackfill()
+		<-backfillDone
+	}()
+
 	backfillRules := rulesCtx.ContentService().ActiveRules()
 	go func() {
+		defer close(backfillDone)
 		// Cancellation is not a failure, it is shutdown reaching a pass that was still walking. Warning about it would put a line
 		// in the log of every deployment that restarts while the backfill is running, describing something that is working.
-		if _, err := detectionCtx.BackfillAlertOrigins(ctx, coord, backfillRules); err != nil && !errors.Is(err, context.Canceled) {
+		if _, err := detectionCtx.BackfillAlertOrigins(backfillCtx, coord, backfillRules); err != nil && !errors.Is(err, context.Canceled) {
 			logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
 		}
 	}()

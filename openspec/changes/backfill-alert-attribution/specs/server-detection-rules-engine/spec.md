@@ -6,7 +6,9 @@
 
 The system SHALL credit alerts that carry no attribution but were raised by a rule this project did not write, so the licence obligation those rules carry is met for alerts raised before attribution was recorded rather than only for later ones.
 
-The pass SHALL run at most once per boot, on exactly one replica, and SHALL NOT block startup on becoming that replica.
+Two replicas SHALL NOT run the pass concurrently, and a replica SHALL NOT block startup on winning the right to run it.
+
+This is non-overlap, not once-per-deployment, and the difference is worth stating because the weaker guarantee is the one the implementation makes. A leader lock excludes callers while it is held and releases it when the work returns, so replicas starting in sequence each acquire it in turn and each run the pass. That is wasteful rather than wrong, since the pass is idempotent, and #872 carries the durable completion state that would make it once per deployment.
 
 It SHALL touch only alerts whose attribution is absent, so an attribution already recorded is never overwritten and repeating the pass changes nothing.
 

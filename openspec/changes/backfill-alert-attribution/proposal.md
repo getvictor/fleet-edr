@@ -21,7 +21,7 @@ Both fall out of asking `AlertOriginOf` per rule and skipping the empty and proj
 
 ## Shape
 
-A one-shot under `DoOnceIfLeader` rather than a fourth leader-gated loop. The work is finite and finished after one pass, a replica that loses the race has nothing to wait for, and a gated loop would hold a pooled connection for the process lifetime that a one-shot has no business claiming.
+A one-shot under `DoOnceIfLeader` rather than a fourth leader-gated loop. Note that this buys non-overlap rather than once-per-deployment: the lock is released when the work returns, so replicas starting in sequence each run the pass. Idempotent, so that is wasted work rather than a wrong result, and #872 carries the fix. The work is finite and finished after one pass, a replica that loses the race has nothing to wait for, and a gated loop would hold a pooled connection for the process lifetime that a one-shot has no business claiming.
 
 Only rows with an empty origin are touched, so the pass cannot overwrite an attribution already recorded and re-running it is a no-op. That is what makes it safe to leave in place rather than something to remove after one release.
 

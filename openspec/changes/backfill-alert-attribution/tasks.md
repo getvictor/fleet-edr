@@ -1,6 +1,6 @@
 # Tasks
 
-- [x] A boot-time pass credits alerts whose origin was never recorded, for vendored rules only, under `DoOnceIfLeader` so exactly one replica runs it and none waits.
+- [x] A boot-time pass credits alerts whose origin was never recorded, for vendored rules only, under `DoOnceIfLeader` so no two replicas run it at once and none waits to find out it lost. Non-overlap, NOT once per deployment: the lock releases when the work returns, so replicas starting in sequence each run the pass. Idempotent, so that is wasted work rather than a wrong result, and #872 carries the durable completion state that fixes it.
 - [x] Our own rules are excluded, so the distinction migration 00012 preserves between "raised before attribution existed" and "raised by us" survives.
 - [x] Projections are excluded, so this project does not claim authorship of an operator's own policy entry.
 - [x] The scope decision is a named function with its own tests, because both exclusions are invisible in the SQL and irreversible if wrong. Mutation-tested: dropping either exclusion, or reading `OriginOf` instead of `AlertOriginOf`, is caught.
