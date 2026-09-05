@@ -36,7 +36,9 @@ Deleting a document SHALL remove it from the corpus, so the rule it defined stop
 
 ### Requirement: Authored content is validated by the loader
 
-The system SHALL validate a submitted rule document by loading it with the same loader that loads the corpus at start-up, so that accepting a document means the deployment will load it, and no second implementation of validity can drift from the first.
+The system SHALL validate a submitted rule document by loading the corpus it would produce with the same loader that loads the corpus at start-up, so that accepting a document means the deployment will load it, and no second implementation of validity can drift from the first.
+
+Validation SHALL consider the whole document set the write would produce, not the submitted document alone. A rule's identity comes from its file stem, and two documents claiming one identity refuse the ENTIRE corpus rather than one document, so a document that is valid alone can still be the one that takes a deployment's rule set down to the copy embedded in its binary.
 
 A document the loader would reject SHALL be refused, and the refusal SHALL carry the loader's own reason, naming what to fix.
 
@@ -47,6 +49,12 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 - **GIVEN** a rule document the corpus loader rejects
 - **WHEN** an operator submits it
 - **THEN** it is refused with the loader's reason, and neither the corpus nor its version changes
+
+#### Scenario: A document colliding with an existing rule identity is refused
+
+- **GIVEN** a corpus already holding a rule whose identity a submitted document would also claim
+- **WHEN** an operator submits it
+- **THEN** it is refused, because accepting it would refuse the whole corpus at the next load
 
 #### Scenario: A pattern too expensive to match is refused
 
