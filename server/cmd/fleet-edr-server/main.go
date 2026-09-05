@@ -201,11 +201,21 @@ func run() error {
 	// returning on a fatal server error. Review found that: with the process context still live on the error path, the join
 	// waited out its full timeout and then logged a statistics-loss warning that had not happened.
 	rulesLoopCtx, stopRulesLoops := context.WithCancel(ctx)
-	defer stopRulesLoops()
 	rulesDone := make(chan struct{})
 	go func() {
 		defer close(rulesDone)
 		rulesCtx.Run(rulesLoopCtx)
+	}()
+	// Deferred rather than placed after RunAndShutdown, so it covers EVERY return from here on. Review found the gap: a bad
+	// trusted-proxy list or a TLS failure returns before the server ever runs, and a join that only follows RunAndShutdown let
+	// the process exit with the shutdown flush still in flight. Same shape as the one in the integration harness.
+	defer func() {
+		stopRulesLoops()
+		select {
+		case <-rulesDone:
+		case <-time.After(rulesShutdownWait):
+			logger.WarnContext(ctx, "rules background loops did not finish before shutdown; per-rule statistics for the last window may be lost")
+		}
 	}()
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
@@ -236,27 +246,14 @@ func run() error {
 	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
 	go gw.Run(gwCtx)
-	err = httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
-
-	// Wait for the rules context's loops to finish before returning, or the process exits while its last write is still in
-	// flight. Review found this: rulesCtx.Run was started detached and nothing joined it, so the per-rule statistics flushed on
-	// shutdown (issue #837) were written on a goroutine the process did not wait for. The claim that a graceful shutdown keeps
-	// that window was therefore false in production while being true in tests, which drive Run directly.
+	// The deferred join above waits for the rules loops before this returns, so the shutdown flush (issue #837) completes rather
+	// than racing the process exit. Bounded, because a shutdown must end.
 	//
-	// Bounded, because a shutdown must end: the flush has its own short budget and this only has to outlast it.
-	//
-	// What this does NOT cover, and review was right to say so: the detection workers are not joined here either, so an
-	// evaluation still in flight can record statistics after the final flush has already run, and those are lost. Joining them
-	// too would mean ordering two contexts' shutdowns against each other, which is a larger change than the residual justifies:
-	// the loss is whatever one in-flight batch had produced, against a table read over days. Documented in the spec rather than
-	// left for a reader to discover.
-	stopRulesLoops()
-	select {
-	case <-rulesDone:
-	case <-time.After(rulesShutdownWait):
-		logger.WarnContext(ctx, "rules background loops did not finish before shutdown; per-rule statistics for the last window may be lost")
-	}
-	return err
+	// What it does NOT cover, and review was right to say so: the detection workers are not joined, so an evaluation still in
+	// flight can record statistics after the final flush has run, and those are lost. Joining them too would mean ordering two
+	// contexts' shutdowns against each other, which is a larger change than the residual justifies: the loss is whatever one
+	// in-flight batch had produced, against a table read over days. Documented in the spec rather than left to be discovered.
+	return httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
 }
 
 // rulesShutdownWait bounds how long shutdown waits for the rules context's loops to return. Only has to outlast the eval-stats
