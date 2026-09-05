@@ -80,6 +80,16 @@ const (
 	AuditDetectionConfigExclusionCreate   AuditAction = "detection_config.exclusion_create"
 	AuditDetectionConfigExclusionDelete   AuditAction = "detection_config.exclusion_delete"
 	AuditDetectionConfigRuleSettingUpdate AuditAction = "detection_config.rule_setting_update"
+
+	// Rule content authoring (issue #767). Records a change to the rule DOCUMENTS the detection engine loads, as distinct from the
+	// detection_config actions above, which record a change to how an existing rule behaves. Both matter, and conflating them
+	// would leave a reader unable to tell "someone retuned a rule" from "someone changed what we detect".
+	//
+	// Only a change that took effect is recorded. A submission validation refused did not alter the corpus, and recording it as a
+	// mutation would make this trail disagree with the thing it audits; the operator gets the refusal and its reason, and an
+	// authorization denial is already recorded by the chokepoint.
+	AuditRuleContentDocumentPut    AuditAction = "rule_content.document_put"
+	AuditRuleContentDocumentDelete AuditAction = "rule_content.document_delete"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller
