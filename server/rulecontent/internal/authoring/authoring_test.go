@@ -46,11 +46,11 @@ func (f *fakeWriter) DeleteDocument(_ context.Context, path string, expected int
 // fakeValidator captures the document set it was asked about, which is the property most of these tests are really about.
 type fakeValidator struct {
 	saw      []api.Document
-	warnings []string
+	warnings []api.ContentWarning
 	err      error
 }
 
-func (f *fakeValidator) Validate(_ context.Context, docs []api.Document) ([]string, error) {
+func (f *fakeValidator) Validate(_ context.Context, docs []api.Document) ([]api.ContentWarning, error) {
 	f.saw = docs
 	return f.warnings, f.err
 }
@@ -128,13 +128,17 @@ func TestPut_RefusedWritesNothing(t *testing.T) {
 func TestPut_WarningsDoNotBlockTheWrite(t *testing.T) {
 	t.Parallel()
 	w := &fakeWriter{}
-	v := &fakeValidator{warnings: []string{"authored/a.yml will not run: unsupported field"}}
+	v := &fakeValidator{warnings: []api.ContentWarning{
+		{Path: "authored/a.yml", Message: "authored/a.yml will not run: unsupported field"},
+	}}
 
 	version, warnings, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(7), version)
-	assert.Equal(t, []string{"authored/a.yml will not run: unsupported field"}, warnings)
+	assert.Equal(t, []api.ContentWarning{
+		{Path: "authored/a.yml", Message: "authored/a.yml will not run: unsupported field"},
+	}, warnings)
 	assert.Len(t, w.put, 1, "a warning is advice, not a refusal")
 }
 
@@ -252,4 +256,49 @@ func TestPut_UnreadableVersionRefusesBeforeReadingDocuments(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, v.saw)
 	assert.Empty(t, w.put)
+}
+
+// spec:rule-content/a-change-is-told-only-about-itself/a-write-reports-only-findings-about-the-document-written
+//
+// TestPut_ReportsOnlyWarningsAboutTheDocumentBeingWritten is the fix for #876, and the assertion that matters is the ABSENCE of
+// the other warning.
+//
+// Validation is corpus-wide by design, so the validator reports findings about every document in the proposed set. Passing all of
+// them back meant an operator writing one rule was told about files they never touched and could not fix, and worse, the caller
+// records warnings on the audit row, so a reviewer reading the row for one change saw findings about documents it was not about.
+//
+// A governance surface that misattributes is worse than a noisy one, which is why this is a test rather than a nicety.
+func TestPut_ReportsOnlyWarningsAboutTheDocumentBeingWritten(t *testing.T) {
+	t.Parallel()
+	w := &fakeWriter{}
+	v := &fakeValidator{warnings: []api.ContentWarning{
+		{Path: "imported/pre_existing.yml", Message: "imported/pre_existing.yml will not run: unsupported field"},
+		{Path: "authored/mine.yml", Message: "mine: search \"selection\" discriminates nothing"},
+	}}
+
+	_, warnings, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/mine.yml"})
+	require.NoError(t, err)
+
+	require.Len(t, warnings, 1, "only the finding about this document belongs to this change")
+	assert.Equal(t, "authored/mine.yml", warnings[0].Path)
+	assert.NotContains(t, warnings[0].Message, "pre_existing",
+		"a finding about a document the operator did not touch must not be attributed to their change")
+}
+
+// spec:rule-content/a-change-is-told-only-about-itself/a-deletion-reports-no-findings-about-the-document-removed
+//
+// TestDelete_ReportsNoWarningsAboutADocumentThatIsGone pins the delete side of the same narrowing. The proposed corpus no longer
+// contains the path, so nothing in the findings is about it, and that is the correct answer rather than a degenerate one: a
+// deletion that BREAKS the corpus is an error, not a warning.
+func TestDelete_ReportsNoWarningsAboutADocumentThatIsGone(t *testing.T) {
+	t.Parallel()
+	corpus := &fakeCorpus{docs: []api.Document{{Path: "authored/mine.yml"}, {Path: "imported/other.yml"}}}
+	v := &fakeValidator{warnings: []api.ContentWarning{
+		{Path: "imported/other.yml", Message: "imported/other.yml will not run: unsupported field"},
+	}}
+
+	_, warnings, err := newService(t, corpus, &fakeWriter{}, v).Delete(t.Context(), "authored/mine.yml")
+	require.NoError(t, err)
+
+	assert.Empty(t, warnings, "a pre-existing finding about another document is not a result of this deletion")
 }

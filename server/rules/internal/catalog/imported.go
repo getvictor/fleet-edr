@@ -649,10 +649,12 @@ func VendoredSource(ruleID string) ([]byte, bool) {
 // A thin delegation on purpose. The question is about compiled matcher structure, so the sigma package is the only place that can
 // answer it without a second implementation of matching semantics, and this type's job is to carry the answer out to the
 // operator-facing surfaces rather than to work it out again.
+//
+// No nil guard on detection, and review was right to ask. parseImported returns before constructing this type whenever the
+// compile failed, including for a refusable unmappableError (see the `if compileErr != nil` return above the constructor), so a
+// constructed importedRule always carries a compiled rule. A guard for a state the constructor cannot produce is dead code rather
+// than robustness, which is the same rule that removed the absent check from discriminatesNothing.
 func (r *importedRule) UndiscriminatingSearches() []string {
-	if r.detection == nil {
-		return nil
-	}
 	return r.detection.UndiscriminatingSearches()
 }
 

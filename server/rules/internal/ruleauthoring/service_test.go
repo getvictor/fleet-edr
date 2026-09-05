@@ -17,11 +17,11 @@ import (
 type fakeAuthor struct {
 	put      []rulecontentapi.Document
 	deleted  []string
-	warnings []string
+	warnings []rulecontentapi.ContentWarning
 	err      error
 }
 
-func (f *fakeAuthor) Put(_ context.Context, doc rulecontentapi.Document) (int64, []string, error) {
+func (f *fakeAuthor) Put(_ context.Context, doc rulecontentapi.Document) (int64, []rulecontentapi.ContentWarning, error) {
 	f.put = append(f.put, doc)
 	if f.err != nil {
 		return 0, f.warnings, f.err
@@ -29,7 +29,7 @@ func (f *fakeAuthor) Put(_ context.Context, doc rulecontentapi.Document) (int64,
 	return 11, f.warnings, nil
 }
 
-func (f *fakeAuthor) Delete(_ context.Context, path string) (int64, []string, error) {
+func (f *fakeAuthor) Delete(_ context.Context, path string) (int64, []rulecontentapi.ContentWarning, error) {
 	f.deleted = append(f.deleted, path)
 	if f.err != nil {
 		return 0, f.warnings, f.err
@@ -40,11 +40,11 @@ func (f *fakeAuthor) Delete(_ context.Context, path string) (int64, []string, er
 // fakeValidator is only reached by Check; the author owns validation for the mutating paths.
 type fakeValidator struct {
 	saw      []rulecontentapi.Document
-	warnings []string
+	warnings []rulecontentapi.ContentWarning
 	err      error
 }
 
-func (f *fakeValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]string, error) {
+func (f *fakeValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]rulecontentapi.ContentWarning, error) {
 	f.saw = docs
 	return f.warnings, f.err
 }
@@ -166,13 +166,17 @@ func TestChangesRequireAReason(t *testing.T) {
 	}
 }
 
+// spec:rule-content/a-change-is-told-only-about-itself/an-audit-entry-carries-only-findings-about-its-own-change
+//
 // TestPut_WarningsAreRecorded keeps the trail useful for the question a reviewer actually asks later. A warning is the operator
 // being told their rule will not fire; someone investigating why a detection never matched wants to know that was said at the
 // time rather than rediscovering it.
 func TestPut_WarningsAreRecorded(t *testing.T) {
 	t.Parallel()
 	audit := &recordingAudit{}
-	author := &fakeAuthor{warnings: []string{"authored/a.yml will not run: unsupported field"}}
+	author := &fakeAuthor{warnings: []rulecontentapi.ContentWarning{
+		{Path: "authored/a.yml", Message: "authored/a.yml will not run: unsupported field"},
+	}}
 
 	_, warnings, err := newService(t, author, &fakeValidator{}, audit).
 		Put(t.Context(), testActor(), "adding a rule", rulecontentapi.Document{Path: "authored/a.yml"})
@@ -217,7 +221,9 @@ func TestCheck_ChangesNothingAndAuditsNothing(t *testing.T) {
 // spec:rule-content/operators-can-check-content-before-publishing-it/a-check-reports-warnings-for-content-that-would-be-accepted
 func TestCheck_ReportsWarnings(t *testing.T) {
 	t.Parallel()
-	v := &fakeValidator{warnings: []string{"authored/x.yml will not run: unsupported field"}}
+	v := &fakeValidator{warnings: []rulecontentapi.ContentWarning{
+		{Path: "authored/x.yml", Message: "authored/x.yml will not run: unsupported field"},
+	}}
 
 	warnings, err := newService(t, &fakeAuthor{}, v, &recordingAudit{}).
 		Check(t.Context(), rulecontentapi.Document{Path: "authored/x.yml"})

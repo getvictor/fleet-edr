@@ -37,3 +37,29 @@ The system SHALL NOT claim to decide this for a regular-expression pattern. Whet
 - **GIVEN** a submitted rule whose pattern matches only an empty value
 - **WHEN** it is validated
 - **THEN** it is accepted with no such warning, because it is the narrowest pattern rather than the broadest
+
+### Requirement: A change is told only about itself
+
+The system SHALL report, for a change to rule content, only the advisory findings about the document being changed.
+
+Validation covers the whole proposed corpus and SHALL continue to, because a document that is valid alone can still be the change that stops the corpus loading. What is scoped is attribution, not validation: findings about documents the change did not touch belong to the corpus rather than to the change.
+
+An audit entry for a change SHALL carry only findings about that change. A reviewer reading it has to be able to trust that what it says is about the change it names, and a record that attributes an unrelated document's problem to someone's edit misinforms the one surface that exists to be trusted.
+
+#### Scenario: A write reports only findings about the document written
+
+- **GIVEN** a proposed corpus with an advisory finding about a document the operator is not changing
+- **WHEN** they write a different document
+- **THEN** they are told only about the document they wrote
+
+#### Scenario: A deletion reports no findings about the document removed
+
+- **GIVEN** an operator deletes a document
+- **WHEN** the deletion takes effect
+- **THEN** no advisory finding is reported for it, because it is no longer in the corpus
+
+#### Scenario: An audit entry carries only findings about its own change
+
+- **GIVEN** a change made while the corpus has findings about other documents
+- **WHEN** the audit entry is recorded
+- **THEN** it carries only the findings about the changed document

@@ -82,10 +82,10 @@ func TestCorpusValidator_UnaffordablePatternIsReportedNotSilent(t *testing.T) {
 	})
 	require.NoError(t, err, "one unaffordable rule does not stop the rest of the corpus loading")
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "authored/expensive.yml", "names the file the operator opens")
-	assert.Contains(t, warnings[0], `field "Image"`, "names the field to fix, which is the whole point of the message")
-	assert.Contains(t, warnings[0], "above the limit of", "and says it is a limit rather than a mystery")
-	assert.Contains(t, warnings[0], "will not run", "so the operator is not left thinking it is active")
+	assert.Contains(t, warnings[0].Message, "authored/expensive.yml", "names the file the operator opens")
+	assert.Contains(t, warnings[0].Message, `field "Image"`, "names the field to fix, which is the whole point of the message")
+	assert.Contains(t, warnings[0].Message, "above the limit of", "and says it is a limit rather than a mystery")
+	assert.Contains(t, warnings[0].Message, "will not run", "so the operator is not left thinking it is active")
 }
 
 // TestCorpusValidator_RefusesMalformedContent pins that a document which is not a rule at all is refused rather than stored and
@@ -126,8 +126,8 @@ func TestCorpusValidator_UnrunnableRuleBesideARunnableOneIsAWarning(t *testing.T
 	})
 	require.NoError(t, err, "one unrunnable rule must not block a corpus that otherwise loads")
 	require.Len(t, warnings, 1, "but the operator must be told it will not fire")
-	assert.Contains(t, warnings[0], "unmappable.yml")
-	assert.Contains(t, warnings[0], "will not run")
+	assert.Contains(t, warnings[0].Message, "unmappable.yml")
+	assert.Contains(t, warnings[0].Message, "will not run")
 }
 
 // spec:rule-content/authored-content-is-validated-by-the-loader/a-document-the-loader-would-not-read-is-refused
@@ -395,9 +395,9 @@ func TestCorpusValidator_WarnsOnARuleThatDiscriminatesNothing(t *testing.T) {
 	})
 	require.NoError(t, err, "a rule matching everything is a foot-gun, not an error: the operator may have meant it")
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "matches_everything", "names the rule")
-	assert.Contains(t, warnings[0], `search "selection"`, "and the search, which is what the operator has to look at")
-	assert.Contains(t, warnings[0], "discriminates nothing")
+	assert.Contains(t, warnings[0].Message, "matches_everything", "names the rule")
+	assert.Contains(t, warnings[0].Message, `search "selection"`, "and the search, which is what the operator has to look at")
+	assert.Contains(t, warnings[0].Message, "discriminates nothing")
 }
 
 // spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-discriminating-rule-is-not-warned-about

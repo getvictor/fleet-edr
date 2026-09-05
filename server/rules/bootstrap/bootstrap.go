@@ -741,7 +741,7 @@ var _ rulecontentapi.Validator = CorpusValidator{}
 // is an expected outcome for a corpus written for a fleet of sensors, and refusing the write over one would mean an operator
 // cannot store a rule that the deployment would simply not run. Those come back as warnings so the operator learns the rule will
 // not fire, rather than being told the document is broken.
-func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]string, error) {
+func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]rulecontentapi.ContentWarning, error) {
 	// Every check below runs BEFORE the corpus is parsed, and each one exists because the loader would otherwise not object.
 	// They are separate functions rather than a run of conditions because each carries a different reason, and a reader tracing
 	// a refusal needs the reason more than the sequence.
@@ -760,9 +760,22 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	if err != nil {
 		return nil, err
 	}
-	warnings := make([]string, 0, len(rejected))
+	// Each warning carries the document it is about, so the authoring path can report the ones concerning the change it is making
+	// (#876). Validation is corpus-wide and that is deliberate; attributing its findings to an unrelated write was not.
+	warnings := make([]rulecontentapi.ContentWarning, 0, len(rejected))
 	for _, r := range rejected {
-		warnings = append(warnings, fmt.Sprintf("%s will not run: %s", r.File, r.Reason))
+		warnings = append(warnings, rulecontentapi.ContentWarning{
+			Path:    r.File,
+			Message: fmt.Sprintf("%s will not run: %s", r.File, r.Reason),
+		})
+	}
+
+	// A rule's id is its file STEM, so the loaded rules cannot say which path they came from and the breadth warnings below have
+	// to be mapped back. Built from the documents actually submitted rather than guessed at, because the directory is not
+	// recoverable from the id.
+	pathByStem := make(map[string]string, len(docs))
+	for _, d := range docs {
+		pathByStem[strings.TrimSuffix(path.Base(d.Path), path.Ext(d.Path))] = d.Path
 	}
 	// A rule that matches everything is the foot-gun issue #767 names: it fires on every event of its type, so it buries real
 	// detections and costs evaluation on every batch to tell an operator nothing.
@@ -775,9 +788,12 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	// PRESENT. For an exec event's Image that is a distinction without a difference; for a field only some events carry, it is not.
 	for _, loadedRule := range loaded {
 		for _, searchName := range api.UndiscriminatingSearchesOf(loadedRule) {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s: search %q matches every event carrying its fields, so it discriminates nothing",
-				loadedRule.ID(), searchName))
+			warnings = append(warnings, rulecontentapi.ContentWarning{
+				Path: pathByStem[loadedRule.ID()],
+				Message: fmt.Sprintf(
+					"%s: search %q matches every event carrying its fields, so it discriminates nothing",
+					loadedRule.ID(), searchName),
+			})
 		}
 	}
 	if len(loaded) == 0 {
