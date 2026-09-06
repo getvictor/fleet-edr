@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -107,52 +109,104 @@ func TestQueuePruneRunner_PassesRetentionToTheSetAsideSweep(t *testing.T) {
 
 // spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/the-record-states-the-consequence-for-its-stage
 //
-// TestReportSetAside_ConsequenceMatchesTheStage is what the record is FOR: it tells an operator what to go and look at.
+// TestSetAsideConsequenceMatchesTheStage is what the record is FOR: it tells an operator what to go and look at.
 //
-// Both stages reported a gap in the process graph, and for the detection stage that is false. processHost completes the builder
-// before evaluating, and evaluateAndAck runs on an already-materialised batch, so a batch withdrawn there IS in the graph: the
-// claim sent an operator to inspect a process tree that was intact, which is worse than saying nothing.
+// Both stages reported a gap in the process graph, and for detection that is false. processHost completes the builder before
+// evaluating, and evaluateAndAck runs on an already-materialised batch, so a batch withdrawn there IS in the graph: the claim sent
+// an operator to inspect a process tree that was intact, which is worse than saying nothing.
 //
-// The detection wording is asserted as "did not complete" rather than "never evaluated", because evaluation ran. It failed
-// partway, and a batch can be partly evaluated before the failure, so the tempting alternative is its own false statement.
-func TestReportSetAside_ConsequenceMatchesTheStage(t *testing.T) {
+// Driven through ProcessOnce rather than by calling reportSetAside directly, and review was right to insist on the difference. The
+// stage now SELECTS the consequence, so the thing that can go wrong is a call site passing the other one; calling the reporter
+// directly tests the lookup while leaving both call sites unexercised, and transposing them there would keep such a test green
+// while recreating the operator-facing defect exactly.
+//
+// The failures are the two that reach a withdrawal: a graph builder that cannot write, and a detection error. Nack is scripted to
+// report a non-zero withdrawal so the reporting path is reached without waiting out a real attempt bound.
+func TestSetAsideConsequenceMatchesTheStage(t *testing.T) {
 	t.Parallel()
 
-	report := func(t *testing.T, stage setAsideStage) string {
+	// withdrawnBy runs one full cycle whose named stage fails, and returns the set-aside record the pipeline emitted.
+	withdrawnBy := func(t *testing.T, buildErr, detectErr error) (msg, stage, consequence string) {
 		t.Helper()
-		var logged bytes.Buffer
-		p := &Processor{
-			logger:  slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError})),
-			metrics: &capturingRecorder{},
-		}
-		p.reportSetAside(t.Context(), "host-1", 4, stage)
-		return logged.String()
+		h := &capturingLogHandler{}
+		log := &scriptedEventLog{setAside: 3, batch: []visibilityapi.Event{{EventID: "e-1", HostID: "host-a"}}}
+		p := newTestProcessor(t, log, stubBuilder{err: buildErr}, stubEvaluator{err: detectErr}, singleCycleOpts(h))
+		p.ProcessOnce(t.Context())
+		return setAsideRecord(t, h)
 	}
 
-	t.Run("the builder stage reports a graph gap", func(t *testing.T) {
+	t.Run("a batch withdrawn while the graph was being built reports the graph gap", func(t *testing.T) {
 		t.Parallel()
-		out := report(t, stageBuilder)
-		assert.Contains(t, out, "gap in its process graph", "these events never reached the graph")
-		assert.Contains(t, out, "stage=builder")
+		_, stage, consequence := withdrawnBy(t, errors.New("graph store unavailable"), nil)
+
+		assert.Equal(t, "builder", stage)
+		assert.Equal(t, "this host has a gap in its process graph", consequence,
+			"these events never reached the graph, so the gap is the real and only consequence")
 	})
 
-	t.Run("the detection stage does not claim a graph gap", func(t *testing.T) {
+	t.Run("a batch withdrawn at detection does not claim a graph gap", func(t *testing.T) {
 		t.Parallel()
-		out := report(t, stageDetection)
-		assert.NotContains(t, out, "gap in its process graph",
-			"the batch was materialised before evaluation, so its process tree is intact")
-		assert.Contains(t, out, "rule evaluation did not complete",
-			"what was actually lost is the rest of the evaluation")
-		assert.NotContains(t, out, "never evaluated",
-			"evaluation ran and failed partway, so claiming none happened would be a second false statement")
-		assert.Contains(t, out, "stage=detection")
+		_, stage, consequence := withdrawnBy(t, nil, errors.New("alert store unavailable"))
+
+		assert.Equal(t, "detection", stage)
+		assert.NotContains(t, consequence, "process graph",
+			"the builder completed before detection ran, so this host's process tree is intact")
+		assert.Equal(t, "detection did not complete for these events, so alerts they would have raised may be missing", consequence)
+	})
+
+	t.Run("the detection consequence does not blame a step it cannot identify", func(t *testing.T) {
+		t.Parallel()
+		_, _, consequence := withdrawnBy(t, nil, errors.New("insert alert: deadlock"))
+
+		// Everything Evaluate can fail with arrives as one error, and evaluateRule documents an alert-persistence failure
+		// overwriting the rule's own after every rule has run. So naming rule evaluation would point a responder at rule
+		// execution while the failure was in alert storage: the graph-gap defect again, one layer down.
+		assert.NotContains(t, consequence, "rule evaluation",
+			"a persistence failure sets the batch aside after every rule has already run")
+		assert.NotContains(t, consequence, "never evaluated",
+			"evaluation ran, so claiming none happened would be a second false statement")
+		assert.Contains(t, consequence, "may be missing",
+			"alerts written before the failure are durable, so overstating the loss sends someone hunting for alerts that exist")
 	})
 
 	t.Run("the message stays fixed so the line remains greppable", func(t *testing.T) {
 		t.Parallel()
-		for _, stage := range []setAsideStage{stageBuilder, stageDetection} {
-			assert.Contains(t, report(t, stage), "queued events set aside after repeated failure",
-				"the consequence rides on an attribute precisely so the message can stay constant")
-		}
+		fromBuilder, _, _ := withdrawnBy(t, errors.New("graph store unavailable"), nil)
+		fromDetection, _, _ := withdrawnBy(t, nil, errors.New("alert store unavailable"))
+
+		// Equality, not containment. A stage-specific suffix would still contain the common prefix, and an alert or a saved
+		// search authored on the exact line is what the fixed message exists to keep working.
+		assert.Equal(t, "queued events set aside after repeated failure", fromBuilder)
+		assert.Equal(t, fromBuilder, fromDetection,
+			"the consequence rides on an attribute precisely so the message can stay constant")
 	})
+}
+
+// setAsideRecord returns the message, stage and consequence of the one set-aside record a cycle emitted.
+//
+// Selects on a fragment of the message and then asserts the whole of it in the caller, which is deliberate: the selector has to
+// keep finding the record for a message that grew a suffix, or the assertion that would catch the suffix never runs.
+func setAsideRecord(t *testing.T, h *capturingLogHandler) (msg, stage, consequence string) {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var found []slog.Record
+	for _, r := range h.records {
+		if r.Level == slog.LevelError && strings.Contains(r.Message, "set aside") {
+			found = append(found, r)
+		}
+	}
+	require.Len(t, found, 1, "one withdrawal emits exactly one record")
+
+	found[0].Attrs(func(a slog.Attr) bool {
+		switch a.Key {
+		case "stage":
+			stage = a.Value.String()
+		case "consequence":
+			consequence = a.Value.String()
+		}
+		return true
+	})
+	return found[0].Message, stage, consequence
 }

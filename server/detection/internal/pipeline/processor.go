@@ -517,8 +517,9 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 // an absence of detections nobody was watching for. So the counter carries host_id, because "which host stopped contributing" is
 // the question, and the log names the host and the stage that failed, because the counter says it happened and not what to look at.
 //
-// Logged at ERROR rather than WARN. The consequence is a gap in one host's process tree and a set of events no rule ever saw,
-// which is not a condition to notice in aggregate later.
+// Logged at ERROR rather than WARN. Whichever stage it came from, a host has permanently stopped contributing some of its
+// activity, which is not a condition to notice in aggregate later. What exactly it stopped contributing depends on the stage and
+// is carried on the consequence attribute rather than stated here.
 //
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
 func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage setAsideStage) {
@@ -546,7 +547,8 @@ type setAsideStage string
 const (
 	// stageBuilder is the process-graph materialisation. A batch withdrawn here never reached the graph.
 	stageBuilder setAsideStage = "builder"
-	// stageDetection is rule evaluation, which runs on an already-materialised batch.
+	// stageDetection is detection: rule evaluation and the persistence of what it finds, running on an already-materialised
+	// batch. Both halves reach the withdrawal through one error, which is why the consequence names neither.
 	stageDetection setAsideStage = "detection"
 )
 
@@ -555,9 +557,15 @@ func (s setAsideStage) consequence() string {
 	if s == stageBuilder {
 		return "this host has a gap in its process graph"
 	}
-	// Deliberately "did not complete" rather than "were never evaluated". Evaluation ran; it failed partway, and a batch can be
-	// partially evaluated before the failure, so claiming no evaluation happened would be its own false statement.
-	return "rule evaluation did not complete for these events"
+	// Names the OUTCOME rather than the step that failed, and review was right to insist. Everything Engine.Evaluate can return
+	// arrives here as one error: a rule that failed hard, a retryable miss that ran out of grace, and an alert-persistence
+	// failure, which evaluateRule documents as overwriting the rule's own error after every rule has already run. Saying
+	// evaluation did not complete would be false for that last one and would point an operator at rule execution while the
+	// failure was in alert storage, which is the same defect as the graph-gap claim by another route.
+	//
+	// "may be missing" rather than "are missing", because a persistence failure on a later finding leaves the alerts written
+	// before it durable. Overstating the loss sends someone hunting for alerts that are already there.
+	return "detection did not complete for these events, so alerts they would have raised may be missing"
 }
 
 // hostOf returns the host a claimed batch belongs to. The processor claims per host, so every event in the batch carries the same

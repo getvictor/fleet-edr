@@ -162,15 +162,19 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// The description stays short because it renders as dashboard metadata beside the counter, where it competes with the chart for
 	// the reader's attention; the reasoning a maintainer needs lives here instead. Setting events aside is NOT data loss: ingest
 	// writes the archive before the work queue and retains it on its own window (ADR-0015), so the events stay available to hunting
-	// queries and alert evidence. What is given up is their contribution to the process graph and their evaluation by whichever
-	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
+	// queries and alert evidence.
+	//
+	// What IS given up depends on the stage the batch was withdrawn at, and stating it unconditionally is the defect #845 fixed.
+	// A batch withdrawn while the process graph was being built never reached the graph, so both its graph contribution and its
+	// evaluation are lost. One withdrawn at detection was folded into the graph first, so its graph contribution stands and what
+	// is lost is the rest of detection: the rules that had not finished, and any alerts whose write did not land.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
 		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). What the host in "+
-			"`host_id` lost depends on the stage, which the accompanying log line names: a batch withdrawn while the process graph was "+
-			"being built leaves a gap in that graph, while one withdrawn during rule evaluation is already in the graph and instead did "+
-			"not finish being evaluated. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
-			"condition never clears once it fires."),
+			"`host_id` lost depends on the stage, which the accompanying log line names on a `consequence` attribute: a batch withdrawn "+
+			"while the process graph was being built leaves a gap in that graph, while one withdrawn at detection is already in the "+
+			"graph and instead may be missing alerts. Alert on a non-zero increase, per host: the counter is cumulative, so an "+
+			"absolute-value condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
 	)
 	// One increment per rule per replica when the budget is exhausted, not per skipped batch: see the interface comment on
