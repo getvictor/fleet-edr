@@ -12,6 +12,8 @@ The system SHALL distinguish a rule that came from no document from one whose do
 
 The rule and the metadata describing it SHALL be resolved from ONE generation of the active rule set. The two are read together on every export, the set is replaced wholesale when rule content reloads, and a reload landing between two separate reads leaves the system describing a rule the deployment is no longer running. That is not a cosmetic inconsistency: for a rule loaded from a document, its metadata alone renders to nothing, so the export fails rather than reporting a stale answer.
 
+Exporting a document an OPERATOR wrote SHALL require the authorization that reading rule content requires, and exporting one that shipped with the product SHALL NOT. Until the export served the running document it could only return the product's own content, so the authorization that reads the rule catalog was the whole gate; the same gate over an operator's own rule hands it to roles that are refused it on the surface built for rule content. Requiring the stricter authorization for every rule would instead withdraw export of the shipped rules from roles that already read them on the catalog.
+
 The system SHALL NOT decide what to export by asking whether a rule is upstream's. Whether a rule carries a document and whose rule it is are separate questions with different answers for an operator's own rule content, and one predicate answering both will be wrong for whichever question it was not written for.
 
 #### Scenario: A rule an operator overwrote exports as theirs
@@ -20,6 +22,13 @@ The system SHALL NOT decide what to export by asking whether a rule is upstream'
 - **WHEN** they export that rule
 - **THEN** they receive the document they stored, byte for byte
 - **AND** they do not receive the shipped document the build still carries under that identifier
+
+#### Scenario: Exporting an authored rule needs more access
+
+- **GIVEN** a reader authorized to read the rule catalog but not to read rule content
+- **WHEN** they export a rule an operator wrote on that deployment
+- **THEN** the request is refused
+- **AND** exporting a rule that shipped with the product still succeeds for them
 
 #### Scenario: A rule expressed in code is rendered
 

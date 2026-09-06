@@ -11,6 +11,8 @@
 - [x] 2.1 Give the service a lookup returning a rule AND its metadata from one snapshot, and have the export route use it, so the document served and the metadata describing it cannot come from different generations.
 - [x] 2.2 Share one metadata projection between that lookup and the catalog listing, so the export cannot publish metadata that differs from what the catalog shows.
 - [x] 2.3 Re-derive the generated pack's "ours or not" partition from attribution rather than from the deleted lookup, and verify the generated pack is byte-identical.
+- [x] 2.5 Require rule-content read authorization for a document an operator wrote, and only for that. The route used to serve only the product's own content, so the catalog's own gate covered it; gating every rule instead would withdraw export of the shipped rules from roles that already read them on the catalog.
+- [x] 2.6 Set `Cache-Control: no-store`, since the URL now answers what is running and the answer changes on a reload.
 - [x] 2.4 Set `X-Content-Type-Options: nosniff` on the response. This is the first version of the route whose body is not fixed at build time, so a browser deciding a stored document looks like HTML is now reachable.
 
 ## 3. Tests

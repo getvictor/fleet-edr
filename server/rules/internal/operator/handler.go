@@ -182,6 +182,19 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 	// Asked of the rule that is RUNNING, not by looking the id up in the corpus this build embeds. A rule's identity is its file
 	// stem (#873), so an operator storing their own version of a shipped detection keeps its id, and the embedded lookup went on
 	// answering with the shipped document: bytes the deployment was not running and they had not written (#879).
+	// An operator's OWN rule document is rule content, and #767 put reading that behind rule_content.read, which is admin or
+	// senior analyst. Until this change the route could only return the product's own content, so alert.read was the whole gate;
+	// serving an operator's document under it would hand their rule to an analyst or auditor, who are denied it on the route that
+	// exists for rule content. Widening the gate for every rule instead would take export away from those roles for the shipped
+	// ones, which they can already read on the catalog.
+	//
+	// The refusal reveals only that this rule is locally authored, which GET /api/rules already reports to the same roles on every
+	// rule's Origin field, so gating this way leaks nothing the catalog does not.
+	if api.OriginOf(rule) == api.LocalOrigin && !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionRuleContentRead, identityapi.Resource{Type: "rule_content"}) {
+		return
+	}
+
 	body, fromDocument := api.SourceOf(rule)
 	if !fromDocument {
 		rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
@@ -199,6 +212,10 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 	// looked like HTML would execute whatever it found. The declared type plus the attachment disposition already say what this
 	// is; nosniff is what stops a browser overruling them, and apidocs sets it on the same reasoning.
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// This URL now answers "what is this deployment running", and the answer changes when rule content is reloaded. A cached copy
+	// would keep serving a generation that is no longer running, which is the same wrong answer the fix removed from the server
+	// side. The rule-content routes set this for the same reason.
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	// G705 flags this because the rule id reaching Exportable comes from the path, so taint analysis marks what it returns. The
 	// body is the stored rule document, never the id, and it is served as an attachment of a declared non-HTML type with sniffing

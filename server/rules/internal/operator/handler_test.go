@@ -274,6 +274,8 @@ func TestHandler_ExportRule(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("Content-Disposition"), `filename="credential_keychain_dump.yml"`)
 	// A rule document can be content an operator wrote, so a browser must not be free to decide it looks like HTML.
 	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+	// The answer changes when rule content is reloaded, so a cached copy would serve a generation that is no longer running.
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -586,4 +588,76 @@ func findRule(t *testing.T, rules []rulesapi.Rule, id string) rulesapi.Rule {
 	}
 	t.Fatalf("rule %q is not registered, so the fixture proves nothing", id)
 	return nil
+}
+
+// alertReadOnlyAuthZ is the analyst and auditor shape: alert.read, and no rule_content.read.
+type alertReadOnlyAuthZ struct{}
+
+func (alertReadOnlyAuthZ) Allow(_ context.Context, a identityapi.Action, _ identityapi.Resource) (identityapi.Decision, error) {
+	if a == identityapi.ActionRuleContentRead {
+		return identityapi.Decision{Allow: false, Reason: "role does not grant rule_content.read"}, nil
+	}
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/exporting-an-authored-rule-needs-more-access
+//
+// TestHandler_ExportRule_AuthorizesOperatorContentSeparately covers the authorization consequence of serving the RUNNING document,
+// which review found and which the earlier versions of this change shipped open.
+//
+// Before this change the route could only return the product's own content, so alert.read was the whole gate. Now the same URL can
+// return a rule an operator wrote, and #767 put reading that behind rule_content.read: analyst and auditor hold alert.read and not
+// rule_content.read, so without this the export would hand them a document the route built for rule content denies them.
+//
+// Both halves are asserted together because the value is precisely that they differ. Gating every rule on rule_content.read would
+// also pass the refusal half while taking export of the SHIPPED rules away from those roles, which they can already read on the
+// catalog, so a test that only checked the refusal would call that a fix.
+func TestHandler_ExportRule_AuthorizesOperatorContentSeparately(t *testing.T) {
+	t.Parallel()
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	const storedPath = catalog.CorpusRoot + "/" + id + ".yml"
+
+	export := func(t *testing.T, svc Service) *http.Response {
+		t.Helper()
+		h := New(svc, alertReadOnlyAuthZ{}, slog.Default())
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		// Closed by the caller rather than here: bodyclose reads the call site, and a Cleanup registered inside the helper is
+		// invisible to it. Closing where the response is used also keeps the two visible together.
+		return resp
+	}
+
+	t.Run("a rule the operator wrote is refused without rule_content.read", func(t *testing.T) {
+		t.Parallel()
+		stored := fstest.MapFS{storedPath: &fstest.MapFile{
+			Data: sigmaDoc("55555555-5555-4555-8555-555555555555", "Operator rewrote this one"),
+		}}
+		loaded, _, err := catalog.LoadCorpus(stored, catalog.CorpusRoot, func(string) bool { return true })
+		require.NoError(t, err)
+
+		resp := export(t, service.New(loaded, nil, slog.Default()))
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"their own rule content is denied to these roles on the route built for it, so this route must not hand it over")
+	})
+
+	t.Run("a shipped rule is still served, since it is not the operator's content", func(t *testing.T) {
+		t.Parallel()
+		resp := export(t, service.New(catalog.New(nil), nil, slog.Default()))
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode,
+			"these roles read the shipped rules on the catalog already, so gating every rule would be a regression")
+
+		got, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, string(embeddedCorpusFile(t, id)), string(got))
+	})
 }
