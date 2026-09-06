@@ -375,7 +375,8 @@ const (
 // host's work in timestamp order, so a nacked batch is that host's oldest pending work and the next claim takes it again; without a
 // bound, nothing newer for that host is ever claimed and the host stops contributing to the graph and raising detections entirely
 // (issue #836). Setting the events aside is not data loss: the archive is written before the queue and retained on its own window,
-// so what is given up is those events' contribution to the graph and their evaluation by rules.
+// so what is given up is the rest of those events' PROCESSING. How much of it depends on how far the batch got, which this layer
+// cannot see: Nack is called from both the graph-building stage and detection, and the caller reports the difference (issue #845).
 //
 // A claim is identified here by state alone, not by owner, which leaves one window this does not close: a worker whose fold outran
 // the 5-minute claim lease nacks rows a replacement worker has since re-claimed, resetting that claim and counting an attempt

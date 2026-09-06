@@ -17,9 +17,9 @@ import (
 //
 // TestReportSetAside covers the visibility half of issue #836, which is the half that was unambiguously wrong before.
 //
-// Bounding the retries stops a host stalling forever; it does not tell anyone it happened. Without a counter and a log, a host with
-// a gap in its process graph is indistinguishable from a quiet host, the backlog gauge does not separate them, and the only symptom
-// is an absence of detections nobody is watching for.
+// Bounding the retries stops a host stalling forever; it does not tell anyone it happened. Without a counter and a log, a host that
+// has given up part of its activity is indistinguishable from a quiet host, the backlog gauge does not separate them, and the only
+// symptom is an absence of detections nobody is watching for.
 //
 // The zero case is asserted as carefully as the non-zero one. Every ordinary retryable nack passes through here, so a report that
 // fired on zero would log and count on the common path and drown the signal it exists to raise.
@@ -43,7 +43,7 @@ func TestReportSetAside(t *testing.T) {
 
 		require.Len(t, rec.setAside, 1, "the counter is what an operator alerts on")
 		assert.Equal(t, "host-wedged", rec.setAside[0].hostID,
-			"attributed per host: a fleet-wide total cannot say which host has the gap")
+			"attributed per host: a fleet-wide total cannot say which host stopped contributing")
 		assert.Equal(t, int64(7), rec.setAside[0].n)
 
 		out := logged.String()
@@ -141,7 +141,8 @@ func TestSetAsideConsequenceMatchesTheStage(t *testing.T) {
 
 		assert.Equal(t, "builder", stage)
 		assert.Equal(t, "this host has a gap in its process graph", consequence,
-			"these events never reached the graph, so the gap is the real and only consequence")
+			"these events never reached the graph, which is the consequence an operator can act on: detection is lost too, but "+
+				"only because the graph never got them")
 	})
 
 	t.Run("a batch withdrawn at detection does not claim a graph gap", func(t *testing.T) {

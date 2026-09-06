@@ -557,14 +557,15 @@ func (s setAsideStage) consequence() string {
 	if s == stageBuilder {
 		return "this host has a gap in its process graph"
 	}
-	// Names the OUTCOME rather than the step that failed, and review was right to insist. Everything Engine.Evaluate can return
-	// arrives here as one error: a rule that failed hard, a retryable miss that ran out of grace, and an alert-persistence
-	// failure, which evaluateRule documents as overwriting the rule's own error after every rule has already run. Saying
-	// evaluation did not complete would be false for that last one and would point an operator at rule execution while the
-	// failure was in alert storage, which is the same defect as the graph-gap claim by another route.
+	// Names the OUTCOME rather than the step that failed, and review was right to insist twice. Exactly two things reach this
+	// withdrawal, and "a rule failed" is neither of them: evaluateRule logs a rule's own non-retryable error and returns nil, so
+	// per-rule isolation means it never leaves the engine. What does leave is an alert-persistence error, which returns from
+	// inside routeFinding's loop and so aborts the batch at the finding it happened on, leaving the rules after it unrun; or a
+	// retryable miss that ran out of attempts, where every rule did run. Naming rule evaluation would be false for the first and
+	// would point an operator at rule execution while the failure was in alert storage.
 	//
-	// "may be missing" rather than "are missing", because a persistence failure on a later finding leaves the alerts written
-	// before it durable. Overstating the loss sends someone hunting for alerts that are already there.
+	// "may be missing" rather than "are missing", because a persistence failure leaves the alerts written before it durable.
+	// Overstating the loss sends someone hunting for alerts that are already there.
 	return "detection did not complete for these events, so alerts they would have raised may be missing"
 }
 

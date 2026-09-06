@@ -259,8 +259,8 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 // EventsSetAside increments the set-aside counter by n for a host. Called by the processor when a nack withdraws events from
 // processing rather than returning them, which happens only once a batch has passed both retry bounds.
 //
-// Attributed per host deliberately: the question this answers is which host stopped contributing to the graph, and a fleet-wide
-// total cannot answer it.
+// Attributed per host deliberately: the question this answers is which host stopped contributing some of its activity, and a
+// fleet-wide total cannot answer it. WHAT it stopped contributing depends on the stage, which the accompanying log line names.
 func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
 	if r == nil || r.eventsSetAside == nil || n <= 0 {
 		return

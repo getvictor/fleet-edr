@@ -21,7 +21,7 @@ import (
 //
 // It also sweeps SET-ASIDE rows (processed = 3, issue #836), and those DO age on the retention window, which is the one place this
 // runner is not retention-independent. The distinction is deliberate. An acked row is finished and worth nothing, so it goes
-// whatever retention says. A set-aside row is the only record of which events a host stopped contributing to its process graph, so
+// whatever retention says. A set-aside row is the only record of which events a host stopped processing, so
 // it is kept for as long as the deployment keeps anything, and kept indefinitely when retention is disabled, which is what
 // disabling retention means everywhere else.
 type QueuePruneRunner struct {
