@@ -13,6 +13,7 @@ import (
 	"github.com/fleetdm/edr/server/migrations/runner"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 	"github.com/fleetdm/edr/server/testdb/full"
@@ -79,7 +80,7 @@ func TestRulePackUpgrade_PreservesTuning(t *testing.T) {
 			Data: []byte(packRule("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Packed Rule", "osascript-v2")),
 		},
 	}
-	upgraded, err := rc.UpgradePackFrom(ctx, v2, ".", nil)
+	upgraded, err := rc.UpgradePackFrom(ctx, v2, ".", nil, rulesbootstrap.RuleIdentityForPath)
 	require.NoError(t, err)
 	require.True(t, upgraded, "the newer pack must install")
 

@@ -72,6 +72,38 @@ func SortDocuments(docs []Document) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
 
+// PackInstall is what installing a build's rule pack did.
+//
+// Skipped is reported rather than logged and forgotten because it is a real divergence: the deployment is not running a rule the
+// pack ships, and the reason is the operator's own rule of the same identity. That is the correct outcome and still something they
+// are entitled to see, since nothing else would tell them.
+type PackInstall struct {
+	Changed bool
+	Version int64
+	Skipped []string
+}
+
+// RuleIdentity maps a document's path to the identity the rule it holds will load under.
+//
+// Supplied by the caller rather than derived here, for the reason the provenance projection is: the derivation belongs to the
+// loader, and a second copy of it in this context would agree until one of them changed. Then the copies would disagree silently,
+// which for this particular question means installing a pack document that collides with an operator's rule.
+//
+// It matters that this is identity and not path. A rule is identified by its file STEM (#873), so `authored/foo.yml` and
+// `imported/foo.yml` are the SAME rule stored twice, and a corpus holding both does not load at all: the loader refuses the whole
+// set rather than choosing between them, so every rule on the deployment stops, not just the pair.
+type RuleIdentity func(path string) string
+
+// Identify answers safely for a nil RuleIdentity, for which a document's identity is its path. That is the weakest correct
+// answer rather than a convenient one: it still catches a pack document landing on the exact path an operator holds, and it is
+// what a caller with no loader of its own can honestly claim to know.
+func (r RuleIdentity) Identify(path string) string {
+	if r == nil {
+		return path
+	}
+	return r(path)
+}
+
 // Source says where a rule document came from: shipped with the product, or written by an operator.
 //
 // Recorded when the document is stored rather than derived from its path, which is the decision the rest of this rests on. A

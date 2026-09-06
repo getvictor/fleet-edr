@@ -4,6 +4,8 @@ package tests
 
 import (
 	"log/slog"
+	"path"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -14,6 +16,10 @@ import (
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
+
+// stemIdentity is the identity the loader gives a document: its file stem. The tests supply it rather than passing nil, because
+// nil means "identity is the path", which is precisely the weaker rule the collision below is about.
+func stemIdentity(p string) string { return strings.TrimSuffix(path.Base(p), path.Ext(p)) }
 
 // shippedDoc is one document as a pack ships it.
 func shippedDoc(path, content string) api.Document {
@@ -66,12 +72,12 @@ func TestUpgradePack_ReplacesTheShippedHalfOnly(t *testing.T) {
 	_, err = s.PutDocument(ctx, api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version)
 	require.NoError(t, err)
 
-	upgraded, _, err := s.UpgradeVendoredTo(ctx, []api.Document{
+	installed, err := s.UpgradeVendoredTo(ctx, []api.Document{
 		shippedDoc("imported/a.yml", "a v2"),
 		shippedDoc("imported/new.yml", "new detection"),
-	})
+	}, stemIdentity)
 	require.NoError(t, err)
-	require.True(t, upgraded)
+	require.True(t, installed.Changed)
 
 	stored, err := s.Documents(ctx)
 	require.NoError(t, err)
@@ -105,7 +111,7 @@ func TestUpgradePack_LeavesAPathTheOperatorTookOver(t *testing.T) {
 	_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("my version")}, version)
 	require.NoError(t, err)
 
-	_, _, err = s.UpgradeVendoredTo(ctx, []api.Document{shippedDoc("imported/a.yml", "shipped v2")})
+	_, err = s.UpgradeVendoredTo(ctx, []api.Document{shippedDoc("imported/a.yml", "shipped v2")}, stemIdentity)
 	require.NoError(t, err)
 
 	stored, err := s.Documents(ctx)
@@ -134,14 +140,14 @@ func TestUpgradePack_IsIdempotent(t *testing.T) {
 		ctx := t.Context()
 		pack := []api.Document{shippedDoc("imported/a.yml", "a"), shippedDoc("imported/b.yml", "b")}
 
-		_, _, err := s.UpgradeVendoredTo(ctx, pack)
+		_, err := s.UpgradeVendoredTo(ctx, pack, stemIdentity)
 		require.NoError(t, err)
 		versionAfterFirst, err := s.Version(ctx)
 		require.NoError(t, err)
 
-		upgraded, _, err := s.UpgradeVendoredTo(ctx, pack)
+		installed, err := s.UpgradeVendoredTo(ctx, pack, stemIdentity)
 		require.NoError(t, err)
-		assert.False(t, upgraded, "the same pack must not reinstall")
+		assert.False(t, installed.Changed, "the same pack must not reinstall")
 
 		versionAfterSecond, err := s.Version(ctx)
 		require.NoError(t, err)
@@ -163,9 +169,9 @@ func TestUpgradePack_IsIdempotent(t *testing.T) {
 		require.NoError(t, err)
 
 		// This is the boot loop the naive comparison would produce: the stored digest cannot equal the build's pack digest here.
-		upgraded, _, err := s.UpgradeVendoredTo(ctx, pack)
+		installed, err := s.UpgradeVendoredTo(ctx, pack, stemIdentity)
 		require.NoError(t, err)
-		assert.False(t, upgraded, "an override must not make the same pack look like a newer one")
+		assert.False(t, installed.Changed, "an override must not make the same pack look like a newer one")
 
 		after, err := s.Version(ctx)
 		require.NoError(t, err)
@@ -180,7 +186,7 @@ func TestUpgradePack_RecordsWhatItInstalled(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 
-	_, _, err := s.UpgradeVendoredTo(ctx, []api.Document{shippedDoc("imported/a.yml", "a")})
+	_, err := s.UpgradeVendoredTo(ctx, []api.Document{shippedDoc("imported/a.yml", "a")}, stemIdentity)
 	require.NoError(t, err)
 
 	recorded, err := s.PackDigest(ctx)
@@ -204,9 +210,9 @@ func TestUpgradePack_RefusesAPackClaimingAuthoredContent(t *testing.T) {
 	_, err := s.Replace(ctx, []api.Document{shippedDoc("imported/a.yml", "a")})
 	require.NoError(t, err)
 
-	_, _, err = s.UpgradeVendoredTo(ctx, []api.Document{
+	_, err = s.UpgradeVendoredTo(ctx, []api.Document{
 		{Path: "imported/b.yml", Content: []byte("b"), Source: api.SourceAuthored},
-	})
+	}, stemIdentity)
 	require.ErrorIs(t, err, api.ErrUnknownSource)
 
 	stored, err := s.Documents(ctx)
@@ -231,11 +237,62 @@ func TestUpgradePackFrom_ABuildWithNoRulesLeavesTheStoredPackAlone(t *testing.T)
 	_, err = rc.Replace(ctx, []api.Document{shippedDoc("imported/a.yml", "a"), shippedDoc("imported/b.yml", "b")})
 	require.NoError(t, err)
 
-	upgraded, err := rc.UpgradePackFrom(ctx, fstest.MapFS{}, ".", nil)
+	upgraded, err := rc.UpgradePackFrom(ctx, fstest.MapFS{}, ".", nil, stemIdentity)
 	require.NoError(t, err, "an empty build is not an error, it is a build that has nothing to install")
 	assert.False(t, upgraded)
 
 	docs, err := rc.Corpus().Documents(ctx)
 	require.NoError(t, err)
 	assert.Len(t, docs, 2, "an empty pack must not be read as an instruction to delete every shipped rule")
+}
+
+// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
+//
+// TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity is the failure review caught, and it is worse than the shadowing it
+// looks like.
+//
+// A rule is identified by its file STEM (#873), not its path, so an operator's `authored/foo.yml` and a pack's `imported/foo.yml`
+// are the SAME rule stored twice. Filtering the pack by path misses that entirely, because the paths differ. The loader then
+// refuses the WHOLE corpus rather than choosing between them, the deployment falls back to the pack embedded in the binary, and
+// every rule the operator ever wrote stops running. A pack upgrade would have silently disabled all of their detections.
+func TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	version, err := s.Replace(ctx, []api.Document{shippedDoc("imported/other.yml", "other")})
+	require.NoError(t, err)
+
+	// The operator writes their own rule, under their own path. Its identity is "foo".
+	_, err = s.PutDocument(ctx, api.Document{Path: "authored/foo.yml", Content: []byte("mine")}, version)
+	require.NoError(t, err)
+
+	// A newer pack ships a rule of the same identity at a DIFFERENT path.
+	installed, err := s.UpgradeVendoredTo(ctx, []api.Document{
+		shippedDoc("imported/other.yml", "other"),
+		shippedDoc("imported/foo.yml", "shipped foo"),
+	}, stemIdentity)
+	require.NoError(t, err)
+
+	stored, err := s.Documents(ctx)
+	require.NoError(t, err)
+	got := pathsOf(t, stored)
+
+	assert.NotContains(t, got, "imported/foo.yml",
+		"installing a pack rule whose identity the operator owns leaves a corpus that does not load at all")
+	require.Contains(t, got, "authored/foo.yml", "the operator's rule stays")
+	assert.Equal(t, "mine", contentAt(t, stored, "authored/foo.yml"))
+
+	// Identity is derived once, by the loader, so every stored document still has a distinct one.
+	seen := make(map[string]string, len(stored))
+	for _, d := range stored {
+		id := stemIdentity(d.Path)
+		if prior, dup := seen[id]; dup {
+			t.Fatalf("two documents share the identity %q (%s and %s), so this corpus does not load", id, prior, d.Path)
+		}
+		seen[id] = d.Path
+	}
+
+	assert.Contains(t, installed.Skipped, "imported/foo.yml",
+		"the operator is entitled to know the deployment is not running a rule the pack ships")
 }

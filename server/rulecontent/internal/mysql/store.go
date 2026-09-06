@@ -179,26 +179,33 @@ func checkPackIsShipped(pack []api.Document) error {
 	return nil
 }
 
-// packMinusOperatorPaths returns the pack documents an upgrade may install: all of them except the ones at paths the operator has
-// taken over, each marked as the shipped content it is.
+// packMinusOperatorRules returns the pack documents an upgrade may install: all of them except the ones whose RULE the operator
+// has taken over, each marked as the shipped content it is. It also reports what it skipped, because that is a divergence from
+// the shipped pack an operator is entitled to know about.
+//
+// Keyed on rule IDENTITY rather than on path, which is the correction review caught. A rule is identified by its file stem, so an
+// operator's `authored/foo.yml` and a pack's `imported/foo.yml` are the same rule stored twice. Installing both does not shadow
+// one with the other: the loader refuses the WHOLE corpus, the deployment falls back to the pack embedded in the binary, and
+// every rule the operator wrote stops running. A path comparison misses that entirely, because the paths differ.
 //
 // Separate from the write so the decision is a pure function of what the pack carries and what is stored, which is the thing worth
 // reading on its own: an upgrade's blast radius is defined here and nowhere else.
-func packMinusOperatorPaths(pack, stored []api.Document) []api.Document {
+func packMinusOperatorRules(pack, stored []api.Document, identity api.RuleIdentity) (want []api.Document, skipped []string) {
 	authored := make(map[string]struct{}, len(stored))
 	for _, d := range stored {
 		if d.Source == api.SourceAuthored {
-			authored[d.Path] = struct{}{}
+			authored[identity.Identify(d.Path)] = struct{}{}
 		}
 	}
-	want := make([]api.Document, 0, len(pack))
+	want = make([]api.Document, 0, len(pack))
 	for _, d := range pack {
-		if _, taken := authored[d.Path]; taken {
+		if _, taken := authored[identity.Identify(d.Path)]; taken {
+			skipped = append(skipped, d.Path)
 			continue
 		}
 		want = append(want, api.Document{Path: d.Path, Content: d.Content, Source: api.SourceVendored})
 	}
-	return want
+	return want, skipped
 }
 
 // UpgradeVendoredTo installs pack as the shipped half of the corpus, leaving the operator's own content alone. It reports
@@ -217,14 +224,16 @@ func packMinusOperatorPaths(pack, stored []api.Document) []api.Document {
 // content actually held, so on a deployment that has overridden one shipped rule it can never equal the build's own pack digest;
 // triggering on that comparison would re-run the upgrade on every boot, bumping the version each time and making every replica
 // reload a corpus that did not change.
-func (s *Store) UpgradeVendoredTo(ctx context.Context, pack []api.Document) (bool, int64, error) {
+func (s *Store) UpgradeVendoredTo(
+	ctx context.Context, pack []api.Document, identity api.RuleIdentity,
+) (api.PackInstall, error) {
 	if err := checkPackIsShipped(pack); err != nil {
-		return false, 0, err
+		return api.PackInstall{}, err
 	}
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return false, 0, fmt.Errorf("begin tx for pack upgrade: %w", err)
+		return api.PackInstall{}, fmt.Errorf("begin tx for pack upgrade: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -232,46 +241,46 @@ func (s *Store) UpgradeVendoredTo(ctx context.Context, pack []api.Document) (boo
 	// against a concurrent replica running the same upgrade, so the second one reads the first one's result and no-ops.
 	var version int64
 	if err := tx.GetContext(ctx, &version, "SELECT version FROM rule_corpus_meta WHERE id = 1 FOR UPDATE"); err != nil {
-		return false, 0, fmt.Errorf("lock rule corpus meta: %w", err)
+		return api.PackInstall{}, fmt.Errorf("lock rule corpus meta: %w", err)
 	}
 
 	var rows []corpusRow
 	if err := tx.SelectContext(ctx, &rows, selectCorpusDocuments); err != nil {
-		return false, 0, fmt.Errorf("read rule corpus documents for pack upgrade: %w", err)
+		return api.PackInstall{}, fmt.Errorf("read rule corpus documents for pack upgrade: %w", err)
 	}
 	stored, err := documentsFromRows(rows)
 	if err != nil {
-		return false, 0, err
+		return api.PackInstall{}, err
 	}
 
-	want := packMinusOperatorPaths(pack, stored)
+	want, skipped := packMinusOperatorRules(pack, stored, identity)
 	target := api.PackDigest(want)
 	if target == api.PackDigest(api.VendoredDocuments(stored)) {
-		return false, version, nil
+		return api.PackInstall{Version: version, Skipped: skipped}, nil
 	}
 
 	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
-		return false, 0, fmt.Errorf("bump rule corpus version: %w", err)
+		return api.PackInstall{}, fmt.Errorf("bump rule corpus version: %w", err)
 	}
 	version++
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM rule_corpus_documents WHERE source = ?", string(api.SourceVendored)); err != nil {
-		return false, 0, fmt.Errorf("clear shipped rule corpus documents: %w", err)
+		return api.PackInstall{}, fmt.Errorf("clear shipped rule corpus documents: %w", err)
 	}
 	for _, d := range want {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
 			d.Path, string(d.Content), string(api.SourceVendored)); err != nil {
-			return false, 0, fmt.Errorf("insert shipped rule corpus document %q: %w", d.Path, err)
+			return api.PackInstall{}, fmt.Errorf("insert shipped rule corpus document %q: %w", d.Path, err)
 		}
 	}
 	if err := setPackDigest(ctx, tx, target); err != nil {
-		return false, 0, err
+		return api.PackInstall{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return false, 0, fmt.Errorf("commit pack upgrade: %w", err)
+		return api.PackInstall{}, fmt.Errorf("commit pack upgrade: %w", err)
 	}
-	return true, version, nil
+	return api.PackInstall{Changed: true, Version: version, Skipped: skipped}, nil
 }
 
 // PutDocument creates or replaces one document and bumps the version, in one transaction. Returns the new version.

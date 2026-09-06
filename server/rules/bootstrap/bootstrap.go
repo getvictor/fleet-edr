@@ -533,6 +533,17 @@ func EmbeddedCorpusFS() fs.FS { return catalog.ImportedCorpusFS() }
 // EmbeddedCorpusRoot is the path prefix the embedded corpus is stored under, which the loader reads it back by.
 const EmbeddedCorpusRoot = catalog.CorpusRoot
 
+// RuleIdentityForPath reports the identity a stored document's rule will load under.
+//
+// Exported so a caller outside this context can ask the question without answering it itself, which is the whole point: it
+// delegates to the single definition of the derivation rather than restating it. #873 counted five copies of that derivation and
+// unified them, and the failure mode of a sixth is quiet: two sides agree until one changes, and then a lookup keyed on identity
+// simply misses.
+//
+// rulecontent needs this to install a pack safely. A rule is identified by its file STEM, so an operator's `authored/foo.yml` and
+// a pack's `imported/foo.yml` are the same rule stored twice, and a corpus holding both does not load at all.
+func RuleIdentityForPath(p string) string { return catalog.RuleIDForPath(p) }
+
 // EmbeddedCorpusIncludes reports whether a walked path is rule content rather than the packaging beside it, so a seed stores
 // exactly what the loader will read.
 func EmbeddedCorpusIncludes(p string) bool { return catalog.IsCorpusFile(p) }

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -122,9 +123,15 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // id rather than in these files. That separation is what makes upgrading safe, and it is the reason issue #768 states the two
 // acceptance criteria it does.
 //
+// identity maps a document's path to the rule it loads as, and is supplied rather than derived here for the same reason the
+// provenance projection is: the derivation belongs to the loader. It is what keeps a pack document from colliding with an
+// operator's rule of the same identity at a different path, which would leave a corpus that does not load AT ALL.
+//
 // Failure is reported rather than fatal, matching SeedFrom for the same reason: a deployment that cannot install a newer pack
 // still detects with the pack it has.
-func (r *RuleContent) UpgradePackFrom(ctx context.Context, fsys fs.FS, root string, include func(path string) bool) (bool, error) {
+func (r *RuleContent) UpgradePackFrom(
+	ctx context.Context, fsys fs.FS, root string, include func(path string) bool, identity api.RuleIdentity,
+) (bool, error) {
 	docs, err := readAll(fsys, root, include)
 	if err != nil {
 		return false, err
@@ -138,15 +145,21 @@ func (r *RuleContent) UpgradePackFrom(ctx context.Context, fsys fs.FS, root stri
 	}
 
 	api.SortDocuments(docs)
-	upgraded, version, err := r.store.UpgradeVendoredTo(ctx, docs)
+	installed, err := r.store.UpgradeVendoredTo(ctx, docs, identity)
 	if err != nil {
 		return false, err
 	}
-	if !upgraded {
+	// Reported even when nothing else changed. A rule the pack ships and this deployment does not run is a divergence the
+	// operator chose, by writing their own rule of the same identity, and it is still the only place they would learn of it.
+	if len(installed.Skipped) > 0 {
+		r.logger.InfoContext(ctx, "rulecontent: kept the operator's own rules over the ones this build ships",
+			"documents", strings.Join(installed.Skipped, ","))
+	}
+	if !installed.Changed {
 		return false, nil
 	}
 	r.logger.InfoContext(ctx, "rulecontent: installed the rule pack from this build",
-		"documents", len(docs), "version", version)
+		"documents", len(docs), "version", installed.Version)
 	return true, nil
 }
 

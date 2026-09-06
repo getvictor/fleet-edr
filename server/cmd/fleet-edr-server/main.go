@@ -601,7 +601,7 @@ func openRuleContent(ctx context.Context, logger *slog.Logger, db *sqlx.DB) (*ru
 	// deployment that seeded once would otherwise run its first generation of detections forever (issue #768). A no-op when the
 	// stored pack already matches, so the ordinary restart writes nothing.
 	if _, err := rcCtx.UpgradePackFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
-		rulesbootstrap.EmbeddedCorpusIncludes); err != nil {
+		rulesbootstrap.EmbeddedCorpusIncludes, rulesbootstrap.RuleIdentityForPath); err != nil {
 		// Same reasoning as the seed: a deployment that cannot install a newer pack still detects with the pack it has.
 		logger.WarnContext(ctx, "rulecontent: could not install this build's rule pack; keeping the stored one", "err", err)
 	}
