@@ -22,6 +22,12 @@ var ErrDocumentNotFound = errors.New("rule content: document not found")
 // re-phrasing it here would make this package a second, drifting account of why the loader refuses things.
 var ErrRefused = errors.New("rule content: change refused")
 
+// ErrNoPreviousPack reports that no earlier generation of shipped content is retained, so there is nothing to roll back to.
+//
+// The ordinary state of a deployment that has never upgraded: it seeded once and is still running what it seeded. Reported rather
+// than treated as an empty restore, which would leave the deployment detecting nothing.
+var ErrNoPreviousPack = errors.New("rule content: no previous rule pack is retained")
+
 // ErrCorpusChanged reports that the corpus moved between being validated and being written, so the write was refused.
 //
 // This is what makes validation mean anything under concurrency. Validating a snapshot and then writing in a separate transaction

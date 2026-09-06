@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"io/fs"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentmysql "github.com/fleetdm/edr/server/rulecontent/internal/mysql"
+	rulecontentmigrations "github.com/fleetdm/edr/server/rulecontent/migrations"
 	rulecontenttestkit "github.com/fleetdm/edr/server/rulecontent/testkit"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
@@ -322,25 +324,42 @@ func TestPackDigest_UnrecordedIsUnknownNotEmpty(t *testing.T) {
 // predating the migration was written by the seed, and it is the direction that fails safely: over-crediting upstream is visible,
 // where the reverse silently drops a licence obligation.
 //
-// It rewinds by dropping the two columns and the migration's own version row, then re-applies the schema, so goose replays the
-// checked-in file rather than a copy of its DDL restated here. A copy would drift from the migration it claims to cover.
+// It rewinds by undoing what the migrations from 00002 onward added and deleting their version rows, then re-applies the schema,
+// so goose replays the checked-in files rather than a copy of their DDL restated here. A copy would drift from the migration it
+// claims to cover.
+//
+// The rewind has to cover EVERY migration at or above the one under test, not just that one. Removing 00002's row while a later
+// one is still recorded makes it a missing out-of-order migration, which goose refuses outright, and that is how adding 00003
+// broke this test. The count assertion below turns the next occurrence into a message naming the fix instead of a puzzle.
 func TestProvenanceMigration_LeavesExistingDocumentsIntact(t *testing.T) {
 	t.Parallel()
 	db := full.Open(t)
 	s := rulecontentmysql.New(db)
 	ctx := t.Context()
 
-	_, err := s.Replace(ctx, []api.Document{
+	// Adding a migration without extending the rewind below leaves it removing 00002's version row while a later one is still
+	// recorded, which goose refuses as a missing out-of-order migration. Asserting the count here makes that a message rather
+	// than a confusing failure inside ApplySchema.
+	files, err := fs.Glob(rulecontentmigrations.FS, "*.sql")
+	require.NoError(t, err)
+	require.Len(t, files, 3,
+		"a migration was added: extend the rewind below to undo it too, or this test fails inside goose with an out-of-order error")
+
+	_, err = s.Replace(ctx, []api.Document{
 		{Path: "imported/a.yml", Content: []byte("title: A\n"), Source: api.SourceVendored},
 		{Path: "imported/process_creation/b.yml", Content: []byte("title: B\n"), Source: api.SourceVendored},
 	})
 	require.NoError(t, err)
 
-	// Rewind to the pre-migration shape: the columns gone, and goose no longer believing it has applied 00002.
+	// Rewind to the pre-00002 shape: everything those migrations added is gone, and goose no longer believes it applied them.
 	for _, stmt := range []string{
 		"ALTER TABLE rule_corpus_documents DROP COLUMN source",
 		"ALTER TABLE rule_corpus_meta DROP COLUMN pack_digest",
-		"DELETE FROM rulecontent_goose_db_version WHERE version_id = 2",
+		"DROP TABLE IF EXISTS rule_corpus_previous_documents",
+		"ALTER TABLE rule_corpus_meta DROP COLUMN previous_pack_digest",
+		"ALTER TABLE rule_corpus_meta DROP COLUMN declined_pack_digest",
+		"ALTER TABLE rule_corpus_meta DROP COLUMN installed_pack_digest",
+		"DELETE FROM rulecontent_goose_db_version WHERE version_id >= 2",
 	} {
 		_, err := db.ExecContext(ctx, stmt)
 		require.NoError(t, err, "rewind step %q", stmt)

@@ -163,6 +163,41 @@ func (r *RuleContent) UpgradePackFrom(
 	return true, nil
 }
 
+// RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
+// declined so a restart does not reinstall it.
+//
+// The pack being declined is read from what the UPGRADE recorded rather than from the build this process is running, which review
+// caught: during a rolling deployment a rollback served by an older replica would otherwise decline that replica's pack and leave
+// the newer one free to reinstall on the next start.
+//
+// identity is needed for the same reason the install path needs it: a rule the operator has taken over since the upgrade must not
+// be taken back by the restore.
+func (r *RuleContent) RollbackPackTo(ctx context.Context, identity api.RuleIdentity) (api.PackRollback, error) {
+	rolled, err := r.store.RollbackPack(ctx, identity)
+	if err != nil {
+		return api.PackRollback{}, err
+	}
+	if len(rolled.Withheld) > 0 {
+		r.logger.InfoContext(ctx, "rulecontent: kept the operator's own rules over the ones being restored",
+			"documents", strings.Join(rolled.Withheld, ","))
+	}
+	r.logger.InfoContext(ctx, "rulecontent: rolled back to the previously installed rule pack",
+		"pack", rolled.Restored, "version", rolled.Version)
+	return rolled, nil
+}
+
+// PackStatusFrom reports what shipped content this deployment runs and how it differs from the pack in this build.
+func (r *RuleContent) PackStatusFrom(
+	ctx context.Context, fsys fs.FS, root string, include func(path string) bool, identity api.RuleIdentity,
+) (api.PackStatus, error) {
+	docs, err := readAll(fsys, root, include)
+	if err != nil {
+		return api.PackStatus{}, err
+	}
+	api.SortDocuments(docs)
+	return r.store.PackStatusAgainst(ctx, docs, identity)
+}
+
 // SeedFrom populates the corpus from fsys when the corpus is empty, and reports whether it wrote anything.
 //
 // Seeding rather than migrating the content in, because the content is not schema: it changes on its own cadence, it is large, and
