@@ -461,3 +461,81 @@ func TestPackStatusFrom_ARootThatDoesNotExistIsAnError(t *testing.T) {
 	_, err := rc.PackStatusFrom(t.Context(), fstest.MapFS{}, "no-such-root", nil, stemIdentity)
 	require.Error(t, err)
 }
+
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-generation-with-no-shipped-rules-is-still-restorable
+//
+// TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus covers the case counting rows gets wrong.
+//
+// A corpus holding only the operator's rules retains a generation with ZERO shipped documents when a pack is first installed onto
+// it. That generation exists and has an identity (the digest of nothing, which is a real value rather than empty), so counting
+// retained rows reports it as "never upgraded" and refuses the one rollback that would undo the upgrade. The recorded digest is
+// what distinguishes the two, which is what the column is for.
+func TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus(t *testing.T) {
+	t.Parallel()
+	rc := newRuleContent(t)
+	ctx := t.Context()
+
+	// An authored-only corpus: their rules, no shipped content at all.
+	_, err := rc.Replace(ctx, []api.Document{
+		{Path: "authored/mine.yml", Content: []byte("mine"), Source: api.SourceAuthored},
+	})
+	require.NoError(t, err)
+
+	installed, err := rc.UpgradePackFrom(ctx, packFS(map[string]string{"imported/a.yml": "a"}), ".", nil, stemIdentity)
+	require.NoError(t, err)
+	require.True(t, installed, "the pack must install onto a corpus that held no shipped content")
+
+	rolled, err := rc.RollbackPackTo(ctx, stemIdentity)
+	require.NoError(t, err, "the generation retained was empty, not absent, so this rollback must be possible")
+	assert.NotEmpty(t, rolled.Restored, "an empty generation still has an identity")
+
+	docs, err := rc.Corpus().Documents(ctx)
+	require.NoError(t, err)
+	require.Len(t, docs, 1, "the shipped rule the upgrade added is gone again")
+	assert.Equal(t, "authored/mine.yml", docs[0].Path, "and their own rule is what remains")
+}
+
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rollback-holds-against-a-build-differing-in-an-override
+//
+// TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule is the way a restart could undo a rollback, which review found.
+//
+// Declining on the pack AS SHIPPED looks equivalent to declining on what it would store, and is not. On a deployment holding an
+// override those two digests differ, so a build whose pack differs from the declined one ONLY in the overridden rule does not
+// match the recorded decline: it installs the rest of itself and the rollback is undone on the next start, silently. The
+// comparison has to be like-for-like against what an install would actually store.
+func TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule(t *testing.T) {
+	t.Parallel()
+	rc := newRuleContent(t)
+	ctx := t.Context()
+
+	_, err := rc.SeedFrom(ctx, packFS(map[string]string{"imported/a.yml": "a v1", "imported/b.yml": "b v1"}), ".", nil)
+	require.NoError(t, err)
+
+	// The operator takes over rule "a", then a newer pack lands and is rolled back.
+	_, err = rc.Replace(ctx, []api.Document{
+		{Path: "imported/a.yml", Content: []byte("mine"), Source: api.SourceAuthored},
+		{Path: "imported/b.yml", Content: []byte("b v1"), Source: api.SourceVendored},
+	})
+	require.NoError(t, err)
+
+	v2 := packFS(map[string]string{"imported/a.yml": "a v2", "imported/b.yml": "b v2"})
+	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	require.NoError(t, err)
+
+	// A build whose pack differs from the declined one only in the rule the operator owns. It would store exactly what the
+	// declined pack would store, so it must not be installed.
+	v2b := packFS(map[string]string{"imported/a.yml": "a v2 tweaked", "imported/b.yml": "b v2"})
+	reinstalled, err := rc.UpgradePackFrom(ctx, v2b, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	assert.False(t, reinstalled, "a pack that would store the declined content must not undo the rollback")
+
+	docs, err := rc.Corpus().Documents(ctx)
+	require.NoError(t, err)
+	for _, d := range docs {
+		if d.Path == "imported/b.yml" {
+			assert.Equal(t, "b v1", string(d.Content), "the deployment is still on the generation it rolled back to")
+		}
+	}
+}

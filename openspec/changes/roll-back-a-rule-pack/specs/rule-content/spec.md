@@ -14,7 +14,9 @@ A rollback SHALL leave content the operator wrote untouched, including content w
 
 A rollback SHALL NOT restore shipped content whose RULE the operator has taken over since the upgrade, whatever path either is stored under. Their rule wins, as it does when shipped content is installed, and the shipped content withheld for that reason SHALL be reported.
 
-A rollback SHALL survive a restart: the system SHALL NOT reinstall a pack an operator rolled back from. That refusal SHALL apply to the declined pack only, so shipped content from a later build installs normally without the operator having to re-enable anything.
+A rollback SHALL survive a restart: the system SHALL NOT reinstall shipped content an operator rolled back from. What is declined SHALL be identified by the content that would be STORED rather than by the content a build carries, because those differ on a deployment holding an override and the looser comparison lets a build differing only in an overridden rule reinstall the rest of itself. The refusal SHALL apply to that content only, so a later build storing different content installs normally without the operator having to re-enable anything.
+
+A retained generation SHALL be recognised by its recorded identity rather than by whether it contains any documents, so a generation that legitimately held no shipped rules can still be restored.
 
 Rolling back when no generation is retained SHALL be reported, and SHALL NOT replace the shipped content with an empty set.
 
@@ -53,6 +55,18 @@ Rolling back when no generation is retained SHALL be reported, and SHALL NOT rep
 - **GIVEN** a corpus stored before pack identity was recorded, whose identity is therefore unrecorded
 - **WHEN** it installs a newer pack and its status is read
 - **THEN** it reports a previous generation is available, and rolling back restores it
+
+#### Scenario: A rollback holds against a build differing in an override
+
+- **GIVEN** a deployment that rolled back, holding its own version of one of the shipped rules
+- **WHEN** it is started on a build whose shipped content differs from the declined content only in that rule
+- **THEN** nothing is installed, because that build would store the content the operator declined
+
+#### Scenario: A generation with no shipped rules is still restorable
+
+- **GIVEN** a corpus that held only the operator's own rules when a pack was first installed onto it
+- **WHEN** it rolls back
+- **THEN** the generation with no shipped rules is restored, leaving their own rules and none of the pack's
 
 #### Scenario: Rolling back with nothing retained is reported
 

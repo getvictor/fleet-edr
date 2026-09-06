@@ -42,22 +42,19 @@ ALTER TABLE rule_corpus_meta
 -- construction, so the very next start would reinstall the pack the operator just rejected, and every start after that. The
 -- operator would have no way to stay on the older generation except never restarting.
 --
--- So a rollback records WHICH pack was declined, by the digest of the build's pack as shipped, and the upgrade skips a pack whose
--- digest matches. It is keyed on the pack rather than on a boolean because the decision is about that pack and not about upgrades
--- in general: the next release ships a different one, its digest does not match, and it installs normally. An operator does not
--- have to remember to switch upgrades back on, which is the kind of latch that silently leaves a fleet on old detections.
+-- So a rollback records WHICH pack was declined, and the upgrade skips a pack that would store the same content. What is recorded
+-- is the digest of the shipped content being REPLACED, not of the build's pack as shipped, and the comparison is like-for-like
+-- against what an install would store. Anything looser is reachable: the two differ on a deployment holding an override, so a
+-- build differing from the declined one only in an overridden rule would install the rest of itself and undo the rollback. It is
+-- also why this is not derived from the build the process is running, which would let a rollback served by an older replica
+-- during a rolling deployment decline that replica's pack and leave the newer one free to reinstall.
+--
+-- It is keyed on the pack rather than on a boolean because the decision is about that pack and not about upgrades in general: the
+-- next release stores different content, so it installs normally. An operator does not have to remember to switch upgrades back
+-- on, which is the kind of latch that silently leaves a fleet on old detections.
 -- +goose StatementBegin
 ALTER TABLE rule_corpus_meta
 	ADD COLUMN declined_pack_digest VARCHAR(64) NOT NULL DEFAULT '';
--- +goose StatementEnd
-
--- installed_pack_digest is the digest of the build pack the last upgrade installed FROM, before operator overrides were filtered
--- out of it. pack_digest describes the shipped content actually stored, which is the right thing for integrity and the wrong
--- thing for this: on a deployment holding an override the two can never be equal, so a rollback could not name the pack it was
--- declining. This is that name.
--- +goose StatementBegin
-ALTER TABLE rule_corpus_meta
-	ADD COLUMN installed_pack_digest VARCHAR(64) NOT NULL DEFAULT '';
 -- +goose StatementEnd
 
 -- +goose Down

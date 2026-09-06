@@ -318,19 +318,23 @@ func (s *Store) UpgradeVendoredTo(
 		return api.PackInstall{}, err
 	}
 
-	// A pack the operator rolled back from is not installed again. Without this the next start would reinstall what they just
-	// rejected, and every start after that, so the only way to stay on the older generation would be never to restart.
 	var declined string
 	if err := tx.GetContext(ctx, &declined, "SELECT declined_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
 		return api.PackInstall{}, fmt.Errorf("read declined pack digest: %w", err)
 	}
-	shipped := api.PackDigest(pack)
-	if declined != "" && declined == shipped {
-		return api.PackInstall{Version: version, Declined: true}, nil
-	}
 
 	want, skipped := packMinusOperatorRules(pack, stored, identity)
 	target := api.PackDigest(want)
+
+	// A pack the operator rolled back from is not installed again. Without this the next start would reinstall what they just
+	// rejected, and every start after that, so the only way to stay on the older generation would be never to restart.
+	//
+	// Compared on what this pack WOULD STORE rather than on the pack as shipped, which review caught: those differ on a
+	// deployment holding an override, so a build differing from the declined one only in an overridden rule would install the
+	// rest of it and undo the rollback. Like-for-like is the only comparison that means "this is the content you rejected".
+	if declined != "" && declined == target {
+		return api.PackInstall{Version: version, Declined: true}, nil
+	}
 	if target == api.PackDigest(api.VendoredDocuments(stored)) {
 		return api.PackInstall{Version: version, Skipped: skipped}, nil
 	}
@@ -348,15 +352,6 @@ func (s *Store) UpgradeVendoredTo(
 	version++
 	if err := setPackDigest(ctx, tx, target); err != nil {
 		return api.PackInstall{}, err
-	}
-	// installed_pack_digest names the BUILD's pack, before operator overrides were filtered out of it, which is what a rollback
-	// has to record as declined. pack_digest cannot serve: it describes the content actually stored, so on a deployment holding
-	// an override it never equals any build's pack digest.
-	w := &txWriter{ctx: ctx, tx: tx}
-	w.exec("record installed pack digest",
-		"UPDATE rule_corpus_meta SET installed_pack_digest = ? WHERE id = 1", shipped)
-	if w.err != nil {
-		return api.PackInstall{}, w.err
 	}
 	if err := tx.Commit(); err != nil {
 		return api.PackInstall{}, fmt.Errorf("commit pack upgrade: %w", err)
@@ -387,6 +382,20 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 		return api.PackRollback{}, fmt.Errorf("lock rule corpus meta: %w", err)
 	}
 
+	// Whether a generation is retained is the recorded DIGEST, not the row count, and review was right that the difference is
+	// reachable: a corpus holding only the operator's rules retains a generation with zero shipped documents, whose digest is the
+	// digest of nothing rather than empty. Counting rows would report that as "never upgraded" and refuse to undo the upgrade
+	// that added shipped rules to it.
+	var meta struct {
+		Rejected string `db:"pack_digest"`
+		Previous string `db:"previous_pack_digest"`
+	}
+	if err := tx.GetContext(ctx, &meta,
+		"SELECT pack_digest, previous_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		return api.PackRollback{}, fmt.Errorf("read rule corpus meta: %w", err)
+	}
+	rejected := meta.Rejected
+
 	var retained []struct {
 		Path    string `db:"path"`
 		Content string `db:"content"`
@@ -399,7 +408,7 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 	if err := tx.SelectContext(ctx, &rows, selectCorpusDocuments); err != nil {
 		return api.PackRollback{}, fmt.Errorf("read rule corpus documents for rollback: %w", err)
 	}
-	if len(retained) == 0 {
+	if meta.Previous == "" {
 		return api.PackRollback{}, api.ErrNoPreviousPack
 	}
 
@@ -423,15 +432,6 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 	}
 	version++
 
-	// Declined is read from what the UPGRADE recorded, not from the pack the replica serving this request happens to carry.
-	// During a rolling deployment those differ: a rollback through an older replica would otherwise decline that replica's pack
-	// and leave the newer one free to reinstall on the next start, which is the failure the decline exists to prevent.
-	var installedFrom string
-	if err := tx.GetContext(ctx, &installedFrom,
-		"SELECT installed_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
-		return api.PackRollback{}, fmt.Errorf("read installed pack digest: %w", err)
-	}
-
 	restored := api.PackDigest(restore)
 	if err := setPackDigest(ctx, tx, restored); err != nil {
 		return api.PackRollback{}, err
@@ -440,9 +440,11 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 	// in place would let a second rollback "restore" the content already installed and report success having changed nothing.
 	w := &txWriter{ctx: ctx, tx: tx}
 	w.exec("clear retained shipped content", "DELETE FROM rule_corpus_previous_documents")
+	// The declined pack is the content being REPLACED, read before the restore overwrote it, and it is deliberately not derived
+	// from the build this process is running: during a rolling deployment a rollback served by an older replica would otherwise
+	// decline that replica's pack and leave the newer one free to reinstall. What the operator rejected is what was stored.
 	w.exec("record declined pack",
-		"UPDATE rule_corpus_meta SET previous_pack_digest = '', declined_pack_digest = ?, installed_pack_digest = '' WHERE id = 1",
-		installedFrom)
+		"UPDATE rule_corpus_meta SET previous_pack_digest = '', declined_pack_digest = ? WHERE id = 1", rejected)
 	if w.err != nil {
 		return api.PackRollback{}, w.err
 	}

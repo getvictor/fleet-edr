@@ -358,7 +358,6 @@ func TestProvenanceMigration_LeavesExistingDocumentsIntact(t *testing.T) {
 		"DROP TABLE IF EXISTS rule_corpus_previous_documents",
 		"ALTER TABLE rule_corpus_meta DROP COLUMN previous_pack_digest",
 		"ALTER TABLE rule_corpus_meta DROP COLUMN declined_pack_digest",
-		"ALTER TABLE rule_corpus_meta DROP COLUMN installed_pack_digest",
 		"DELETE FROM rulecontent_goose_db_version WHERE version_id >= 2",
 	} {
 		_, err := db.ExecContext(ctx, stmt)
