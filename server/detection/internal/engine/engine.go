@@ -24,7 +24,7 @@ import (
 // group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
 // alert_count attribute shape.
 
-// batchTally accumulates what one batch's evaluation should record ONCE THE BATCH IS ACKNOWLEDGED.
+// batchTally accumulates what one batch's evaluation should record ONCE THAT BATCH WILL NOT BE PROCESSED AGAIN.
 //
 // Nothing is written while evaluating, and that is the whole design. A batch that fails is nacked and replayed whole, so a counter
 // incremented during evaluation counts a retried batch twice; #631 measured roughly 130 materialization retries a minute from one
@@ -249,8 +249,8 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	// One statistics accumulator for the batch, recorded from a defer so every exit path reports the work it did: a hard error
 	// mid-loop, a retryable miss after the loop, and success. Recorded HERE rather than handed back like the tally, because
 	// unlike a monitor match an evaluation is not something a replay must avoid counting twice; see RuleEvalStat's doc. Handing
-	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is never
-	// acknowledged and the caller's record-after-ack step never runs.
+	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is nacked rather
+	// than acknowledged, and the caller records only once a batch will not be processed again.
 	var stats rulesapi.RuleEvalStats
 	defer func() { e.recordEvalStats(ctx, stats) }()
 	var pendingMiss error

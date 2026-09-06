@@ -266,7 +266,7 @@ type MonitorMatch struct {
 // once. That is usually its acknowledgement; it is also its withdrawal from the queue after repeated failure, where there is no
 // later attempt to count it (#843).
 //
-// The cost of that choice is the opposite failure: a crash between the acknowledgement and the write loses those counts, and that
+// The cost of that choice is the opposite failure: a crash between that transition and the write loses those counts, and that
 // is the RISK-BEARING direction, not a safe one. A number that is too low makes a rule look quiet, which is what persuades an
 // operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to prevent. It is accepted here because
 // the alternative counts a replayed batch once per attempt, which is a systematic error on every retry rather than a rare one

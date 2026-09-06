@@ -609,7 +609,8 @@ func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.de
 // evaluation statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
 func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.evalStatsBuffer }
 
-// MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to after acknowledging a batch
+// MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to once a batch will not be
+// processed again
 // (issue #813). Same direction as the mode resolver above: the rules context owns the table, and detection consumes the narrow
 // interface rather than reaching into it (ADR-0004).
 func (r *Rules) MonitorMatchRecorder() api.MonitorMatchRecorder { return r.detectionConfigStore }

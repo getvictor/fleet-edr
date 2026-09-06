@@ -6,7 +6,7 @@
 - [x] 1.2 Record it in the processor when the queue reports the whole batch withdrawn, and only then.
 - [x] 1.3 Compare against the batch size rather than against zero, since a partial withdrawal leaves rows that are evaluated again.
 - [x] 1.4 Update the recorder's contract, which described the acknowledgement as the only transition, and drop the stale claim-lease inaccuracy that #817 removed.
-- [x] 1.5 Sweep every other place that framed the record as happening only after an acknowledgement, found by grepping the claim rather than by taking review's list: the port `MonitorMatchRecorder`, the counter's description and its recorder, the eval-stats contrast in three files, the processor's field comment, and the engine's tally comments. Ten sites; review named two.
+- [x] 1.5 Sweep every other place that framed the record as happening only after an acknowledgement. Nineteen sites in the end, across two passes: the port, the counter's description and residual list, the recorder, the eval-stats contrast in five files, the processor's field comment, the runner's setter, both bootstraps, the deadlock-retry rationale, and the engine's tally comments. The first pass grepped case-sensitively for the phrasings it had already seen and missed six; the second grepped `acknowledg` case-insensitively across every comment, which is the sweep that should have been run first.
 
 ## 2. Tests
 

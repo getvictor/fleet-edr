@@ -16,12 +16,12 @@ import (
 // One statement for the whole set rather than one per rule: a flush carries every rule that ran since the last one, which at a thousand
 // rules is a great many.
 //
-// Unlike RecordMonitorMatches, this is called whether or not the batch was acknowledged, and a replayed batch adds again. That is not the
-// retry inflation the sibling avoids, it is a different quantity: a monitor match is a fact about the world, so a replay must not make it
-// two, whereas an evaluation is work the server actually performed and a replay really did perform it again. The figures a reader derives
-// survive it, because evaluations and eval_ns_sum inflate by the same factor and their ratio does not move. Recording only after an
-// acknowledgement would also put retryable_misses out of reach, since a batch that ends in a retryable miss is never acknowledged, and that
-// counter is what names the rule driving the churn.
+// Unlike RecordMonitorMatches, this is called whether or not the batch is finished with the queue, and a replayed batch adds again.
+// That is not the retry inflation the sibling avoids, it is a different quantity: a monitor match is a fact about the world, so a
+// replay must not make it two, whereas an evaluation is work the server actually performed and a replay really did perform it
+// again. The figures a reader derives survive it, because evaluations and eval_ns_sum inflate by the same factor and their ratio
+// does not move. Recording only on a batch's terminal transition would also put retryable_misses nearly out of reach, since a batch
+// ending in a retryable miss is nacked rather than acknowledged, and that counter is what names the rule driving the churn.
 //
 // The day comes from the SERVER's clock (UTC), for the same reason the sibling takes it from there: the counters answer "what is this rule
 // costing lately", a question about now, and attributing work to an event's own timestamp would let a skewed host clock or a long queue
