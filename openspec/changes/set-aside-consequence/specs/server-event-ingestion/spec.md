@@ -18,7 +18,9 @@ Setting events aside SHALL be observable, both as a counter that dashboards and 
 
 That record SHALL state the consequence that applies to the stage the events were withdrawn at, and SHALL NOT state a consequence that does not. Events can be set aside while the process graph is being built, where they never reach the graph, or during detection, where the batch was already materialised and its process tree is intact. Reporting a process-graph gap for the second sends a responder to inspect healthy data, which is worse than reporting nothing: this record is the only prompt anyone gets, so a prompt that wastes the responder's attention teaches them to discount the next one.
 
-The detection stage's consequence SHALL name what was lost rather than which step failed, and SHALL NOT claim the events went unevaluated. Rule evaluation, an exhausted retry, and a failure to persist an alert all reach the withdrawal as one indistinguishable error, and the last of those can occur after every rule has run, so naming rule evaluation would point a responder at rule execution while the failure was in alert storage. For the same reason the consequence SHALL be that alerts those events would have raised MAY be missing rather than that they ARE: alerts written before the failure remain durable, and overstating the loss sends someone hunting for alerts that are already there.
+The graph-building stage's consequence SHALL report a POSSIBLE gap rather than a certain one. The bounds that withdraw a batch accrue on its queue entry and count every attempt, whichever stage failed, so a batch can be folded into the graph on one attempt, fail at detection, and be withdrawn later on an attempt whose fold failed. Those events are already in the graph and nothing recorded that they got that far, so the system cannot distinguish that from a batch that never folded at all and SHALL NOT state a certainty it does not have.
+
+The detection stage's consequence SHALL name what was lost rather than which step failed, and SHALL NOT claim the events went unevaluated. A rule's own failure is isolated and does not withdraw the batch at all; two other conditions do, and they are indistinguishable at the withdrawal: a failure to persist an alert, which stops the batch at the finding it happened on so the rules after it never run, and an evaluation that asked to be retried until its bounds ran out, where every rule ran. Naming rule evaluation would be false for the first and would point a responder at rule execution while the failure was in alert storage. For the same reason the consequence SHALL be that alerts those events would have raised MAY be missing rather than that they ARE: alerts written before the failure remain durable, and overstating the loss sends someone hunting for alerts that are already there.
 
 The log MESSAGE SHALL be the same for every stage, with the consequence carried as an attribute. The record is found by searching for that line, and a message that varied by stage would leave any search, and any alert authored on it, matching some withdrawals and not others.
 
@@ -53,8 +55,8 @@ Events set aside SHALL age out under the deployment's retention window rather th
 - **WHEN** the record is read
 - **THEN** it reports that detection did not complete for those events, so alerts they would have raised may be missing
 - **AND** it does not report a gap in that host's process graph, which would send a responder to inspect an intact process tree
-- **AND** it does not name rule evaluation as the step that failed, since the same withdrawal follows a failure to store an alert after every rule has run
-- **AND** a batch set aside while the graph was being built reports the graph gap instead
+- **AND** it does not name rule evaluation as the step that failed, since the same withdrawal follows a failure to store an alert, in which no rule failed at all
+- **AND** a batch set aside while the graph was being built reports a possible gap in that graph instead
 - **AND** both carry the same log message, so one search finds either
 
 #### Scenario: Setting an event aside does not delete it

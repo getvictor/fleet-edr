@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
@@ -111,9 +112,9 @@ func TestQueuePruneRunner_PassesRetentionToTheSetAsideSweep(t *testing.T) {
 //
 // TestSetAsideConsequenceMatchesTheStage is what the record is FOR: it tells an operator what to go and look at.
 //
-// Both stages reported a gap in the process graph, and for detection that is false. processHost completes the builder before
-// evaluating, and evaluateAndAck runs on an already-materialised batch, so a batch withdrawn there IS in the graph: the claim sent
-// an operator to inspect a process tree that was intact, which is worse than saying nothing.
+// Both stages reported a gap in the process graph, and for detection that is false. processHost returns before evaluation when
+// the fold failed, so evaluateAndAck only ever runs on an already-materialised batch: one withdrawn there IS in the graph, and the
+// claim sent an operator to inspect a process tree that was intact, which is worse than saying nothing.
 //
 // Driven through ProcessOnce rather than by calling reportSetAside directly, and review was right to insist on the difference. The
 // stage now SELECTS the consequence, so the thing that can go wrong is a call site passing the other one; calling the reporter
@@ -140,9 +141,9 @@ func TestSetAsideConsequenceMatchesTheStage(t *testing.T) {
 		_, stage, consequence := withdrawnBy(t, errors.New("graph store unavailable"), nil)
 
 		assert.Equal(t, "builder", stage)
-		assert.Equal(t, "this host has a gap in its process graph", consequence,
-			"these events never reached the graph, which is the consequence an operator can act on: detection is lost too, but "+
-				"only because the graph never got them")
+		assert.Equal(t, "this host may have a gap in its process graph", consequence,
+			"the fold failed on this attempt, and an earlier attempt may already have folded these events, so the definite form "+
+				"is not something this record can claim")
 	})
 
 	t.Run("a batch withdrawn at detection does not claim a graph gap", func(t *testing.T) {
@@ -159,11 +160,12 @@ func TestSetAsideConsequenceMatchesTheStage(t *testing.T) {
 		t.Parallel()
 		_, _, consequence := withdrawnBy(t, nil, errors.New("insert alert: deadlock"))
 
-		// Everything Evaluate can fail with arrives as one error, and evaluateRule documents an alert-persistence failure
-		// overwriting the rule's own after every rule has run. So naming rule evaluation would point a responder at rule
-		// execution while the failure was in alert storage: the graph-gap defect again, one layer down.
+		// A rule's own non-retryable error never leaves the engine: evaluateRule logs it and returns nil for per-rule isolation.
+		// What does leave is an alert-persistence error, returned from inside routeFinding's loop so the batch aborts at the
+		// finding it happened on, or a retryable miss that ran out of attempts. Naming rule evaluation would point a responder
+		// at rule execution while the failure was in alert storage: the graph-gap defect again, one layer down.
 		assert.NotContains(t, consequence, "rule evaluation",
-			"a persistence failure sets the batch aside after every rule has already run")
+			"a persistence failure withdraws the batch without any rule having failed")
 		assert.NotContains(t, consequence, "never evaluated",
 			"evaluation ran, so claiming none happened would be a second false statement")
 		assert.Contains(t, consequence, "may be missing",
@@ -181,6 +183,99 @@ func TestSetAsideConsequenceMatchesTheStage(t *testing.T) {
 		assert.Equal(t, fromBuilder, fromDetection,
 			"the consequence rides on an attribute precisely so the message can stay constant")
 	})
+}
+
+// replayingEventLog serves one host's batch on EVERY cycle, which scriptedEventLog deliberately does not: it serves once so a
+// drain loop terminates. A batch that is retried and eventually withdrawn is served many times, and a test about what the
+// withdrawal says cannot reach the interesting sequences with a log that only answers once.
+//
+// withdrawOn is the cycle whose Nack reports the withdrawal, which stands in for the attempt and duration bounds a real queue row
+// carries. Those bounds accrue on the ROW, not on the stage that nacked it, which is the property the test below turns on.
+type replayingEventLog struct {
+	batch      []visibilityapi.Event
+	withdrawOn int
+	nacks      int
+}
+
+func (l *replayingEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
+func (l *replayingEventLog) PendingHosts(context.Context, int) ([]string, error) {
+	return []string{l.batch[0].HostID}, nil
+}
+
+func (l *replayingEventLog) ClaimForHost(context.Context, string, int) ([]visibilityapi.Event, int64, error) {
+	return l.batch, scriptedClaimStamp, nil
+}
+func (l *replayingEventLog) Ack(context.Context, []string, int64) (bool, error) { return true, nil }
+func (l *replayingEventLog) Nack(context.Context, []string) (int64, error) {
+	l.nacks++
+	if l.nacks < l.withdrawOn {
+		return 0, nil
+	}
+	return int64(len(l.batch)), nil
+}
+func (l *replayingEventLog) CountPending(context.Context) (int64, error)            { return 0, nil }
+func (l *replayingEventLog) PruneProcessed(context.Context, int) (int64, error)     { return 0, nil }
+func (l *replayingEventLog) PruneSetAside(context.Context, int, int) (int64, error) { return 0, nil }
+
+// failOnCycle is a builder that succeeds until the given cycle, so a test can fold a batch first and fail its fold later.
+//
+// folded counts the SUCCESSFUL folds, which is the number a caller has to assert on. Counting calls does not distinguish a fixture
+// that folded once and then failed from one that failed both times, and the second reaches the same record while proving nothing.
+type failOnCycle struct {
+	failFrom int
+	cycles   int
+	folded   int
+}
+
+func (b *failOnCycle) ProcessBatch(context.Context, []visibilityapi.Event) error {
+	b.cycles++
+	if b.cycles < b.failFrom {
+		b.folded++
+		return nil
+	}
+	return errors.New("graph store unavailable")
+}
+
+// spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/the-record-states-the-consequence-for-its-stage
+//
+// TestSetAsideAtTheBuilderDoesNotClaimACertainGap covers the sequence that makes the DEFINITE form of the builder consequence
+// false, which review found and which the first version of this fix would have shipped.
+//
+// The bounds that withdraw a batch accrue on the queue row and count every attempt, whichever stage nacked it. So a batch can fold
+// successfully, fail at detection, and be withdrawn later on an attempt whose fold is what failed. Those events are in the graph,
+// put there by the first attempt, and nothing on the row records that they got that far. The record cannot distinguish that from a
+// batch that never folded at all, so it must not claim it can.
+//
+// Asserted as the absence of the definite claim rather than only the presence of the hedged one, because the point is what the
+// record must NOT tell a responder. A future wording that hedges differently should still pass; one that goes back to asserting a
+// gap should not.
+func TestSetAsideAtTheBuilderDoesNotClaimACertainGap(t *testing.T) {
+	t.Parallel()
+
+	h := &capturingLogHandler{}
+	log := &replayingEventLog{
+		batch:      []visibilityapi.Event{{EventID: "e-1", HostID: "host-a"}},
+		withdrawOn: 2,
+	}
+	// Cycle 1 folds and fails at detection; cycle 2 fails at the fold and is the one that withdraws.
+	builder := &failOnCycle{failFrom: 2}
+	p := newTestProcessor(t, log, builder, stubEvaluator{err: errors.New("alert store unavailable")}, singleCycleOpts(h))
+	p.ProcessOnce(t.Context())
+	p.ProcessOnce(t.Context())
+
+	// Pinned, because the whole point is the sequence and not the outcome: a fixture that failed the fold on BOTH cycles would
+	// reach the same record while proving nothing, and would keep passing after the wording went back to a definite claim.
+	require.Equal(t, 2, builder.cycles, "the fold ran on both cycles")
+	require.Equal(t, 1, builder.folded,
+		"cycle 1 must have folded SUCCESSFULLY: a fixture that failed both folds reaches the same record and proves nothing")
+	require.Equal(t, 2, log.nacks, "cycle 1 nacked at detection and cycle 2 at the fold")
+
+	_, stage, consequence := setAsideRecord(t, h)
+	require.Equal(t, "builder", stage, "the withdrawing attempt is the one whose fold failed")
+	assert.NotContains(t, consequence, "has a gap",
+		"the first attempt folded these events, so the graph is not necessarily missing them")
+	assert.Contains(t, consequence, "may have a gap",
+		"the record still has to send someone to look, since it cannot tell this from a batch that never folded")
 }
 
 // setAsideRecord returns the message, stage and consequence of the one set-aside record a cycle emitted.
