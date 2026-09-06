@@ -8,7 +8,7 @@ A rule's identity is its file STEM and not its path (#873), so an operator who s
 
 The export is the artifact an operator saves, reads, diffs, and hands to another tool, so wrong bytes there are wrong everywhere downstream. It is also the surface someone reaches for precisely when they want to confirm what is running.
 
-## What Changes
+## What changes
 
 - A rule answers for its own document, through an optional `SourceCarrier` interface, instead of an identifier being resolved against the embedded corpus.
 - The export route resolves the rule and its metadata from ONE snapshot of the active set, so it serves what the deployment evaluates: upstream's file for a vendored rule, and the operator's own file for one they wrote. One snapshot rather than two reads, because a reload landing between them would leave the route rendering metadata for a rule the deployment no longer runs, and for a rule loaded from a document that renders to nothing.
