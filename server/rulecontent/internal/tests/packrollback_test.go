@@ -583,7 +583,7 @@ func TestRollback_HoldsAfterTheOperatorEditsShippedContent(t *testing.T) {
 	}
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-deployment-with-no-recorded-generation-records-one-on-start
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/an-unrecorded-generation-is-recorded-on-start
 //
 // TestUpgradePack_RecordsTheInstalledGenerationOnANoOpStart covers the deployment that upgraded before its installed generation
 // was recorded at all, and mutation testing is what surfaced it: the conditional write on the no-op path looked like an

@@ -70,7 +70,7 @@ Rolling back when no generation is retained SHALL be reported, and SHALL NOT rep
 - **WHEN** it is started again on that same build
 - **THEN** nothing is installed, because what it declined is the generation that was installed rather than the corpus as the edit left it
 
-#### Scenario: A deployment with no recorded generation records one on start
+#### Scenario: An unrecorded generation is recorded on start
 
 - **GIVEN** a deployment holding this build's shipped content with no generation recorded, as one upgraded before it was tracked would be
 - **WHEN** it is started
