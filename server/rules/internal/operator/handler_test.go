@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -245,8 +246,14 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	assert.Positive(t, ours, "the rules this project wrote credit this project")
 }
 
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-expressed-in-code-is-rendered
+//
 // TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is
 // YAML rather than a JSON envelope the caller would have to unwrap before the bytes were useful.
+//
+// credential_keychain_dump is written in Go and was never a document, which is the other half of the export decision: it has no
+// bytes to serve, so it is rendered. Asserting on rendered content rather than on non-emptiness is deliberate, because a renderer
+// returning a plausible-looking wrong file is the failure worth catching and an empty response is not the way it would present.
 func TestHandler_ExportRule(t *testing.T) {
 	t.Parallel()
 	svc := service.New(catalog.New(nil), nil, slog.Default())
@@ -315,8 +322,8 @@ func TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
-	want, vendored := catalog.VendoredSource(id)
-	require.True(t, vendored, "fixture rule must be one of the vendored ones")
+	want, fromDocument := sourceOfActive(svc, id)
+	require.True(t, fromDocument, "fixture rule must be one loaded from a document")
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
 	require.NoError(t, err)
@@ -397,4 +404,73 @@ func (m stubGlobalModes) GlobalRuleMode(ruleID string, ruleDefault rulesapi.Dete
 		return got
 	}
 	return rulesapi.GlobalRuleMode{Mode: ruleDefault, Source: rulesapi.RuleModeSourceDefault}
+}
+
+// sourceOfActive returns the document the rule running under id was loaded from, by asking the ACTIVE rule set rather than the
+// corpus embedded in the build. That distinction is the point of #879, so a test asserting the export bytes has to make it too: a
+// helper reading the embedded corpus would agree with a broken handler on exactly the case the fix is about.
+func sourceOfActive(svc *service.Service, id string) ([]byte, bool) {
+	for _, r := range svc.ActiveRules() {
+		if r.ID() == id {
+			return rulesapi.SourceOf(r)
+		}
+	}
+	return nil, false
+}
+
+// sigmaDoc renders a minimal loadable Sigma document, varying only what a test needs to tell two of them apart.
+func sigmaDoc(id, title string) []byte {
+	return []byte("title: " + title + "\n" +
+		"id: " + id + "\n" +
+		"status: test\n" +
+		"description: fixture\n" +
+		"author: test\n" +
+		"logsource:\n    category: process_creation\n    product: macos\n" +
+		"detection:\n    selection:\n        Image|endswith: '/osascript'\n    condition: selection\n" +
+		"level: medium\n")
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestHandler_ExportRule_OverwrittenRuleServesTheOperatorsBytes is the #879 regression, and the fixture is built to fail against
+// the version this replaced rather than merely to pass against the new one.
+//
+// The stored document takes the stem of a rule the build SHIPS. A rule's identity is its file stem (#873), so the operator's rule
+// keeps that id, and the old export resolved the id against the corpus embedded in the binary and found upstream's document still
+// sitting under it. What came back was content the deployment was not running and the operator had not written.
+//
+// The two assertions are separate on purpose. That the operator's bytes come back is the requirement; that upstream's title is
+// absent is the failure mode, and a fix that returned some third rendering would satisfy the first and not the second.
+func TestHandler_ExportRule_OverwrittenRuleServesTheOperatorsBytes(t *testing.T) {
+	t.Parallel()
+
+	// The stem of a rule the embedded corpus really carries. Chosen from the corpus rather than invented, because the defect only
+	// appears when the embedded lookup HAS an answer to give.
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	const path = catalog.CorpusRoot + "/" + id + ".yml"
+	operatorDoc := sigmaDoc("44444444-4444-4444-8444-444444444444", "Operator rewrote this one")
+
+	stored := fstest.MapFS{path: &fstest.MapFile{Data: operatorDoc}}
+	loaded, _, err := catalog.LoadCorpus(stored, catalog.CorpusRoot, func(string) bool { return true })
+	require.NoError(t, err)
+	require.Len(t, loaded, 1, "the fixture corpus holds exactly the operator's rule")
+
+	svc := service.New(loaded, nil, slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, string(operatorDoc), string(got), "an operator exporting their own rule gets what they wrote")
+	assert.NotContains(t, string(got), "xattr", "and not the shipped document the build still carries under that stem")
 }

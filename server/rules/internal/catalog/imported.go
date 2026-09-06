@@ -48,8 +48,9 @@ type importedRule struct {
 	// decides attribution and nothing else: the rule evaluates identically either way.
 	authored bool
 
-	// source is the vendored file's bytes, verbatim. Kept so an operator exporting this rule gets the upstream rule they can diff
-	// against SigmaHQ, rather than a re-rendering of it in this project's format. See VendoredSource.
+	// source is the document this rule was loaded from, verbatim. Kept so exporting the rule hands back the file rather than a
+	// re-rendering of it in this project's format: for a vendored rule that is the upstream file an operator can diff against
+	// SigmaHQ, and for one they wrote themselves it is what they wrote. Read through api.SourceOf, never by id lookup (#879).
 	source []byte
 
 	id          string
@@ -671,22 +672,13 @@ func ImportedRejections() []rejection {
 	return rejected
 }
 
-// VendoredSource returns the upstream file a rule was imported from, verbatim, and whether the rule is a vendored one at all.
+// Source implements api.SourceCarrier by returning the document this rule was loaded from, verbatim.
 //
-// It is the single place that answers "is this rule ours or upstream's", and both callers that need to know go through it. The
-// exported rule pack skips vendored rules, because their declarative form already exists as the file this repository vendored and
-// rendering a second one in this project's format would put two representations of one rule on disk. The per-rule export endpoint
-// serves these bytes instead, so an operator exporting an imported rule gets the upstream rule they can diff against SigmaHQ
-// rather than a re-rendering of it.
-func VendoredSource(ruleID string) ([]byte, bool) {
-	for _, r := range MustLoadImported() {
-		imported, ok := r.(*importedRule)
-		if ok && imported.id == ruleID {
-			return imported.source, true
-		}
-	}
-	return nil, false
-}
+// It answers from the rule rather than by resolving an identifier, which is the fix for #879. The version this replaced looked the
+// id up in the corpus embedded in the BUILD, and a rule's identity is its file stem (#873), so an operator who stored their own
+// version of a shipped detection kept its id and the lookup went on finding the shipped document under it. Exporting the rule then
+// returned upstream's bytes: content the deployment was not running and the operator had not written.
+func (r *importedRule) Source() []byte { return r.source }
 
 // UndiscriminatingSearches implements api.SelfDescribingBreadth by asking the compiled detection which of its searches match
 // everything.

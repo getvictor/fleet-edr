@@ -196,6 +196,32 @@ type SelfDescribingBreadth interface {
 	UndiscriminatingSearches() []string
 }
 
+// SourceCarrier is an OPTIONAL interface a rule implements to hand back the document it was loaded from, byte for byte.
+//
+// Optional because only a rule that CAME from a document has one. A rule written in Go was never a file, so there is nothing to
+// return and rendering one is a different operation with a different answer, which is why this is not spelled as an empty result.
+//
+// The bytes are the ones the rule was loaded from, which is not always the bytes this build ships. An operator can store their own
+// rule under a shipped rule's identifier, since a rule's identity is its file STEM and not its path (#873), and from then on the
+// rule that runs is theirs. Answering from the rule itself is what makes that case come out right: resolving an identifier against
+// the corpus embedded in the build finds the shipped document under that stem and hands back content the deployment is not
+// running and the operator did not write (#879).
+type SourceCarrier interface {
+	Source() []byte
+}
+
+// SourceOf returns the document r was loaded from, and whether r came from one at all.
+//
+// The two are distinguishable on purpose. A rule with no document is not a rule with an empty one: the first is rendered into a
+// document on demand, the second would be exported as a zero-byte file.
+func SourceOf(r Rule) ([]byte, bool) {
+	carrier, ok := r.(SourceCarrier)
+	if !ok {
+		return nil, false
+	}
+	return carrier.Source(), true
+}
+
 // UndiscriminatingSearchesOf returns the searches in r that match everything, or nil for a rule that cannot answer.
 //
 // The accessor exists so callers do not each repeat the type assertion, which is how the OriginOf / AlgorithmNameOf pair already

@@ -682,10 +682,16 @@ func PrunePack(dir string, pack map[string][]byte) ([]string, error) {
 // rendering a second one in this project's format would put two representations of one rule on disk, and the two would say the
 // same thing in different shapes. The per-rule export endpoint serves the vendored bytes for them instead, which is also the more
 // useful artifact: an operator gets the upstream rule they can diff against SigmaHQ.
+//
+// The partition is on each rule's ATTRIBUTION rather than on an id lookup against the embedded corpus, which is what it used to
+// be. Both answer identically here, because this runs at build time against the corpus this build embeds and nothing else, but the
+// attribution is the question actually being asked: this pack holds the rules this project wrote, and a rule an operator wrote on
+// their deployment is no more ours to render than an upstream one is (#879).
 func ExportPack() (map[string][]byte, error) {
-	authored := make([]api.RuleMetadata, 0, len(CatalogOnly().List()))
-	for _, rm := range CatalogOnly().List() {
-		if _, vendored := catalog.VendoredSource(rm.ID); vendored {
+	listed := CatalogOnly().List()
+	authored := make([]api.RuleMetadata, 0, len(listed))
+	for _, rm := range listed {
+		if rm.Origin != api.ProjectOrigin {
 			continue
 		}
 		authored = append(authored, rm)

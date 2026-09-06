@@ -16,6 +16,9 @@ import (
 // so the handler tests can substitute a fake without spinning up a DB.
 type Service interface {
 	api.Lister
+	// RuleProvider is what the export route needs: List reports a rule's metadata, and a rule's own document is not metadata.
+	// It is read from the ACTIVE rule set rather than from the corpus embedded in the build, which is the whole of #879's fix.
+	api.RuleProvider
 }
 
 // Handler serves the rules-context operator routes. Construct it with the rules service handle and the authorization chokepoint;
@@ -167,11 +170,17 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		if rm.ID != id {
 			continue
 		}
-		// A vendored rule exports as the upstream file it was imported from, byte for byte (issue #764). Re-rendering it in this
-		// project's format would hand back a second description of a rule whose authoritative description already exists, and the
-		// upstream bytes are the more useful artifact anyway: they are what an operator can diff against SigmaHQ.
-		body, vendored := catalog.VendoredSource(rm.ID)
-		if !vendored {
+		// A rule that came from a document exports as that document, byte for byte (issue #764). Re-rendering it would hand back
+		// a second description of a rule whose authoritative description already exists, and the document is the more useful
+		// artifact anyway: for a vendored rule it is what an operator diffs against SigmaHQ, and for one they wrote themselves it
+		// is what they wrote.
+		//
+		// Resolved from the rule that is RUNNING, not by looking the id up in the corpus this build embeds. A rule's identity is
+		// its file stem (#873), so an operator storing their own version of a shipped detection keeps its id, and the embedded
+		// lookup went on answering with the shipped document: bytes the deployment was not running and they had not written
+		// (#879).
+		body, fromDocument := h.activeSource(rm.ID)
+		if !fromDocument {
 			rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
 			if err != nil {
 				h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
@@ -189,4 +198,22 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})
+}
+
+// activeSource returns the document the rule running under id was loaded from, and whether it came from one.
+//
+// Scans the active set rather than taking an index, because the set is replaced wholesale on every corpus reload and an index
+// built beside it is a second thing to keep in step. The catalog is tens of rules and this runs once per export request, which is
+// an operator clicking a button.
+func (h *Handler) activeSource(id string) ([]byte, bool) {
+	for _, r := range h.svc.ActiveRules() {
+		if r.ID() != id {
+			continue
+		}
+		return api.SourceOf(r)
+	}
+	// Reachable only if the active set and the listing disagree, which they can: they are two reads of an atomically swapped
+	// pointer, so a reload landing between them leaves a rule listed here and gone there. Rendering it is the right answer for
+	// that, and it is the same answer a rule with no document gets.
+	return nil, false
 }
