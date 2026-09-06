@@ -350,7 +350,10 @@ func markerPathKey(repoRoot, scanRoot, repoRelative string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.HasPrefix(rel, "..") {
+	// Component-wise, not a string prefix. A file legitimately named "..checks.go" starts with two dots without being outside
+	// anything, and rejecting it would drop every marker in it from the gate silently, which is the failure this whole change
+	// exists to stop.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%s is outside the scan root", repoRelative)
 	}
 	return filepath.ToSlash(rel), nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -94,4 +95,40 @@ func TestScanFile_DoesNotCountACarriageReturn(t *testing.T) {
 
 	touched := map[string][]lineRange{"f.go": {{Start: 1, End: 1}}}
 	assert.Empty(t, OverlongMarkers(markers, touched), "a compliant line must not be reported because of its line ending")
+}
+
+// TestMarkerPathKey_ComponentWise pins that a path is judged outside the scan root by its COMPONENTS, not by a string prefix.
+//
+// A file legitimately named "..checks.go" starts with two dots without being outside anything. Rejecting it would drop every
+// marker in that file from the gate's scope silently, which is the failure this change exists to stop, arriving through the
+// change itself. Review caught it.
+func TestMarkerPathKey_ComponentWise(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	cases := []struct {
+		name         string
+		scanRoot     string
+		repoRelative string
+		want         string
+		wantErr      bool
+	}{
+		{"a file under the root", root, "server/a_test.go", "server/a_test.go", false},
+		{"a leading-dot filename is not a traversal", root, "server/..checks.go", "server/..checks.go", false},
+		{"a dotted name in a directory position", root, "..checks/a_test.go", "..checks/a_test.go", false},
+		{"scoped to a subtree, the path loses the prefix", filepath.Join(root, "server"), "server/a_test.go", "a_test.go", false},
+		{"outside the scan root is reported", filepath.Join(root, "server"), "tools/a_test.go", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := markerPathKey(root, tc.scanRoot, tc.repoRelative)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
