@@ -10,13 +10,15 @@ A monitor match SHALL be attributed to the host it matched on and to the day it 
 
 Counts SHALL be recorded on the transition that ends the batch's life, not while the batch is evaluated. A batch that fails is nacked and replayed whole, so a count written during evaluation is written again by every retry.
 
-Usually that transition is the acknowledgement. The other is the batch being withdrawn from processing for good once its retry bounds are passed, and the matches it resolved SHALL be recorded then rather than discarded, because there is no later attempt to record them. Discarding them under-reports for precisely the hosts that had processing trouble, and the figure is what an operator reads when deciding whether to promote a monitor-mode rule, so the bias is toward believing a rule is quiet.
+Usually that transition is the acknowledgement. The other is the batch being withdrawn from processing for good once its retry bounds are passed, and where the attempt that was withdrawn had itself evaluated the batch, the matches THAT attempt resolved SHALL be recorded rather than discarded, because there is no later attempt to record them. Discarding them under-reports for precisely the hosts that had processing trouble, and the figure is what an operator reads when deciding whether to promote a monitor-mode rule, so the bias is toward believing a rule is quiet.
+
+A withdrawal on an attempt that did NOT evaluate the batch records nothing, and matches from that batch's earlier attempts are NOT carried to it. Processing has stages, and a batch withdrawn at a stage before evaluation has no matches of its own to record, while an earlier attempt's were discarded when that attempt was retried. Closing this would mean holding a batch's matches somewhere that survives its retries, which is either state in the work queue that is telemetry rather than work, or per-replica state that a stateless app tier cannot keep. It is stated here rather than closed, so the figure's remaining bias is documented rather than implied away.
 
 Only a batch withdrawn IN FULL SHALL be counted this way. The withdrawal decision is made per queued event, so a partly withdrawn batch leaves events that are claimed and evaluated again while the recorded figure covers all of them, and recording it would count the remainder twice. Exactly-once SHALL rest on the queue reporting a withdrawal to one caller rather than on coordination between workers.
 
-Two residual inaccuracies remain and SHALL be documented rather than implied away. A crash between the transition and the record loses those counts, and so does a recording failure, which is dropped rather than allowed to fail an acknowledged batch (below); the observability counter has already advanced by then, so both also leave the counter ahead of the durable record. That is the direction that carries risk, not the one that avoids it: a rule whose recorded volume is too low looks quiet, which is what persuades an operator to promote it, and promoting a noisy rule is the alert flood monitor mode exists to prevent. It is accepted because the alternative, counting during evaluation, is systematically wrong on every retry rather than rarely wrong in the window between two adjacent statements. A third once stood here, an evaluation outliving its claim lease and being counted by both itself and its replacement, and no longer applies: acknowledgement is conditional on still holding the claim and the loser records nothing. The recorded figure is therefore approximate, and MUST NOT be presented as an exact count of what promoting a rule would produce.
+Two residual inaccuracies remain besides that one, and SHALL be documented rather than implied away. A crash between the transition and the record loses those counts, and so does a recording failure, which is dropped rather than allowed to fail a batch already finished with the queue (below); the observability counter has already advanced by then, so both also leave the counter ahead of the durable record. That is the direction that carries risk, not the one that avoids it: a rule whose recorded volume is too low looks quiet, which is what persuades an operator to promote it, and promoting a noisy rule is the alert flood monitor mode exists to prevent. It is accepted because the alternative, counting during evaluation, is systematically wrong on every retry rather than rarely wrong in the window between two adjacent statements. A third once stood here, an evaluation outliving its claim lease and being counted by both itself and its replacement, and no longer applies: acknowledgement is conditional on still holding the claim and the loser records nothing. The recorded figure is therefore approximate, and MUST NOT be presented as an exact count of what promoting a rule would produce.
 
-A failure to record SHALL NOT fail the batch. The events are acknowledged by the time the record is attempted, and replaying real detection work to save a counter would trade the more valuable thing for the less valuable one.
+A failure to record SHALL NOT fail the batch. By the time the record is attempted the batch has reached a state it will not be processed again from, whether acknowledged or withdrawn, so there is nothing left to fail; replaying real detection work, or undoing a withdrawal, to save a counter would trade the more valuable thing for the less valuable one.
 
 Recorded counts SHALL be subject to the deployment's data-retention window, and pruning them SHALL NOT require a leader-elected task. The delete is idempotent and needs no coordination, whereas every leader-gated loop holds a database connection for the lifetime of the process and the event processor sizes itself against what those loops leave behind.
 
@@ -51,7 +53,7 @@ Recorded counts SHALL be subject to the deployment's data-retention window, and 
 
 - **GIVEN** a rule in monitor mode that matched events in a batch that then failed
 - **WHEN** the batch exhausts its retry bounds and every one of its events is withdrawn from processing
-- **THEN** the matches that batch resolved are recorded
+- **THEN** the matches that attempt resolved are recorded
 - **AND** they are recorded once, because no later attempt will evaluate those events
 
 #### Scenario: A partly withdrawn batch is not counted yet
@@ -60,4 +62,11 @@ Recorded counts SHALL be subject to the deployment's data-retention window, and 
 - **WHEN** those events are withdrawn and the rest return to the queue
 - **THEN** nothing is recorded for that attempt
 - **AND** the events that returned are counted by the attempt that finishes them
+
+#### Scenario: A withdrawal before evaluation records nothing
+
+- **GIVEN** a batch that evaluated and failed on one attempt, and on a later attempt failed before evaluation was reached
+- **WHEN** that later attempt withdraws every one of its events
+- **THEN** nothing is recorded, because the withdrawing attempt resolved no matches
+- **AND** the earlier attempt's matches are not carried to it
 

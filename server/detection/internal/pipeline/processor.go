@@ -426,6 +426,12 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
 			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
 			//
+			// This covers a withdrawal HERE and not one at the fold, which is a residual rather than an oversight. A batch can
+			// evaluate and fail on one attempt, then fail its fold on the attempt that withdraws it, and that attempt resolved
+			// no matches while the earlier one's were discarded when it was retried. Carrying them across attempts would mean
+			// telemetry state in the work queue or per-replica state a stateless app tier cannot keep, so the limit is stated
+			// in the requirement and pinned by a test rather than closed here.
+			//
 			// Only a WHOLE batch counts, and the comparison is against the batch rather than against zero. The withdrawal
 			// predicate is per row, so a partial withdrawal leaves rows that are re-claimed and re-evaluated, and this tally
 			// covers all of them: recording it would count the survivors twice.

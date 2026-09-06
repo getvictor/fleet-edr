@@ -13,5 +13,6 @@
 - [x] 2.1 A fully withdrawn batch records what it matched, in both the durable record and the counter.
 - [x] 2.2 A partly withdrawn batch records nothing.
 - [x] 2.3 An ordinary nack still records nothing, so the fix is not "record on every failure".
+- [x] 2.6 Pin the RESIDUAL: a batch that evaluated on one attempt and is withdrawn by a fold failure on a later one records nothing. Review was right that the first version of the requirement claimed more than the code does.
 - [x] 2.4 Cover the ENGINE's two returns directly. The processor's tests stub the evaluator, so they prove nothing about whether a tally is handed over; the two mutants that drop it survived until this was added.
 - [x] 2.5 Mutation-test: discarding the tally on a withdrawal, loosening the condition to any withdrawal, and dropping the tally from either engine return.
