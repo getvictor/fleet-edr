@@ -357,7 +357,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			// host first would let the next claimer take this host's LATER events and fold them ahead of these, so the retry would
 			// arrive behind generations it precedes. The claim's in-flight bound makes that window harmless even if this Nack
 			// fails, but closing the window is cheaper than relying on the bound to cover it.
-			setAside, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed))
+			setAside, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed), stamp)
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
@@ -418,7 +418,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		tally, err = p.detection.Evaluate(ctx, events)
 		if err != nil {
 			p.logDetectionRetry(ctx, err)
-			setAside, nackErr := p.eventLog.Nack(ctx, eventIDs)
+			setAside, nackErr := p.eventLog.Nack(ctx, eventIDs, claimStamp)
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
@@ -445,10 +445,9 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			// the requested ids at processed = 0, so it can also match a row another nack had already returned to pending. That
 			// makes no difference to the count, and the distinction matters for anyone changing this queue.
 			//
-			// That holds per ROW and not per claim, which leaves the window #840 tracks: Nack is not conditional on the claim it
-			// was issued for, so an attempt that outran its lease can withdraw rows a replacement now owns, get a count short of
-			// its own batch, and be rejected here while the replacement's later nack reports nothing. The residual is recorded in
-			// the requirement rather than worked around, because closing it is a change to the queue's contract.
+			// Per claim as well as per row, since #840: a nack acts only on the events the claim it names still holds, so an
+			// attempt that outran its lease withdraws nothing and is told so, rather than withdrawing a replacement's events and
+			// being rejected here for a count short of its own batch.
 			if setAside == int64(len(eventIDs)) {
 				p.recordMonitorMatches(ctx, tally)
 			}

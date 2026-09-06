@@ -207,7 +207,7 @@ func (l *replayingEventLog) ClaimForHost(context.Context, string, int) ([]visibi
 	return l.batch, scriptedClaimStamp, nil
 }
 func (l *replayingEventLog) Ack(context.Context, []string, int64) (bool, error) { return true, nil }
-func (l *replayingEventLog) Nack(context.Context, []string) (int64, error) {
+func (l *replayingEventLog) Nack(context.Context, []string, int64) (int64, error) {
 	l.nacks++
 	if l.nacks < l.withdrawOn {
 		return 0, nil

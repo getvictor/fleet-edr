@@ -54,15 +54,24 @@ type EventLog interface {
 	// held=false MUST skip whatever it does after the ack, because the attempt that owns the rows now will do it.
 	Ack(ctx context.Context, eventIDs []string, claimStampNs int64) (held bool, err error)
 
-	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost (retry after a
-	// processing failure).
-	// Nack returns claimed events for a later claim and counts the attempt, reporting how many it SET ASIDE instead of returning.
+	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost, counting the
+	// attempt, and reports how many it SET ASIDE instead of returning.
+	//
+	// claimStampNs is the stamp ClaimForHost issued, and an implementation SHALL act only on events this claim still holds, as Ack
+	// does. Identifying a claim by an event's STATE instead lets a caller whose processing outran its lease reset and count an
+	// attempt against a claim a replacement now owns, which pushes that batch toward its retry bounds on failures it did not have,
+	// and leaves the replacement's own acknowledgement to be refused so its work is redone (issue #840).
+	//
+	// A caller that owns none of the events SHALL be told nothing was set aside, which is true: it withdrew nothing.
 	//
 	// The count is the point of the return value. A batch that fails the same way every time is otherwise retried forever, and
 	// because the claim takes a host's oldest work first, nothing newer for that host is ever claimed: the host stops
 	// contributing to the process graph and raising detections at all (issue #836). An implementation SHALL bound the retries and
 	// withdraw the events once that bound is passed, and the caller reports the count so a stalled host is visible.
-	Nack(ctx context.Context, eventIDs []string) (setAside int64, err error)
+	//
+	// The count SHALL be exact rather than merely non-zero. A caller decides whether a WHOLE batch was withdrawn by comparing it
+	// against the events it handed over, so an under-count reads as a partial withdrawal.
+	Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, err error)
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)

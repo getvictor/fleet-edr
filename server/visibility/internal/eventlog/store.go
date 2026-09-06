@@ -378,21 +378,13 @@ const (
 // so what is given up is the rest of those events' PROCESSING. How much of it depends on how far the batch got, which this layer
 // cannot see: Nack is called from both the graph-building stage and detection, and the caller reports the difference (issue #845).
 //
-// A claim is identified here by state alone, not by owner, which leaves one window this does not close: a worker whose fold outran
-// the 5-minute claim lease nacks rows a replacement worker has since re-claimed, resetting that claim and counting an attempt
-// against it. The window is narrow by construction, since a live claim is refused to every other claimer by both the claimable
-// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease.
-//
-// What it costs was understated here until review corrected it, and the correction is a consequence of issue #817. This statement
-// clears the replacement's claim stamp along with its in-flight state, and Ack is conditional on that stamp, so the replacement's
-// acknowledgement is REJECTED rather than landing: its work is redone by whoever claims the rows next. And a spurious set-aside
-// does not need the race to recur, because the attempt bound is carried on the ROW: ordinary failures can have brought a row to
-// within one attempt of its bound already, and this stale nack supplies the last one.
-//
-// Closing it properly means carrying the claim stamp back to the caller and making Nack conditional on still owning it, as Ack
-// already is, which changes a cross-context interface and fixes a different defect (the same stale nack can also let two workers
-// process one event). Tracked as issue #840 rather than folded in here.
-func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
+// A claim is identified by the stamp it was issued, not by a row's state, which is what closed issue #840. Until then a worker
+// whose fold outran the 5-minute claim lease nacked rows a replacement had since re-claimed, and what that cost was worse than the
+// "inflated attempt count" it was first written down as. It cleared the replacement's claim stamp, and Ack is conditional on that
+// stamp since issue #817, so the replacement's acknowledgement was REJECTED and its work redone by whoever claimed the rows next.
+// It also counted a failure the replacement had not had against a bound that lives on the ROW and ends in the row being withdrawn,
+// so it needed no repetition: ordinary failures can leave a row one attempt short, and a stale nack supplied the last one.
+func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
 		return 0, nil
 	}
@@ -402,6 +394,33 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// Establish ownership FIRST, and take the rows under lock while doing it, so everything below operates on exactly the rows
+	// this claim still holds. Both statements then key on that set rather than on a state any concurrent caller can also see.
+	//
+	// A read before the writes rather than a predicate on them, because the writes cannot express it. The reset clears
+	// claimed_at_ns, so it cannot both check the stamp and be told which rows it checked; and the withdrawal runs on rows in the
+	// PENDING state, which is where a row another nack returned it to also sits. Selecting the owned ids answers both, and FOR
+	// UPDATE holds them so no concurrent claimer can take them between here and the commit.
+	ownedQuery, ownedArgs, err := sqlx.In(`
+		SELECT event_id FROM event_queue
+		WHERE processed = 2 AND event_id IN (?) AND claimed_at_ns = ?
+		FOR UPDATE`, eventIDs, claimStampNs)
+	if err != nil {
+		return 0, fmt.Errorf("nack build ownership query: %w", err)
+	}
+	var owned []string
+	if err := tx.SelectContext(ctx, &owned, ownedQuery, ownedArgs...); err != nil {
+		return 0, fmt.Errorf("nack ownership: %w", err)
+	}
+	if len(owned) == 0 {
+		// This attempt no longer owns any of these rows: its claim lease expired and a replacement took them, or they have
+		// already been acknowledged. Doing nothing is the whole point of issue #840. The previous version matched on state
+		// alone, so a superseded worker reset a claim it did not hold, counted an attempt against it, and could push the batch
+		// past its retry bounds; the replacement's own acknowledgement then failed, because Ack has been conditional on the
+		// stamp since issue #817, and its work was redone by whoever claimed the rows next.
+		return 0, nil
+	}
+
 	now := time.Now().UnixNano()
 	query, args, err := sqlx.In(`
 		UPDATE event_queue
@@ -409,7 +428,7 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 		    first_failed_at_ns = IF(first_failed_at_ns = 0, ?, first_failed_at_ns),
 		    processed = 0,
 		    claimed_at_ns = 0
-		WHERE processed = 2 AND event_id IN (?)`, now, eventIDs)
+		WHERE processed = 2 AND event_id IN (?)`, now, owned)
 	if err != nil {
 		return 0, fmt.Errorf("nack build query: %w", err)
 	}
@@ -426,11 +445,10 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 	// it once in its life and exactly one caller is told it did. The count the caller receives is sound for that reason and not
 	// because of any ownership this guard establishes.
 	//
-	// It is not protection against a concurrent claimer either. The statement above holds an exclusive lock on every row it
-	// modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED skips locked rows, so no other
-	// worker can claim those rows between the two statements. (A row can still be reset by a worker whose claim lease expired,
-	// which is the ownership limitation documented on Nack above and tracked as issue #840; the guard here neither causes nor
-	// prevents that.)
+	// It is not protection against a concurrent claimer either, and does not need to be. The ownership read above took these rows
+	// FOR UPDATE and holds them to the commit, the statement above locks every row it modified, and the claim's
+	// SELECT ... FOR UPDATE SKIP LOCKED skips locked rows, so no other worker can claim them across any of it. A worker whose
+	// lease expired cannot reset them either, since it no longer matches the ownership read (issue #840).
 	//
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
@@ -440,7 +458,7 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 		UPDATE event_queue
 		SET processed = 3, set_aside_at_ns = ?
 		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
-		now, eventIDs, setAsideAttempts, failingSince)
+		now, owned, setAsideAttempts, failingSince)
 	if err != nil {
 		return 0, fmt.Errorf("nack set-aside build query: %w", err)
 	}

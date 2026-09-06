@@ -86,7 +86,7 @@ func TestEventLog_AppendClaimAckNack(t *testing.T) {
 	held, err := log.Ack(ctx, []string{"e1"}, stamp)
 	require.NoError(t, err)
 	assert.True(t, held, "the claim is still held, so the ack must report that it won")
-	_, nackErr := log.Nack(ctx, []string{"e2"})
+	_, nackErr := log.Nack(ctx, []string{"e2"}, stamp)
 	require.NoError(t, nackErr)
 
 	pending, err = log.CountPending(ctx)
@@ -539,7 +539,7 @@ func TestEventLog_EmptyOps(t *testing.T) {
 	held, err := log.Ack(ctx, nil, 0)
 	require.NoError(t, err)
 	assert.True(t, held, "an empty ack is vacuously held")
-	setAside, nackErr := log.Nack(ctx, nil)
+	setAside, nackErr := log.Nack(ctx, nil, 0)
 	require.NoError(t, nackErr)
 	assert.Zero(t, setAside, "an empty nack withdraws nothing")
 

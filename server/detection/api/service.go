@@ -137,7 +137,9 @@ type MetricsRecorder interface {
 	// the withdrawn attempt's matches are recorded then instead (#843). Recorded only when the WHOLE batch was withdrawn, since a
 	// partial withdrawal leaves rows that are re-claimed and evaluated again.
 	//
-	// Five inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
+	// Four inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
+	// A fifth stood here until #840 made returning a batch conditional on the claim it was issued for: a stale attempt could
+	// withdraw events a replacement owned, and neither attempt would then record.
 	//
 	// A crash between the transition and the record loses those counts, and so does a failure of the durable write, which is
 	// logged and dropped rather than allowed to fail a batch that is already finished with the queue.
@@ -153,11 +155,6 @@ type MetricsRecorder interface {
 	// whatever the withdrawn events alone had matched has no later attempt to produce it. Recording the survivors' share instead
 	// would need this figure to say which event each match came from, and it is aggregated per rule and host for the batch.
 	//
-	// A withdrawal reported to an attempt that no longer owns the events loses them from both sides. An attempt whose processing
-	// outran its claim lease can withdraw rows a replacement has since claimed; the count it gets back describes its own view, so
-	// it can fall short of that attempt's batch and be rejected, while the replacement's later nack reports nothing because the
-	// rows are already withdrawn. That needs the queue's nack to be conditional on the claim it was issued for, as its ack already
-	// is since #817. Tracked as #840.
 	//
 	// Losing counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
 	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. It is accepted only because every
