@@ -381,12 +381,17 @@ const (
 // A claim is identified here by state alone, not by owner, which leaves one window this does not close: a worker whose fold outran
 // the 5-minute claim lease nacks rows a replacement worker has since re-claimed, resetting that claim and counting an attempt
 // against it. The window is narrow by construction, since a live claim is refused to every other claimer by both the claimable
-// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease. It is also pre-existing and bounded:
-// the replacement's Ack still lands and the event is still processed, so the cost is an inflated attempt count rather than lost
-// work, and a spurious set-aside would need that to recur twenty times across fifteen minutes on one batch. Closing it properly
-// means carrying the claim stamp back to the caller and making Nack conditional on still owning it, as Ack already is since issue
-// #817, which changes a cross-context interface and fixes a different defect (the same stale nack can also let two workers process
-// one event). Tracked as issue #840 rather than folded in here.
+// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease.
+//
+// What it costs was understated here until review corrected it, and the correction is a consequence of issue #817. This statement
+// clears the replacement's claim stamp along with its in-flight state, and Ack is conditional on that stamp, so the replacement's
+// acknowledgement is REJECTED rather than landing: its work is redone by whoever claims the rows next. And a spurious set-aside
+// does not need the race to recur, because the attempt bound is carried on the ROW: ordinary failures can have brought a row to
+// within one attempt of its bound already, and this stale nack supplies the last one.
+//
+// Closing it properly means carrying the claim stamp back to the caller and making Nack conditional on still owning it, as Ack
+// already is, which changes a cross-context interface and fixes a different defect (the same stale nack can also let two workers
+// process one event). Tracked as issue #840 rather than folded in here.
 func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
 		return 0, nil
