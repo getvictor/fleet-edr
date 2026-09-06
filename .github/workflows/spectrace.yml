@@ -90,5 +90,11 @@ jobs:
       # still surfaces the coverage figure in the job log without a separate informational step.
       # --base-ref is explicit rather than relying on the default: on a pull request the branch being merged INTO is what the
       # gate should scope against, and that is not always origin/main.
+      #
+      # The ref goes through the environment rather than being expanded into the command. A branch name is attacker-controllable
+      # on a fork pull request, and `${{ }}` inside `run:` is substituted before the shell sees it, so a crafted name would be
+      # executed as code. Through `env:` it is data the shell quotes.
       - name: Run spectrace check (strict)
-        run: go run ./tools/spectrace check --strict --base-ref "origin/${{ github.base_ref || 'main' }}"
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: go run ./tools/spectrace check --strict --base-ref "origin/${BASE_REF}"
