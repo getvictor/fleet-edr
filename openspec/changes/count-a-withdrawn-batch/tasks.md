@@ -8,6 +8,8 @@
 - [x] 1.4 Note the archive-order dependency in the proposal: this delta modifies a requirement that only an in-flight change has added, so that change has to archive first, and the names sort the wrong way.
 - [x] 1.5 Update the recorder's contract, which described the acknowledgement as the only transition, and drop the stale claim-lease inaccuracy that #817 removed.
 - [x] 1.6 Sweep every other place that framed the record as happening only after an acknowledgement. Nineteen sites in the end, across two passes: the port, the counter's description and residual list, the recorder, the eval-stats contrast in five files, the processor's field comment, the runner's setter, both bootstraps, the deadlock-retry rationale, and the engine's tally comments. The first pass grepped case-sensitively for the phrasings it had already seen and missed six; the second grepped `acknowledg` case-insensitively across every comment, which is the sweep that should have been run first.
+- [x] 1.7 Restate `Stable counter names` with the terminal-transition rule, in this change and identically in the four other active deltas that carry it. Without that the archived specs would both require and forbid recording on withdrawal, and spectrace requires concurrent restatements to be identical.
+- [x] 1.8 Correct the queue's own description of #840, which said the replacement's Ack still lands. Since #817 made Ack claim-conditional, a stale nack clears the stamp and the replacement's Ack is rejected; and a spurious set-aside needs no repetition, because the attempt bound is carried on the row.
 
 ## 2. Tests
 
