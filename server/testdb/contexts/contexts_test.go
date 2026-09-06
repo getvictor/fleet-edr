@@ -44,3 +44,41 @@ func TestMySQLMigrations_ReportsAnUnreadableRoot(t *testing.T) {
 	_, err := contexts.MySQLMigrations(filepath.Join(t.TempDir(), "no-such-directory"))
 	require.Error(t, err)
 }
+
+// TestMySQLMigrations_HandlesAPathWithGlobMetacharacters is the defect review caught, and it is the worst kind for a guard: the
+// scan reports nothing, both registration gates then have nothing to check, and they pass at exactly the moment they matter.
+//
+// A checkout under a path containing brackets is unusual but legal, and the old glob-based scan returned zero matches and a nil
+// error for it. Measured before the fix, not assumed.
+func TestMySQLMigrations_HandlesAPathWithGlobMetacharacters(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "checkout[1]")
+	dir := filepath.Join(root, "alpha", "migrations")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "00001_init.sql"), []byte("-- +goose Up\n"), 0o600))
+
+	found, err := contexts.MySQLMigrations(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha"}, found,
+		"a path with glob metacharacters must not make a context look like it ships no migrations")
+}
+
+// TestMySQLMigrations_ReportsAnUnreadableMigrationsDirectory keeps an access failure from reading as "this context ships
+// nothing", for the same reason: a guard that cannot see the tree must fail rather than agree.
+func TestMySQLMigrations_ReportsAnUnreadableMigrationsDirectory(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dir := filepath.Join(root, "alpha", "migrations")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "00001_init.sql"), []byte("-- +goose Up\n"), 0o600))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	// Restored so t.TempDir's own cleanup can remove the tree. gosec reads any chmod above 0600 as a finding, and a directory
+	// needs its execute bit to be traversable, so the exemption is narrowed to this line rather than the file.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // G302: a directory must be traversable for cleanup to remove it
+
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("this filesystem or user can read a 0000 directory, so the failure cannot be provoked here")
+	}
+	_, err := contexts.MySQLMigrations(root)
+	require.Error(t, err, "an unreadable migrations directory must fail the scan rather than empty it")
+}

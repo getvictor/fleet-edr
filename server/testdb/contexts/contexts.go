@@ -9,10 +9,13 @@
 package contexts
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // MySQLMigrations lists the bounded contexts under serverDir that ship MySQL migrations, sorted.
@@ -30,14 +33,39 @@ func MySQLMigrations(serverDir string) ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		sqls, err := filepath.Glob(filepath.Join(serverDir, e.Name(), "migrations", "*.sql"))
+		holds, err := holdsMigrations(filepath.Join(serverDir, e.Name(), "migrations"))
 		if err != nil {
-			return nil, fmt.Errorf("glob %s migrations: %w", e.Name(), err)
+			return nil, fmt.Errorf("read %s migrations: %w", e.Name(), err)
 		}
-		if len(sqls) > 0 {
+		if holds {
 			found = append(found, e.Name())
 		}
 	}
 	sort.Strings(found)
 	return found, nil
+}
+
+// holdsMigrations reports whether dir contains at least one migration file.
+//
+// A directory read rather than a glob, and review was right that the difference is reachable. filepath.Glob treats its whole
+// argument as a PATTERN, so a checkout under a path containing glob metacharacters silently matches nothing, and it reports no
+// error when a directory cannot be read. Either way the scan would report a context as shipping no migrations, both guards would
+// have nothing to check, and they would pass at exactly the moment they were needed. Measured: a temp directory named with
+// brackets yields zero matches and a nil error.
+//
+// A missing directory is the ordinary shape of a context that owns no tables, so it is not an error. Anything else is.
+func holdsMigrations(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
