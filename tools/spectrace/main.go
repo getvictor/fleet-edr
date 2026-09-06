@@ -111,6 +111,8 @@ func runCheck(args []string) int {
 	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree; in-flight proposal scenarios are valid marker targets")
 	rootDir := fs.String("root", defaultRootDir, "root of the source tree to scan for markers")
 	strict := fs.Bool("strict", false, "exit non-zero if any SHALL/MUST scenario is uncovered")
+	markerLineLength := fs.Bool("marker-line-length", false,
+		"exit non-zero if a marker added or modified in this branch sits on a source line over the limit (needs a merge base)")
 	byLayer := fs.Bool("by-layer", false, "annotate the gap report with per-layer coverage (L0..L6)")
 	newCode := fs.Bool("new-code", false, "gate only on scenarios added or modified in the current branch")
 	baseRef := fs.String("base-ref", defaultBaseRef, "git revision the merge base is computed against (for --new-code)")
@@ -201,7 +203,30 @@ func runCheck(args []string) int {
 			len(newCodeIDs), *baseRef)
 	}
 
-	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid)
+	// Reported and gated regardless of --strict, like an invalid reference: an over-long marker is something already wrong in
+	// the tree rather than a coverage judgement, and it is mechanical to fix.
+	//
+	// Scoped to lines this branch touched. Several hundred over-long markers already exist on main, so gating on all of them
+	// would fail every pull request in the repository for a defect none of them introduced, which is the shape of wedge this
+	// repository has been bitten by before.
+	//
+	// Opt-in, and CI opts in. The scoping needs a merge base, which an ordinary local check or a release-checklist run may not
+	// have, and review caught both halves of getting that wrong: an earlier revision swallowed the git failure, which would let
+	// the required check pass enforcing nothing, and the revision after it failed unconditionally, which broke the documented
+	// local invocations. A flag separates the two. When it is set a git failure is fatal, because the caller asked for the gate
+	// and silently not running it is the outcome this whole change exists to prevent.
+	var overlong []Marker
+	if *markerLineLength {
+		touchedLines, terr := ChangedMarkerLines(*baseRef, *rootDir)
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "spectrace: cannot scope the marker line-length gate: %v\n", terr)
+			fmt.Fprintf(os.Stderr, "spectrace: pass --base-ref for a ref this checkout has, or fetch history for a merge base\n")
+			return 2
+		}
+		overlong = OverlongMarkers(markers, touchedLines)
+	}
+
+	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid, overlong, *markerLineLength)
 	if *byLayer {
 		printByLayer(scenarios, covered)
 	}
@@ -210,6 +235,8 @@ func runCheck(args []string) int {
 	case len(restatementConflicts) > 0:
 		return 1
 	case len(invalid) > 0:
+		return 1
+	case len(overlong) > 0:
 		return 1
 	case *strict && len(gatedNormative) > 0:
 		return 1
@@ -298,7 +325,9 @@ func splitUncovered(scenarios []Scenario, covered map[string][]Marker) ([]Scenar
 	return normative, advisory
 }
 
-func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []Scenario, invalid []Marker) {
+func printReport(
+	scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []Scenario, invalid, overlong []Marker, lineLengthGated bool,
+) {
 	totalNormative := 0
 	for _, s := range scenarios {
 		if s.Normative {
@@ -312,11 +341,25 @@ func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []S
 	fmt.Printf("spectrace: %d advisory scenarios uncovered (requirement body has no SHALL/MUST)\n",
 		len(uncoveredAdvisory))
 	fmt.Printf("spectrace: %d invalid references in tests (ID does not exist in any spec)\n", len(invalid))
+	// Says "not checked" rather than "0" when the gate is off, because a zero someone did not measure is worse than no number:
+	// it reads as a clean result on a run that never looked.
+	if lineLengthGated {
+		fmt.Printf("spectrace: %d markers on a source line over %d characters\n", len(overlong), MaxMarkerLineLen)
+	} else {
+		fmt.Printf("spectrace: marker line lengths not checked (pass --marker-line-length)\n")
+	}
 
 	if len(invalid) > 0 {
 		fmt.Fprintln(os.Stderr, "\nInvalid references:")
 		for _, m := range invalid {
 			fmt.Fprintf(os.Stderr, "  %s:%d  spec:%s\n", m.SourcePath, m.SourceLine, m.ID)
+		}
+	}
+	if len(overlong) > 0 {
+		fmt.Fprintln(os.Stderr, "\nMarkers over the source line limit. A marker cannot be wrapped without breaking the")
+		fmt.Fprintln(os.Stderr, "reference, so shorten the requirement or scenario title it names:")
+		for _, m := range overlong {
+			fmt.Fprintf(os.Stderr, "  %s:%d  %d chars  spec:%s\n", m.SourcePath, m.SourceLine, m.LineLen, m.ID)
 		}
 	}
 	if len(uncoveredNormative) > 0 {

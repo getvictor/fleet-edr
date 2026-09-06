@@ -14,6 +14,12 @@ on:
       - "**/*.ts"
       - "**/*.tsx"
       - "**/*.swift"
+      # The scanner also reads workflow and shell files, because the packaging and release scenarios are enforced there
+      # (marker.go documents which). Without these a pull request changing only one of them would set relevant=false and the
+      # job would never run, so its markers would escape both the reference check and the line-length gate.
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.sh"
       - "openspec/specs/**"
       # In-flight deltas are in scope because spectrace reads them: they exempt canonical scenarios, and the
       # concurrent-restatement gate compares them against each other. Without this a PR that only touches a delta could
@@ -75,6 +81,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Full history so the merge base with the target branch resolves. The marker line-length gate scopes itself to lines
+          # this branch touched, and at the default depth of 1 it cannot find that base: it would skip with a notice rather than
+          # fail, which is the "check that never runs" shape this repository has already been bitten by.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -84,5 +94,27 @@ jobs:
       # SHALL/MUST scenarios. The advisory phase is over; main is at 100% coverage and the gate enforces it from here.
       # The check's stdout includes the headline "N/M normative scenarios have a test marker" line, so a passing run
       # still surfaces the coverage figure in the job log without a separate informational step.
+      # The base the line-length gate scopes against differs by event, and getting it wrong makes the gate silently vacuous.
+      #
+      # On a pull request it is the branch being merged INTO, which is not always main. On a PUSH it must be the commit before
+      # the push: origin/main is then the same commit as HEAD, so the diff is empty and the gate reports zero touched markers
+      # however many the push added. Review caught that, and it is the same "reports clean without looking" shape this gate
+      # exists to close. A first push to a branch has no before-commit, and is scoped against main instead.
+      #
+      # Both go through the environment rather than being expanded into the command. A branch name is attacker-controllable on a
+      # fork pull request, and `${{ }}` inside `run:` is substituted before the shell sees it, so a crafted name would be
+      # executed as code. Through `env:` it is data the shell quotes.
       - name: Run spectrace check (strict)
-        run: go run ./tools/spectrace check --strict
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "${BASE_REF}" ]; then
+            base="origin/${BASE_REF}"
+          elif [ -n "${PUSH_BEFORE}" ] && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            base="${PUSH_BEFORE}"
+          else
+            base="origin/main"
+          fi
+          echo "spectrace: scoping the marker line-length gate against ${base}"
+          go run ./tools/spectrace check --strict --marker-line-length --base-ref "${base}"
