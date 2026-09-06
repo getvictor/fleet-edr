@@ -12,6 +12,8 @@ One generation SHALL be retained. Restoring it SHALL consume it, so a further ro
 
 A rollback SHALL leave content the operator wrote untouched, including content written after the upgrade being rolled back, because rolling back a pack restores shipped content rather than undoing their work.
 
+A rollback SHALL NOT restore shipped content whose RULE the operator has taken over since the upgrade, whatever path either is stored under. Their rule wins, as it does when shipped content is installed, and the shipped content withheld for that reason SHALL be reported.
+
 A rollback SHALL survive a restart: the system SHALL NOT reinstall a pack an operator rolled back from. That refusal SHALL apply to the declined pack only, so shipped content from a later build installs normally without the operator having to re-enable anything.
 
 Rolling back when no generation is retained SHALL be reported, and SHALL NOT replace the shipped content with an empty set.
@@ -39,6 +41,18 @@ Rolling back when no generation is retained SHALL be reported, and SHALL NOT rep
 - **GIVEN** a deployment holding rules the operator wrote
 - **WHEN** it rolls back its shipped content
 - **THEN** their rules are still stored and still recorded as theirs
+
+#### Scenario: A rule the operator took over is not taken back
+
+- **GIVEN** a deployment where the operator has taken over one of the rules in the retained generation, under any path
+- **WHEN** it rolls back
+- **THEN** their rule is unchanged, no two stored documents share an identity, and the shipped rule that was withheld is reported
+
+#### Scenario: A corpus predating pack identity offers a rollback
+
+- **GIVEN** a corpus stored before pack identity was recorded, whose identity is therefore unrecorded
+- **WHEN** it installs a newer pack and its status is read
+- **THEN** it reports a previous generation is available, and rolling back restores it
 
 #### Scenario: Rolling back with nothing retained is reported
 

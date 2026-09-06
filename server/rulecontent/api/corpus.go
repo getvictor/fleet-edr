@@ -102,6 +102,9 @@ type PackRollback struct {
 	Restored string
 	// Version is the corpus version after the rollback.
 	Version int64
+	// Withheld names retained documents NOT restored because the operator has taken over that rule since the upgrade. Their
+	// rule wins, as it does on the way in, and they are told which shipped rules the rollback therefore did not bring back.
+	Withheld []string
 }
 
 // PackInstall is what installing a build's rule pack did.

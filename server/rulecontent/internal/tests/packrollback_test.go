@@ -7,6 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -26,9 +27,16 @@ func packFS(docs map[string]string) fstest.MapFS {
 
 func newRuleContent(t *testing.T) *rulecontentbootstrap.RuleContent {
 	t.Helper()
-	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: full.Open(t), Logger: slog.New(slog.DiscardHandler)})
-	require.NoError(t, err)
+	rc, _ := newRuleContentWithDB(t)
 	return rc
+}
+
+func newRuleContentWithDB(t *testing.T) (*rulecontentbootstrap.RuleContent, *sqlx.DB) {
+	t.Helper()
+	db := full.Open(t)
+	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: slog.New(slog.DiscardHandler)})
+	require.NoError(t, err)
+	return rc, db
 }
 
 // spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/the-previous-generation-is-restored
@@ -53,7 +61,7 @@ func TestRollback_RestoresTheGenerationAnUpgradeReplaced(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, upgraded)
 
-	rolled, err := rc.RollbackPackTo(ctx, v2, ".", nil)
+	rolled, err := rc.RollbackPackTo(ctx, stemIdentity)
 	require.NoError(t, err)
 	assert.NotEmpty(t, rolled.Restored)
 
@@ -88,7 +96,7 @@ func TestRollback_SurvivesARestart(t *testing.T) {
 	v2 := packFS(map[string]string{"imported/a.yml": "a v2"})
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, v2, ".", nil)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
 	require.NoError(t, err)
 
 	// The restart: the same build, running its startup install again.
@@ -118,7 +126,7 @@ func TestRollback_DoesNotLatchOffFutureUpgrades(t *testing.T) {
 	v2 := packFS(map[string]string{"imported/a.yml": "a v2"})
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, v2, ".", nil)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
 	require.NoError(t, err)
 
 	// The next release ships a different pack. It was never declined, so it installs.
@@ -157,7 +165,7 @@ func TestRollback_LeavesTheOperatorsOwnRulesAlone(t *testing.T) {
 	require.NoError(t, err)
 	_ = version
 
-	_, err = rc.RollbackPackTo(ctx, v2, ".", nil)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
 	require.NoError(t, err)
 
 	docs, err := rc.Corpus().Documents(ctx)
@@ -185,7 +193,7 @@ func TestRollback_WithNothingRetainedIsReported(t *testing.T) {
 	_, err := rc.SeedFrom(ctx, v1, ".", nil)
 	require.NoError(t, err)
 
-	_, err = rc.RollbackPackTo(ctx, v1, ".", nil)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
 	require.ErrorIs(t, err, api.ErrNoPreviousPack)
 
 	docs, err := rc.Corpus().Documents(ctx)
@@ -208,9 +216,9 @@ func TestRollback_CannotBeRepeatedPastTheRetainedGeneration(t *testing.T) {
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
 
-	_, err = rc.RollbackPackTo(ctx, v2, ".", nil)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, v2, ".", nil)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
 	require.ErrorIs(t, err, api.ErrNoPreviousPack)
 }
 
@@ -291,4 +299,165 @@ func TestPackStatus_IgnoresTheOperatorsOwnRules(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, status.Removed, "the operator's own rule is not a rule the pack dropped")
 	assert.True(t, status.Current(), "writing their own rule must not make the deployment look out of date")
+}
+
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rule-the-operator-took-over-is-not-taken-back
+//
+// TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns is the failure review caught, and it has two shapes with the same cause.
+//
+// A rollback restores the retained shipped documents. If the operator has taken over one of those rules SINCE the upgrade, then
+// at the same path the insert is a duplicate-key failure that aborts the whole rollback, and at a different path with the same
+// identity it stores two documents for one rule, which makes the corpus refuse to load and takes every rule on the deployment
+// down. It is the hazard the install path already filters for, arriving from the other direction.
+func TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns(t *testing.T) {
+	t.Parallel()
+
+	t.Run("at the same path", func(t *testing.T) {
+		t.Parallel()
+		rc := newRuleContent(t)
+		ctx := t.Context()
+
+		_, err := rc.SeedFrom(ctx, packFS(map[string]string{"imported/a.yml": "shipped v1"}), ".", nil)
+		require.NoError(t, err)
+		_, err = rc.UpgradePackFrom(ctx, packFS(map[string]string{"imported/a.yml": "shipped v2"}), ".", nil, stemIdentity)
+		require.NoError(t, err)
+
+		// The operator writes their own version, at the path the retained generation also holds.
+		version, err := rc.Corpus().Version(ctx)
+		require.NoError(t, err)
+		_, err = rc.Replace(ctx, []api.Document{
+			{Path: "imported/a.yml", Content: []byte("my version"), Source: api.SourceAuthored},
+		})
+		require.NoError(t, err)
+		_ = version
+
+		rolled, err := rc.RollbackPackTo(ctx, stemIdentity)
+		require.NoError(t, err, "a rollback must not fail because the operator took over one of the rules")
+
+		docs, err := rc.Corpus().Documents(ctx)
+		require.NoError(t, err)
+		require.Len(t, docs, 1)
+		assert.Equal(t, "my version", string(docs[0].Content), "their rule wins, as it does on the way in")
+		assert.Equal(t, api.SourceAuthored, docs[0].Source)
+		assert.Contains(t, rolled.Withheld, "imported/a.yml", "they are told which shipped rule was not restored")
+	})
+
+	t.Run("at a different path with the same identity", func(t *testing.T) {
+		t.Parallel()
+		rc := newRuleContent(t)
+		ctx := t.Context()
+
+		_, err := rc.SeedFrom(ctx, packFS(map[string]string{"imported/a.yml": "shipped v1"}), ".", nil)
+		require.NoError(t, err)
+		_, err = rc.UpgradePackFrom(ctx, packFS(map[string]string{"imported/b.yml": "shipped v2"}), ".", nil, stemIdentity)
+		require.NoError(t, err)
+
+		// Their own rule whose identity collides with the retained "a", under a path of their choosing.
+		_, err = rc.Replace(ctx, []api.Document{
+			{Path: "imported/b.yml", Content: []byte("shipped v2"), Source: api.SourceVendored},
+			{Path: "authored/a.yml", Content: []byte("mine"), Source: api.SourceAuthored},
+		})
+		require.NoError(t, err)
+
+		_, err = rc.RollbackPackTo(ctx, stemIdentity)
+		require.NoError(t, err)
+
+		docs, err := rc.Corpus().Documents(ctx)
+		require.NoError(t, err)
+		seen := make(map[string]string, len(docs))
+		for _, d := range docs {
+			id := stemIdentity(d.Path)
+			if prior, dup := seen[id]; dup {
+				t.Fatalf("two documents share the identity %q (%s and %s), so this corpus does not load", id, prior, d.Path)
+			}
+			seen[id] = d.Path
+		}
+		assert.Contains(t, seen, "a", "their rule keeps the identity")
+		assert.Equal(t, "authored/a.yml", seen["a"], "and the restore did not add a second document for it")
+	})
+}
+
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-corpus-predating-pack-identity-offers-a-rollback
+//
+// TestRollback_IsOfferedOnACorpusThatPredatesPackIdentity is the inconsistency review found between the two halves of this
+// feature, and mutation testing then showed the fix was unpinned.
+//
+// A corpus stored before pack identity was recorded carries an EMPTY pack_digest, deliberately: it holds some generation and
+// nothing wrote down which. Retaining by copying that value left the first upgrade on such a deployment storing the rows while
+// recording no identity for them, so the status surface reported no rollback available while a rollback would in fact have
+// worked. Deriving the identity from the snapshot closes it, and this is what says so.
+func TestRollback_IsOfferedOnACorpusThatPredatesPackIdentity(t *testing.T) {
+	t.Parallel()
+	rc, db := newRuleContentWithDB(t)
+	ctx := t.Context()
+
+	_, err := rc.SeedFrom(ctx, packFS(map[string]string{"imported/a.yml": "a v1"}), ".", nil)
+	require.NoError(t, err)
+
+	// The state migration 00002 leaves a populated pre-provenance corpus in: content stored, identity unrecorded.
+	_, err = db.ExecContext(ctx, "UPDATE rule_corpus_meta SET pack_digest = '' WHERE id = 1")
+	require.NoError(t, err)
+
+	v2 := packFS(map[string]string{"imported/a.yml": "a v2"})
+	upgraded, err := rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	require.True(t, upgraded)
+
+	status, err := rc.PackStatusFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	require.NotEmpty(t, status.Previous,
+		"the retained generation must have an identity, or the status surface reports no rollback while one would work")
+
+	// And the two halves agree: what status offers, rollback delivers.
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	require.NoError(t, err)
+	docs, err := rc.Corpus().Documents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "a v1", string(docs[0].Content))
+}
+
+// TestPackLifecycle_RefusesAnUnreadableStoredSource covers the read every path here shares. A row written by a version that knew
+// a provenance this one does not must stop the operation rather than be interpreted as one of today's two values, and that has to
+// hold for reading status and for rolling back as well as for installing, which is where it was already pinned.
+func TestPackLifecycle_RefusesAnUnreadableStoredSource(t *testing.T) {
+	t.Parallel()
+
+	corrupt := func(t *testing.T) (*rulecontentbootstrap.RuleContent, fstest.MapFS) {
+		t.Helper()
+		rc, db := newRuleContentWithDB(t)
+		ctx := t.Context()
+		pack := packFS(map[string]string{"imported/a.yml": "a"})
+		_, err := rc.SeedFrom(ctx, pack, ".", nil)
+		require.NoError(t, err)
+		// An upgrade first, so a generation is retained and the rollback below gets past its own emptiness check.
+		_, err = rc.UpgradePackFrom(ctx, packFS(map[string]string{"imported/a.yml": "a v2"}), ".", nil, stemIdentity)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "UPDATE rule_corpus_documents SET source = ? WHERE path = ?", "community", "imported/a.yml")
+		require.NoError(t, err)
+		return rc, pack
+	}
+
+	t.Run("reading pack status", func(t *testing.T) {
+		t.Parallel()
+		rc, pack := corrupt(t)
+		_, err := rc.PackStatusFrom(t.Context(), pack, ".", nil, stemIdentity)
+		require.ErrorIs(t, err, api.ErrUnknownSource)
+	})
+
+	t.Run("rolling back", func(t *testing.T) {
+		t.Parallel()
+		rc, _ := corrupt(t)
+		_, err := rc.RollbackPackTo(t.Context(), stemIdentity)
+		require.ErrorIs(t, err, api.ErrUnknownSource)
+	})
+}
+
+// TestPackStatusFrom_ARootThatDoesNotExistIsAnError pins that the bootstrap surfaces a bad walk rather than reporting a
+// deployment current against a pack it could not read. Reporting "current" there would be the worst available answer: it is the
+// one an operator would act on by doing nothing.
+func TestPackStatusFrom_ARootThatDoesNotExistIsAnError(t *testing.T) {
+	t.Parallel()
+	rc := newRuleContent(t)
+	_, err := rc.PackStatusFrom(t.Context(), fstest.MapFS{}, "no-such-root", nil, stemIdentity)
+	require.Error(t, err)
 }

@@ -209,6 +209,46 @@ func packMinusOperatorRules(pack, stored []api.Document, identity api.RuleIdenti
 	return want, skipped
 }
 
+// txWriter runs a sequence of statements in one transaction and remembers the first failure.
+//
+// The sequences here are runs of writes that all fail the same way, and writing them out gave this store a `if err != nil {
+// return ... }` after every line: ten of them for two operations, each an error branch no test can reach without injecting a
+// database fault. Accumulating instead leaves ONE branch per sequence, and the call sites read as the ordered list of writes they
+// are, which is the thing worth being able to check by eye. `doing` names each step so the one error still says which failed.
+type txWriter struct {
+	ctx context.Context
+	tx  *sqlx.Tx
+	err error
+}
+
+// exec runs one statement unless an earlier one already failed.
+func (w *txWriter) exec(doing, query string, args ...any) {
+	if w.err != nil {
+		return
+	}
+	if _, err := w.tx.ExecContext(w.ctx, query, args...); err != nil {
+		w.err = fmt.Errorf("%s: %w", doing, err)
+	}
+}
+
+// replaceShippedWithin bumps the corpus version and swaps the shipped documents for docs, in the caller's transaction.
+//
+// Shared by installing a pack and by rolling one back, because they are the same three writes in the same order: bump, clear the
+// shipped half, insert the new one. They had a copy each, which is two places for the ordering to drift and twice the error
+// branches for one behaviour. `doing` names the caller so a failure still says which operation it came from.
+func replaceShippedWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document, doing string) error {
+	w := &txWriter{ctx: ctx, tx: tx}
+	w.exec(doing+": bump rule corpus version", "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1")
+	w.exec(doing+": clear shipped rule corpus documents",
+		"DELETE FROM rule_corpus_documents WHERE source = ?", string(api.SourceVendored))
+	for _, d := range docs {
+		w.exec(doing+": write shipped rule corpus document "+d.Path,
+			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
+			d.Path, string(d.Content), string(api.SourceVendored))
+	}
+	return w.err
+}
+
 // retainCurrentShippedWithin snapshots the shipped content an upgrade is about to replace, so a bad pack is recoverable.
 //
 // One generation, replaced wholesale each time. A deeper history would need a retention policy, a way to name a generation and a
@@ -219,25 +259,18 @@ func packMinusOperatorRules(pack, stored []api.Document, identity api.RuleIdenti
 // including them would make a rollback able to revert an operator's edit made after the upgrade, which is not what rolling back a
 // PACK means.
 func retainCurrentShippedWithin(ctx context.Context, tx *sqlx.Tx, shipped []api.Document) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_previous_documents"); err != nil {
-		return fmt.Errorf("clear retained shipped content: %w", err)
-	}
+	w := &txWriter{ctx: ctx, tx: tx}
+	w.exec("clear retained shipped content", "DELETE FROM rule_corpus_previous_documents")
 	for _, d := range shipped {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO rule_corpus_previous_documents (path, content) VALUES (?, ?)",
-			d.Path, string(d.Content)); err != nil {
-			return fmt.Errorf("retain shipped document %q: %w", d.Path, err)
-		}
+		w.exec("retain shipped document "+d.Path,
+			"INSERT INTO rule_corpus_previous_documents (path, content) VALUES (?, ?)", d.Path, string(d.Content))
 	}
-	var current string
-	if err := tx.GetContext(ctx, &current, "SELECT pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
-		return fmt.Errorf("read pack digest for retention: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE rule_corpus_meta SET previous_pack_digest = ? WHERE id = 1", current); err != nil {
-		return fmt.Errorf("record retained pack digest: %w", err)
-	}
-	return nil
+	// Derived from the snapshot rather than copied from pack_digest, which is deliberately EMPTY on a corpus that predates
+	// provenance being recorded. Copying it would leave the first upgrade on such a deployment retaining rows while reporting no
+	// generation to roll back to, so the status surface would say rollback is unavailable while the rollback itself would work.
+	w.exec("record retained pack digest",
+		"UPDATE rule_corpus_meta SET previous_pack_digest = ? WHERE id = 1", api.PackDigest(shipped))
+	return w.err
 }
 
 // UpgradeVendoredTo installs pack as the shipped half of the corpus, leaving the operator's own content alone. It reports
@@ -309,30 +342,21 @@ func (s *Store) UpgradeVendoredTo(
 		return api.PackInstall{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
-		return api.PackInstall{}, fmt.Errorf("bump rule corpus version: %w", err)
+	if err := replaceShippedWithin(ctx, tx, want, "install"); err != nil {
+		return api.PackInstall{}, err
 	}
 	version++
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM rule_corpus_documents WHERE source = ?", string(api.SourceVendored)); err != nil {
-		return api.PackInstall{}, fmt.Errorf("clear shipped rule corpus documents: %w", err)
-	}
-	for _, d := range want {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
-			d.Path, string(d.Content), string(api.SourceVendored)); err != nil {
-			return api.PackInstall{}, fmt.Errorf("insert shipped rule corpus document %q: %w", d.Path, err)
-		}
-	}
 	if err := setPackDigest(ctx, tx, target); err != nil {
 		return api.PackInstall{}, err
 	}
 	// installed_pack_digest names the BUILD's pack, before operator overrides were filtered out of it, which is what a rollback
 	// has to record as declined. pack_digest cannot serve: it describes the content actually stored, so on a deployment holding
 	// an override it never equals any build's pack digest.
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE rule_corpus_meta SET installed_pack_digest = ? WHERE id = 1", shipped); err != nil {
-		return api.PackInstall{}, fmt.Errorf("record installed pack digest: %w", err)
+	w := &txWriter{ctx: ctx, tx: tx}
+	w.exec("record installed pack digest",
+		"UPDATE rule_corpus_meta SET installed_pack_digest = ? WHERE id = 1", shipped)
+	if w.err != nil {
+		return api.PackInstall{}, w.err
 	}
 	if err := tx.Commit(); err != nil {
 		return api.PackInstall{}, fmt.Errorf("commit pack upgrade: %w", err)
@@ -351,7 +375,7 @@ func (s *Store) UpgradeVendoredTo(
 //
 // Reports api.ErrNoPreviousPack when there is nothing retained, which is the ordinary state of a deployment that has never
 // upgraded. Restoring an empty set instead would leave it detecting nothing.
-func (s *Store) RollbackPack(ctx context.Context, declinedShipped string) (api.PackRollback, error) {
+func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (api.PackRollback, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return api.PackRollback{}, fmt.Errorf("begin tx for pack rollback: %w", err)
@@ -371,29 +395,41 @@ func (s *Store) RollbackPack(ctx context.Context, declinedShipped string) (api.P
 		"SELECT path, content FROM rule_corpus_previous_documents ORDER BY path"); err != nil {
 		return api.PackRollback{}, fmt.Errorf("read retained shipped content: %w", err)
 	}
+	var rows []corpusRow
+	if err := tx.SelectContext(ctx, &rows, selectCorpusDocuments); err != nil {
+		return api.PackRollback{}, fmt.Errorf("read rule corpus documents for rollback: %w", err)
+	}
 	if len(retained) == 0 {
 		return api.PackRollback{}, api.ErrNoPreviousPack
 	}
 
-	restore := make([]api.Document, 0, len(retained))
+	snapshot := make([]api.Document, 0, len(retained))
 	for _, r := range retained {
-		restore = append(restore, api.Document{Path: r.Path, Content: []byte(r.Content), Source: api.SourceVendored})
+		snapshot = append(snapshot, api.Document{Path: r.Path, Content: []byte(r.Content), Source: api.SourceVendored})
 	}
 
-	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
-		return api.PackRollback{}, fmt.Errorf("bump rule corpus version: %w", err)
+	// The operator may have taken over one of these rules since the upgrade, and a rollback must not take it back. Restoring
+	// blindly is not merely impolite: at the same path it is a duplicate-key failure that aborts the whole rollback, and at a
+	// different path with the same identity it stores two documents for one rule, which makes the corpus refuse to load and
+	// takes every rule on the deployment down. Same hazard the install path filters for, and the same filter.
+	stored, err := documentsFromRows(rows)
+	if err != nil {
+		return api.PackRollback{}, err
+	}
+	restore, withheld := packMinusOperatorRules(snapshot, stored, identity)
+
+	if err := replaceShippedWithin(ctx, tx, restore, "restore"); err != nil {
+		return api.PackRollback{}, err
 	}
 	version++
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM rule_corpus_documents WHERE source = ?", string(api.SourceVendored)); err != nil {
-		return api.PackRollback{}, fmt.Errorf("clear shipped rule corpus documents: %w", err)
-	}
-	for _, d := range restore {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
-			d.Path, string(d.Content), string(api.SourceVendored)); err != nil {
-			return api.PackRollback{}, fmt.Errorf("restore shipped document %q: %w", d.Path, err)
-		}
+
+	// Declined is read from what the UPGRADE recorded, not from the pack the replica serving this request happens to carry.
+	// During a rolling deployment those differ: a rollback through an older replica would otherwise decline that replica's pack
+	// and leave the newer one free to reinstall on the next start, which is the failure the decline exists to prevent.
+	var installedFrom string
+	if err := tx.GetContext(ctx, &installedFrom,
+		"SELECT installed_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		return api.PackRollback{}, fmt.Errorf("read installed pack digest: %w", err)
 	}
 
 	restored := api.PackDigest(restore)
@@ -402,18 +438,18 @@ func (s *Store) RollbackPack(ctx context.Context, declinedShipped string) (api.P
 	}
 	// The retained generation has been consumed: it is the live one now, so there is nothing behind it to go back to. Leaving it
 	// in place would let a second rollback "restore" the content already installed and report success having changed nothing.
-	if _, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_previous_documents"); err != nil {
-		return api.PackRollback{}, fmt.Errorf("clear retained shipped content: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx,
+	w := &txWriter{ctx: ctx, tx: tx}
+	w.exec("clear retained shipped content", "DELETE FROM rule_corpus_previous_documents")
+	w.exec("record declined pack",
 		"UPDATE rule_corpus_meta SET previous_pack_digest = '', declined_pack_digest = ?, installed_pack_digest = '' WHERE id = 1",
-		declinedShipped); err != nil {
-		return api.PackRollback{}, fmt.Errorf("record declined pack: %w", err)
+		installedFrom)
+	if w.err != nil {
+		return api.PackRollback{}, w.err
 	}
 	if err := tx.Commit(); err != nil {
 		return api.PackRollback{}, fmt.Errorf("commit pack rollback: %w", err)
 	}
-	return api.PackRollback{Restored: restored, Version: version}, nil
+	return api.PackRollback{Restored: restored, Version: version, Withheld: withheld}, nil
 }
 
 // PackStatusAgainst reports what shipped content is stored and how it differs from the pack this build carries.
@@ -422,38 +458,44 @@ func (s *Store) RollbackPack(ctx context.Context, declinedShipped string) (api.P
 // tuning is keyed on. A rule that moved between directories upstream is the same rule to them, and reporting it as one removed
 // and one added would be noise dressed as a change.
 func (s *Store) PackStatusAgainst(ctx context.Context, pack []api.Document, identity api.RuleIdentity) (api.PackStatus, error) {
+	// One transaction for the meta row and the documents, because a status assembled from two reads can describe two different
+	// generations: an upgrade committing between them yields the old Installed digest beside the new documents, which reports
+	// "not current" with every diff list empty. That is a nonsense answer rather than a stale one.
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return api.PackStatus{}, fmt.Errorf("begin tx for pack status: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	var meta struct {
 		PackDigest     string `db:"pack_digest"`
 		PreviousDigest string `db:"previous_pack_digest"`
 		DeclinedDigest string `db:"declined_pack_digest"`
 	}
-	if err := s.db.GetContext(ctx, &meta,
+	if err := tx.GetContext(ctx, &meta,
 		"SELECT pack_digest, previous_pack_digest, declined_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
 		return api.PackStatus{}, fmt.Errorf("read rule corpus meta: %w", err)
 	}
-	stored, err := s.Documents(ctx)
+	var rows []corpusRow
+	if err := tx.SelectContext(ctx, &rows, selectCorpusDocuments); err != nil {
+		return api.PackStatus{}, fmt.Errorf("read rule corpus documents for pack status: %w", err)
+	}
+	stored, err := documentsFromRows(rows)
 	if err != nil {
 		return api.PackStatus{}, err
 	}
 
 	status := api.PackStatus{
 		Installed: meta.PackDigest,
-		Available: api.PackDigest(api.VendoredDocuments(packAsShipped(pack))),
+		// The pack is digested as given. Marking Source on a copy first would change nothing, because PackDigest hashes the
+		// path and the content and not the source, which is what review caught: two helpers existed to do it and neither could
+		// have had an effect.
+		Available: api.PackDigest(pack),
 		Previous:  meta.PreviousDigest,
 		Declined:  meta.DeclinedDigest,
 	}
 	status.Added, status.Removed, status.Changed = diffByIdentity(api.VendoredDocuments(stored), pack, identity)
 	return status, nil
-}
-
-// packAsShipped normalises a build's pack for digesting, so a caller reading a pack off disk (where documents carry no declared
-// source) gets the same identity the store records for it.
-func packAsShipped(pack []api.Document) []api.Document {
-	out := make([]api.Document, 0, len(pack))
-	for _, d := range pack {
-		out = append(out, api.Document{Path: d.Path, Content: d.Content, Source: api.SourceVendored})
-	}
-	return out
 }
 
 // diffByIdentity reports which RULES differ between the shipped content stored and the pack a build carries.

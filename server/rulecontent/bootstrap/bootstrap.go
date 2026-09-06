@@ -166,21 +166,20 @@ func (r *RuleContent) UpgradePackFrom(
 // RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
 // declined so a restart does not reinstall it.
 //
-// fsys/root/include describe the build's own pack, which is needed only to name what is being declined. Reading it here rather
-// than taking a digest keeps the caller from having to compute one, and keeps the two paths (install and roll back) reading the
-// build's content the same way.
-func (r *RuleContent) RollbackPackTo(
-	ctx context.Context, fsys fs.FS, root string, include func(path string) bool,
-) (api.PackRollback, error) {
-	docs, err := readAll(fsys, root, include)
+// The pack being declined is read from what the UPGRADE recorded rather than from the build this process is running, which review
+// caught: during a rolling deployment a rollback served by an older replica would otherwise decline that replica's pack and leave
+// the newer one free to reinstall on the next start.
+//
+// identity is needed for the same reason the install path needs it: a rule the operator has taken over since the upgrade must not
+// be taken back by the restore.
+func (r *RuleContent) RollbackPackTo(ctx context.Context, identity api.RuleIdentity) (api.PackRollback, error) {
+	rolled, err := r.store.RollbackPack(ctx, identity)
 	if err != nil {
 		return api.PackRollback{}, err
 	}
-	api.SortDocuments(docs)
-
-	rolled, err := r.store.RollbackPack(ctx, api.PackDigest(shippedPack(docs)))
-	if err != nil {
-		return api.PackRollback{}, err
+	if len(rolled.Withheld) > 0 {
+		r.logger.InfoContext(ctx, "rulecontent: kept the operator's own rules over the ones being restored",
+			"documents", strings.Join(rolled.Withheld, ","))
 	}
 	r.logger.InfoContext(ctx, "rulecontent: rolled back to the previously installed rule pack",
 		"pack", rolled.Restored, "version", rolled.Version)
@@ -197,15 +196,6 @@ func (r *RuleContent) PackStatusFrom(
 	}
 	api.SortDocuments(docs)
 	return r.store.PackStatusAgainst(ctx, docs, identity)
-}
-
-// shippedPack marks a pack read off disk as the shipped content it is, so its digest matches the one the store records for it.
-func shippedPack(docs []api.Document) []api.Document {
-	out := make([]api.Document, 0, len(docs))
-	for _, d := range docs {
-		out = append(out, api.Document{Path: d.Path, Content: d.Content, Source: api.SourceVendored})
-	}
-	return out
 }
 
 // SeedFrom populates the corpus from fsys when the corpus is empty, and reports whether it wrote anything.
