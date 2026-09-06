@@ -139,9 +139,12 @@ type MetricsRecorder interface {
 	//
 	// Five inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
 	//
-	// A crash between the transition and the durable record loses those counts, and so does a failure of that record, which is
-	// logged and dropped rather than allowed to fail a batch that is already finished with the queue. Both leave THIS counter
-	// ahead of the durable table, since it is incremented first.
+	// A crash between the transition and the record loses those counts, and so does a failure of the durable write, which is
+	// logged and dropped rather than allowed to fail a batch that is already finished with the queue.
+	//
+	// Which sink is left ahead depends on WHERE in that window it happens, and an earlier version of this comment got it wrong by
+	// claiming this counter always survives. The increment happens after the queue transition and before the durable write, so a
+	// crash before the increment loses both; only a crash after it, or a failure of the write itself, leaves this counter ahead.
 	//
 	// A batch withdrawn on an attempt that had not evaluated it records nothing: that attempt resolved no matches, and an earlier
 	// attempt's were discarded when it was retried rather than carried forward (#893).
