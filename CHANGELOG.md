@@ -29,6 +29,8 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
+- **Exporting a rule you have written over a shipped one now returns your file, not the shipped one.** A rule is identified by its filename, so your own version of a shipped detection keeps that detection's identifier, and the export resolved that identifier against the rules built into the release: it handed back the shipped file, which was not what your deployment was running. The export now returns the document the running rule was loaded from, which is yours where you have written one and the community project's original where you have not.
+
 - **`fleet-edr-migrate` now applies every MySQL migration, not all but one.** The tool reported success having skipped one component's tables, so a deployment that runs migrations as a separate privileged step and then starts the server without schema-change permission failed on start, with nothing in the migration output to explain why. If you run migrations that way, this is the fix; if you let the server migrate on start, nothing changes for you. The event archive's own schema is still applied by the server at start, as before.
 
 - **Submitting a rule no longer reports problems with rules you did not touch.** Every submission was accompanied by warnings about the vendored rules this sensor cannot run, so your own rule's warning arrived last among files you cannot fix, and the audit entry for your change recorded them as though they were about it. A change now reports, and records, only what concerns the rule you changed.
