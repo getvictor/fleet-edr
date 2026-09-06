@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -589,5 +590,54 @@ func TestPackStatus_RoundTripsAnyDifferenceLists(t *testing.T) {
 		assert.Equal(rt, orEmpty(want.Added), got.Added)
 		assert.Equal(rt, orEmpty(want.Removed), got.Removed)
 		assert.Equal(rt, orEmpty(want.Changed), got.Changed)
+	})
+}
+
+// TestPackRollback_RoundTripsAnyReasonAndWithheldList is the other half of the serialization invariant, and review was right that
+// the first pass only covered the status response.
+//
+// The reason is the interesting input: it is operator-supplied free text that goes into a JSON request AND into an audit payload,
+// so quotes, newlines and non-ASCII all have to survive the trip intact. A reason mangled in transit would be recorded wrongly in
+// the one place someone later asks why every shipped rule changed.
+func TestPackRollback_RoundTripsAnyReasonAndWithheldList(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		reason := rapid.StringN(1, 200, -1).Filter(func(s string) bool { return strings.TrimSpace(s) != "" }).Draw(rt, "reason")
+		withheld := rapid.SliceOfN(rapid.StringMatching(`[a-z_/]{1,30}\.yml`), 0, 5).Draw(rt, "withheld")
+		restored := rapid.StringMatching(`[0-9a-f]{0,64}`).Draw(rt, "restored")
+		version := rapid.Int64Range(0, 1<<40).Draw(rt, "version")
+
+		packs := &fakeRCPacks{rolled: rulecontentapi.PackRollback{
+			Restored: restored, Version: version, Withheld: withheld,
+		}}
+		h, err := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, fakeRCCorpus{}, packs, allowAllAuthZ{},
+			slog.New(slog.DiscardHandler))
+		require.NoError(rt, err)
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+
+		body, err := json.Marshal(map[string]string{"reason": reason})
+		require.NoError(rt, err)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(
+			identityapi.WithActor(context.Background(),
+				&identityapi.Actor{Principal: identityapi.UserPrincipal(7, ""), SessionFresh: true}),
+			http.MethodPost, "/api/v1/rule-content/pack:rollback", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		require.Equal(rt, http.StatusOK, rec.Code, rec.Body.String())
+
+		// The reason survived the request encoding, which is what the audit row will carry.
+		assert.Equal(rt, reason, packs.reason)
+
+		var got struct {
+			Restored string   `json:"restored"`
+			Version  int64    `json:"version"`
+			Withheld []string `json:"withheld"`
+		}
+		require.NoError(rt, json.Unmarshal(rec.Body.Bytes(), &got))
+		assert.Equal(rt, restored, got.Restored)
+		assert.Equal(rt, version, got.Version)
+		assert.Equal(rt, orEmpty(withheld), got.Withheld)
 	})
 }
