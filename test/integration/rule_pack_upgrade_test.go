@@ -87,6 +87,21 @@ func TestRulePackUpgrade_PreservesTuning(t *testing.T) {
 	require.Len(t, docs, 1)
 	assert.Contains(t, string(docs[0].Content), "osascript-v2", "the upgrade must have installed the newer pack")
 
+	// The tuned id must name a rule the corpus actually loads, or every assertion below is about a setting attached to nothing.
+	// The resolver answers for any id it holds a row for, existing rule or not, so without this the test would pass just as
+	// happily with a typo in the constant. Review raised this, via a different mechanism: it read the fixture's Sigma `id:` as the
+	// rule's identity, where in this codebase the identity is the file STEM (#873) and that UUID is metadata. The id is right, and
+	// nothing was checking that it was.
+	reloaded, err := stack.Rules.Reload(ctx)
+	require.NoError(t, err)
+	require.Positive(t, reloaded)
+	ids := make([]string, 0, reloaded)
+	for _, rm := range stack.Rules.Catalog().List() {
+		ids = append(ids, rm.ID)
+	}
+	require.Contains(t, ids, ruleID,
+		"the tuning targets a rule the upgraded corpus does not contain, so the survival assertions would prove nothing")
+
 	mode, severity := resolver.ResolveRuleMode(ruleID, "host-a", rulesapi.DetectionRuleModeMonitor)
 	assert.Equal(t, rulesapi.DetectionRuleModeAlert, mode,
 		"a rule promoted out of monitor must not silently return to it on a pack upgrade")
