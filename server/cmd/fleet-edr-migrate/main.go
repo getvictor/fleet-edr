@@ -21,6 +21,7 @@ import (
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
+	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
@@ -44,6 +45,10 @@ func migrations() []migration {
 		{"rules", rulesbootstrap.ApplySchema},
 		{"response", responsebootstrap.ApplySchema},
 		{"detection", detectionbootstrap.ApplySchema},
+		// observability was absent from this list while being applied at server boot, so a deployment that migrates as a
+		// privileged step and then runs the app without DDL grants failed at boot on this one context, and a multi-replica boot
+		// had every replica racing goose for it: the race this CLI exists to remove (#849).
+		{"observability", observabilitybootstrap.ApplySchema},
 		// visibility applies only its MySQL schema here (the event_queue work queue); the ClickHouse event archive is migrated by the
 		// server at boot, since this CLI takes a MySQL DSN only (ADR-0015).
 		{"visibility", visibilitybootstrap.ApplySchema},
