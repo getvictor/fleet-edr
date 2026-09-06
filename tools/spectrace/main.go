@@ -206,12 +206,17 @@ func runCheck(args []string) int {
 	//
 	// Scoped to lines this branch touched. Several hundred over-long markers already exist on main, so gating on all of them
 	// would fail every pull request in the repository for a defect none of them introduced, which is the shape of wedge this
-	// repository has been bitten by before. A run that cannot reach git reports none rather than failing: the gate is worth
-	// having when it can be scoped honestly and is not worth blocking a build over when it cannot.
-	touchedLines, terr := ChangedMarkerLines(*baseRef)
+	// repository has been bitten by before.
+	//
+	// A git failure is reported, NOT swallowed. An earlier revision turned it into an empty scope and carried on, which review
+	// caught: this runs as a required check, so a missing merge base or a timed-out diff would have reported no over-long
+	// markers and let the check pass without enforcing anything. That is the "gate that never runs" shape twice over, since the
+	// gate was itself added to stop a class of defect from reaching review unchecked.
+	touchedLines, terr := ChangedMarkerLines(*baseRef, *rootDir)
 	if terr != nil {
-		fmt.Fprintf(os.Stderr, "spectrace: marker line-length gate skipped (%v)\n", terr)
-		touchedLines = map[string][]lineRange{}
+		fmt.Fprintf(os.Stderr, "spectrace: cannot scope the marker line-length gate: %v\n", terr)
+		fmt.Fprintf(os.Stderr, "spectrace: pass --base-ref for a ref this checkout has, or fetch enough history for a merge base\n")
+		return 2
 	}
 	overlong := OverlongMarkers(markers, touchedLines)
 

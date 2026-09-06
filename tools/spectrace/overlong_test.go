@@ -1,9 +1,11 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestOverlongMarkers_ScopedToTouchedLines is what makes this gate shippable rather than a wedge.
@@ -26,13 +28,29 @@ func TestOverlongMarkers_ScopedToTouchedLines(t *testing.T) {
 	assert.Equal(t, "a/b/c", got[0].ID)
 }
 
-// TestOverlongMarkers_AtTheLimitIsFine pins the boundary. The limit is a maximum, so a line exactly at it complies, and getting
-// this backwards would fail lines that are already correct.
-func TestOverlongMarkers_AtTheLimitIsFine(t *testing.T) {
+// TestOverlongMarkers_Boundary pins where the limit falls. It is a maximum, so a line exactly at it complies; getting that
+// backwards would fail lines that are already correct, which is the kind of gate contributors learn to ignore.
+func TestOverlongMarkers_Boundary(t *testing.T) {
 	t.Parallel()
 	touched := map[string][]lineRange{"f.go": {{Start: 1, End: 1}}}
-	assert.Empty(t, OverlongMarkers([]Marker{{SourcePath: "f.go", SourceLine: 1, LineLen: MaxMarkerLineLen}}, touched))
-	assert.Len(t, OverlongMarkers([]Marker{{SourcePath: "f.go", SourceLine: 1, LineLen: MaxMarkerLineLen + 1}}, touched), 1)
+
+	cases := []struct {
+		name     string
+		lineLen  int
+		reported bool
+	}{
+		{"one under the limit", MaxMarkerLineLen - 1, false},
+		{"exactly at the limit", MaxMarkerLineLen, false},
+		{"one over the limit", MaxMarkerLineLen + 1, true},
+		{"well over the limit", MaxMarkerLineLen + 40, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := OverlongMarkers([]Marker{{SourcePath: "f.go", SourceLine: 1, LineLen: tc.lineLen}}, touched)
+			assert.Equal(t, tc.reported, len(got) == 1, "%d characters", tc.lineLen)
+		})
+	}
 }
 
 // TestOverlongMarkers_NilTouchedReportsEverything covers the deliberate sweep: a caller that wants the whole backlog passes no
@@ -52,4 +70,28 @@ func TestOverlongMarkers_UntouchedFileIsIgnored(t *testing.T) {
 	t.Parallel()
 	markers := []Marker{{ID: "a", SourcePath: "untouched.go", SourceLine: 5, LineLen: MaxMarkerLineLen + 50}}
 	assert.Empty(t, OverlongMarkers(markers, map[string][]lineRange{"other.go": {{Start: 1, End: 100}}}))
+}
+
+// TestScanFile_DoesNotCountACarriageReturn covers the CRLF checkout: a marker line of exactly the limit must not be reported as
+// one over on a machine that differs from the author's only in checkout settings.
+//
+// It holds because bufio.ScanLines strips the carriage return before Text() returns, which is worth a test rather than a comment:
+// review asserted the opposite and proposed trimming it here, and a redundant trim would have read as load-bearing to whoever
+// touched this next. Measured before deciding, and the scanner is right.
+func TestScanFile_DoesNotCountACarriageReturn(t *testing.T) {
+	t.Parallel()
+
+	// A marker line padded to exactly the limit, then delivered with CRLF endings.
+	const id = "a/b/c"
+	marker := "// spec:" + id
+	line := marker + strings.Repeat(" ", MaxMarkerLineLen-len(marker))
+	require.Len(t, line, MaxMarkerLineLen)
+
+	markers, err := scanFile(strings.NewReader(line+"\r\n"), "f.go", false, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, markers, 1)
+	assert.Equal(t, MaxMarkerLineLen, markers[0].LineLen, "the carriage return is not part of the line's width")
+
+	touched := map[string][]lineRange{"f.go": {{Start: 1, End: 1}}}
+	assert.Empty(t, OverlongMarkers(markers, touched), "a compliant line must not be reported because of its line ending")
 }

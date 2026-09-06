@@ -14,6 +14,12 @@ on:
       - "**/*.ts"
       - "**/*.tsx"
       - "**/*.swift"
+      # The scanner also reads workflow and shell files, because the packaging and release scenarios are enforced there
+      # (marker.go documents which). Without these a pull request changing only one of them would set relevant=false and the
+      # job would never run, so its markers would escape both the reference check and the line-length gate.
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.sh"
       - "openspec/specs/**"
       # In-flight deltas are in scope because spectrace reads them: they exempt canonical scenarios, and the
       # concurrent-restatement gate compares them against each other. Without this a PR that only touches a delta could
