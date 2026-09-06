@@ -19,4 +19,4 @@ Being wrong in this direction is worse than saying nothing. The record exists be
 ## Impact
 
 - Affected specs: `server-event-ingestion`
-- Affected code: `server/detection/internal/pipeline/processor.go`, `server/metrics/metrics.go`, `server/detection/api/service.go`
+- Affected code: `server/detection/internal/pipeline/processor.go`, `server/detection/internal/pipeline/queueprune.go`, `server/detection/api/service.go`, `server/metrics/metrics.go`, `server/visibility/api/eventlog.go`, `server/visibility/internal/eventlog/store.go`
