@@ -382,6 +382,13 @@ func TestExportable_PairsComeFromOneGeneration(t *testing.T) {
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
+	// Registered BEFORE the worker starts, not after the loop. A require in the loop below calls t.FailNow, which unwinds the
+	// goroutine running the test, so a stop-and-wait written after the loop is simply skipped: the worker would then spin forever,
+	// burning a core and swapping the service under whatever ran next.
+	t.Cleanup(func() {
+		close(stop)
+		wg.Wait()
+	})
 	wg.Go(func() {
 		for i := 0; ; i++ {
 			select {
@@ -399,6 +406,4 @@ func TestExportable_PairsComeFromOneGeneration(t *testing.T) {
 		require.Equal(t, rule.DisplayName(), md.Doc.Title,
 			"the metadata and the rule must describe one generation, and a reload must not be able to split them")
 	}
-	close(stop)
-	wg.Wait()
 }
