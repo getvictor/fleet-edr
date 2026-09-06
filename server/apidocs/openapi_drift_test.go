@@ -1,6 +1,8 @@
 package apidocs
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -42,13 +44,22 @@ func TestEmbeddedSpecMatchesCanonical(t *testing.T) {
 // TestServedSpecIsTheEmbeddedOne closes the gap the test above cannot see on its own: that the bytes compared there are the bytes
 // a caller actually receives.
 //
-// Without this, the two could agree while the handler served something else entirely, and both tests would pass. It is the same
-// class of gap as a drift check that never runs: an assertion about the wrong artifact.
+// It goes through the real route rather than reading the asset a second time, and review caught the first version doing exactly
+// that. Comparing `assets.ReadFile(...)` with `specBytes` compares one asset with itself, since specBytes IS that asset read at
+// init, so the handler could serve anything at all and both tests would still pass. That is the same failure this file exists to
+// prevent, an assertion about the wrong artifact, committed inside the test written to prevent it.
 func TestServedSpecIsTheEmbeddedOne(t *testing.T) {
 	t.Parallel()
 
 	embedded, err := assets.ReadFile("embed/openapi.yaml")
 	require.NoError(t, err)
-	assert.Equal(t, string(embedded), string(specBytes),
-		"the handler must serve the embedded spec, or comparing that file to the canonical one proves nothing about the API")
+
+	mux := http.NewServeMux()
+	RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, string(embedded), rec.Body.String(),
+		"the route must serve the embedded spec, or comparing that file to the canonical one proves nothing about the API")
 }
