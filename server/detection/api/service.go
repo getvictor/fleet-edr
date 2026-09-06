@@ -137,7 +137,7 @@ type MetricsRecorder interface {
 	// the withdrawn attempt's matches are recorded then instead (#843). Recorded only when the WHOLE batch was withdrawn, since a
 	// partial withdrawal leaves rows that are re-claimed and evaluated again.
 	//
-	// Four inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
+	// Five inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
 	//
 	// A crash between the transition and the durable record loses those counts, and so does a failure of that record, which is
 	// logged and dropped rather than allowed to fail a batch that is already finished with the queue. Both leave THIS counter
@@ -149,6 +149,11 @@ type MetricsRecorder interface {
 	// A batch only PARTLY withdrawn drops the whole attempt's matches. The survivors are evaluated again and counted then, but
 	// whatever the withdrawn events alone had matched has no later attempt to produce it. Recording the survivors' share instead
 	// would need this figure to say which event each match came from, and it is aggregated per rule and host for the batch.
+	//
+	// A withdrawal reported to an attempt that no longer owns the events loses them from both sides. An attempt whose processing
+	// outran its claim lease can withdraw rows a replacement has since claimed; the count it gets back describes its own view, so
+	// it can fall short of that attempt's batch and be rejected, while the replacement's later nack reports nothing because the
+	// rows are already withdrawn. That needs the queue's nack to be conditional on the claim it was issued for, which is #840.
 	//
 	// Losing counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
 	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. It is accepted only because every

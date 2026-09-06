@@ -439,6 +439,11 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			// Exactly-once across replicas comes from the queue rather than from a lock here. A row moves 2 -> 0 -> 3 inside one
 			// Nack transaction, and the second statement matches only rows the first reset, so a row is reported as withdrawn to
 			// exactly one caller however many are nacking.
+			//
+			// That holds per ROW and not per claim, which leaves the window #840 tracks: Nack is not conditional on the claim it
+			// was issued for, so an attempt that outran its lease can withdraw rows a replacement now owns, get a count short of
+			// its own batch, and be rejected here while the replacement's later nack reports nothing. The residual is recorded in
+			// the requirement rather than worked around, because closing it is a change to the queue's contract.
 			if setAside == int64(len(eventIDs)) {
 				p.recordMonitorMatches(ctx, tally)
 			}

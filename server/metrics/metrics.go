@@ -133,7 +133,8 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 			"the residual inaccuracies are a crash between that transition and the record, which loses counts and so can make a "+
 			"noisy rule look safe to promote; a batch withdrawn on an attempt that had not evaluated it, whose earlier attempts' "+
 			"matches are not carried forward; and a batch only partly withdrawn, where whatever the withdrawn events alone had "+
-			"matched is dropped so the survivors cannot be counted twice."),
+			"matched is dropped so the survivors cannot be counted twice; and, where a worker's processing outran its claim lease, "+
+			"a batch whose events another worker has since claimed."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
