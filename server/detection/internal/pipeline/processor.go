@@ -63,8 +63,9 @@ type Processor struct {
 	detection   batchEvaluator
 	coordinator leader.Coordinator
 	metrics     api.MetricsRecorder
-	// monitorMatches persists what a batch found in monitor mode, after the batch is acknowledged. Nil records nothing, which is
-	// the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert either way.
+	// monitorMatches persists what a batch found in monitor mode, once that batch will not be processed again. Nil records nothing,
+	// which is the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert
+	// either way.
 	monitorMatches rulesapi.MonitorMatchRecorder
 	logger         *slog.Logger
 	interval       time.Duration
@@ -469,8 +470,8 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 // again. The other is the batch being withdrawn from processing for good once its retry bounds are passed (#836), where there is
 // no later attempt to count it and the attempt that was withdrawn is the last word on what it matched (#843).
 //
-// The cost of recording after the acknowledgement is the opposite failure, a crash between the ack and this write, which loses
-// those counts.
+// The cost of recording after a transition rather than during evaluation is the opposite failure, a crash between the transition
+// and this write, which loses those counts.
 //
 // That loss is the RISK-BEARING direction and is accepted rather than preferred. A count that is too low makes a rule look quiet,
 // which is exactly what persuades an operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to
@@ -483,8 +484,10 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 // immune, deduplicating on (host, rule, subject)). Issue #817 fixed that in the queue contract, where it belonged: Ack is
 // conditional on still holding the claim and reports whether it did, and the caller skips this write when it has lost.
 //
-// A failure here cannot fail the batch: the events are already acknowledged, and re-nacking them to save a counter would replay
-// real detection work. It is logged and dropped.
+// A failure here cannot fail the batch, on either path, and for the same reason on both: the batch has already reached a state it
+// will not be processed again from, so there is nothing left to fail. Acknowledged events are done, and withdrawn ones are not
+// coming back; re-nacking either to save a counter would replay real detection work or undo a withdrawal. It is logged and
+// dropped.
 func (p *Processor) recordMonitorMatches(ctx context.Context, tally rulesapi.MonitorTally) {
 	if len(tally) == 0 {
 		return

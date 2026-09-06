@@ -36,8 +36,8 @@ const DefaultEvalStatsFlushInterval = 30 * time.Second
 //
 // Buffering is acceptable HERE and would not be for monitor matches, which the spec already separates rather than leaving to be
 // re-argued. A monitor match is a fact about the world that drives a promotion decision, so losing one makes a rule look quiet and
-// misleads the operator, which is why those are written only after the batch is acknowledged. An evaluation cost sample is one of
-// thousands and losing a window changes no decision.
+// misleads the operator, which is why those are written only once the batch will not be processed again. An evaluation cost sample
+// is one of thousands and losing a window changes no decision.
 type BufferedEvalStats struct {
 	inner  api.RuleEvalStatsRecorder
 	logger *slog.Logger

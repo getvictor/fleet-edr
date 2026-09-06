@@ -9,8 +9,8 @@ import (
 //
 // Separate from MonitorTally because it answers a different question and, crucially, obeys the OPPOSITE recording rule. A monitor
 // match is a fact about the world (this rule matched this host on this day) so a replayed batch must not count it twice, which is
-// why the tally is handed back to be written only after the acknowledgement. An evaluation is a fact about work the server
-// performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
+// why the tally is handed back to be written only once the batch will not be processed again. An evaluation is a fact about work
+// the server performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
 //
 // That is not the retry-inflation mistake MonitorTally's doc warns about, and the difference is worth being able to state: the
 // figures a reader derives are unaffected by replay, because Evaluations and EvalNs inflate by the same factor and the mean they

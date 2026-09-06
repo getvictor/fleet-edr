@@ -13,8 +13,8 @@ import (
 
 const (
 	// matchCountDeadlockAttempts and matchCountDeadlockStep bound the retry on a deadlocked upsert. Short and few: the statement is
-	// idempotent in the sense that retrying it applies the same additions, and the caller has already acknowledged the batch, so a
-	// long retry would hold the drain loop for a counter.
+	// idempotent in the sense that retrying it applies the same additions, and the batch it describes is already finished with the
+	// queue either way, so a long retry would hold the drain loop for a counter.
 	matchCountDeadlockAttempts = 3
 	matchCountDeadlockStep     = 20 * time.Millisecond
 	// matchCountPruneBatch bounds one DELETE's row-lock and undo-log footprint, the same reason the retention runner batches its

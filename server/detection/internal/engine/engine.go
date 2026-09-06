@@ -29,7 +29,7 @@ import (
 // Nothing is written while evaluating, and that is the whole design. A batch that fails is nacked and replayed whole, so a counter
 // incremented during evaluation counts a retried batch twice; #631 measured roughly 130 materialization retries a minute from one
 // host under a sustained condition, so that is not a rounding error. Handing the tally back to the caller lets it be recorded once,
-// after the acknowledgement that says the batch will not come round again.
+// on the transition that says the batch will not come round again: its acknowledgement, or its withdrawal from the queue.
 type batchTally struct {
 	monitor map[monitorKey]int
 }
@@ -244,7 +244,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
 	// call returns, so concurrent batches share nothing.
 	scope := &rulesapi.BatchScope{}
-	// One tally for the batch, returned to the caller to record after the acknowledgement. See batchTally.
+	// One tally for the batch, returned to the caller to record on the transition that ends the batch's life. See batchTally.
 	tally := &batchTally{}
 	// One statistics accumulator for the batch, recorded from a defer so every exit path reports the work it did: a hard error
 	// mid-loop, a retryable miss after the loop, and success. Recorded HERE rather than handed back like the tally, because
@@ -484,7 +484,7 @@ func (e *Engine) evaluateRule(
 	// batch is replayed whole, so a chain declined in an attempt that is later nacked is recorded again on the next attempt's
 	// span; issue #631 measured roughly 130 retries a minute from one host under a sustained condition, so the absolute count of
 	// declines across spans can exceed the number of chains actually given up. A cumulative metric would have the same problem,
-	// which is why MonitorTally is handed back to be recorded only after the acknowledgement.
+	// which is why MonitorTally is handed back to be recorded only once the batch will not be processed again.
 	//
 	// What makes the per-attempt form sufficient here is that the requirement asks for this to be measurable against the rule's
 	// OWN alert volume, and alert_count below is measured on this same span, under the identical retry semantics. Both numbers

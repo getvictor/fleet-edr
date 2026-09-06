@@ -139,7 +139,7 @@ type MetricsRecorder interface {
 	//
 	// Two inaccuracies remain and a consumer has to know both. A crash between the transition and the durable record loses those
 	// counts, and so does a failure of that record, which is logged and dropped rather than allowed to fail a batch that is
-	// already acknowledged. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing counts is
+	// already finished with the queue. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing counts is
 	// the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is gets promoted, and
 	// promoting a noisy rule is the outcome monitor mode exists to prevent.
 	//

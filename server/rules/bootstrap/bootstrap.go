@@ -605,8 +605,8 @@ func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.de
 // RuleEvalStatsRecorder exposes the durable per-rule evaluation-statistics sink the detection engine writes to (issue #774).
 //
 // Separate from MonitorMatchRecorder, and consumed by the ENGINE rather than the pipeline, because the two obey opposite recording
-// rules: monitor matches are written only after the batch is acknowledged so a replay cannot count them twice, while evaluation
-// statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
+// rules: monitor matches are written only once the batch will not be processed again so a replay cannot count them twice, while
+// evaluation statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
 func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.evalStatsBuffer }
 
 // MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to after acknowledging a batch
