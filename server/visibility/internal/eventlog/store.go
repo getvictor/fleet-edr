@@ -384,9 +384,9 @@ const (
 // predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease. It is also pre-existing and bounded:
 // the replacement's Ack still lands and the event is still processed, so the cost is an inflated attempt count rather than lost
 // work, and a spurious set-aside would need that to recur twenty times across fifteen minutes on one batch. Closing it properly
-// means carrying the claim stamp back to the caller and making Nack and Ack conditional on still owning it, which changes a
-// cross-context interface and fixes a different defect (the same stale nack can also let two workers process one event). Tracked
-// as issue #840 rather than folded in here.
+// means carrying the claim stamp back to the caller and making Nack conditional on still owning it, as Ack already is since issue
+// #817, which changes a cross-context interface and fixes a different defect (the same stale nack can also let two workers process
+// one event). Tracked as issue #840 rather than folded in here.
 func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
 		return 0, nil

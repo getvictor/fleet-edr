@@ -153,7 +153,8 @@ type MetricsRecorder interface {
 	// A withdrawal reported to an attempt that no longer owns the events loses them from both sides. An attempt whose processing
 	// outran its claim lease can withdraw rows a replacement has since claimed; the count it gets back describes its own view, so
 	// it can fall short of that attempt's batch and be rejected, while the replacement's later nack reports nothing because the
-	// rows are already withdrawn. That needs the queue's nack to be conditional on the claim it was issued for, which is #840.
+	// rows are already withdrawn. That needs the queue's nack to be conditional on the claim it was issued for, as its ack already
+	// is since #817. Tracked as #840.
 	//
 	// Losing counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
 	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. It is accepted only because every

@@ -1216,10 +1216,11 @@ func (r *recordingEvalStats) byRule(id string) (rulesapi.RuleEvalStat, bool) {
 // TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne pins the counting rule that is the whole reason this type exists
 // separately from MonitorTally, and pins it on the path that would otherwise never record anything.
 //
-// A batch ending in a retryable outcome is NACKED, so the pipeline's record-on-a-terminal-transition step never runs for it. If the
-// statistics rode back the way the monitor tally does, the retryable-miss counter would be permanently zero: the only batches that
-// could report a miss are exactly the ones that never reach the recording step. That makes the counter worse than absent, because a
-// reader would take zero as evidence of no churn.
+// A batch ending in a retryable outcome is NACKED, and the pipeline's recording step runs only on a terminal transition, which an
+// ordinary nack is not. If the statistics rode back the way the monitor tally does, the retryable-miss counter would report almost
+// nothing: a batch that misses and then succeeds would have its misses discarded on every attempt, and the only one that could
+// report a miss is a batch eventually withdrawn from the queue, which is the rare terminal nack. That makes the counter worse than
+// absent, because a reader would take a near-zero as evidence of no churn.
 //
 // Two attempts are driven through deliberately, standing in for a nack and its replay, because counting attempts rather than
 // logical batches is the property under test. Asserting one attempt would pass equally for either design.

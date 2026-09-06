@@ -19,6 +19,10 @@ Exactly-once needs no coordination between workers. A row moves in-flight to pen
 
 That holds per ROW rather than per claim, which leaves the window #840 tracks: Nack is not conditional on the claim it was issued for, so an attempt that outran its lease can withdraw rows a replacement now owns, get back a count short of its own batch, and be rejected while the replacement's later nack reports nothing. Recorded in the requirement as a bound rather than worked around, because closing it changes the queue's contract.
 
+## Archive order
+
+This delta MODIFIES `Monitor-mode matches are recorded durably per rule`, which is not in the canonical tree yet: it exists only as the ADDED requirement in the in-flight `record-monitor-match-counts` change. So `record-monitor-match-counts` MUST be archived before this one, and the names sort the wrong way for anyone archiving alphabetically.
+
 ## Impact
 
 - Affected specs: `observability-instrumentation`
