@@ -57,7 +57,7 @@ func TestServedSpecIsTheEmbeddedOne(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil))
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/openapi.yaml", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, string(embedded), rec.Body.String(),
