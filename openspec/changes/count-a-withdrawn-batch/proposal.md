@@ -17,6 +17,8 @@ The count is what the detection-tuning table shows an operator deciding whether 
 
 Exactly-once needs no coordination between workers. A row moves in-flight to pending to set-aside inside one Nack transaction, and the statement that withdraws it matches only rows the same transaction reset, so a row is reported as withdrawn to exactly one caller however many are nacking.
 
+That holds per ROW rather than per claim, which leaves the window #840 tracks: Nack is not conditional on the claim it was issued for, so an attempt that outran its lease can withdraw rows a replacement now owns, get back a count short of its own batch, and be rejected while the replacement's later nack reports nothing. Recorded in the requirement as a bound rather than worked around, because closing it changes the queue's contract.
+
 ## Impact
 
 - Affected specs: `observability-instrumentation`
