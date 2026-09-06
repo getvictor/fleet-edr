@@ -1,35 +1,23 @@
 package full
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/testdb/contexts"
 )
 
-// contextsWithMigrations reads the bounded contexts that ship migrations from the TREE rather than from a list, for the reason
-// the migrator's copy of this does: a hardcoded expectation would be the same defect one level up, agreeing with the bug.
-func contextsWithMigrations(t *testing.T) []string {
+// shippingMigrations is the shared tree scan, wrapped for the assertions below.
+//
+// One definition across both guards, because two copies of the rule that decides which contexts count can disagree, and then the
+// two gates would police different sets: the defect they exist to catch, one level up. Review caught the duplication.
+func shippingMigrations(t *testing.T) []string {
 	t.Helper()
-	entries, err := os.ReadDir("../..")
+	found, err := contexts.MySQLMigrations("../..")
 	require.NoError(t, err, "the server tree must be readable from this package")
-
-	var found []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		sqls, err := filepath.Glob(filepath.Join("../..", e.Name(), "migrations", "*.sql"))
-		require.NoError(t, err)
-		if len(sqls) > 0 {
-			found = append(found, e.Name())
-		}
-	}
 	require.NotEmpty(t, found, "no context migrations were found, so this test would prove nothing")
-	sort.Strings(found)
 	return found
 }
 
@@ -47,7 +35,7 @@ func TestFixtureAppliesEveryContextsSchema(t *testing.T) {
 		applied[step.name] = struct{}{}
 	}
 
-	for _, ctxName := range contextsWithMigrations(t) {
+	for _, ctxName := range shippingMigrations(t) {
 		assert.Contains(t, applied, ctxName,
 			"%s ships migrations but this fixture does not apply its schema, so tests needing those tables hand-apply it", ctxName)
 	}
@@ -59,7 +47,7 @@ func TestFixtureAppliesNothingWithoutMigrations(t *testing.T) {
 	t.Parallel()
 
 	onDisk := make(map[string]struct{})
-	for _, name := range contextsWithMigrations(t) {
+	for _, name := range shippingMigrations(t) {
 		onDisk[name] = struct{}{}
 	}
 

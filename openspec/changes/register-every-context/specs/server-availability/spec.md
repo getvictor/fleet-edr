@@ -8,7 +8,9 @@ The system SHALL apply database schema through versioned, forward-only migration
 
 Every bounded context that owns database tables is managed this way. That is stated as a property rather than as a list of contexts, because a hand-maintained list drifts silently: the previous enumeration named five contexts and had fallen three behind the tree.
 
-The standalone migration tool SHALL apply the corpus of every such context. A context it omits is not merely unmigrated: the tool reports success having skipped it, so a deployment that migrates as a privileged step and then runs without schema-change permission fails at boot on that context alone, and a multi-replica boot races to apply it, which is the race a separate tool exists to remove.
+The standalone migration tool SHALL apply the relational corpus of every such context. A context it omits is not merely unmigrated: the tool reports success having skipped it, so a deployment that migrates as a privileged step and then runs without schema-change permission fails at boot on that context alone, and a multi-replica boot races to apply it, which is the race a separate tool exists to remove.
+
+The scope is the RELATIONAL corpus, and the limit is stated rather than implied. One context keeps a separate corpus for the columnar event store, which the server applies at boot because the tool takes a relational connection only. A requirement covering that corpus would demand the tool apply something it cannot reach.
 
 Whether a context is registered with that tool SHALL be checkable from the source tree rather than asserted against a maintained list, because a list of expectations drifts in step with the list it checks.
 
@@ -28,7 +30,7 @@ Whether a context is registered with that tool SHALL be checkable from the sourc
 
 #### Scenario: A context shipping migrations is registered
 
-- **GIVEN** a bounded context in the source tree that ships migration files
+- **GIVEN** a bounded context in the source tree that ships relational migration files
 - **WHEN** the registered contexts are compared against the tree
 - **THEN** that context is registered with the standalone migration tool
 
@@ -36,4 +38,4 @@ Whether a context is registered with that tool SHALL be checkable from the sourc
 
 - **GIVEN** a context registered with the standalone migration tool
 - **WHEN** the registered contexts are compared against the tree
-- **THEN** it ships migration files, so its registration is not a step that silently does nothing
+- **THEN** it ships relational migration files, so its registration is not a step that silently does nothing

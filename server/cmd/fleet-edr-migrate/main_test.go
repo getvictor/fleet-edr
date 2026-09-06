@@ -36,9 +36,14 @@ func TestApplyAll(t *testing.T) {
 		// success while creating nothing, and the server's own boot-time apply would then be the only thing that ever
 		// created the tables, which defeats having a standalone migrator at all.
 		"rule_corpus_documents",
+		// observability's sampler settings. Listed for the reason rulecontent's row above is, and because review pointed out
+		// the registration tests alone cannot catch it: they compare NAMES, so pairing "observability" with the wrong applier,
+		// or with one that does nothing, would satisfy them. A table that only its migrations create cannot be satisfied that
+		// way.
+		"trace_sampler_settings",
 		"identity_goose_db_version", "endpoint_goose_db_version", "rules_goose_db_version",
 		"response_goose_db_version", "detection_goose_db_version", "visibility_goose_db_version",
-		"rulecontent_goose_db_version",
+		"rulecontent_goose_db_version", "observability_goose_db_version",
 	} {
 		assert.Truef(t, tableExists(t, db, table), "table %q must exist after applyAll", table)
 	}

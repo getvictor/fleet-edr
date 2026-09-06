@@ -1,37 +1,23 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/testdb/contexts"
 )
 
-// contextsWithMigrations reads the bounded contexts that ship migrations from the TREE rather than from a list.
+// shippingMigrations is the shared tree scan, wrapped for the assertions below.
 //
-// Driven from the filesystem deliberately. A hardcoded expectation here would be the same defect one level up: a context added
-// without an entry would also be missing from the expectation, and the test would agree with the bug.
-func contextsWithMigrations(t *testing.T) []string {
+// One definition across both guards, because two copies of the rule that decides which contexts count can disagree, and then the
+// two gates would police different sets: the defect they exist to catch, one level up. Review caught the duplication.
+func shippingMigrations(t *testing.T) []string {
 	t.Helper()
-	entries, err := os.ReadDir("../..")
+	found, err := contexts.MySQLMigrations("../..")
 	require.NoError(t, err, "the server tree must be readable from this package")
-
-	var found []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		sqls, err := filepath.Glob(filepath.Join("../..", e.Name(), "migrations", "*.sql"))
-		require.NoError(t, err)
-		if len(sqls) > 0 {
-			found = append(found, e.Name())
-		}
-	}
 	require.NotEmpty(t, found, "no context migrations were found, so this test would prove nothing")
-	sort.Strings(found)
 	return found
 }
 
@@ -54,7 +40,7 @@ func TestEveryContextWithMigrationsIsRegistered(t *testing.T) {
 		registered[m.context] = struct{}{}
 	}
 
-	for _, ctxName := range contextsWithMigrations(t) {
+	for _, ctxName := range shippingMigrations(t) {
 		assert.Contains(t, registered, ctxName,
 			"%s ships migrations but is not registered with the standalone migrator, which would exit 0 having skipped it", ctxName)
 	}
@@ -69,7 +55,7 @@ func TestNoRegisteredContextIsMissingItsMigrations(t *testing.T) {
 	t.Parallel()
 
 	onDisk := make(map[string]struct{})
-	for _, name := range contextsWithMigrations(t) {
+	for _, name := range shippingMigrations(t) {
 		onDisk[name] = struct{}{}
 	}
 

@@ -8,3 +8,7 @@
 - [x] Both guards were confirmed to catch the real defect by removing `observability` from each list in turn.
 - [x] The canonical requirement's hand-written list of contexts had gone stale by three (`rulecontent`, `observability`, `visibility`). Replaced with the property rather than an enumeration, so it cannot drift again.
 - [x] Verified end to end: the CLI against a fresh database creates every context's tracking table, `observability_goose_db_version` included, and `trace_sampler_settings` exists afterwards.
+- [x] The tree scan has ONE definition, shared by both guards. Two copies of the rule that decides which contexts count can disagree, and then the two gates would police different sets: the defect they exist to catch, one level up. Review caught it, in a change about exactly that class.
+- [x] The scan and the requirement are scoped to the RELATIONAL corpus. One context keeps a separate corpus for the columnar event store which the server applies at boot, because the tool takes a relational connection only; a guard counting it would demand the tool apply something it cannot reach. The release note said "every part of the schema" and now says what it means.
+- [x] The registration tests compare NAMES, so pairing a name with the wrong applier, or one that does nothing, would satisfy them. Review pointed that out. The smoke test now asserts the table only observability's migrations create, and a no-op applier paired with that name fails it.
+
