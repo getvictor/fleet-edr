@@ -355,7 +355,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportSetAside(lockedCtx, host, setAside, "builder")
+			p.reportSetAside(lockedCtx, host, setAside, stageBuilder)
 		}
 		return nil
 	}
@@ -416,7 +416,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportSetAside(ctx, hostOf(events), setAside, "detection")
+			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
 			return 0
 		}
 	}
@@ -517,20 +517,68 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 // an absence of detections nobody was watching for. So the counter carries host_id, because "which host stopped contributing" is
 // the question, and the log names the host and the stage that failed, because the counter says it happened and not what to look at.
 //
-// Logged at ERROR rather than WARN. The consequence is a gap in one host's process tree and a set of events no rule ever saw,
-// which is not a condition to notice in aggregate later.
+// Logged at ERROR rather than WARN. Whichever stage it came from, a host has permanently stopped contributing some of its
+// activity, which is not a condition to notice in aggregate later. What exactly it stopped contributing depends on the stage and
+// is carried on the consequence attribute rather than stated here.
 //
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
-func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string) {
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage setAsideStage) {
 	if setAside <= 0 {
 		return
 	}
-	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
-		"host_id", hostID, "events", setAside, "stage", stage)
+	// The message is fixed and the consequence rides on an attribute, so the line stays greppable while saying something true
+	// of the stage it came from. It previously claimed a process-graph gap for both, which is false for the detection stage:
+	// processHost completes the builder before evaluating, so a batch withdrawn there IS in the graph, and the claim sent an
+	// operator to inspect a process tree that was intact.
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure",
+		"host_id", hostID, "events", setAside, "stage", stage.name, "consequence", stage.consequence)
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}
 }
+
+// setAsideStage is the pipeline stage a withdrawal happened at, together with what it cost an operator.
+//
+// The consequence is carried ON the value rather than looked up from it, which is the second thing review corrected here. A named
+// string type was the first attempt and does not do the job the call sites need: Go assigns an untyped literal to one happily, so
+// a misspelling compiles and a lookup keyed on it then reports every value that is not the builder as detection. Pairing the two
+// removes the lookup, so there is no mapping left to get wrong and nothing to keep in step.
+type setAsideStage struct {
+	// name is the stage as it appears on the record's stage attribute.
+	name string
+	// consequence is what the host lost, phrased as what an operator should go and check.
+	consequence string
+}
+
+var (
+	// stageBuilder is the process-graph materialisation.
+	//
+	// "MAY have a gap" rather than "has a gap", and review was right that the definite form is reachable. Attempts accumulate on
+	// the queue row whichever stage nacked it, so a batch can fold successfully, fail at detection, and then be withdrawn on a
+	// later attempt whose fold is the thing that failed. Those events are in the graph, put there by the earlier attempt, and
+	// nothing on the row records that they got that far. Claiming a gap there would be this change's own defect, one attempt
+	// further back.
+	stageBuilder = setAsideStage{
+		name:        "builder",
+		consequence: "this host may have a gap in its process graph",
+	}
+
+	// stageDetection is detection: rule evaluation and the persistence of what it finds, running on an already-materialised batch.
+	//
+	// Names the OUTCOME rather than the step that failed. Exactly two things reach this withdrawal, and "a rule failed" is neither:
+	// evaluateRule logs a rule's own non-retryable error and returns nil, so per-rule isolation keeps it inside the engine. What
+	// does leave is an alert-persistence error, returned from inside routeFinding's loop so the batch aborts at the finding it
+	// happened on and the rules after it never run; or a retryable miss that ran out of attempts, where every rule did run.
+	// Naming rule evaluation would be false for the first, and would send a responder to rule execution while the failure was in
+	// alert storage.
+	//
+	// "may be missing" rather than "are missing", because alerts written before a persistence failure stay durable. Overstating
+	// the loss sends someone hunting for alerts that are already there.
+	stageDetection = setAsideStage{
+		name:        "detection",
+		consequence: "detection did not complete for these events, so alerts they would have raised may be missing",
+	}
+)
 
 // hostOf returns the host a claimed batch belongs to. The processor claims per host, so every event in the batch carries the same
 // one; an empty batch never reaches a nack.
