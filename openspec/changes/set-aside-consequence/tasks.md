@@ -7,6 +7,7 @@
 - [x] 1.2 Select the consequence from the stage: a process-graph gap for the builder, and for detection that it did not complete, so alerts those events would have raised may be missing. The detection wording names the outcome rather than the step, because a rule's own error never leaves the engine and the two that do reach the withdrawal (an alert-persistence abort, an exhausted retryable miss) are not distinguishable there.
 - [x] 1.3 Keep the log message fixed and carry the consequence on an attribute, so the line stays greppable.
 - [x] 1.4 Correct every other place describing what a set-aside costs, found by grepping the claim rather than by taking a reviewer's list: the metric description and its rationale, the recorder, the detection port, the queue-prune runner, the event-log port, and the store.
+- [x] 1.7 Correct the counter's normative rationale in `observability-instrumentation`, which stated the same claim as a SHALL.
 - [x] 1.5 Leave the two statements about the STALL alone. An unbounded retry does take the whole host out of the graph, because nothing newer is ever claimed; that claim is unconditional and true, and rewording it would trade one wrong statement for another.
 
 ## 2. Tests

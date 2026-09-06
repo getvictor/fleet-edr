@@ -165,15 +165,16 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// queries and alert evidence.
 	//
 	// What IS given up depends on the stage the batch was withdrawn at, and stating it unconditionally is the defect #845 fixed.
-	// A batch withdrawn while the process graph was being built never reached the graph, so both its graph contribution and its
-	// evaluation are lost. One withdrawn at detection was folded into the graph first, so its graph contribution stands and what
-	// is lost is the rest of detection: the rules that had not finished, and any alerts whose write did not land.
+	// One withdrawn at detection was folded into the graph first, so its graph contribution stands and what is lost is the rest of
+	// detection. One withdrawn while the graph was being built lost its evaluation, and MAY have lost its graph contribution: the
+	// retry bounds accrue on the queue entry across attempts whichever stage failed, so an earlier attempt may already have folded
+	// the batch. Neither loss is stated more precisely than that, because neither can be.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
 		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). What the host in "+
 			"`host_id` lost depends on the stage, which the accompanying log line names on a `consequence` attribute: a batch withdrawn "+
-			"while the process graph was being built leaves a gap in that graph, while one withdrawn at detection is already in the "+
-			"graph and instead may be missing alerts. Alert on a non-zero increase, per host: the counter is cumulative, so an "+
+			"while the process graph was being built may leave a gap in that graph, while one withdrawn at detection is already in "+
+			"the graph and instead may be missing alerts. Alert on a non-zero increase, per host: the counter is cumulative, so an "+
 			"absolute-value condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
 	)

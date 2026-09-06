@@ -8,7 +8,7 @@ Setting events aside happens at two stages of processing a host's claimed work, 
 
 Being wrong in this direction is worse than saying nothing. The record exists because a stalled host is otherwise indistinguishable from a quiet one, so it is the only prompt anyone gets; a prompt pointing at healthy data spends the responder's attention and teaches them to discount the next one.
 
-## What Changes
+## What changes
 
 - The consequence is selected by the stage, so the builder stage reports a POSSIBLE gap in the process graph and the detection stage reports that detection did not complete, so alerts those events would have raised may be missing.
 - The builder consequence is hedged because the certain form is reachable. Retry bounds accrue on the queue entry and count every attempt whichever stage failed, so a batch can fold, fail at detection, and be withdrawn later on an attempt whose fold failed. Those events are in the graph already, and nothing records that they got that far.
@@ -19,5 +19,6 @@ Being wrong in this direction is worse than saying nothing. The record exists be
 
 ## Impact
 
-- Affected specs: `server-event-ingestion`
+- Affected specs: `server-event-ingestion`, `observability-instrumentation`
+- The `observability-instrumentation` delta restates `Stable counter names` to correct one sentence: the counter's rationale said it answers which host has stopped contributing to the GRAPH, which is the same false claim in normative form. Three merged-but-unarchived changes already restate that requirement, and spectrace requires concurrent restatements to be identical, so all three are updated to the corrected text. That is the mechanism issue #815 built: archiving replaces a requirement whole and in sequence, so each change must state it as it will read once all of them have landed, or the last to archive silently discards the rest.
 - Affected code: `server/detection/internal/pipeline/processor.go`, `server/detection/internal/pipeline/queueprune.go`, `server/detection/api/service.go`, `server/metrics/metrics.go`, `server/visibility/api/eventlog.go`, `server/visibility/internal/eventlog/store.go`
