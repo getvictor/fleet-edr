@@ -26,8 +26,13 @@ type batchBuilder interface {
 // batchEvaluator runs the detection rules over a materialized batch. *engine.Engine is the production implementation.
 //
 // The tally it returns is what the batch found in monitor mode, and it comes back rather than being written by the engine so this
-// processor can record it AFTER the acknowledgement. A nacked batch is replayed whole, so anything the engine wrote while
-// evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
+// processor can record it on whichever transition ends the batch's life. A nacked batch is replayed whole, so anything the engine
+// wrote while evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
+//
+// It is returned ALONGSIDE an error too, and not instead of one. An error usually means a replay, where this attempt's tally is
+// discarded because a later one will produce it again; but the queue can also withdraw the batch from processing for good, and
+// then this attempt is the only one there will ever be. The engine cannot tell those apart because only the queue knows, so it
+// hands the tally over on every path and the decision is made here (#843).
 type batchEvaluator interface {
 	Evaluate(ctx context.Context, events []visibilityapi.Event) (rulesapi.MonitorTally, error)
 }
@@ -417,6 +422,19 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
 			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
+			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
+			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
+			//
+			// Only a WHOLE batch counts, and the comparison is against the batch rather than against zero. The withdrawal
+			// predicate is per row, so a partial withdrawal leaves rows that are re-claimed and re-evaluated, and this tally
+			// covers all of them: recording it would count the survivors twice.
+			//
+			// Exactly-once across replicas comes from the queue rather than from a lock here. A row moves 2 -> 0 -> 3 inside one
+			// Nack transaction, and the second statement matches only rows the first reset, so a row is reported as withdrawn to
+			// exactly one caller however many are nacking.
+			if setAside == int64(len(eventIDs)) {
+				p.recordMonitorMatches(ctx, tally)
+			}
 			return 0
 		}
 	}
@@ -444,11 +462,15 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 	return len(events)
 }
 
-// recordMonitorMatches persists and counts a batch's monitor-mode matches, AFTER the acknowledgement.
+// recordMonitorMatches persists and counts a batch's monitor-mode matches, on whichever transition ends the batch's life.
 //
-// After, so a replayed batch is counted once: everything before this point can still nack, and a nacked batch re-evaluates and
-// produces the same matches again. The cost is the opposite failure, a crash between the ack and this write, which loses those
-// counts.
+// Two transitions end it, and both call here. The ordinary one is the acknowledgement, and this runs AFTER it so a replayed batch
+// is counted once: everything before that point can still nack, and a nacked batch re-evaluates and produces the same matches
+// again. The other is the batch being withdrawn from processing for good once its retry bounds are passed (#836), where there is
+// no later attempt to count it and the attempt that was withdrawn is the last word on what it matched (#843).
+//
+// The cost of recording after the acknowledgement is the opposite failure, a crash between the ack and this write, which loses
+// those counts.
 //
 // That loss is the RISK-BEARING direction and is accepted rather than preferred. A count that is too low makes a rule look quiet,
 // which is exactly what persuades an operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to

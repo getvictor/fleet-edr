@@ -270,9 +270,12 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 			continue
 		}
 		if !errors.Is(err, rulesapi.ErrRetryBatch) {
-			// The batch will be nacked and replayed, so the tally is discarded: whatever it holds will be counted by the
-			// attempt that succeeds.
-			return nil, err
+			// Returned WITH the tally rather than instead of it. The batch is nacked, and on the ordinary path it is replayed
+			// and whatever this attempt found is counted by the attempt that succeeds; but a batch can also be withdrawn from
+			// processing entirely once its retry bounds are passed (#836), and then there is no later attempt to count it. Only
+			// the caller can tell those apart, because only the queue knows whether this nack was the withdrawal, so the engine
+			// hands the tally over and does not decide (#843).
+			return tally.snapshot(), err
 		}
 		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
 		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
@@ -287,9 +290,9 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 		}
 	}
 	if pendingMiss != nil {
-		// Same reasoning as the hard error above: a retryable miss nacks the batch, so this attempt's matches are not the ones
-		// to record.
-		return nil, pendingMiss
+		// Same reasoning as the hard error above: the tally travels with the error, and whether it is recorded is the caller's
+		// decision, because it turns on whether this nack withdrew the batch for good.
+		return tally.snapshot(), pendingMiss
 	}
 	return tally.snapshot(), nil
 }

@@ -1414,3 +1414,70 @@ func TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError(t *testin
 	assert.Equal(t, int64(1), st.RetryableMisses,
 		"the evaluation missed, so it counts as a miss even though a later persistence failure replaced the returned error")
 }
+
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-withdrawn-batch-is-counted-once-not-lost
+//
+// TestEngine_Evaluate_ReturnsTheTallyAlongsideAnError is the engine half of #843, and without it the fix is untested here: the
+// processor's tests stub the evaluator, so they assert what the processor DOES with a tally and prove nothing about whether the
+// engine hands one over.
+//
+// Both error classes are covered because both nack a batch, and a nacked batch can be withdrawn from processing for good once its
+// retry bounds are passed. The engine cannot tell an ordinary retry from a withdrawal, because only the queue knows, so it hands
+// the tally over on every path and lets the processor decide. Returning nil instead is what lost the count.
+//
+// The rule that matches is registered FIRST and the failing rule second, which is the ordering the property needs: matches
+// resolved before the failure are exactly the ones that used to be discarded.
+func TestEngine_Evaluate_ReturnsTheTallyAlongsideAnError(t *testing.T) {
+	t.Parallel()
+
+	// The two error CLASSES Evaluate can return, which are the two `return` statements the fix changed. A rule's own failure is
+	// neither: evaluateRule logs it and returns nil for per-rule isolation, so it never reaches the caller and never nacks
+	// anything.
+	cases := []struct {
+		name    string
+		failing rulesapi.Rule
+		why     string
+	}{
+		{
+			"a retryable miss",
+			&failingRule{
+				stubRule: stubRule{id: "waiting-rule"},
+				err:      fmt.Errorf("event x references pid 7: %w", rulesapi.ErrProcessNotYetMaterialized),
+			},
+			"the batch comes round again, and may run out of attempts before it ever succeeds",
+		},
+		{
+			// An ALERTING rule whose finding cannot be persisted, which is the only way a non-retryable error leaves the engine.
+			// The finding names no subject, so it is refused before any store is touched, which is why a nil store is enough.
+			"an alert-persistence failure",
+			&stubRuleWithFindings{
+				stubRule: stubRule{id: "alerting-rule"},
+				findings: []api.Finding{{HostID: "h1", RuleID: "alerting-rule", Severity: "high", Title: "t"}},
+			},
+			"this aborts the batch at the finding it happened on, and the retries it causes are bounded the same way",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := New(nil, discardLogger())
+			e.Register(&modeDeclaringStub{
+				stubRuleWithFindings: stubRuleWithFindings{
+					stubRule: stubRule{id: "imported"},
+					findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+				},
+				mode: rulesapi.DetectionRuleModeMonitor,
+			})
+			e.Register(tc.failing)
+
+			tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+
+			require.Error(t, err, tc.why)
+			require.Len(t, tally, 1, "the match resolved before the failure must reach the caller, or nothing can ever record it")
+			assert.Equal(t, "imported", tally[0].RuleID)
+			assert.Equal(t, 1, tally[0].Count)
+		})
+	}
+}
