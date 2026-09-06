@@ -16,6 +16,8 @@ A rollback SHALL NOT restore shipped content whose RULE the operator has taken o
 
 A rollback SHALL survive a restart: the system SHALL NOT reinstall shipped content an operator rolled back from. What is declined SHALL be identified by the content that would be STORED rather than by the content a build carries, because those differ on a deployment holding an override and the looser comparison lets a build differing only in an overridden rule reinstall the rest of itself. The refusal SHALL apply to that content only, so a later build storing different content installs normally without the operator having to re-enable anything.
 
+What is declined SHALL be the generation the upgrade installed, recorded when it was installed, so that changes an operator makes to shipped content afterwards do not alter it. A start that finds the content already installed but no generation recorded SHALL record it, so that a deployment upgraded before this was tracked can still name what a rollback declines. Otherwise deleting a shipped rule between the upgrade and the rollback records a decline describing content no build ever shipped, and the rejected generation reinstalls.
+
 A retained generation SHALL be recognised by its recorded identity rather than by whether it contains any documents, so a generation that legitimately held no shipped rules can still be restored.
 
 Rolling back when no generation is retained SHALL be reported, and SHALL NOT replace the shipped content with an empty set.
@@ -61,6 +63,18 @@ Rolling back when no generation is retained SHALL be reported, and SHALL NOT rep
 - **GIVEN** a deployment that rolled back, holding its own version of one of the shipped rules
 - **WHEN** it is started on a build whose shipped content differs from the declined content only in that rule
 - **THEN** nothing is installed, because that build would store the content the operator declined
+
+#### Scenario: A rollback holds after the operator edits shipped content
+
+- **GIVEN** a deployment that deleted one of the shipped rules a pack installed, and then rolled back
+- **WHEN** it is started again on that same build
+- **THEN** nothing is installed, because what it declined is the generation that was installed rather than the corpus as the edit left it
+
+#### Scenario: A deployment with no recorded generation records one on start
+
+- **GIVEN** a deployment holding this build's shipped content with no generation recorded, as one upgraded before it was tracked would be
+- **WHEN** it is started
+- **THEN** no documents move, the generation it holds is recorded, and a rollback afterwards is not undone by the next start
 
 #### Scenario: A generation with no shipped rules is still restorable
 

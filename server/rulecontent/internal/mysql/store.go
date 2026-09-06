@@ -335,7 +335,29 @@ func (s *Store) UpgradeVendoredTo(
 	if declined != "" && declined == target {
 		return api.PackInstall{Version: version, Declined: true}, nil
 	}
-	if target == api.PackDigest(api.VendoredDocuments(stored)) {
+
+	// The target is recorded even when the documents do not move, because the deployment IS on this generation either way and a
+	// rollback has to be able to name it. Leaving it unwritten on the no-op path is what let a stale value survive into the
+	// decline, which review caught: nothing else here is allowed to be almost-right about which pack is installed.
+	var installed string
+	if err := tx.GetContext(ctx, &installed,
+		"SELECT installed_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		return api.PackInstall{}, fmt.Errorf("read installed pack digest: %w", err)
+	}
+	unchanged := target == api.PackDigest(api.VendoredDocuments(stored))
+	if unchanged && installed == target {
+		return api.PackInstall{Version: version, Skipped: skipped}, nil
+	}
+	if unchanged {
+		w := &txWriter{ctx: ctx, tx: tx}
+		w.exec("record installed pack digest",
+			"UPDATE rule_corpus_meta SET installed_pack_digest = ? WHERE id = 1", target)
+		if w.err != nil {
+			return api.PackInstall{}, w.err
+		}
+		if err := tx.Commit(); err != nil {
+			return api.PackInstall{}, fmt.Errorf("commit installed pack digest: %w", err)
+		}
 		return api.PackInstall{Version: version, Skipped: skipped}, nil
 	}
 
@@ -352,6 +374,12 @@ func (s *Store) UpgradeVendoredTo(
 	version++
 	if err := setPackDigest(ctx, tx, target); err != nil {
 		return api.PackInstall{}, err
+	}
+	w := &txWriter{ctx: ctx, tx: tx}
+	w.exec("record installed pack digest",
+		"UPDATE rule_corpus_meta SET installed_pack_digest = ? WHERE id = 1", target)
+	if w.err != nil {
+		return api.PackInstall{}, w.err
 	}
 	if err := tx.Commit(); err != nil {
 		return api.PackInstall{}, fmt.Errorf("commit pack upgrade: %w", err)
@@ -387,13 +415,16 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 	// digest of nothing rather than empty. Counting rows would report that as "never upgraded" and refuse to undo the upgrade
 	// that added shipped rules to it.
 	var meta struct {
-		Rejected string `db:"pack_digest"`
+		Rejected string `db:"installed_pack_digest"`
 		Previous string `db:"previous_pack_digest"`
 	}
 	if err := tx.GetContext(ctx, &meta,
-		"SELECT pack_digest, previous_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		"SELECT installed_pack_digest, previous_pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
 		return api.PackRollback{}, fmt.Errorf("read rule corpus meta: %w", err)
 	}
+	// What is declined is the generation the UPGRADE installed, not the corpus's current digest. Operator edits recompute the
+	// latter, so deleting a shipped rule between the upgrade and the rollback would record a decline describing content no build
+	// ever shipped, and the next start would reinstall the rejected generation.
 	rejected := meta.Rejected
 
 	var retained []struct {
@@ -444,7 +475,8 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 	// from the build this process is running: during a rolling deployment a rollback served by an older replica would otherwise
 	// decline that replica's pack and leave the newer one free to reinstall. What the operator rejected is what was stored.
 	w.exec("record declined pack",
-		"UPDATE rule_corpus_meta SET previous_pack_digest = '', declined_pack_digest = ? WHERE id = 1", rejected)
+		"UPDATE rule_corpus_meta SET previous_pack_digest = '', declined_pack_digest = ?, installed_pack_digest = '' WHERE id = 1",
+		rejected)
 	if w.err != nil {
 		return api.PackRollback{}, w.err
 	}

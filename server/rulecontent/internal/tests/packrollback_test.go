@@ -539,3 +539,87 @@ func TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule(t *testing.T)
 		}
 	}
 }
+
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rollback-holds-after-the-operator-edits-shipped-content
+//
+// TestRollback_HoldsAfterTheOperatorEditsShippedContent is the third way a restart could undo a rollback, and the last of a set
+// worth stating together because each looked like the obvious answer and each was reachable.
+//
+// The decline has to name the generation the UPGRADE installed. Three narrower answers each fail: the pack a build carries
+// differs from what gets stored on a deployment holding an override; the running process's own pack is wrong when a rollback is
+// served by an older replica mid-deployment; and the corpus's current digest is recomputed by operator edits, so deleting a
+// shipped rule between the upgrade and the rollback records a decline describing content no build ever shipped. This covers the
+// third: the deletion must not let the rejected generation come back.
+func TestRollback_HoldsAfterTheOperatorEditsShippedContent(t *testing.T) {
+	t.Parallel()
+	rc := newRuleContent(t)
+	ctx := t.Context()
+
+	_, err := rc.SeedFrom(ctx, packFS(map[string]string{"imported/a.yml": "a v1", "imported/b.yml": "b v1"}), ".", nil)
+	require.NoError(t, err)
+
+	v2 := packFS(map[string]string{"imported/a.yml": "a v2", "imported/b.yml": "b v2"})
+	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+
+	// The operator deletes one of the shipped rules the bad pack brought, which recomputes the corpus digest.
+	_, err = rc.Replace(ctx, []api.Document{
+		{Path: "imported/a.yml", Content: []byte("a v2"), Source: api.SourceVendored},
+	})
+	require.NoError(t, err)
+
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	require.NoError(t, err)
+
+	reinstalled, err := rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	assert.False(t, reinstalled,
+		"an edit between the upgrade and the rollback must not let the rejected generation reinstall")
+
+	docs, err := rc.Corpus().Documents(ctx)
+	require.NoError(t, err)
+	for _, d := range docs {
+		assert.NotContains(t, string(d.Content), "v2", "%s came from the generation the operator rejected", d.Path)
+	}
+}
+
+// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-deployment-with-no-recorded-generation-records-one-on-start
+//
+// TestUpgradePack_RecordsTheInstalledGenerationOnANoOpStart covers the deployment that upgraded before its installed generation
+// was recorded at all, and mutation testing is what surfaced it: the conditional write on the no-op path looked like an
+// optimisation and is load-bearing.
+//
+// Such a deployment holds this build's content with nothing saying which generation that is. A start that changes no documents
+// still has to write it down, because otherwise a rollback has no name for what it is declining, the decline is recorded empty,
+// and the next start reinstalls the generation the operator rejected. That is the original defect, reached by a different route.
+func TestUpgradePack_RecordsTheInstalledGenerationOnANoOpStart(t *testing.T) {
+	t.Parallel()
+	rc, db := newRuleContentWithDB(t)
+	ctx := t.Context()
+
+	_, err := rc.SeedFrom(ctx, packFS(map[string]string{"imported/a.yml": "a v1"}), ".", nil)
+	require.NoError(t, err)
+	v2 := packFS(map[string]string{"imported/a.yml": "a v2"})
+	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+
+	// The state a deployment that upgraded under an older build is in: content installed, generation unrecorded.
+	_, err = db.ExecContext(ctx, "UPDATE rule_corpus_meta SET installed_pack_digest = '' WHERE id = 1")
+	require.NoError(t, err)
+
+	// A start that moves no documents. It must still record which generation is installed.
+	changed, err := rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	require.False(t, changed, "the content already matches, so nothing should move")
+
+	var installed string
+	require.NoError(t, db.GetContext(ctx, &installed, "SELECT installed_pack_digest FROM rule_corpus_meta WHERE id = 1"))
+	require.NotEmpty(t, installed, "a start must record the generation it finds installed, or a rollback cannot name it")
+
+	// And the consequence that matters: the rollback now declines something, so a restart does not undo it.
+	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	require.NoError(t, err)
+	reinstalled, err := rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
+	require.NoError(t, err)
+	assert.False(t, reinstalled, "the rejected generation must not reinstall")
+}

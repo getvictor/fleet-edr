@@ -57,6 +57,21 @@ ALTER TABLE rule_corpus_meta
 	ADD COLUMN declined_pack_digest VARCHAR(64) NOT NULL DEFAULT '';
 -- +goose StatementEnd
 
+-- installed_pack_digest is the identity of the generation the last upgrade INSTALLED, and it is what a rollback declines.
+--
+-- Three narrower answers were tried and each is reachable. The pack a build carries is wrong because it differs from what gets
+-- stored on a deployment holding an override, so a later build differing only in that rule reinstalls the rest of itself. The
+-- digest of the running process's own pack is wrong because a rollback served by an older replica during a rolling deployment
+-- would decline that replica's pack. And `pack_digest` is wrong because operator edits recompute it: deleting a shipped rule
+-- between the upgrade and the rollback would make the recorded decline describe content no build ever shipped.
+--
+-- What satisfies all three at once is the target the upgrade stored, recorded when it stored it and not touched by anything an
+-- operator does afterwards. That is this column, and the upgrade compares against it like-for-like.
+-- +goose StatementBegin
+ALTER TABLE rule_corpus_meta
+	ADD COLUMN installed_pack_digest VARCHAR(64) NOT NULL DEFAULT '';
+-- +goose StatementEnd
+
 -- +goose Down
 -- Forward-only migrations (ADR-0009). Dropping these would discard the generation an operator can roll back to and the record of
 -- a pack they declined, so re-applying would silently reinstall content they rejected. The rollback path is restore-from-backup;
