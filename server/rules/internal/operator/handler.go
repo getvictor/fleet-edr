@@ -16,9 +16,9 @@ import (
 // so the handler tests can substitute a fake without spinning up a DB.
 type Service interface {
 	api.Lister
-	// RuleProvider is what the export route needs: List reports a rule's metadata, and a rule's own document is not metadata.
-	// It is read from the ACTIVE rule set rather than from the corpus embedded in the build, which is the whole of #879's fix.
-	api.RuleProvider
+	// Exportable is what the export route needs: the rule itself alongside its metadata, since a rule's own document is not
+	// metadata, and both from one snapshot of the active set so the two cannot describe different generations.
+	Exportable(id string) (api.RuleMetadata, api.Rule, bool)
 }
 
 // Handler serves the rules-context operator routes. Construct it with the rules service handle and the authorization chokepoint;
@@ -166,54 +166,44 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	for _, rm := range h.svc.List() {
-		if rm.ID != id {
-			continue
-		}
-		// A rule that came from a document exports as that document, byte for byte (issue #764). Re-rendering it would hand back
-		// a second description of a rule whose authoritative description already exists, and the document is the more useful
-		// artifact anyway: for a vendored rule it is what an operator diffs against SigmaHQ, and for one they wrote themselves it
-		// is what they wrote.
-		//
-		// Resolved from the rule that is RUNNING, not by looking the id up in the corpus this build embeds. A rule's identity is
-		// its file stem (#873), so an operator storing their own version of a shipped detection keeps its id, and the embedded
-		// lookup went on answering with the shipped document: bytes the deployment was not running and they had not written
-		// (#879).
-		body, fromDocument := h.activeSource(rm.ID)
-		if !fromDocument {
-			rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
-			if err != nil {
-				h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
-				writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
-				return
-			}
-			body = rendered
-		}
-		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(body); err != nil {
-			h.logger.WarnContext(ctx, "write rule file", "rule", id, "err", err)
-		}
+	// The rule and its metadata come from one snapshot, so the document served and the metadata describing it cannot be from
+	// different generations of the rule set (see Service.Exportable).
+	rm, rule, ok := h.svc.Exportable(id)
+	if !ok {
+		writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})
 		return
 	}
-	writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})
-}
 
-// activeSource returns the document the rule running under id was loaded from, and whether it came from one.
-//
-// Scans the active set rather than taking an index, because the set is replaced wholesale on every corpus reload and an index
-// built beside it is a second thing to keep in step. The catalog is tens of rules and this runs once per export request, which is
-// an operator clicking a button.
-func (h *Handler) activeSource(id string) ([]byte, bool) {
-	for _, r := range h.svc.ActiveRules() {
-		if r.ID() != id {
-			continue
+	// A rule that came from a document exports as that document, byte for byte (issue #764). Re-rendering it would hand back a
+	// second description of a rule whose authoritative description already exists, and the document is the more useful artifact
+	// anyway: for a vendored rule it is what an operator diffs against SigmaHQ, and for one they wrote themselves it is what they
+	// wrote.
+	//
+	// Asked of the rule that is RUNNING, not by looking the id up in the corpus this build embeds. A rule's identity is its file
+	// stem (#873), so an operator storing their own version of a shipped detection keeps its id, and the embedded lookup went on
+	// answering with the shipped document: bytes the deployment was not running and they had not written (#879).
+	body, fromDocument := api.SourceOf(rule)
+	if !fromDocument {
+		rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
+		if err != nil {
+			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
+			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
+			return
 		}
-		return api.SourceOf(r)
+		body = rendered
 	}
-	// Reachable only if the active set and the listing disagree, which they can: they are two reads of an atomically swapped
-	// pointer, so a reload landing between them leaves a rule listed here and gone there. Rendering it is the right answer for
-	// that, and it is the same answer a rule with no document gets.
-	return nil, false
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)
+	// A rule document can now be content an operator wrote, so this is the first version of this route whose body is not fixed at
+	// build time. Sniffing is what would make that reachable: a browser that ignored the declared type and decided a YAML document
+	// looked like HTML would execute whatever it found. The declared type plus the attachment disposition already say what this
+	// is; nosniff is what stops a browser overruling them, and apidocs sets it on the same reasoning.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	// G705 flags this because the rule id reaching Exportable comes from the path, so taint analysis marks what it returns. The
+	// body is the stored rule document, never the id, and it is served as an attachment of a declared non-HTML type with sniffing
+	// off. Escaping it is not an option either: the response IS the artifact, and an escaped YAML document is not one.
+	if _, err := w.Write(body); err != nil { //nolint:gosec // G705: see above
+		h.logger.WarnContext(ctx, "write rule file", "rule", id, "err", err)
+	}
 }

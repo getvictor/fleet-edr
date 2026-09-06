@@ -95,22 +95,50 @@ func (s *Service) List() []api.RuleMetadata {
 		if !api.IsDetection(r) {
 			continue
 		}
-		declared := api.DefaultModeOf(r)
-		global := api.GlobalRuleModeOf(s.modes, r.ID(), declared)
-		out = append(out, api.RuleMetadata{
-			ID:                           r.ID(),
-			Techniques:                   r.Techniques(),
-			Doc:                          r.Doc(),
-			SupportedExclusionMatchTypes: r.SupportedExclusionMatchTypes(),
-			Platforms:                    r.Platforms(),
-			Algorithm:                    api.AlgorithmNameOf(r),
-			DefaultMode:                  declared,
-			Mode:                         global.Mode,
-			ModeSource:                   global.Source,
-			Origin:                       api.OriginOf(r),
-		})
+		out = append(out, s.metadataOf(r))
 	}
 	return out
+}
+
+// metadataOf projects one rule to the metadata the catalog surfaces publish.
+//
+// Extracted so Exportable below reports exactly what List reports for the same rule. A second projection would agree today and
+// diverge the first time only one was updated, and the divergence would be invisible: both would look like plausible metadata.
+func (s *Service) metadataOf(r api.Rule) api.RuleMetadata {
+	declared := api.DefaultModeOf(r)
+	global := api.GlobalRuleModeOf(s.modes, r.ID(), declared)
+	return api.RuleMetadata{
+		ID:                           r.ID(),
+		Techniques:                   r.Techniques(),
+		Doc:                          r.Doc(),
+		SupportedExclusionMatchTypes: r.SupportedExclusionMatchTypes(),
+		Platforms:                    r.Platforms(),
+		Algorithm:                    api.AlgorithmNameOf(r),
+		DefaultMode:                  declared,
+		Mode:                         global.Mode,
+		ModeSource:                   global.Source,
+		Origin:                       api.OriginOf(r),
+	}
+}
+
+// Exportable returns the rule registered under id together with its metadata, and whether id names a rule the catalog describes.
+//
+// Both come from ONE snapshot of the active set, which is the whole reason this exists rather than a caller pairing List with
+// ActiveRules. Those are two reads of an atomically swapped pointer, so a reload landing between them hands the caller metadata
+// from a generation the deployment is no longer running while the rule it describes is already gone. For the export that is not a
+// theoretical inconsistency: the caller would render the stale metadata, which for an imported rule fails and turns the export
+// into a transient 500 (#879 review).
+//
+// Non-detections are absent for the same reason they are absent from List, and the caller cannot tell them from an id that names
+// nothing. That is deliberate: a distinct answer would leak the existence of rules the catalog does not describe (#775).
+func (s *Service) Exportable(id string) (api.RuleMetadata, api.Rule, bool) {
+	for _, r := range s.active.Load().rules {
+		if r.ID() != id || !api.IsDetection(r) {
+			continue
+		}
+		return s.metadataOf(r), r, true
+	}
+	return api.RuleMetadata{}, nil, false
 }
 
 // ActiveRules returns the rule set in force. Reloaded from stored content while the server runs (issue #766), so a caller holding

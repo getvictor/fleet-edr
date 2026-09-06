@@ -306,3 +306,45 @@ func TestNew_NilRulesIsAnEmptySet(t *testing.T) {
 	assert.Empty(t, svc.List())
 	assert.Zero(t, svc.ActiveVersion())
 }
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestExportable_ResolvesTheRuleAndItsMetadataTogether pins the seam that keeps an export coherent.
+//
+// The export needs two things about one rule: the rule itself, to ask for the document it was loaded from, and its metadata, to
+// render one when it has no document. Pairing List with ActiveRules gets both, and gets them from two reads of an atomically
+// swapped pointer, so a reload landing between them describes a generation the deployment is no longer running. For an imported
+// rule that is not a cosmetic inconsistency: its metadata renders to nothing, so the export turns into a transient 500 (#879).
+//
+// The metadata is asserted EQUAL to what List reports rather than merely populated, because the failure this guards against is a
+// second projection that drifts from the first. Both would look like plausible metadata, and only a comparison catches it.
+func TestExportable_ResolvesTheRuleAndItsMetadataTogether(t *testing.T) {
+	t.Parallel()
+
+	wanted := stubRule{id: "detection_first"}
+	svc := New([]api.Rule{
+		wanted,
+		stubProjection{stubRule{id: "a_projection"}},
+		stubHealth{stubRule{id: "a_health_signal"}},
+	}, nil, nil)
+
+	t.Run("a detection resolves to its own rule and the metadata List publishes", func(t *testing.T) {
+		t.Parallel()
+		md, rule, ok := svc.Exportable("detection_first")
+		require.True(t, ok)
+		assert.Equal(t, wanted, rule, "the rule itself, since only it can hand back the document it was loaded from")
+
+		listed := svc.List()
+		require.Len(t, listed, 1)
+		assert.Equal(t, listed[0], md, "one projection, or the export renders different metadata from the one the catalog shows")
+	})
+
+	t.Run("a non-detection is absent, indistinguishably from a rule that does not exist", func(t *testing.T) {
+		t.Parallel()
+		for _, id := range []string{"a_projection", "a_health_signal", "no_such_rule"} {
+			_, rule, ok := svc.Exportable(id)
+			assert.False(t, ok, "rule %q", id)
+			assert.Nil(t, rule, "rule %q", id)
+		}
+	})
+}

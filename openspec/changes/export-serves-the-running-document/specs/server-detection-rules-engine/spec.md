@@ -10,6 +10,8 @@ The distinction is not academic. A rule's identity is its file stem rather than 
 
 The system SHALL distinguish a rule that came from no document from one whose document is empty. A rule expressed in code was never a file, and the system SHALL render a document for it rather than exporting zero bytes.
 
+The rule and the metadata describing it SHALL be resolved from ONE generation of the active rule set. The two are read together on every export, the set is replaced wholesale when rule content reloads, and a reload landing between two separate reads leaves the system describing a rule the deployment is no longer running. That is not a cosmetic inconsistency: for a rule loaded from a document, its metadata alone renders to nothing, so the export fails rather than reporting a stale answer.
+
 The system SHALL NOT decide what to export by asking whether a rule is upstream's. Whether a rule carries a document and whose rule it is are separate questions with different answers for an operator's own rule content, and one predicate answering both will be wrong for whichever question it was not written for.
 
 #### Scenario: A rule an operator overwrote exports as theirs

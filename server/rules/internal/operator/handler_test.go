@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -271,6 +272,8 @@ func TestHandler_ExportRule(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "application/yaml; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Contains(t, resp.Header.Get("Content-Disposition"), `filename="credential_keychain_dump.yml"`)
+	// A rule document can be content an operator wrote, so a browser must not be free to decide it looks like HTML.
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -322,8 +325,7 @@ func TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
-	want, fromDocument := sourceOfActive(svc, id)
-	require.True(t, fromDocument, "fixture rule must be one loaded from a document")
+	want := embeddedCorpusFile(t, id)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
 	require.NoError(t, err)
@@ -406,16 +408,26 @@ func (m stubGlobalModes) GlobalRuleMode(ruleID string, ruleDefault rulesapi.Dete
 	return rulesapi.GlobalRuleMode{Mode: ruleDefault, Source: rulesapi.RuleModeSourceDefault}
 }
 
-// sourceOfActive returns the document the rule running under id was loaded from, by asking the ACTIVE rule set rather than the
-// corpus embedded in the build. That distinction is the point of #879, so a test asserting the export bytes has to make it too: a
-// helper reading the embedded corpus would agree with a broken handler on exactly the case the fix is about.
-func sourceOfActive(svc *service.Service, id string) ([]byte, bool) {
-	for _, r := range svc.ActiveRules() {
-		if r.ID() == id {
-			return rulesapi.SourceOf(r)
+// embeddedCorpusFile reads the vendored file whose stem is id, straight off the corpus embedded in the build.
+//
+// An INDEPENDENT oracle, and it has to be. Taking the expected bytes from the same active rule the handler serves would assert
+// only that two reads of one field agree, which is true however wrong that field is: the test would pass against a handler that
+// served the wrong document, which is the entire failure it exists to catch.
+//
+// Walked rather than composed from a path, because the corpus keeps upstream's own category directories and a rule's id is its
+// STEM (#873), so the directory a given rule sits in is not derivable from its id.
+func embeddedCorpusFile(t *testing.T, id string) []byte {
+	t.Helper()
+	var found []byte
+	require.NoError(t, fs.WalkDir(catalog.ImportedCorpusFS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || catalog.RuleIDForPath(p) != id {
+			return err
 		}
-	}
-	return nil, false
+		found, err = fs.ReadFile(catalog.ImportedCorpusFS(), p)
+		return err
+	}))
+	require.NotNil(t, found, "fixture rule %q must exist in the corpus this build embeds, or the test proves nothing", id)
+	return found
 }
 
 // sigmaDoc renders a minimal loadable Sigma document, varying only what a test needs to tell two of them apart.
