@@ -163,6 +163,51 @@ func (r *RuleContent) UpgradePackFrom(
 	return true, nil
 }
 
+// RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
+// declined so a restart does not reinstall it.
+//
+// fsys/root/include describe the build's own pack, which is needed only to name what is being declined. Reading it here rather
+// than taking a digest keeps the caller from having to compute one, and keeps the two paths (install and roll back) reading the
+// build's content the same way.
+func (r *RuleContent) RollbackPackTo(
+	ctx context.Context, fsys fs.FS, root string, include func(path string) bool,
+) (api.PackRollback, error) {
+	docs, err := readAll(fsys, root, include)
+	if err != nil {
+		return api.PackRollback{}, err
+	}
+	api.SortDocuments(docs)
+
+	rolled, err := r.store.RollbackPack(ctx, api.PackDigest(shippedPack(docs)))
+	if err != nil {
+		return api.PackRollback{}, err
+	}
+	r.logger.InfoContext(ctx, "rulecontent: rolled back to the previously installed rule pack",
+		"pack", rolled.Restored, "version", rolled.Version)
+	return rolled, nil
+}
+
+// PackStatusFrom reports what shipped content this deployment runs and how it differs from the pack in this build.
+func (r *RuleContent) PackStatusFrom(
+	ctx context.Context, fsys fs.FS, root string, include func(path string) bool, identity api.RuleIdentity,
+) (api.PackStatus, error) {
+	docs, err := readAll(fsys, root, include)
+	if err != nil {
+		return api.PackStatus{}, err
+	}
+	api.SortDocuments(docs)
+	return r.store.PackStatusAgainst(ctx, docs, identity)
+}
+
+// shippedPack marks a pack read off disk as the shipped content it is, so its digest matches the one the store records for it.
+func shippedPack(docs []api.Document) []api.Document {
+	out := make([]api.Document, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, api.Document{Path: d.Path, Content: d.Content, Source: api.SourceVendored})
+	}
+	return out
+}
+
 // SeedFrom populates the corpus from fsys when the corpus is empty, and reports whether it wrote anything.
 //
 // Seeding rather than migrating the content in, because the content is not schema: it changes on its own cadence, it is large, and

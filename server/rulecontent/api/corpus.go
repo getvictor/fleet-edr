@@ -72,6 +72,38 @@ func SortDocuments(docs []Document) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
 
+// PackStatus is what shipped rule content a deployment is running, and what it would run if it took this build's pack.
+//
+// Reported as digests plus the rules that differ, rather than as a version string, because a version has to be maintained by hand
+// and forgetting to bump one is silent: the deployment believes it is current while running different rules.
+type PackStatus struct {
+	// Installed identifies the shipped content stored now.
+	Installed string
+	// Available identifies the pack this build carries. Equal to Installed on a current deployment.
+	Available string
+	// Previous identifies the generation a rollback would restore. Empty when there is none, which is the ordinary state of a
+	// deployment that has never upgraded.
+	Previous string
+	// Declined is the pack an operator rolled back from, which this deployment will not install. Empty when none.
+	Declined string
+	// Added, Removed and Changed name the RULES that differ between Installed and Available, by identity rather than by path,
+	// because that is what an operator recognises and what their tuning is keyed on.
+	Added   []string
+	Removed []string
+	Changed []string
+}
+
+// Current reports whether the deployment is running the shipped content this build carries.
+func (p PackStatus) Current() bool { return p.Installed == p.Available }
+
+// PackRollback is what rolling back did.
+type PackRollback struct {
+	// Restored is the identity of the generation now installed.
+	Restored string
+	// Version is the corpus version after the rollback.
+	Version int64
+}
+
 // PackInstall is what installing a build's rule pack did.
 //
 // Skipped is reported rather than logged and forgotten because it is a real divergence: the deployment is not running a rule the
@@ -81,6 +113,10 @@ type PackInstall struct {
 	Changed bool
 	Version int64
 	Skipped []string
+	// Declined reports that this build's pack was not installed because the operator rolled back from it. It is distinct from
+	// "nothing to do": the deployment is deliberately running older shipped content, which is a state worth surfacing rather
+	// than one to infer from an absence.
+	Declined bool
 }
 
 // RuleIdentity maps a document's path to the identity the rule it holds will load under.
