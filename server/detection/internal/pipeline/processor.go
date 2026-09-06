@@ -436,9 +436,14 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			// predicate is per row, so a partial withdrawal leaves rows that are re-claimed and re-evaluated, and this tally
 			// covers all of them: recording it would count the survivors twice.
 			//
-			// Exactly-once across replicas comes from the queue rather than from a lock here. A row moves 2 -> 0 -> 3 inside one
-			// Nack transaction, and the second statement matches only rows the first reset, so a row is reported as withdrawn to
-			// exactly one caller however many are nacking.
+			// Exactly-once across replicas comes from the queue rather than from a lock here, and specifically from set-aside
+			// being TERMINAL. Nack's withdrawing statement matches rows at processed = 0, and a withdrawn row sits at 3, which
+			// nothing moves it back from: Nack's own reset requires 2. So the 0 -> 3 transition happens once for a row in its
+			// life, row locks serialise concurrent attempts at it, and only the caller whose statement performed it counts it.
+			//
+			// NOT because that statement is restricted to rows this transaction reset, which review corrected: its predicate is
+			// the requested ids at processed = 0, so it can also match a row another nack had already returned to pending. That
+			// makes no difference to the count, and the distinction matters for anyone changing this queue.
 			//
 			// That holds per ROW and not per claim, which leaves the window #840 tracks: Nack is not conditional on the claim it
 			// was issued for, so an attempt that outran its lease can withdraw rows a replacement now owns, get a count short of
