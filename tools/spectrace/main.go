@@ -201,7 +201,21 @@ func runCheck(args []string) int {
 			len(newCodeIDs), *baseRef)
 	}
 
-	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid)
+	// Reported and gated regardless of --strict, like an invalid reference: an over-long marker is something already wrong in
+	// the tree rather than a coverage judgement, and it is mechanical to fix.
+	//
+	// Scoped to lines this branch touched. Several hundred over-long markers already exist on main, so gating on all of them
+	// would fail every pull request in the repository for a defect none of them introduced, which is the shape of wedge this
+	// repository has been bitten by before. A run that cannot reach git reports none rather than failing: the gate is worth
+	// having when it can be scoped honestly and is not worth blocking a build over when it cannot.
+	touchedLines, terr := ChangedMarkerLines(*baseRef)
+	if terr != nil {
+		fmt.Fprintf(os.Stderr, "spectrace: marker line-length gate skipped (%v)\n", terr)
+		touchedLines = map[string][]lineRange{}
+	}
+	overlong := OverlongMarkers(markers, touchedLines)
+
+	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid, overlong)
 	if *byLayer {
 		printByLayer(scenarios, covered)
 	}
@@ -210,6 +224,8 @@ func runCheck(args []string) int {
 	case len(restatementConflicts) > 0:
 		return 1
 	case len(invalid) > 0:
+		return 1
+	case len(overlong) > 0:
 		return 1
 	case *strict && len(gatedNormative) > 0:
 		return 1
@@ -298,7 +314,7 @@ func splitUncovered(scenarios []Scenario, covered map[string][]Marker) ([]Scenar
 	return normative, advisory
 }
 
-func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []Scenario, invalid []Marker) {
+func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []Scenario, invalid, overlong []Marker) {
 	totalNormative := 0
 	for _, s := range scenarios {
 		if s.Normative {
@@ -312,11 +328,19 @@ func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []S
 	fmt.Printf("spectrace: %d advisory scenarios uncovered (requirement body has no SHALL/MUST)\n",
 		len(uncoveredAdvisory))
 	fmt.Printf("spectrace: %d invalid references in tests (ID does not exist in any spec)\n", len(invalid))
+	fmt.Printf("spectrace: %d markers on a source line over %d characters\n", len(overlong), MaxMarkerLineLen)
 
 	if len(invalid) > 0 {
 		fmt.Fprintln(os.Stderr, "\nInvalid references:")
 		for _, m := range invalid {
 			fmt.Fprintf(os.Stderr, "  %s:%d  spec:%s\n", m.SourcePath, m.SourceLine, m.ID)
+		}
+	}
+	if len(overlong) > 0 {
+		fmt.Fprintln(os.Stderr, "\nMarkers over the source line limit. A marker cannot be wrapped without breaking the")
+		fmt.Fprintln(os.Stderr, "reference, so shorten the requirement or scenario title it names:")
+		for _, m := range overlong {
+			fmt.Fprintf(os.Stderr, "  %s:%d  %d chars  spec:%s\n", m.SourcePath, m.SourceLine, m.LineLen, m.ID)
 		}
 	}
 	if len(uncoveredNormative) > 0 {

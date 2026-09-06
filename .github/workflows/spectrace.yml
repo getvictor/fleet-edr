@@ -75,6 +75,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Full history so the merge base with the target branch resolves. The marker line-length gate scopes itself to lines
+          # this branch touched, and at the default depth of 1 it cannot find that base: it would skip with a notice rather than
+          # fail, which is the "check that never runs" shape this repository has already been bitten by.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -84,5 +88,7 @@ jobs:
       # SHALL/MUST scenarios. The advisory phase is over; main is at 100% coverage and the gate enforces it from here.
       # The check's stdout includes the headline "N/M normative scenarios have a test marker" line, so a passing run
       # still surfaces the coverage figure in the job log without a separate informational step.
+      # --base-ref is explicit rather than relying on the default: on a pull request the branch being merged INTO is what the
+      # gate should scope against, and that is not always origin/main.
       - name: Run spectrace check (strict)
-        run: go run ./tools/spectrace check --strict
+        run: go run ./tools/spectrace check --strict --base-ref "origin/${{ github.base_ref || 'main' }}"
