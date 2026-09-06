@@ -533,6 +533,22 @@ func EmbeddedCorpusFS() fs.FS { return catalog.ImportedCorpusFS() }
 // EmbeddedCorpusRoot is the path prefix the embedded corpus is stored under, which the loader reads it back by.
 const EmbeddedCorpusRoot = catalog.CorpusRoot
 
+// RuleIdentityForPath reports the key a stored document's rule is COMPARED by, which is what a caller asking "do these two
+// collide?" needs.
+//
+// Exported so a caller outside this context can ask the question without answering it itself, which is the whole point: it
+// delegates to the single definition of the derivation rather than restating it. #873 counted five copies of that derivation and
+// unified them, and the failure mode of a sixth is quiet: two sides agree until one changes, and then a lookup keyed on identity
+// simply misses.
+//
+// rulecontent needs this to install a pack safely. A rule is identified by its file STEM, so an operator's `authored/foo.yml` and
+// a pack's `imported/foo.yml` are the same rule stored twice, and a corpus holding both does not load at all.
+//
+// The key is FOLDED, and review caught the first version returning the case-preserving stem. The loader compares ids
+// case-insensitively because the columns they reach do, so `authored/Foo.yml` does not block a shipped `foo.yml` under an exact
+// comparison: both get stored, and the corpus then fails to load exactly as it would for an exact-case collision.
+func RuleIdentityForPath(p string) string { return catalog.RuleIDKey(p) }
+
 // EmbeddedCorpusIncludes reports whether a walked path is rule content rather than the packaging beside it, so a seed stores
 // exactly what the loader will read.
 func EmbeddedCorpusIncludes(p string) bool { return catalog.IsCorpusFile(p) }

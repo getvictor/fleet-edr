@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -107,6 +108,59 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 		Context:   "rulecontent",
 		TableName: "rulecontent_goose_db_version",
 	})
+}
+
+// UpgradePackFrom installs the shipped rule content in this build over the shipped content the corpus holds, and reports whether
+// anything changed.
+//
+// The counterpart to SeedFrom, which acts only on an EMPTY corpus. Once a deployment has seeded, the seed can never run again, so
+// without this a corpus keeps its first generation of shipped rules forever: an operator upgrading the product to get new
+// detections would not get them, and nothing would say so. That is a security regression rather than an inconvenience, which is
+// why this runs on its own rather than waiting to be asked.
+//
+// It replaces only the SHIPPED half. An operator's own rules survive an upgrade, including one written over a shipped rule's path,
+// and their tuning survives because per-rule mode, severity overrides and exclusions live in detection_rule_settings keyed by rule
+// id rather than in these files. That separation is what makes upgrading safe, and it is the reason issue #768 states the two
+// acceptance criteria it does.
+//
+// identity maps a document's path to the rule it loads as, and is supplied rather than derived here for the same reason the
+// provenance projection is: the derivation belongs to the loader. It is what keeps a pack document from colliding with an
+// operator's rule of the same identity at a different path, which would leave a corpus that does not load AT ALL.
+//
+// Failure is reported rather than fatal, matching SeedFrom for the same reason: a deployment that cannot install a newer pack
+// still detects with the pack it has.
+func (r *RuleContent) UpgradePackFrom(
+	ctx context.Context, fsys fs.FS, root string, include func(path string) bool, identity api.RuleIdentity,
+) (bool, error) {
+	docs, err := readAll(fsys, root, include)
+	if err != nil {
+		return false, err
+	}
+	if len(docs) == 0 {
+		// A build shipping no rules must not be read as "delete every shipped rule you have". Seeding treats this as a legitimate
+		// empty corpus because there is nothing to lose; here there is, so the only safe reading is that something is wrong with
+		// this build's embedded content rather than that the pack is deliberately empty.
+		r.logger.WarnContext(ctx, "rulecontent: this build ships no rule documents; leaving the stored pack alone", "root", root)
+		return false, nil
+	}
+
+	api.SortDocuments(docs)
+	installed, err := r.store.UpgradeVendoredTo(ctx, docs, identity)
+	if err != nil {
+		return false, err
+	}
+	// Reported even when nothing else changed. A rule the pack ships and this deployment does not run is a divergence the
+	// operator chose, by writing their own rule of the same identity, and it is still the only place they would learn of it.
+	if len(installed.Skipped) > 0 {
+		r.logger.InfoContext(ctx, "rulecontent: kept the operator's own rules over the ones this build ships",
+			"documents", strings.Join(installed.Skipped, ","))
+	}
+	if !installed.Changed {
+		return false, nil
+	}
+	r.logger.InfoContext(ctx, "rulecontent: installed the rule pack from this build",
+		"documents", len(docs), "version", installed.Version)
+	return true, nil
 }
 
 // SeedFrom populates the corpus from fsys when the corpus is empty, and reports whether it wrote anything.

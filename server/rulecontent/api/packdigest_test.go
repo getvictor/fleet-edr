@@ -187,3 +187,20 @@ func TestPackDigest_GoldenValue(t *testing.T) {
 	assert.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", PackDigest(nil),
 		"the empty pack's identity is the digest of nothing, and is not the empty string")
 }
+
+// TestRuleIdentity_NilIsThePath pins the fallback a nil RuleIdentity gives, which is the weakest correct answer rather than a
+// convenient one.
+//
+// It still catches a pack document landing on the exact path an operator holds, and it is what a caller with no loader of its own
+// can honestly claim to know. Pinned because the alternative reading, that nil means "no collisions exist", would silently install
+// straight over an operator's rules.
+func TestRuleIdentity_NilIsThePath(t *testing.T) {
+	t.Parallel()
+
+	var none RuleIdentity
+	assert.Equal(t, "authored/foo.yml", none.Identify("authored/foo.yml"),
+		"with no identity supplied, a document's identity is its whole path")
+
+	stem := RuleIdentity(func(p string) string { return "stem" })
+	assert.Equal(t, "stem", stem.Identify("authored/foo.yml"), "a supplied identity is used as given")
+}
