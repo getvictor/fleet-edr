@@ -77,8 +77,8 @@ type EventLog interface {
 	// PruneSetAside removes set-aside events older than retentionDays, in batches of at most batchSize. A non-positive
 	// retentionDays prunes nothing, which keeps them indefinitely and matches what a disabled retention window means elsewhere.
 	//
-	// Set-aside rows are the only record of which events a host stopped contributing to its process graph, so they are retained
-	// for the deployment's window rather than deleted when they are created; that window doubles as the time an operator has to
-	// look at them (issue #836).
+	// Set-aside rows are the only record of which events a host stopped processing, so they are retained for the deployment's
+	// window rather than deleted when they are created; that window doubles as the time an operator has to look at them
+	// (issue #836).
 	PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error)
 }

@@ -12,7 +12,7 @@ The system SHALL expose the following counters with stable names so dashboards a
 
 The counter SHALL be documented as counting MATCHES rather than would-be alerts. `edr.alerts.created` counts newly created alerts, which deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments the monitor series every time and would raise exactly one alert. That biases the monitor series upward against what promoting the rule produces, while the counter's documented losses bias it downward, so it SHALL be described as an approximation rather than as a bound in either direction. Documenting that is what keeps the recommended comparison from being read as a forecast.
 
-`edr.events.set_aside` SHALL carry a `host_id` attribute. The question it answers is which host has stopped contributing to the graph, and a fleet-wide total cannot answer it.
+`edr.events.set_aside` SHALL carry a `host_id` attribute. The question it answers is which host has stopped contributing some of its activity, and a fleet-wide total cannot answer it. WHAT it stopped contributing depends on the stage the batch was withdrawn at and is not derivable from the counter, so the counter SHALL NOT be documented as identifying a gap in that host's process graph; the accompanying log record carries the stage and its consequence.
 
 #### Scenario: Ingested events are counted by host
 

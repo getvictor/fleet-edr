@@ -162,13 +162,21 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// The description stays short because it renders as dashboard metadata beside the counter, where it competes with the chart for
 	// the reader's attention; the reasoning a maintainer needs lives here instead. Setting events aside is NOT data loss: ingest
 	// writes the archive before the work queue and retains it on its own window (ADR-0015), so the events stay available to hunting
-	// queries and alert evidence. What is given up is their contribution to the process graph and their evaluation by whichever
-	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
+	// queries and alert evidence.
+	//
+	// What IS given up depends on the stage the batch was withdrawn at, and stating it unconditionally is the defect #845 fixed.
+	// One withdrawn at detection was folded into the graph first, so its graph contribution stands and what is lost is the rest of
+	// detection. For one withdrawn while the graph was being built, BOTH losses are possibilities rather than certainties: the
+	// retry bounds accrue on the queue entry across attempts whichever stage failed, so an earlier attempt may have folded the
+	// batch and may even have reached detection before a later fold failed. Neither is stated more precisely, because neither can
+	// be, and the log's consequence attribute is worded to the same limit.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
-		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). The host in `host_id` "+
-			"has a gap in its process graph. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
-			"condition never clears once it fires."),
+		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). What the host in "+
+			"`host_id` lost depends on the stage, which the accompanying log line names on a `consequence` attribute: a batch withdrawn "+
+			"while the process graph was being built may leave a gap in that graph, while one withdrawn at detection is already in "+
+			"the graph and instead may be missing alerts. Alert on a non-zero increase, per host: the counter is cumulative, so an "+
+			"absolute-value condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
 	)
 	// One increment per rule per replica when the budget is exhausted, not per skipped batch: see the interface comment on
@@ -253,8 +261,8 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 // EventsSetAside increments the set-aside counter by n for a host. Called by the processor when a nack withdraws events from
 // processing rather than returning them, which happens only once a batch has passed both retry bounds.
 //
-// Attributed per host deliberately: the question this answers is which host stopped contributing to the graph, and a fleet-wide
-// total cannot answer it.
+// Attributed per host deliberately: the question this answers is which host stopped contributing some of its activity, and a
+// fleet-wide total cannot answer it. WHAT it stopped contributing depends on the stage, which the accompanying log line names.
 func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
 	if r == nil || r.eventsSetAside == nil || n <= 0 {
 		return
