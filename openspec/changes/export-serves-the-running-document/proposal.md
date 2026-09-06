@@ -11,10 +11,12 @@ The export is the artifact an operator saves, reads, diffs, and hands to another
 ## What Changes
 
 - A rule answers for its own document, through an optional `SourceCarrier` interface, instead of an identifier being resolved against the embedded corpus.
-- The export route reads the ACTIVE rule set, so it serves what the deployment evaluates: upstream's file for a vendored rule, and the operator's own file for one they wrote.
+- The export route resolves the rule and its metadata from ONE snapshot of the active set, so it serves what the deployment evaluates: upstream's file for a vendored rule, and the operator's own file for one they wrote. One snapshot rather than two reads, because a reload landing between them would leave the route rendering metadata for a rule the deployment no longer runs, and for a rule loaded from a document that renders to nothing.
+- That lookup and the catalog listing share one metadata projection, so the export cannot publish metadata differing from what the catalog shows.
 - The classifier that conflated "came from a document" with "is upstream's" is removed. Its other callers ask the second question, which is attribution, and now use the attribution the listing already carries.
+- The response carries `X-Content-Type-Options: nosniff`. This is the first version of the route whose body is not fixed at build time, so a browser overruling the declared type on content an operator stored is now a reachable path rather than a hypothetical one.
 
 ## Impact
 
 - Affected specs: `server-detection-rules-engine`
-- Affected code: `server/rules/api/types.go`, `server/rules/internal/catalog/imported.go`, `server/rules/internal/operator/handler.go`, `server/rules/bootstrap/bootstrap.go`
+- Affected code: `server/rules/api/types.go`, `server/rules/internal/catalog/imported.go`, `server/rules/internal/service/service.go`, `server/rules/internal/operator/handler.go`, `server/rules/bootstrap/bootstrap.go`
