@@ -18,3 +18,5 @@
 - [x] 3.1 Regression: an operator's document stored under a shipped rule's stem exports as their bytes, and does not carry the shipped document's content.
 - [x] 3.2 Mutation-test: restoring the embedded-corpus lookup fails the regression test.
 - [x] 3.3 Keep the vendored case pinned, so the fix is not "stop serving documents", and give it an INDEPENDENT oracle: read the expected bytes off the embedded corpus, since taking them from the same rule the handler serves would pass against a handler serving the wrong document.
+- [x] 3.4 Guard the single-generation property with a fake whose two reads permanently disagree, in BOTH directions: a rule the stale listing names and the current set has dropped must be a 404 rather than a rendered stale answer, and one the current set runs and the stale listing omits must still be served. One direction alone is satisfied by a handler that answers 404 to everything.
+- [x] 3.5 Mutation-test that guard by reintroducing the List pairing, since the first version of the test asserted the wrong thing and the mutant survived it.

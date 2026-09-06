@@ -486,3 +486,104 @@ func TestHandler_ExportRule_OverwrittenRuleServesTheOperatorsBytes(t *testing.T)
 	assert.Equal(t, string(operatorDoc), string(got), "an operator exporting their own rule gets what they wrote")
 	assert.NotContains(t, string(got), "xattr", "and not the shipped document the build still carries under that stem")
 }
+
+// driftingService answers List and Exportable from DIFFERENT generations of the rule set, which is what a rule content reload
+// landing between two reads looks like from the handler's side.
+//
+// A fake rather than a real reload, because the race is not reproducible on demand: the window is one atomic pointer swap wide, so
+// a test racing a real Swap against a real request would pass by luck on almost every run. Making the two reads disagree ALWAYS
+// turns the property into something a test can decide.
+type driftingService struct {
+	// listed is the OLD generation, which still names a rule the new one has dropped.
+	listed []rulesapi.RuleMetadata
+	// exportable is the CURRENT generation, and it is empty: the rule is gone.
+	exportable map[string]rulesapi.Rule
+}
+
+func (d driftingService) List() []rulesapi.RuleMetadata { return d.listed }
+func (d driftingService) Exportable(id string) (rulesapi.RuleMetadata, rulesapi.Rule, bool) {
+	rule, ok := d.exportable[id]
+	if !ok {
+		return rulesapi.RuleMetadata{}, nil, false
+	}
+	return rulesapi.RuleMetadata{ID: id}, rule, true
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestHandler_ExportRule_ReadsOneGeneration is the regression guard for the defect review found in the first version of this fix,
+// which resolved the rule by pairing List with a separate lookup of the active set.
+//
+// Those are two reads of an atomically swapped pointer, and a reload landing between them leaves a rule listed by the first and
+// gone from the second. The first version read the listing to decide the rule existed, failed to find its document, and treated
+// that as "a rule written in code" and rendered the stale metadata. An imported rule renders to nothing, so the export became a
+// transient 500 for a rule the deployment was no longer running.
+//
+// 404 is the right answer, and asserting it rather than merely "not 500" is the point: the deployment does not run that rule, and
+// that is the same answer any other absent id gets (#775).
+func TestHandler_ExportRule_ReadsOneGeneration(t *testing.T) {
+	t.Parallel()
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	svc := driftingService{
+		listed:     []rulesapi.RuleMetadata{{ID: id}},
+		exportable: map[string]rulesapi.Rule{},
+	}
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"the rule is not in the running set, and a handler that trusted the stale listing would render it into a 500 instead")
+}
+
+// TestHandler_ExportRule_ServesTheGenerationExportableAnswered is the other half of the fake above: without it, a handler that
+// answered 404 to everything would pass the drift test and prove nothing.
+func TestHandler_ExportRule_ServesTheGenerationExportableAnswered(t *testing.T) {
+	t.Parallel()
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	running := findRule(t, catalog.New(nil), id)
+	svc := driftingService{
+		// The listing is EMPTY here, the opposite drift: a rule the current generation runs and the stale listing does not name.
+		listed:     nil,
+		exportable: map[string]rulesapi.Rule{id: running},
+	}
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a handler consulting the listing would 404 a rule the deployment runs")
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, string(embeddedCorpusFile(t, id)), string(got))
+}
+
+// findRule returns the registered rule with the given id, failing the test rather than returning a nil interface a caller would
+// dereference much later.
+func findRule(t *testing.T, rules []rulesapi.Rule, id string) rulesapi.Rule {
+	t.Helper()
+	for _, r := range rules {
+		if r.ID() == id {
+			return r
+		}
+	}
+	t.Fatalf("rule %q is not registered, so the fixture proves nothing", id)
+	return nil
+}
