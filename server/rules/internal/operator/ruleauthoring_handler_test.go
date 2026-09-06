@@ -420,6 +420,8 @@ func rcServerWithPacks(t *testing.T, packs rulePackService) *httptest.Server {
 	return srv
 }
 
+// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/an-operator-reads-which-shipped-rules-are-installed
+//
 // TestPackStatus_ReportsTheDifferenceAndWhetherRollbackIsPossible pins the wire shape an operator screen reads.
 //
 // `can_roll_back` is stated rather than left to be inferred from `previous`, because "can I undo this" is the question someone
@@ -453,6 +455,8 @@ func TestPackStatus_ReportsTheDifferenceAndWhetherRollbackIsPossible(t *testing.
 	assert.Equal(t, []string{"edited_rule"}, got.Changed)
 }
 
+// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-restore-without-a-reason-is-refused
+//
 // TestPackRollback_RequiresAReason keeps the rollback on the same footing as every other change to rule content. This one is the
 // strongest case for it: the change swaps out every shipped detection a deployment runs.
 func TestPackRollback_RequiresAReason(t *testing.T) {
@@ -465,6 +469,8 @@ func TestPackRollback_RequiresAReason(t *testing.T) {
 	assert.Contains(t, body, "reason is required")
 }
 
+// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-restore-with-nothing-retained-is-refused-as-a-conflict
+//
 // TestPackRollback_WithNothingRetainedIsAConflict distinguishes "you asked for something that does not exist yet" from "something
 // went wrong". A corpus that has never had a newer pack installed has nothing behind it, and a 500 would send an operator looking
 // for a fault that is not there.
@@ -477,6 +483,8 @@ func TestPackRollback_WithNothingRetainedIsAConflict(t *testing.T) {
 	assert.Contains(t, body, "nothing to roll back to")
 }
 
+// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-restore-reports-what-it-withheld
+//
 // TestPackRollback_ReportsWhatItRestoredAndWithheld carries both halves back to the operator. The withheld list matters: the
 // deployment is deliberately not running shipped rules it was offered, their own rule is why, and nothing else would say so.
 func TestPackRollback_ReportsWhatItRestoredAndWithheld(t *testing.T) {
@@ -499,4 +507,20 @@ func TestPackRollback_ReportsWhatItRestoredAndWithheld(t *testing.T) {
 	assert.Equal(t, "restored-digest", got.Restored)
 	assert.Equal(t, int64(42), got.Version)
 	assert.Equal(t, []string{"imported/mine.yml"}, got.Withheld)
+}
+
+// TestPackStatus_EmptyDifferencesAreArraysNotNull pins the wire shape a consumer iterates.
+//
+// A nil slice marshals to `null`, which makes every reader null-check before iterating and makes "no rules changed" look like a
+// missing field. Caught by reading the real response during QA rather than by a test, which is the argument for pinning it.
+func TestPackStatus_EmptyDifferencesAreArraysNotNull(t *testing.T) {
+	t.Parallel()
+	srv := rcServerWithPacks(t, &fakeRCPacks{status: rulecontentapi.PackStatus{Installed: "same", Available: "same"}})
+
+	status, body := rcDo(t, srv, http.MethodGet, "/api/v1/rule-content/pack", "")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, `"added":[]`, "an empty difference list must be an array, not null")
+	assert.Contains(t, body, `"removed":[]`)
+	assert.Contains(t, body, `"changed":[]`)
+	assert.NotContains(t, body, "null", "no field on this response should marshal to null")
 }

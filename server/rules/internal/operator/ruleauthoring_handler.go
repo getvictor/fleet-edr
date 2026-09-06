@@ -99,6 +99,14 @@ func (h *RuleAuthoringHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("POST /api/v1/rule-content/pack:rollback", h.handlePackRollback)
 }
 
+// orEmpty renders a nil slice as an empty JSON array rather than null, so a consumer can iterate without a null check.
+func orEmpty(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
+}
+
 // handlePackStatus reports which generation of shipped rules this deployment runs and how it differs from this build's.
 //
 // Read authorization, because it changes nothing. It answers a question a deployment could not answer at all before: rule
@@ -123,9 +131,11 @@ func (h *RuleAuthoringHandler) handlePackStatus(w http.ResponseWriter, r *http.R
 		// Stated rather than left to the reader to infer from `previous`, because "can I undo this" is the question an operator
 		// looking at a bad pack is actually asking.
 		"can_roll_back": st.Previous != "",
-		"added":         st.Added,
-		"removed":       st.Removed,
-		"changed":       st.Changed,
+		// Emitted as arrays even when empty. A nil slice marshals to `null`, which makes every consumer null-check before
+		// iterating and makes "no rules changed" indistinguishable from "the field is missing" to a careless reader.
+		"added":   orEmpty(st.Added),
+		"removed": orEmpty(st.Removed),
+		"changed": orEmpty(st.Changed),
 	})
 }
 
@@ -164,7 +174,7 @@ func (h *RuleAuthoringHandler) handlePackRollback(w http.ResponseWriter, r *http
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{
 		"restored": rolled.Restored,
 		"version":  rolled.Version,
-		"withheld": rolled.Withheld,
+		"withheld": orEmpty(rolled.Withheld),
 	})
 }
 
