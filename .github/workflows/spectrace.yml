@@ -94,13 +94,27 @@ jobs:
       # SHALL/MUST scenarios. The advisory phase is over; main is at 100% coverage and the gate enforces it from here.
       # The check's stdout includes the headline "N/M normative scenarios have a test marker" line, so a passing run
       # still surfaces the coverage figure in the job log without a separate informational step.
-      # --base-ref is explicit rather than relying on the default: on a pull request the branch being merged INTO is what the
-      # gate should scope against, and that is not always origin/main.
+      # The base the line-length gate scopes against differs by event, and getting it wrong makes the gate silently vacuous.
       #
-      # The ref goes through the environment rather than being expanded into the command. A branch name is attacker-controllable
-      # on a fork pull request, and `${{ }}` inside `run:` is substituted before the shell sees it, so a crafted name would be
+      # On a pull request it is the branch being merged INTO, which is not always main. On a PUSH it must be the commit before
+      # the push: origin/main is then the same commit as HEAD, so the diff is empty and the gate reports zero touched markers
+      # however many the push added. Review caught that, and it is the same "reports clean without looking" shape this gate
+      # exists to close. A first push to a branch has no before-commit, and is scoped against main instead.
+      #
+      # Both go through the environment rather than being expanded into the command. A branch name is attacker-controllable on a
+      # fork pull request, and `${{ }}` inside `run:` is substituted before the shell sees it, so a crafted name would be
       # executed as code. Through `env:` it is data the shell quotes.
       - name: Run spectrace check (strict)
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: go run ./tools/spectrace check --strict --marker-line-length --base-ref "origin/${BASE_REF}"
+          BASE_REF: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "${BASE_REF}" ]; then
+            base="origin/${BASE_REF}"
+          elif [ -n "${PUSH_BEFORE}" ] && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            base="${PUSH_BEFORE}"
+          else
+            base="origin/main"
+          fi
+          echo "spectrace: scoping the marker line-length gate against ${base}"
+          go run ./tools/spectrace check --strict --marker-line-length --base-ref "${base}"
