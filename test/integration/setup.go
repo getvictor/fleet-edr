@@ -180,10 +180,12 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	require.NoError(t, err)
 
 	rulesCtx, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
-		DB:                   db,
-		Logger:               logger,
-		Corpus:               ruleContentCtx.Corpus(),
-		RuleAuthor:           ruleAuthor,
+		DB:         db,
+		Logger:     logger,
+		Corpus:     ruleContentCtx.Corpus(),
+		RuleAuthor: ruleAuthor,
+		RulePacks: ruleContentCtx.Packs(rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
+			rulesbootstrap.EmbeddedCorpusIncludes, rulesbootstrap.RuleIdentityForPath),
 		AuthZ:                identityCtx.AuthZ(),
 		Audit:                identityCtx.AuditRecorder(),
 		CommandBatchInserter: responseCtx.Service().InsertBatch,
@@ -355,6 +357,8 @@ func buildMux(
 		"GET /api/v1/rule-content/documents/{path...}",
 		"PUT /api/v1/rule-content/documents/{path...}",
 		"DELETE /api/v1/rule-content/documents/{path...}",
+		"GET /api/v1/rule-content/pack",
+		"POST /api/v1/rule-content/pack:rollback",
 	} {
 		mux.Handle(p, sessionProtected)
 	}

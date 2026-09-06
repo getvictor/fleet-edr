@@ -163,6 +163,35 @@ func (r *RuleContent) UpgradePackFrom(
 	return true, nil
 }
 
+// Packs returns the pack lifecycle bound to the build's own pack, satisfying api.PackLifecycle.
+//
+// The binding is the point. Status and rollback both need to know what shipped content this build carries, and the caller in the
+// rules context has no business reading it: that is what made the port's two methods take no arguments. Closing over the FS here
+// is what lets them.
+//
+// identity maps a document's path to the rule it loads as, and comes from the caller for the reason it does everywhere else in
+// this context: the derivation belongs to the loader (#873), and a copy of it here would agree until one of them changed.
+func (r *RuleContent) Packs(fsys fs.FS, root string, include func(path string) bool, identity api.RuleIdentity) api.PackLifecycle {
+	return boundPacks{rc: r, fsys: fsys, root: root, include: include, identity: identity}
+}
+
+// boundPacks is the pack lifecycle with the build's pack and the loader's identity function already supplied.
+type boundPacks struct {
+	rc       *RuleContent
+	fsys     fs.FS
+	root     string
+	include  func(path string) bool
+	identity api.RuleIdentity
+}
+
+func (b boundPacks) Status(ctx context.Context) (api.PackStatus, error) {
+	return b.rc.PackStatusFrom(ctx, b.fsys, b.root, b.include, b.identity)
+}
+
+func (b boundPacks) Rollback(ctx context.Context) (api.PackRollback, error) {
+	return b.rc.RollbackPackTo(ctx, b.identity)
+}
+
 // RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
 // declined so a restart does not reinstall it.
 //

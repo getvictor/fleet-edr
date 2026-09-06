@@ -624,6 +624,11 @@ func openRules(
 	//
 	// A failure here leaves the authoring surface unmounted rather than stopping the server. An operator who cannot author a rule
 	// today still has a deployment that detects, and the alternative is refusing to boot over a surface nothing depends on yet.
+	// The pack lifecycle is bound to this build's own embedded corpus, the same FS the seed and the startup install read, so the
+	// status surface compares against exactly what this process would install.
+	rulePacks := ruleContentCtx.Packs(rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
+		rulesbootstrap.EmbeddedCorpusIncludes, rulesbootstrap.RuleIdentityForPath)
+
 	var ruleAuthor rulecontentapi.Author
 	if author, aerr := ruleContentCtx.Author(rulesbootstrap.CorpusValidator{}); aerr != nil {
 		logger.WarnContext(ctx, "rule authoring surface unavailable; rule content cannot be changed through the API", "err", aerr)
@@ -636,6 +641,7 @@ func openRules(
 		Logger:               logger,
 		Corpus:               ruleContentCtx.Corpus(),
 		RuleAuthor:           ruleAuthor,
+		RulePacks:            rulePacks,
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		PrincipalLabel:       identityCtx.Service().PrincipalLabel,

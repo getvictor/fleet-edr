@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -77,7 +78,7 @@ func (f fakeRCCorpus) Version(context.Context) (int64, error) { return 5, f.err 
 
 func rcServer(t *testing.T, svc ruleAuthoringService, corpus ruleContentCorpus, authz identityapi.AuthZ) *httptest.Server {
 	t.Helper()
-	h, err := NewRuleAuthoringHandler(svc, corpus, authz, slog.New(slog.DiscardHandler))
+	h, err := NewRuleAuthoringHandler(svc, corpus, &fakeRCPacks{}, authz, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -110,6 +111,24 @@ func rcDo(t *testing.T, srv *httptest.Server, method, path, body string) (int, s
 //
 // TestRuleAuthoring_ReadPermissionDoesNotGrantWrite is why the surface has two actions rather than one. senior_analyst is meant to
 // see what the deployment detects without being able to change it, and a single action could not express that.
+// fakeRCPacks is a stub pack lifecycle for the handler tests.
+type fakeRCPacks struct {
+	status    rulecontentapi.PackStatus
+	statusErr error
+	rolled    rulecontentapi.PackRollback
+	rollErr   error
+	reason    string
+}
+
+func (f *fakeRCPacks) Status(context.Context) (rulecontentapi.PackStatus, error) {
+	return f.status, f.statusErr
+}
+
+func (f *fakeRCPacks) Rollback(_ context.Context, _ *identityapi.Actor, reason string) (rulecontentapi.PackRollback, error) {
+	f.reason = reason
+	return f.rolled, f.rollErr
+}
+
 func TestRuleAuthoring_ReadPermissionDoesNotGrantWrite(t *testing.T) {
 	t.Parallel()
 	svc := &fakeAuthoringSvc{}
@@ -308,18 +327,20 @@ func TestRuleAuthoring_OversizeBodyIsRejected(t *testing.T) {
 // request is worse than a route that is not mounted, because it looks available.
 func TestNewRuleAuthoringHandler_RequiresItsCollaborators(t *testing.T) {
 	t.Parallel()
-	_, noSvc := NewRuleAuthoringHandler(nil, fakeRCCorpus{}, allowAllAuthZ{}, nil)
+	_, noSvc := NewRuleAuthoringHandler(nil, fakeRCCorpus{}, &fakeRCPacks{}, allowAllAuthZ{}, nil)
 	require.Error(t, noSvc)
-	_, noCorpus := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, nil, allowAllAuthZ{}, nil)
+	_, noCorpus := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, nil, &fakeRCPacks{}, allowAllAuthZ{}, nil)
 	require.Error(t, noCorpus)
-	_, noAuthz := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, fakeRCCorpus{}, nil, nil)
+	_, noPacks := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, fakeRCCorpus{}, nil, allowAllAuthZ{}, nil)
+	require.Error(t, noPacks)
+	_, noAuthz := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, fakeRCCorpus{}, &fakeRCPacks{}, nil, nil)
 	require.Error(t, noAuthz)
 }
 
 // rcServerWithActor is rcServer with a caller-supplied actor, so the actor SHAPE can be varied rather than assumed.
 func rcServerWithActor(t *testing.T, svc ruleAuthoringService, actor *identityapi.Actor) *httptest.Server {
 	t.Helper()
-	h, err := NewRuleAuthoringHandler(svc, fakeRCCorpus{}, allowAllAuthZ{}, slog.New(slog.DiscardHandler))
+	h, err := NewRuleAuthoringHandler(svc, fakeRCCorpus{}, &fakeRCPacks{}, allowAllAuthZ{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -364,7 +385,7 @@ func TestRuleAuthoring_ServiceAccountWritesAreNotRejectedForActorShape(t *testin
 func TestRuleAuthoring_MissingActorIsAnInternalErrorNotAnAnonymousChange(t *testing.T) {
 	t.Parallel()
 	svc := &fakeAuthoringSvc{}
-	h, err := NewRuleAuthoringHandler(svc, fakeRCCorpus{}, allowAllAuthZ{}, slog.New(slog.DiscardHandler))
+	h, err := NewRuleAuthoringHandler(svc, fakeRCCorpus{}, &fakeRCPacks{}, allowAllAuthZ{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -376,4 +397,106 @@ func TestRuleAuthoring_MissingActorIsAnInternalErrorNotAnAnonymousChange(t *test
 
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.Empty(t, svc.puts, "an unattributable change must not reach the corpus")
+}
+
+// rcServerWithPacks is rcServer with a caller-supplied pack lifecycle, so the pack routes can be driven independently of the
+// document ones they sit beside.
+func rcServerWithPacks(t *testing.T, packs rulePackService) *httptest.Server {
+	t.Helper()
+	h, err := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, fakeRCCorpus{}, packs, allowAllAuthZ{},
+		slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	// An actor on the context, as the session middleware supplies in production. Without it the write route 500s before it
+	// reaches the service, which is how the first version of these tests reported an internal error for every case.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := identityapi.WithActor(r.Context(),
+			&identityapi.Actor{Principal: identityapi.UserPrincipal(7, ""), SessionFresh: true})
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestPackStatus_ReportsTheDifferenceAndWhetherRollbackIsPossible pins the wire shape an operator screen reads.
+//
+// `can_roll_back` is stated rather than left to be inferred from `previous`, because "can I undo this" is the question someone
+// looking at a bad pack is actually asking, and making a caller derive it invites two surfaces deriving it differently.
+func TestPackStatus_ReportsTheDifferenceAndWhetherRollbackIsPossible(t *testing.T) {
+	t.Parallel()
+	srv := rcServerWithPacks(t, &fakeRCPacks{status: rulecontentapi.PackStatus{
+		Installed: "aaa", Available: "bbb", Previous: "old",
+		Added: []string{"new_rule"}, Removed: []string{"gone_rule"}, Changed: []string{"edited_rule"},
+	}})
+
+	status, body := rcDo(t, srv, http.MethodGet, "/api/v1/rule-content/pack", "")
+	require.Equal(t, http.StatusOK, status, body)
+
+	var got struct {
+		Installed   string   `json:"installed"`
+		Available   string   `json:"available"`
+		Current     bool     `json:"current"`
+		CanRollBack bool     `json:"can_roll_back"`
+		Added       []string `json:"added"`
+		Removed     []string `json:"removed"`
+		Changed     []string `json:"changed"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &got))
+	assert.Equal(t, "aaa", got.Installed)
+	assert.Equal(t, "bbb", got.Available)
+	assert.False(t, got.Current, "the installed and available generations differ")
+	assert.True(t, got.CanRollBack, "a previous generation is retained")
+	assert.Equal(t, []string{"new_rule"}, got.Added)
+	assert.Equal(t, []string{"gone_rule"}, got.Removed)
+	assert.Equal(t, []string{"edited_rule"}, got.Changed)
+}
+
+// TestPackRollback_RequiresAReason keeps the rollback on the same footing as every other change to rule content. This one is the
+// strongest case for it: the change swaps out every shipped detection a deployment runs.
+func TestPackRollback_RequiresAReason(t *testing.T) {
+	t.Parallel()
+	packs := &fakeRCPacks{rollErr: ruleauthoring.ErrReasonRequired}
+	srv := rcServerWithPacks(t, packs)
+
+	status, body := rcDo(t, srv, http.MethodPost, "/api/v1/rule-content/pack:rollback", `{"reason":"  "}`)
+	assert.Equal(t, http.StatusBadRequest, status, body)
+	assert.Contains(t, body, "reason is required")
+}
+
+// TestPackRollback_WithNothingRetainedIsAConflict distinguishes "you asked for something that does not exist yet" from "something
+// went wrong". A corpus that has never had a newer pack installed has nothing behind it, and a 500 would send an operator looking
+// for a fault that is not there.
+func TestPackRollback_WithNothingRetainedIsAConflict(t *testing.T) {
+	t.Parallel()
+	srv := rcServerWithPacks(t, &fakeRCPacks{rollErr: rulecontentapi.ErrNoPreviousPack})
+
+	status, body := rcDo(t, srv, http.MethodPost, "/api/v1/rule-content/pack:rollback", `{"reason":"the new pack is too noisy"}`)
+	assert.Equal(t, http.StatusConflict, status, body)
+	assert.Contains(t, body, "nothing to roll back to")
+}
+
+// TestPackRollback_ReportsWhatItRestoredAndWithheld carries both halves back to the operator. The withheld list matters: the
+// deployment is deliberately not running shipped rules it was offered, their own rule is why, and nothing else would say so.
+func TestPackRollback_ReportsWhatItRestoredAndWithheld(t *testing.T) {
+	t.Parallel()
+	packs := &fakeRCPacks{rolled: rulecontentapi.PackRollback{
+		Restored: "restored-digest", Version: 42, Withheld: []string{"imported/mine.yml"},
+	}}
+	srv := rcServerWithPacks(t, packs)
+
+	status, body := rcDo(t, srv, http.MethodPost, "/api/v1/rule-content/pack:rollback", `{"reason":"rule X fires on everything"}`)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Equal(t, "rule X fires on everything", packs.reason, "the reason must reach the service that audits it")
+
+	var got struct {
+		Restored string   `json:"restored"`
+		Version  int64    `json:"version"`
+		Withheld []string `json:"withheld"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &got))
+	assert.Equal(t, "restored-digest", got.Restored)
+	assert.Equal(t, int64(42), got.Version)
+	assert.Equal(t, []string{"imported/mine.yml"}, got.Withheld)
 }

@@ -79,6 +79,10 @@ type Deps struct {
 	// CorpusValidator, and rulecontent must not import it (ADR-0021). cmd/main closes that loop by constructing the lifecycle
 	// with the validator and passing the result back.
 	RuleAuthor rulecontentapi.Author
+	// RulePacks is rulecontent's pack lifecycle, which backs the operator surface for reading which generation of shipped rules
+	// a deployment runs and restoring the one before it (issue #768). Optional on the same terms as RuleAuthor: nil leaves that
+	// surface unmounted, which is right for a tool that has no business changing rule content.
+	RulePacks rulecontentapi.PackLifecycle
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -153,15 +157,20 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		detectionConfigH.SetPrincipalLabelResolver(deps.PrincipalLabel)
 	}
 
-	// Mounted only when both halves are present: the lifecycle to change content, and the corpus to read it back. Without either
-	// the surface would be half a surface, and a handler that 500s on every request is worse than a route that is not there.
+	// Mounted only when every half is present: the lifecycle to change documents, the corpus to read them back, and the pack
+	// lifecycle behind the status and rollback routes. Without any one of them the surface would be partial, and a handler that
+	// 500s on some of its routes is worse than routes that are not there.
 	var ruleAuthoringH *operator.RuleAuthoringHandler
-	if deps.RuleAuthor != nil && deps.Corpus != nil {
+	if deps.RuleAuthor != nil && deps.Corpus != nil && deps.RulePacks != nil {
 		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, deps.Audit, logger)
 		if aerr != nil {
 			return nil, fmt.Errorf("build rule authoring service: %w", aerr)
 		}
-		ruleAuthoringH, aerr = operator.NewRuleAuthoringHandler(authoringSvc, deps.Corpus, deps.AuthZ, logger)
+		packSvc, perr := ruleauthoring.NewPackService(deps.RulePacks, deps.Audit, logger)
+		if perr != nil {
+			return nil, fmt.Errorf("build rule pack service: %w", perr)
+		}
+		ruleAuthoringH, aerr = operator.NewRuleAuthoringHandler(authoringSvc, deps.Corpus, packSvc, deps.AuthZ, logger)
 		if aerr != nil {
 			return nil, fmt.Errorf("build rule authoring handler: %w", aerr)
 		}

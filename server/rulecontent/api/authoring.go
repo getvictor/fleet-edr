@@ -22,6 +22,19 @@ var ErrDocumentNotFound = errors.New("rule content: document not found")
 // re-phrasing it here would make this package a second, drifting account of why the loader refuses things.
 var ErrRefused = errors.New("rule content: change refused")
 
+// PackLifecycle is the pack half of rule content: which generation of shipped rules a deployment runs, and restoring the one
+// before it.
+//
+// Declared here and implemented by rulecontent's bootstrap, for the reason Author is: the operator surface lives in the rules
+// context, which must be able to call this without rulecontent depending on it (ADR-0021). Reading the build's own pack is the
+// implementation's business, not the caller's, which is why neither method takes one.
+type PackLifecycle interface {
+	// Status reports the generation installed, the generation this build carries, and which rules differ.
+	Status(ctx context.Context) (PackStatus, error)
+	// Rollback restores the generation the last install replaced, and records that the current one was declined.
+	Rollback(ctx context.Context) (PackRollback, error)
+}
+
 // ErrNoPreviousPack reports that no earlier generation of shipped content is retained, so there is nothing to roll back to.
 //
 // The ordinary state of a deployment that has never upgraded: it seeded once and is still running what it seeded. Reported rather

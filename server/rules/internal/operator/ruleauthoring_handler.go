@@ -41,6 +41,14 @@ type ruleAuthoringService interface {
 	Check(ctx context.Context, doc rulecontentapi.Document) ([]string, error)
 }
 
+// rulePackService is the pack LIFECYCLE, as opposed to the individual documents above: which generation of shipped rules this
+// deployment runs, and restoring the one before it. Its own port because it needs something the corpus does not, the pack this
+// build carries, which only the rulecontent side can read.
+type rulePackService interface {
+	Status(ctx context.Context) (rulecontentapi.PackStatus, error)
+	Rollback(ctx context.Context, actor *identityapi.Actor, reason string) (rulecontentapi.PackRollback, error)
+}
+
 // ruleContentCorpus is the read side, held separately because reading and changing are separately authorized.
 type ruleContentCorpus interface {
 	Documents(ctx context.Context) ([]rulecontentapi.Document, error)
@@ -57,6 +65,7 @@ type ruleContentCorpus interface {
 type RuleAuthoringHandler struct {
 	svc    ruleAuthoringService
 	corpus ruleContentCorpus
+	packs  rulePackService
 	authz  identityapi.AuthZ
 	logger *slog.Logger
 }
@@ -64,15 +73,16 @@ type RuleAuthoringHandler struct {
 // NewRuleAuthoringHandler builds the handler. A nil service or corpus is an error rather than a handler that 500s per request:
 // this surface either exists or it does not, and a deployment that wired it wrong should fail to start.
 func NewRuleAuthoringHandler(
-	svc ruleAuthoringService, corpus ruleContentCorpus, authz identityapi.AuthZ, logger *slog.Logger,
+	svc ruleAuthoringService, corpus ruleContentCorpus, packs rulePackService,
+	authz identityapi.AuthZ, logger *slog.Logger,
 ) (*RuleAuthoringHandler, error) {
-	if svc == nil || corpus == nil || authz == nil {
-		return nil, errors.New("rule authoring handler: a service, a corpus and an authorizer are all required")
+	if svc == nil || corpus == nil || packs == nil || authz == nil {
+		return nil, errors.New("rule authoring handler: a service, a corpus, a pack service and an authorizer are all required")
 	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &RuleAuthoringHandler{svc: svc, corpus: corpus, authz: authz, logger: logger}, nil
+	return &RuleAuthoringHandler{svc: svc, corpus: corpus, packs: packs, authz: authz, logger: logger}, nil
 }
 
 // RegisterRoutes mounts the surface.
@@ -85,6 +95,77 @@ func (h *RuleAuthoringHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/v1/rule-content/documents/{path...}", h.handleGet)
 	mux.HandleFunc("PUT /api/v1/rule-content/documents/{path...}", h.handlePut)
 	mux.HandleFunc("DELETE /api/v1/rule-content/documents/{path...}", h.handleDelete)
+	mux.HandleFunc("GET /api/v1/rule-content/pack", h.handlePackStatus)
+	mux.HandleFunc("POST /api/v1/rule-content/pack:rollback", h.handlePackRollback)
+}
+
+// handlePackStatus reports which generation of shipped rules this deployment runs and how it differs from this build's.
+//
+// Read authorization, because it changes nothing. It answers a question a deployment could not answer at all before: rule
+// content is seeded once and then installed from each build, and the only signal that it had moved on was the rules themselves.
+func (h *RuleAuthoringHandler) handlePackStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionRuleContentRead, identityapi.Resource{Type: "rule_content"}) {
+		return
+	}
+	st, err := h.packs.Status(ctx)
+	if err != nil {
+		h.internal(ctx, w, "read rule pack status", err)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{
+		"installed": st.Installed,
+		"available": st.Available,
+		"previous":  st.Previous,
+		"declined":  st.Declined,
+		"current":   st.Current(),
+		// Stated rather than left to the reader to infer from `previous`, because "can I undo this" is the question an operator
+		// looking at a bad pack is actually asking.
+		"can_roll_back": st.Previous != "",
+		"added":         st.Added,
+		"removed":       st.Removed,
+		"changed":       st.Changed,
+	})
+}
+
+// handlePackRollback restores the generation of shipped rules the last install replaced.
+func (h *RuleAuthoringHandler) handlePackRollback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionRuleContentWrite, identityapi.Resource{Type: "rule_content"}) {
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if !h.decode(ctx, w, r, &req) {
+		return
+	}
+	actor, ok := h.actor(ctx, w)
+	if !ok {
+		return
+	}
+	rolled, err := h.packs.Rollback(ctx, actor, req.Reason)
+	switch {
+	case errors.Is(err, ruleauthoring.ErrReasonRequired):
+		writeOperatorErr(ctx, h.logger, w, http.StatusBadRequest, errCodeRCInvalidInput, "reason is required")
+		return
+	case errors.Is(err, rulecontentapi.ErrNoPreviousPack):
+		// Not a fault in the deployment and not a 500: a corpus that has never had a newer pack installed has nothing behind
+		// it. The operator asked for something that does not exist yet rather than something that went wrong.
+		writeOperatorErr(ctx, h.logger, w, http.StatusConflict, errCodeRCConflict,
+			"no previous rule pack is retained, so there is nothing to roll back to")
+		return
+	case err != nil:
+		h.internal(ctx, w, "roll back the rule pack", err)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{
+		"restored": rolled.Restored,
+		"version":  rolled.Version,
+		"withheld": rolled.Withheld,
+	})
 }
 
 type documentSummary struct {
