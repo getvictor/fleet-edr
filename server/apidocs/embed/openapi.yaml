@@ -942,6 +942,160 @@ paths:
               schema:
                 $ref: "#/components/schemas/DetectionConfigError"
 
+  /api/v1/rule-content/pack:
+    get:
+      tags: [Rule authoring]
+      summary: Report which generation of shipped rules this deployment runs
+      description: |
+        Returns the identity of the shipped rule content installed, the
+        identity of the content the running build carries, and which rules
+        differ between them.
+
+        Differences are named by rule identity rather than by the path a
+        document is stored under, because identity is what per-rule tuning
+        is keyed on and what an operator recognises. A rule that moved
+        between directories upstream is the same rule, and reporting it as
+        one removed plus one added would be noise dressed as a change.
+
+        Rules you wrote are excluded from the comparison, so adding one
+        does not make a deployment appear out of date.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Pack status
+          content:
+            application/json:
+              schema:
+                type: object
+                # Every field is always emitted, and the difference lists are normalised to arrays rather than null, so a
+                # generated client should model them as guaranteed rather than optional.
+                required:
+                  [
+                    installed,
+                    available,
+                    previous,
+                    declined,
+                    current,
+                    can_roll_back,
+                    added,
+                    removed,
+                    changed,
+                  ]
+                properties:
+                  installed:
+                    type: string
+                    description: Identity of the shipped content stored now. Empty on a corpus that predates this being recorded.
+                  available:
+                    type: string
+                    description: Identity of the shipped content the running build carries.
+                  previous:
+                    type: string
+                    description: Identity of the generation a rollback would restore. Empty when there is none.
+                  declined:
+                    type: string
+                    description: Identity of content rolled back from, which this deployment will not reinstall. Empty when none.
+                  current:
+                    type: boolean
+                    description: Whether the deployment is running the shipped content this build carries.
+                  can_roll_back:
+                    type: boolean
+                    description: >-
+                      Whether a previous generation is retained. Stated rather than left to be derived from `previous`, because
+                      it is the question being asked.
+                  added:
+                    type: array
+                    items: { type: string }
+                    description: Rules the build's content has that the installed content does not.
+                  removed:
+                    type: array
+                    items: { type: string }
+                    description: Rules the installed content has that the build's content does not.
+                  changed:
+                    type: array
+                    items: { type: string }
+                    description: Rules present in both whose content differs.
+        "403":
+          description: The caller may not read rule content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/rule-content/pack:rollback:
+    post:
+      tags: [Rule authoring]
+      summary: Restore the generation of shipped rules the last install replaced
+      description: |
+        Installing the rules a build ships replaces the previous set. This
+        restores that set, for when one of the new rules turns out to be
+        noisy or wrong.
+
+        The rollback holds: this deployment will not reinstall the content
+        you rejected, including on the next restart. Content from a later
+        build installs normally, so there is nothing to turn back on.
+
+        Rules you wrote are untouched, including ones written after the
+        install being rolled back. A shipped rule whose identity you have
+        taken over is not restored over yours, and is reported in
+        `withheld`.
+
+        One previous generation is retained, so a second rollback reports
+        that there is nothing further back rather than appearing to work.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: >-
+                    Why the content is being rolled back. Required, and recorded in the audit log: this replaces every shipped
+                    rule at once.
+      responses:
+        "200":
+          description: Rolled back
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restored, version, withheld]
+                properties:
+                  restored:
+                    type: string
+                    description: Identity of the generation now installed.
+                  version:
+                    type: integer
+                    format: int64
+                    description: Corpus version after the rollback, which replicas poll to notice the change.
+                  withheld:
+                    type: array
+                    items: { type: string }
+                    description: Shipped rules not restored because you have taken over that rule.
+        "400":
+          description: >-
+            The request was rejected: no reason was given, or the body was not readable JSON.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: The caller may not change rule content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: No previous generation is retained, so there is nothing to roll back to
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/v1/rule-content/documents:
     get:
       tags: [Rule authoring]
