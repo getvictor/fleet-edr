@@ -70,7 +70,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `spectrace: openspec spec-to-test traceability linter
 
 Usage:
-  spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]
+  spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code]
+                     [--marker-line-length] [--gate-inflight] [--base-ref REF]
   spectrace list-ids [--specs-dir DIR] [--normative-only]
   spectrace report   [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
@@ -78,9 +79,12 @@ Subcommands:
   check     Walk specs and codebase; report uncovered scenarios and invalid references.
             Exit code 0 unless --strict is set or invalid references are present.
             --changes-dir  openspec/changes tree; scenarios in in-flight proposals are valid
-                           marker targets (not yet gated for coverage). Default openspec/changes.
+                           marker targets. Default openspec/changes.
             --by-layer  Annotate the gap report with per-layer coverage (L0..L6).
             --new-code  Gate only on scenarios added or modified in the current PR (diff against --base-ref).
+            --marker-line-length  Fail a marker this branch added whose source line exceeds the limit.
+            --gate-inflight  Require a marker for scenarios this branch adds to an in-flight change delta.
+                           Both of these need a merge base; a git failure while either is set is fatal.
             --base-ref  Git revision the merge base is computed against (default: origin/main).
   list-ids  Print canonical scenario IDs, one per line.
   report    Render the Markdown coverage matrix (one row per scenario, one column per layer).
@@ -116,6 +120,8 @@ func runCheck(args []string) int {
 	byLayer := fs.Bool("by-layer", false, "annotate the gap report with per-layer coverage (L0..L6)")
 	newCode := fs.Bool("new-code", false, "gate only on scenarios added or modified in the current branch")
 	baseRef := fs.String("base-ref", defaultBaseRef, "git revision the merge base is computed against (for --new-code)")
+	gateInFlight := fs.Bool("gate-inflight", false,
+		"require a marker for scenarios this branch adds to an in-flight change delta (needs a merge base)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -226,7 +232,27 @@ func runCheck(args []string) int {
 		overlong = OverlongMarkers(markers, touchedLines)
 	}
 
+	// The in-flight gate, which closes the other half of referenceValid (issue #841). A delta-declared ID is a valid marker
+	// target so a test can point at a scenario before it is canonical; without this, a delta-declared scenario with NO marker
+	// was indistinguishable from one that never needed one, and nothing failed until the release archive made it canonical.
+	//
+	// Scoped and opt-in for exactly the reasons the line-length gate is, and the scoping matters more here: in-flight holds every
+	// change merged since the last release, so gating all of it would fail every pull request on scenarios somebody else wrote.
+	// A git failure is fatal when the flag is set, because a gate that silently does not run is the outcome being prevented.
+	var ungatedInFlight []Scenario
+	if *gateInFlight {
+		ungatedInFlight, err = UngatedInFlight(context.Background(), *changesDir, *baseRef, canonicalIDs(scenarios), covered)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "spectrace: cannot scope the in-flight scenario gate: %v\n", err)
+			fmt.Fprintf(os.Stderr, "spectrace: pass --base-ref for a ref this checkout has, or fetch history for a merge base\n")
+			return 2
+		}
+	}
+
 	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid, overlong, *markerLineLength)
+	if len(ungatedInFlight) > 0 {
+		printUngatedInFlight(ungatedInFlight)
+	}
 	if *byLayer {
 		printByLayer(scenarios, covered)
 	}
@@ -237,6 +263,8 @@ func runCheck(args []string) int {
 	case len(invalid) > 0:
 		return 1
 	case len(overlong) > 0:
+		return 1
+	case len(ungatedInFlight) > 0:
 		return 1
 	case *strict && len(gatedNormative) > 0:
 		return 1
