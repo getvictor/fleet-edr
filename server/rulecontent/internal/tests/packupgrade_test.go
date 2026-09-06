@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"context"
 	"log/slog"
 	"path"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
+	rulecontentmysql "github.com/fleetdm/edr/server/rulecontent/internal/mysql"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -333,4 +335,130 @@ func TestUpgradePack_CollisionIsCaseInsensitive(t *testing.T) {
 		"a case-variant of an identity the operator owns must not be installed either")
 	assert.Contains(t, got, "authored/Foo.yml")
 	assert.Contains(t, installed.Skipped, "imported/foo.yml")
+}
+
+// TestUpgradePackFrom_BootstrapDecisions covers the surface cmd/main actually calls, which the store-level tests above reach past.
+//
+// Worth separating because the bootstrap makes decisions of its own rather than forwarding: whether a walk that finds nothing is
+// an error, what an unusable pack does, and whether a no-op upgrade is reported as one. A deployment restarting normally takes the
+// last of those on every boot, so it is the most-travelled path here and was the least tested.
+func TestUpgradePackFrom_BootstrapDecisions(t *testing.T) {
+	t.Parallel()
+
+	newRC := func(t *testing.T) (*rulecontentbootstrap.RuleContent, func(ctx context.Context) ([]api.Document, error)) {
+		t.Helper()
+		db := full.Open(t)
+		rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: slog.New(slog.DiscardHandler)})
+		require.NoError(t, err)
+		return rc, rc.Corpus().Documents
+	}
+
+	t.Run("installing the pack a corpus already holds reports no change", func(t *testing.T) {
+		t.Parallel()
+		rc, _ := newRC(t)
+		ctx := t.Context()
+		pack := fstest.MapFS{"imported/a.yml": &fstest.MapFile{Data: []byte("a")}}
+
+		first, err := rc.UpgradePackFrom(ctx, pack, ".", nil, stemIdentity)
+		require.NoError(t, err)
+		require.True(t, first, "the first install writes")
+
+		again, err := rc.UpgradePackFrom(ctx, pack, ".", nil, stemIdentity)
+		require.NoError(t, err)
+		assert.False(t, again, "an ordinary restart must report no change rather than reinstalling")
+	})
+
+	t.Run("a root that does not exist is an error, not an empty pack", func(t *testing.T) {
+		t.Parallel()
+		rc, _ := newRC(t)
+		_, err := rc.UpgradePackFrom(t.Context(), fstest.MapFS{}, "no-such-root", nil, stemIdentity)
+		require.Error(t, err, "a walk that cannot run is a broken build, and must not read as a build shipping no rules")
+	})
+
+	t.Run("a pack claiming authored content is refused, and the corpus is untouched", func(t *testing.T) {
+		t.Parallel()
+		rc, documents := newRC(t)
+		ctx := t.Context()
+		_, err := rc.Replace(ctx, []api.Document{shippedDoc("imported/a.yml", "a")})
+		require.NoError(t, err)
+
+		// Replace stores documents verbatim, so a pack read from disk cannot declare a source. This drives the store directly
+		// with one that does, which is the input the bootstrap has to surface rather than swallow.
+		_, err = rc.UpgradePackFrom(ctx, fstest.MapFS{
+			"imported/b.yml": &fstest.MapFile{Data: []byte("b")},
+		}, ".", func(string) bool { return false }, stemIdentity)
+		require.NoError(t, err, "a pack filtered down to nothing is an empty build, which is not an error")
+
+		docs, err := documents(ctx)
+		require.NoError(t, err)
+		assert.Len(t, docs, 1, "an empty pack must leave the stored one alone")
+	})
+
+	t.Run("rules kept over the pack are reported", func(t *testing.T) {
+		t.Parallel()
+		rc, _ := newRC(t)
+		ctx := t.Context()
+		// An operator's rule alongside shipped content, then a pack shipping the same identity elsewhere.
+		_, err := rc.Replace(ctx, []api.Document{
+			shippedDoc("imported/other.yml", "other"),
+			{Path: "authored/foo.yml", Content: []byte("mine"), Source: api.SourceAuthored},
+		})
+		require.NoError(t, err)
+
+		changed, err := rc.UpgradePackFrom(ctx, fstest.MapFS{
+			"imported/other.yml": &fstest.MapFile{Data: []byte("other")},
+			"imported/foo.yml":   &fstest.MapFile{Data: []byte("shipped foo")},
+		}, ".", nil, stemIdentity)
+		require.NoError(t, err)
+		assert.False(t, changed, "withholding the only new rule leaves the shipped set as it was")
+
+		docs, err := rc.Corpus().Documents(ctx)
+		require.NoError(t, err)
+		paths := pathsOf(t, docs)
+		assert.NotContains(t, paths, "imported/foo.yml")
+		assert.Contains(t, paths, "authored/foo.yml")
+	})
+}
+
+// TestUpgradeVendoredTo_RefusesAnUnreadableStoredSource covers the read this path shares with every other reader: a row written by
+// a version that knew more must stop the upgrade rather than be interpreted as one of today's two values.
+func TestUpgradeVendoredTo_RefusesAnUnreadableStoredSource(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	s := rulecontentmysql.New(db)
+	ctx := t.Context()
+
+	_, err := s.Replace(ctx, []api.Document{shippedDoc("imported/a.yml", "a")})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE rule_corpus_documents SET source = ? WHERE path = ?", "community", "imported/a.yml")
+	require.NoError(t, err)
+
+	_, err = s.UpgradeVendoredTo(ctx, []api.Document{shippedDoc("imported/a.yml", "a")}, stemIdentity)
+	require.ErrorIs(t, err, api.ErrUnknownSource)
+}
+
+// TestUpgradePackFrom_SurfacesAStoreRefusal pins that the bootstrap reports a refusal from the store rather than absorbing it.
+//
+// It matters because the caller treats a returned error as "keep the pack you have and carry on detecting", which is the right
+// outcome, whereas a swallowed one would report a successful install of a pack that was never written. The startup log would then
+// say the deployment is current when it is not.
+func TestUpgradePackFrom_SurfacesAStoreRefusal(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: slog.New(slog.DiscardHandler)})
+	require.NoError(t, err)
+	ctx := t.Context()
+
+	_, err = rc.Replace(ctx, []api.Document{shippedDoc("imported/a.yml", "a")})
+	require.NoError(t, err)
+
+	// A row written by a version that knew a provenance this one does not. Every reader refuses it, the upgrade included.
+	_, err = db.ExecContext(ctx, "UPDATE rule_corpus_documents SET source = ? WHERE path = ?", "community", "imported/a.yml")
+	require.NoError(t, err)
+
+	changed, err := rc.UpgradePackFrom(ctx, fstest.MapFS{
+		"imported/b.yml": &fstest.MapFile{Data: []byte("b")},
+	}, ".", nil, stemIdentity)
+	require.ErrorIs(t, err, api.ErrUnknownSource)
+	assert.False(t, changed, "a refused upgrade must not report itself as installed")
 }
