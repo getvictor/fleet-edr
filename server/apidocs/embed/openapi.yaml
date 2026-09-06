@@ -655,21 +655,35 @@ paths:
       tags: [Admin]
       summary: Export a detection rule as a declarative rule file
       description: |
-        Returns one registered detection rendered as a declarative rule file:
-        standard Sigma metadata plus a namespaced `x-engine` key carrying our
-        rule id, kind, portability, event types, the evaluator that decides
-        the rule, the exclusion dimensions it honours, and its known
-        limitations.
+        Returns the rule file for one registered detection, taken from the
+        rule set the deployment currently has in force rather than from the
+        content built into the release.
 
-        The response body IS the artifact rather than a description of one, so
-        it is served as YAML. It is the same document as the corresponding
-        file in the rule pack at `server/rules/internal/catalog/pack/`,
-        without that file's generated-file header.
+        A rule that was LOADED FROM A DOCUMENT is returned as that document,
+        byte for byte. For a rule that shipped with the product that is the
+        upstream file, which is what you diff against the upstream project;
+        for one you wrote yourself it is what you wrote. A rule written in
+        code was never a document, so one is rendered for it: standard Sigma
+        metadata plus a namespaced `x-engine` key carrying our rule id, kind,
+        portability, event types, the evaluator that decides the rule, the
+        exclusion dimensions it honours, and its known limitations. A rendered
+        rule is the same document as the corresponding file in the rule pack
+        at `server/rules/internal/catalog/pack/`, without that file's
+        generated-file header.
+
+        Exporting a rule YOU wrote additionally requires `rule_content.read`,
+        which is the authorization that reading rule content requires
+        elsewhere; without it the request returns 403. Exporting a rule that
+        shipped with the product does not, since it is the product's own
+        content and is already described on `GET /api/rules`.
 
         Only detections are exportable. A registered rule that is not a
         detection (a projection of a decision the agent already made, or a
         health signal about the agent itself) returns 404, the same answer as
         a rule id that names nothing.
+
+        The response is `no-store`: it answers what is running, and that
+        answer changes when rule content is reloaded.
       security:
         - SessionCookie: []
       parameters:
@@ -688,6 +702,10 @@ paths:
                 type: string
         "401":
           description: No authenticated session
+        "403":
+          description: >-
+            The rule was written on this deployment and the caller does not
+            hold `rule_content.read`
         "404":
           description: No such detection, or the rule is not a detection
         "500":
