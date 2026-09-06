@@ -88,7 +88,7 @@ func (r *QueuePruneRunner) Run(ctx context.Context) (int64, error) {
 		return pruned, err
 	}
 	// Swept after the acked rows and reported separately, because the two mean different things: acked rows draining is routine,
-	// and set-aside rows draining means the window to inspect a host's gap has closed.
+	// and set-aside rows draining means the window to inspect what a host stopped processing has closed.
 	if setAside, sErr := r.eventLog.PruneSetAside(ctx, r.retentionDays, r.batchSize); sErr != nil {
 		r.logger.WarnContext(ctx, "prune set-aside events from the queue", "err", sErr)
 	} else if setAside > 0 {

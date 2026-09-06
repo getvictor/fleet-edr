@@ -166,9 +166,10 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	//
 	// What IS given up depends on the stage the batch was withdrawn at, and stating it unconditionally is the defect #845 fixed.
 	// One withdrawn at detection was folded into the graph first, so its graph contribution stands and what is lost is the rest of
-	// detection. One withdrawn while the graph was being built lost its evaluation, and MAY have lost its graph contribution: the
-	// retry bounds accrue on the queue entry across attempts whichever stage failed, so an earlier attempt may already have folded
-	// the batch. Neither loss is stated more precisely than that, because neither can be.
+	// detection. For one withdrawn while the graph was being built, BOTH losses are possibilities rather than certainties: the
+	// retry bounds accrue on the queue entry across attempts whichever stage failed, so an earlier attempt may have folded the
+	// batch and may even have reached detection before a later fold failed. Neither is stated more precisely, because neither can
+	// be, and the log's consequence attribute is worded to the same limit.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
 		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). What the host in "+

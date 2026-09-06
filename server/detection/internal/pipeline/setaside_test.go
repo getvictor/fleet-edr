@@ -136,7 +136,7 @@ func TestSetAsideConsequenceMatchesTheStage(t *testing.T) {
 		return setAsideRecord(t, h)
 	}
 
-	t.Run("a batch withdrawn while the graph was being built reports the graph gap", func(t *testing.T) {
+	t.Run("a batch withdrawn while the graph was being built reports a possible graph gap", func(t *testing.T) {
 		t.Parallel()
 		_, stage, consequence := withdrawnBy(t, errors.New("graph store unavailable"), nil)
 

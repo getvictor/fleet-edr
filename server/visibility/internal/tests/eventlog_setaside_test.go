@@ -220,7 +220,7 @@ func TestSetAside_RetainsTheEntry(t *testing.T) {
 	// The seam, asserted as behaviour rather than as a column value. Nack stamping the withdrawal and PruneSetAside ageing on that
 	// stamp were tested apart, and nothing joined them: the sweep test plants rows with an explicit stamp, so dropping the stamp
 	// from Nack left set_aside_at_ns at 0, read as withdrawn at the epoch, and swept every set-aside entry on the first pass. That
-	// deletes the record of every host's gap immediately, and it passed the whole file.
+	// deletes the record of what every host stopped processing immediately, and it passed the whole file.
 	kept, err := log.PruneSetAside(t.Context(), 30, 100)
 	require.NoError(t, err)
 	assert.Zero(t, kept, "an entry withdrawn moments ago is inside any sane retention window")
@@ -236,8 +236,8 @@ func TestSetAside_RetainsTheEntry(t *testing.T) {
 // TestPruneSetAside covers the retention sweep from both sides, and the disabled case.
 //
 // Both sides, because a sweep that deleted everything would pass a test that only checked the old entry was gone, and would erase
-// the window an operator has to look at a host's gap. The disabled case, because reading a zero retention as "keep nothing older
-// than now" would delete every set-aside entry on the first sweep of a deployment that asked to keep them.
+// the window an operator has to look at what a host stopped processing. The disabled case, because reading a zero retention as
+// "keep nothing older than now" would delete every set-aside entry on the first sweep of a deployment that asked to keep them.
 //
 // It also pins WHICH clock the sweep reads, because the obvious wrong one passes every other assertion here.
 func TestPruneSetAside(t *testing.T) {
