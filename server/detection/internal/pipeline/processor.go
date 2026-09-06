@@ -355,7 +355,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportSetAside(lockedCtx, host, setAside, "builder")
+			p.reportSetAside(lockedCtx, host, setAside, stageBuilder)
 		}
 		return nil
 	}
@@ -416,7 +416,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportSetAside(ctx, hostOf(events), setAside, "detection")
+			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
 			return 0
 		}
 	}
@@ -521,15 +521,43 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 // which is not a condition to notice in aggregate later.
 //
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
-func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string) {
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage setAsideStage) {
 	if setAside <= 0 {
 		return
 	}
-	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
-		"host_id", hostID, "events", setAside, "stage", stage)
+	// The message is fixed and the consequence rides on an attribute, so the line stays greppable while saying something true
+	// of the stage it came from. It previously claimed a process-graph gap for both, which is false for the detection stage:
+	// processHost completes the builder before evaluating, so a batch withdrawn there IS in the graph, and the claim sent an
+	// operator to inspect a process tree that was intact.
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure",
+		"host_id", hostID, "events", setAside, "stage", string(stage), "consequence", stage.consequence())
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}
+}
+
+// setAsideStage is the pipeline stage a withdrawal happened at.
+//
+// A named type rather than a bare string at the call sites, because the stage now selects the consequence reported to an
+// operator: a typo would not fail to compile, it would quietly report the wrong one, which is the failure this change fixes
+// arriving by a different route.
+type setAsideStage string
+
+const (
+	// stageBuilder is the process-graph materialisation. A batch withdrawn here never reached the graph.
+	stageBuilder setAsideStage = "builder"
+	// stageDetection is rule evaluation, which runs on an already-materialised batch.
+	stageDetection setAsideStage = "detection"
+)
+
+// consequence is what an operator loses when a batch is withdrawn at this stage, phrased as what to check.
+func (s setAsideStage) consequence() string {
+	if s == stageBuilder {
+		return "this host has a gap in its process graph"
+	}
+	// Deliberately "did not complete" rather than "were never evaluated". Evaluation ran; it failed partway, and a batch can be
+	// partially evaluated before the failure, so claiming no evaluation happened would be its own false statement.
+	return "rule evaluation did not complete for these events"
 }
 
 // hostOf returns the host a claimed batch belongs to. The processor claims per host, so every event in the batch carries the same

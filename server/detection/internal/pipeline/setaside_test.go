@@ -37,7 +37,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-wedged", 7, "detection")
+		p.reportSetAside(t.Context(), "host-wedged", 7, stageDetection)
 
 		require.Len(t, rec.setAside, 1, "the counter is what an operator alerts on")
 		assert.Equal(t, "host-wedged", rec.setAside[0].hostID,
@@ -48,14 +48,14 @@ func TestReportSetAside(t *testing.T) {
 		assert.Contains(t, out, "host-wedged", "the log has to name the host, or the counter says only that it happened somewhere")
 		assert.Contains(t, out, "detection", "and the stage that failed, so there is somewhere to look")
 		assert.Contains(t, out, "level=ERROR",
-			"a gap in a host's process graph is not a condition to notice in aggregate later")
+			"losing events from a host's processing is not a condition to notice in aggregate later")
 	})
 
 	t.Run("stays silent when nothing was set aside", func(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-fine", 0, "builder")
+		p.reportSetAside(t.Context(), "host-fine", 0, stageBuilder)
 
 		assert.Empty(t, rec.setAside, "an ordinary retryable nack must not touch the counter")
 		assert.Empty(t, logged.String(),
@@ -69,7 +69,7 @@ func TestReportSetAside(t *testing.T) {
 
 		// The recorder is installed after construction (the two-phase setup cmd/main uses), so a nil one is a real state and not
 		// a defensive hypothetical.
-		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, "detection") })
+		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, stageDetection) })
 		assert.Contains(t, logged.String(), "host-x", "the log still fires, since it is the half that needs no wiring")
 	})
 }
@@ -103,4 +103,56 @@ func TestQueuePruneRunner_PassesRetentionToTheSetAsideSweep(t *testing.T) {
 
 	assert.Equal(t, []int{30}, log.setAsidePruned,
 		"the sweep must hand the store the deployment's window; a zero here keeps set-aside rows for the life of the deployment")
+}
+
+// spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/the-record-states-the-consequence-for-its-stage
+//
+// TestReportSetAside_ConsequenceMatchesTheStage is what the record is FOR: it tells an operator what to go and look at.
+//
+// Both stages reported a gap in the process graph, and for the detection stage that is false. processHost completes the builder
+// before evaluating, and evaluateAndAck runs on an already-materialised batch, so a batch withdrawn there IS in the graph: the
+// claim sent an operator to inspect a process tree that was intact, which is worse than saying nothing.
+//
+// The detection wording is asserted as "did not complete" rather than "never evaluated", because evaluation ran. It failed
+// partway, and a batch can be partly evaluated before the failure, so the tempting alternative is its own false statement.
+func TestReportSetAside_ConsequenceMatchesTheStage(t *testing.T) {
+	t.Parallel()
+
+	report := func(t *testing.T, stage setAsideStage) string {
+		t.Helper()
+		var logged bytes.Buffer
+		p := &Processor{
+			logger:  slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError})),
+			metrics: &capturingRecorder{},
+		}
+		p.reportSetAside(t.Context(), "host-1", 4, stage)
+		return logged.String()
+	}
+
+	t.Run("the builder stage reports a graph gap", func(t *testing.T) {
+		t.Parallel()
+		out := report(t, stageBuilder)
+		assert.Contains(t, out, "gap in its process graph", "these events never reached the graph")
+		assert.Contains(t, out, "stage=builder")
+	})
+
+	t.Run("the detection stage does not claim a graph gap", func(t *testing.T) {
+		t.Parallel()
+		out := report(t, stageDetection)
+		assert.NotContains(t, out, "gap in its process graph",
+			"the batch was materialised before evaluation, so its process tree is intact")
+		assert.Contains(t, out, "rule evaluation did not complete",
+			"what was actually lost is the rest of the evaluation")
+		assert.NotContains(t, out, "never evaluated",
+			"evaluation ran and failed partway, so claiming none happened would be a second false statement")
+		assert.Contains(t, out, "stage=detection")
+	})
+
+	t.Run("the message stays fixed so the line remains greppable", func(t *testing.T) {
+		t.Parallel()
+		for _, stage := range []setAsideStage{stageBuilder, stageDetection} {
+			assert.Contains(t, report(t, stage), "queued events set aside after repeated failure",
+				"the consequence rides on an attribute precisely so the message can stay constant")
+		}
+	})
 }

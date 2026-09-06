@@ -166,8 +166,10 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
-		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). The host in `host_id` "+
-			"has a gap in its process graph. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
+		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). What the host in "+
+			"`host_id` lost depends on the stage, which the accompanying log line names: a batch withdrawn while the process graph was "+
+			"being built leaves a gap in that graph, while one withdrawn during rule evaluation is already in the graph and instead did "+
+			"not finish being evaluated. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
 			"condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
 	)
