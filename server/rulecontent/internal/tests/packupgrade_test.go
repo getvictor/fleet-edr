@@ -17,9 +17,15 @@ import (
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
-// stemIdentity is the identity the loader gives a document: its file stem. The tests supply it rather than passing nil, because
-// nil means "identity is the path", which is precisely the weaker rule the collision below is about.
-func stemIdentity(p string) string { return strings.TrimSuffix(path.Base(p), path.Ext(p)) }
+// stemIdentity is the key the loader compares documents by: the file stem, FOLDED.
+//
+// The tests supply it rather than passing nil, because nil means "identity is the path", which is precisely the weaker rule the
+// collisions below are about. It folds for the same reason the loader does: the columns a rule id reaches collate
+// case-insensitively, so `Foo` and `foo` are one rule, and a filter that compared them exactly would let a pack install the
+// second alongside an operator's first.
+func stemIdentity(p string) string {
+	return strings.ToLower(strings.TrimSuffix(path.Base(p), path.Ext(p)))
+}
 
 // shippedDoc is one document as a pack ships it.
 func shippedDoc(path, content string) api.Document {
@@ -295,4 +301,36 @@ func TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity(t *testing.T) {
 
 	assert.Contains(t, installed.Skipped, "imported/foo.yml",
 		"the operator is entitled to know the deployment is not running a rule the pack ships")
+}
+
+// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
+//
+// TestUpgradePack_CollisionIsCaseInsensitive is the same defect one level down, and review found it after the exact-case one was
+// fixed. Rule ids are compared case-insensitively where they are STORED, because the columns they reach collate that way and
+// carry unique keys over it, so `Foo` and `foo` are one row of per-rule settings and one alert dedup key. A filter comparing
+// stems exactly therefore lets a shipped `foo.yml` install alongside an operator's `Foo.yml`, and the corpus fails to load for
+// the same reason and with the same blast radius: every rule the operator wrote stops running.
+func TestUpgradePack_CollisionIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	version, err := s.Replace(ctx, []api.Document{shippedDoc("imported/other.yml", "other")})
+	require.NoError(t, err)
+	_, err = s.PutDocument(ctx, api.Document{Path: "authored/Foo.yml", Content: []byte("mine")}, version)
+	require.NoError(t, err)
+
+	installed, err := s.UpgradeVendoredTo(ctx, []api.Document{
+		shippedDoc("imported/other.yml", "other"),
+		shippedDoc("imported/foo.yml", "shipped foo"),
+	}, stemIdentity)
+	require.NoError(t, err)
+
+	stored, err := s.Documents(ctx)
+	require.NoError(t, err)
+	got := pathsOf(t, stored)
+	assert.NotContains(t, got, "imported/foo.yml",
+		"a case-variant of an identity the operator owns must not be installed either")
+	assert.Contains(t, got, "authored/Foo.yml")
+	assert.Contains(t, installed.Skipped, "imported/foo.yml")
 }

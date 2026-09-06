@@ -10,7 +10,7 @@ Seeding SHALL remain guarded on an empty corpus, and this SHALL be a separate op
 
 Installing SHALL replace only the shipped content. Content an operator wrote SHALL survive, including content written at a path the pack also ships, because taking that path back would discard the rule they wrote and credit its replacement to a project that did not write it.
 
-Installing SHALL NOT store shipped content whose RULE an operator already owns, whatever path either is stored under. A rule is identified by its file stem rather than its path, so two documents resolving to one identity are the same rule stored twice, and a corpus holding both does not load at all: every rule on the deployment stops, not only the pair. Shipped content withheld for this reason SHALL be reported.
+Installing SHALL NOT store shipped content whose RULE an operator already owns, whatever path either is stored under and whatever case either is written in. A rule is identified by its file stem rather than its path, so two documents resolving to one identity are the same rule stored twice, and a corpus holding both does not load at all: every rule on the deployment stops, not only the pair. Shipped content withheld for this reason SHALL be reported.
 
 An operator's per-rule tuning SHALL survive installing a pack.
 
@@ -43,6 +43,12 @@ A build carrying no shipped rule content SHALL leave the stored content alone ra
 - **GIVEN** an operator's own rule, and a build shipping a rule of the same identity stored under a different path
 - **WHEN** the build is started
 - **THEN** the shipped rule is not stored, the operator's rule is unchanged, no two stored documents share an identity, and the shipped rule that was withheld is reported
+
+#### Scenario: A pack rule differing only in case is not installed
+
+- **GIVEN** an operator's own rule, and a build shipping a rule whose identity differs from it only in letter case
+- **WHEN** the build is started
+- **THEN** the shipped rule is not stored, because rule identities are compared the way the records keyed by them are compared, which is without regard to case
 
 #### Scenario: An operator's tuning survives
 

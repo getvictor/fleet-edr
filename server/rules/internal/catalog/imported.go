@@ -186,7 +186,7 @@ func checkDuplicateStems(names []string) error {
 		// apart: tuning one would tune the other, and their alerts would deduplicate into a single row. The corpus path column is
 		// deliberately BINARY (see the rulecontent migration), so storage will happily hold both files, which is what makes this
 		// reachable rather than theoretical once operators author content.
-		folded := strings.ToLower(id)
+		folded := RuleIDKey(name)
 		if prev, dup := seen[folded]; dup {
 			if prev.id == id {
 				return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
@@ -599,6 +599,17 @@ func ImportedCorpusFS() fs.FS { return importedCorpus }
 func RuleIDForPath(p string) string {
 	return strings.TrimSuffix(path.Base(p), path.Ext(p))
 }
+
+// RuleIDKey is the key two rules are compared BY, as opposed to the id they are called by.
+//
+// Folded, because the columns a rule id reaches (detection_rule_settings.rule_id, alerts.rule_id) collate case-insensitively and
+// carry unique keys over it: "Foo" and "foo" are one row of per-rule settings and one alert dedup key, so the corpus must not hold
+// both. checkDuplicateStems has always folded for that reason; this exports the same fold so a caller outside the loader can ask
+// whether two documents collide without deciding for itself what colliding means.
+//
+// ToLower is exact rather than approximate here only because the identifier charset is checked first, so an id reaching this is
+// ASCII. That precondition belongs to loadImported's ordering and is documented at checkStemIdentifiers.
+func RuleIDKey(p string) string { return strings.ToLower(RuleIDForPath(p)) }
 
 // IsCorpusFile reports whether a path is rule content, as opposed to the packaging that ships alongside it.
 //
