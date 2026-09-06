@@ -123,7 +123,13 @@ func (s *Service) metadataOf(r api.Rule) api.RuleMetadata {
 
 // Exportable returns the rule registered under id together with its metadata, and whether id names a rule the catalog describes.
 //
-// Both come from ONE snapshot of the active set, which is the whole reason this exists rather than a caller pairing List with
+// The generation is this service's, which is the CATALOG's and not necessarily the engine's. installRuleSet swaps this set first
+// and rebuilds the engine's derived indices after, and in-flight evaluations finish on the generation they started with, so for
+// the moment an install takes, the catalog lists a set the engine is not yet evaluating. That window is documented there and is
+// not closed here: a caller reading a rule alongside GET /api/rules should get the answer that surface gives, and closing it would
+// mean a lock spanning the per-batch evaluation path.
+//
+// Both returns come from ONE snapshot of that set, which is the whole reason this exists rather than a caller pairing List with
 // ActiveRules. Those are two reads of an atomically swapped pointer, so a reload landing between them hands the caller metadata
 // from a generation the deployment is no longer running while the rule it describes is already gone. For the export that is not a
 // theoretical inconsistency: the caller would render the stale metadata, which for an imported rule fails and turns the export

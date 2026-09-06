@@ -166,8 +166,9 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// The rule and its metadata come from one snapshot, so the document served and the metadata describing it cannot be from
-	// different generations of the rule set (see Service.Exportable).
+	// The rule and its metadata come from one snapshot of the rule set in force, so the document served and the metadata
+	// describing it cannot be from different generations (see Service.Exportable, which also scopes what "in force" means during
+	// a content reload).
 	rm, rule, ok := h.svc.Exportable(id)
 	if !ok {
 		writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})

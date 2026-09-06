@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -347,4 +348,57 @@ func TestExportable_ResolvesTheRuleAndItsMetadataTogether(t *testing.T) {
 			assert.Nil(t, rule, "rule %q", id)
 		}
 	})
+}
+
+// titledRule distinguishes two generations of the same rule id, so a reader can be asked which one it is holding.
+type titledRule struct {
+	stubRule
+	title string
+}
+
+func (r titledRule) DisplayName() string    { return r.title }
+func (r titledRule) Doc() api.Documentation { return api.Documentation{Title: r.title} }
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestExportable_PairsComeFromOneGeneration is the concurrency half, and it exists because the test above cannot fail without it.
+//
+// With a single generation installed, a metadata read and a rule read agree however they were obtained, so an Exportable that
+// regressed to two separate reads would pass. The property is about what happens WHILE the set is being replaced, so the test has
+// to replace it.
+//
+// Two generations carry the same rule id and different titles, which is the shape a rule content reload produces when an operator
+// edits a rule. Every pair Exportable returns must be internally consistent: metadata describing generation A alongside the rule
+// from generation B is precisely the mismatch a caller pairing List with ActiveRules would eventually serve.
+func TestExportable_PairsComeFromOneGeneration(t *testing.T) {
+	t.Parallel()
+
+	const id = "detection_first"
+	generations := [][]api.Rule{
+		{titledRule{stubRule{id: id}, "generation one"}},
+		{titledRule{stubRule{id: id}, "generation two"}},
+	}
+	svc := New(generations[0], nil, nil)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Go(func() {
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			svc.Swap(generations[i%2], int64(i))
+		}
+	})
+
+	for range 5000 {
+		md, rule, ok := svc.Exportable(id)
+		require.True(t, ok)
+		require.Equal(t, rule.DisplayName(), md.Doc.Title,
+			"the metadata and the rule must describe one generation, and a reload must not be able to split them")
+	}
+	close(stop)
+	wg.Wait()
 }

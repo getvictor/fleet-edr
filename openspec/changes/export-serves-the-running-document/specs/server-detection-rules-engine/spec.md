@@ -4,7 +4,9 @@
 
 ### Requirement: The export serves the document a rule was loaded from
 
-When a registered rule was loaded from a rule document, the system SHALL export that document verbatim, and SHALL resolve it from the rule the deployment is RUNNING rather than by matching the rule's identifier against content embedded in the build.
+When a registered rule was loaded from a rule document, the system SHALL export that document verbatim, and SHALL resolve it from the rule set the deployment currently has in force rather than by matching the rule's identifier against content embedded in the build.
+
+The set in force means the one the rule catalog reports, which during a content reload is briefly ahead of the one detection is evaluating: installing a new set replaces the catalog's copy before rebuilding what evaluation derives from it, and evaluations already running finish on the generation they started with. The export SHALL follow the catalog, so that a rule read alongside the catalog agrees with it, and that bounded divergence is accepted rather than closed, since closing it would require serialising the per-batch evaluation path against a write that happens only when content changes.
 
 The distinction is not academic. A rule's identity is its file stem rather than its path, so an operator who stores their own version of a shipped detection keeps that detection's identifier and the rule that evaluates is theirs. An identifier resolved against the build's own copy still finds the shipped document under that stem, so the export returns content the deployment is not running and the operator did not write. The export exists to answer "what is running here", and it is reached for precisely when someone doubts the answer, so returning a plausible wrong document is worse than returning nothing.
 
