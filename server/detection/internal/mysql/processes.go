@@ -433,8 +433,17 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 //
 // So the ordering resolves the generation first (fork_time_ns DESC), then the image within it: rows whose exec landed at or before the
 // instant sort first, and among those the latest exec wins, being the image actually in force. When no image in the chain had been
-// applied yet, the child's stamp fell inside its parent's own fork-to-exec window, and the trailing exec_time_ns ASC key takes the
-// chain's EARLIEST image instead of dropping the generation and attributing the child to an older one. That window is reachable
+// applied yet, the child's stamp fell inside its parent's own fork-to-exec window, and the next key takes the chain's EARLIEST image
+// instead of dropping the generation and attributing the child to an older one.
+//
+// That key is SCOPED to the not-yet-applied rows, and the scoping is the fix for #861. It was a bare `exec_time_ns ASC`, which is
+// inert for the group it was written for (every row there has an exec, and it is in the future) but not for the applied group,
+// where MySQL sorts NULL first and it therefore preferred a row that never exec'd over one whose exec landed at the same instant as
+// the other's fork. That is the pre-exec image reported for an instant at which the process had executed. It also put this SQL out
+// of step with the batch overlay, which has no counterpart to the clause and falls through to pidversion in that tie: the answer
+// then depended on whether the row happened to be preloaded into the batch, which is the shape of bug that reproduces only at a
+// batch boundary. Written as a CASE, the key is NULL for every applied row, so the applied group ties here and falls through to
+// pidversion exactly as the overlay does. That window is reachable
 // because fork and exec are stamped independently at handler time, so their errors are independent and a child's fork can carry a
 // stamp below its parent's exec even when it truly followed it (562 rows on the same data). The pre-exec image itself is
 // unrecoverable, since the first exec after a fork updates that row in place, so the chain's first image is the closest evidence that
@@ -485,12 +494,12 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTim
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
 		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
-		         exec_time_ns ASC,
+		         CASE WHEN exec_time_ns > ? THEN exec_time_ns END ASC,
 		         pidversion IS NOT NULL DESC,
 		         pidversion DESC,
 		         id DESC
 		LIMIT 1`,
-		hostID, pid, atTimeNs, atTimeNs, atTimeNs,
+		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -606,10 +615,9 @@ func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int,
 // the parent was running, so that one sorts first. Issues #723 and #724 paid for that reasoning; reusing it is cheaper and more
 // correct than repeating it.
 //
-// Reusing it inherits one open question, filed as #861 rather than answered here: the final `exec_time_ns ASC` sorts a NULL exec
-// ahead of a non-NULL one at the same image start, and the batch overlay's ranking has no counterpart to that clause, so the two
-// could disagree in that tie. It is pre-existing in the two functions above, and changing it under this PR would change their
-// shipped behaviour on a case whose reachability is itself in doubt.
+// The open question that reuse inherited is answered: see GetParentPath's ordering comment. The earliest-image key is scoped to the
+// rows it was written for, so a row that never exec'd no longer outranks one whose exec landed at the same image start, and this
+// SQL and the batch overlay now break that tie the same way (#861).
 //
 // This is the lookup every parent-image and attribution question goes through, including the eleven corpus rules that read
 // ParentImage, so the wrong answer was both wrong attribution and a missed detection: a malicious parent that re-executed into
@@ -630,12 +638,12 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
 		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
-		         exec_time_ns ASC,
+		         CASE WHEN exec_time_ns > ? THEN exec_time_ns END ASC,
 		         pidversion IS NOT NULL DESC,
 		         pidversion DESC,
 		         id DESC
 		LIMIT 1`,
-		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
+		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
