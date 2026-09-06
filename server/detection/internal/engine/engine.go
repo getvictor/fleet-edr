@@ -24,12 +24,12 @@ import (
 // group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
 // alert_count attribute shape.
 
-// batchTally accumulates what one batch's evaluation should record ONCE THE BATCH IS ACKNOWLEDGED.
+// batchTally accumulates what one batch's evaluation should record ONCE THAT BATCH WILL NOT BE PROCESSED AGAIN.
 //
 // Nothing is written while evaluating, and that is the whole design. A batch that fails is nacked and replayed whole, so a counter
 // incremented during evaluation counts a retried batch twice; #631 measured roughly 130 materialization retries a minute from one
 // host under a sustained condition, so that is not a rounding error. Handing the tally back to the caller lets it be recorded once,
-// after the acknowledgement that says the batch will not come round again.
+// on the transition that says the batch will not come round again: its acknowledgement, or its withdrawal from the queue.
 type batchTally struct {
 	monitor map[monitorKey]int
 }
@@ -244,13 +244,13 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
 	// call returns, so concurrent batches share nothing.
 	scope := &rulesapi.BatchScope{}
-	// One tally for the batch, returned to the caller to record after the acknowledgement. See batchTally.
+	// One tally for the batch, returned to the caller to record on the transition that ends the batch's life. See batchTally.
 	tally := &batchTally{}
 	// One statistics accumulator for the batch, recorded from a defer so every exit path reports the work it did: a hard error
 	// mid-loop, a retryable miss after the loop, and success. Recorded HERE rather than handed back like the tally, because
 	// unlike a monitor match an evaluation is not something a replay must avoid counting twice; see RuleEvalStat's doc. Handing
-	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is never
-	// acknowledged and the caller's record-after-ack step never runs.
+	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is nacked rather
+	// than acknowledged, and the caller records only once a batch will not be processed again.
 	var stats rulesapi.RuleEvalStats
 	defer func() { e.recordEvalStats(ctx, stats) }()
 	var pendingMiss error
@@ -270,9 +270,12 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 			continue
 		}
 		if !errors.Is(err, rulesapi.ErrRetryBatch) {
-			// The batch will be nacked and replayed, so the tally is discarded: whatever it holds will be counted by the
-			// attempt that succeeds.
-			return nil, err
+			// Returned WITH the tally rather than instead of it. The batch is nacked, and on the ordinary path it is replayed
+			// and whatever this attempt found is counted by the attempt that succeeds; but a batch can also be withdrawn from
+			// processing entirely once its retry bounds are passed (#836), and then there is no later attempt to count it. Only
+			// the caller can tell those apart, because only the queue knows whether this nack was the withdrawal, so the engine
+			// hands the tally over and does not decide (#843).
+			return tally.snapshot(), err
 		}
 		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
 		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
@@ -287,9 +290,9 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 		}
 	}
 	if pendingMiss != nil {
-		// Same reasoning as the hard error above: a retryable miss nacks the batch, so this attempt's matches are not the ones
-		// to record.
-		return nil, pendingMiss
+		// Same reasoning as the hard error above: the tally travels with the error, and whether it is recorded is the caller's
+		// decision, because it turns on whether this nack withdrew the batch for good.
+		return tally.snapshot(), pendingMiss
 	}
 	return tally.snapshot(), nil
 }
@@ -481,7 +484,7 @@ func (e *Engine) evaluateRule(
 	// batch is replayed whole, so a chain declined in an attempt that is later nacked is recorded again on the next attempt's
 	// span; issue #631 measured roughly 130 retries a minute from one host under a sustained condition, so the absolute count of
 	// declines across spans can exceed the number of chains actually given up. A cumulative metric would have the same problem,
-	// which is why MonitorTally is handed back to be recorded only after the acknowledgement.
+	// which is why MonitorTally is handed back to be recorded only once the batch will not be processed again.
 	//
 	// What makes the per-attempt form sufficient here is that the requirement asks for this to be measurable against the rule's
 	// OWN alert volume, and alert_count below is measured on this same span, under the identical retry semantics. Both numbers

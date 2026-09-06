@@ -9,13 +9,14 @@ import (
 //
 // Separate from MonitorTally because it answers a different question and, crucially, obeys the OPPOSITE recording rule. A monitor
 // match is a fact about the world (this rule matched this host on this day) so a replayed batch must not count it twice, which is
-// why the tally is handed back to be written only after the acknowledgement. An evaluation is a fact about work the server
-// performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
+// why the tally is handed back to be written only once the batch will not be processed again. An evaluation is a fact about work
+// the server performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
 //
 // That is not the retry-inflation mistake MonitorTally's doc warns about, and the difference is worth being able to state: the
 // figures a reader derives are unaffected by replay, because Evaluations and EvalNs inflate by the same factor and the mean they
-// produce together does not move. Recording only on acknowledgement would additionally make RetryableMisses unreachable, since a
-// batch that ends in a retryable miss is never acknowledged. That counter is the whole point of the type: it names the rule whose
+// produce together does not move. Recording only on a batch's terminal transition would additionally make RetryableMisses nearly
+// unreachable, since a batch ending in a retryable miss is nacked rather than acknowledged and reaches one only if it is later
+// withdrawn. That counter is the whole point of the type: it names the rule whose
 // misses are driving the churn, which the fleet-wide edr.detection.materialization_retries counter cannot.
 type RuleEvalStat struct {
 	RuleID string

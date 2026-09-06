@@ -26,8 +26,13 @@ type batchBuilder interface {
 // batchEvaluator runs the detection rules over a materialized batch. *engine.Engine is the production implementation.
 //
 // The tally it returns is what the batch found in monitor mode, and it comes back rather than being written by the engine so this
-// processor can record it AFTER the acknowledgement. A nacked batch is replayed whole, so anything the engine wrote while
-// evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
+// processor can record it on whichever transition ends the batch's life. A nacked batch is replayed whole, so anything the engine
+// wrote while evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
+//
+// It is returned ALONGSIDE an error too, and not instead of one. An error usually means a replay, where this attempt's tally is
+// discarded because a later one will produce it again; but the queue can also withdraw the batch from processing for good, and
+// then this attempt is the only one there will ever be. The engine cannot tell those apart because only the queue knows, so it
+// hands the tally over on every path and the decision is made here (#843).
 type batchEvaluator interface {
 	Evaluate(ctx context.Context, events []visibilityapi.Event) (rulesapi.MonitorTally, error)
 }
@@ -58,8 +63,9 @@ type Processor struct {
 	detection   batchEvaluator
 	coordinator leader.Coordinator
 	metrics     api.MetricsRecorder
-	// monitorMatches persists what a batch found in monitor mode, after the batch is acknowledged. Nil records nothing, which is
-	// the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert either way.
+	// monitorMatches persists what a batch found in monitor mode, once that batch will not be processed again. Nil records nothing,
+	// which is the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert
+	// either way.
 	monitorMatches rulesapi.MonitorMatchRecorder
 	logger         *slog.Logger
 	interval       time.Duration
@@ -417,6 +423,35 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
 			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
+			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
+			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
+			//
+			// This covers a withdrawal HERE and not one at the fold, which is a residual rather than an oversight. A batch can
+			// evaluate and fail on one attempt, then fail its fold on the attempt that withdraws it, and that attempt resolved
+			// no matches while the earlier one's were discarded when it was retried. Carrying them across attempts would mean
+			// telemetry state in the work queue or per-replica state a stateless app tier cannot keep, so the limit is stated
+			// in the requirement and pinned by a test rather than closed here.
+			//
+			// Only a WHOLE batch counts, and the comparison is against the batch rather than against zero. The withdrawal
+			// predicate is per row, so a partial withdrawal leaves rows that are re-claimed and re-evaluated, and this tally
+			// covers all of them: recording it would count the survivors twice.
+			//
+			// Exactly-once across replicas comes from the queue rather than from a lock here, and specifically from set-aside
+			// being TERMINAL. Nack's withdrawing statement matches rows at processed = 0, and a withdrawn row sits at 3, which
+			// nothing moves it back from: Nack's own reset requires 2. So the 0 -> 3 transition happens once for a row in its
+			// life, row locks serialise concurrent attempts at it, and only the caller whose statement performed it counts it.
+			//
+			// NOT because that statement is restricted to rows this transaction reset, which review corrected: its predicate is
+			// the requested ids at processed = 0, so it can also match a row another nack had already returned to pending. That
+			// makes no difference to the count, and the distinction matters for anyone changing this queue.
+			//
+			// That holds per ROW and not per claim, which leaves the window #840 tracks: Nack is not conditional on the claim it
+			// was issued for, so an attempt that outran its lease can withdraw rows a replacement now owns, get a count short of
+			// its own batch, and be rejected here while the replacement's later nack reports nothing. The residual is recorded in
+			// the requirement rather than worked around, because closing it is a change to the queue's contract.
+			if setAside == int64(len(eventIDs)) {
+				p.recordMonitorMatches(ctx, tally)
+			}
 			return 0
 		}
 	}
@@ -444,11 +479,15 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 	return len(events)
 }
 
-// recordMonitorMatches persists and counts a batch's monitor-mode matches, AFTER the acknowledgement.
+// recordMonitorMatches persists and counts a batch's monitor-mode matches, on whichever transition ends the batch's life.
 //
-// After, so a replayed batch is counted once: everything before this point can still nack, and a nacked batch re-evaluates and
-// produces the same matches again. The cost is the opposite failure, a crash between the ack and this write, which loses those
-// counts.
+// Two transitions end it, and both call here. The ordinary one is the acknowledgement, and this runs AFTER it so a replayed batch
+// is counted once: everything before that point can still nack, and a nacked batch re-evaluates and produces the same matches
+// again. The other is the batch being withdrawn from processing for good once its retry bounds are passed (#836), where there is
+// no later attempt to count it and the attempt that was withdrawn is the last word on what it matched (#843).
+//
+// The cost of recording after a transition rather than during evaluation is the opposite failure, a crash between the transition
+// and this write, which loses those counts.
 //
 // That loss is the RISK-BEARING direction and is accepted rather than preferred. A count that is too low makes a rule look quiet,
 // which is exactly what persuades an operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to
@@ -461,8 +500,10 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 // immune, deduplicating on (host, rule, subject)). Issue #817 fixed that in the queue contract, where it belonged: Ack is
 // conditional on still holding the claim and reports whether it did, and the caller skips this write when it has lost.
 //
-// A failure here cannot fail the batch: the events are already acknowledged, and re-nacking them to save a counter would replay
-// real detection work. It is logged and dropped.
+// A failure here cannot fail the batch, on either path, and for the same reason on both: the batch has already reached a state it
+// will not be processed again from, so there is nothing left to fail. Acknowledged events are done, and withdrawn ones are not
+// coming back; re-nacking either to save a counter would replay real detection work or undo a withdrawal. It is logged and
+// dropped.
 func (p *Processor) recordMonitorMatches(ctx context.Context, tally rulesapi.MonitorTally) {
 	if len(tally) == 0 {
 		return

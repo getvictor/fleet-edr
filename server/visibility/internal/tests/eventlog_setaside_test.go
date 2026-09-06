@@ -96,7 +96,11 @@ func TestSetAside_UnblocksTheHost(t *testing.T) {
 	}
 	setAside, err := log.Nack(t.Context(), again)
 	require.NoError(t, err)
-	assert.Positive(t, setAside, "past both bounds the batch must be set aside rather than returned")
+	// EXACTLY the batch, not merely positive. A caller decides whether a whole batch was withdrawn by comparing this against the
+	// number of events it handed over (#843), so an under-count here reads as a partial withdrawal and silently discards what
+	// that batch matched. "Positive" cannot see that, and every test above stays green while it happens.
+	assert.Equal(t, int64(len(again)), setAside,
+		"past both bounds the whole batch must be set aside, and the count must say so exactly")
 
 	next, _, err := log.ClaimForHost(t.Context(), host, batch)
 	require.NoError(t, err)

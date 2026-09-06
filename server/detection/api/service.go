@@ -129,17 +129,43 @@ type MetricsRecorder interface {
 	// decide whether promoting a rule is worth it.
 	//
 	// It takes a count rather than being called per match because the caller aggregates a whole batch before recording it, and it
-	// does that because of WHEN it records: after the batch is acknowledged, not while evaluating. A nacked batch is replayed
-	// whole, so a counter incremented during evaluation counts a retried batch twice. Called after the acknowledgement, a replayed
-	// batch is counted once.
+	// does that because of WHEN it records: on the transition that ends the batch's life, not while evaluating. A nacked batch is
+	// replayed whole, so a counter incremented during evaluation counts a retried batch twice.
 	//
-	// Three inaccuracies remain and a consumer has to know all of them. A crash between the acknowledgement and the durable record
-	// loses those counts, and so does a failure of that record, which is logged and dropped rather than allowed to fail a batch
-	// that is already acknowledged. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing
-	// counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is gets
-	// promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. Third, an evaluation that outlives its
-	// claim lease can be re-offered to another worker while the first is still running; Ack does not verify claim ownership, so
-	// both attempts can succeed and both can record.
+	// Two transitions end a batch. Usually the acknowledgement, after which a replayed batch is counted once. The other is the
+	// batch being withdrawn from processing for good once its retry bounds are passed: there is no later attempt to count it, so
+	// the withdrawn attempt's matches are recorded then instead (#843). Recorded only when the WHOLE batch was withdrawn, since a
+	// partial withdrawal leaves rows that are re-claimed and evaluated again.
+	//
+	// Five inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
+	//
+	// A crash between the transition and the record loses those counts, and so does a failure of the durable write, which is
+	// logged and dropped rather than allowed to fail a batch that is already finished with the queue.
+	//
+	// Which sink is left ahead depends on WHERE in that window it happens, and an earlier version of this comment got it wrong by
+	// claiming this counter always survives. The increment happens after the queue transition and before the durable write, so a
+	// crash before the increment loses both; only a crash after it, or a failure of the write itself, leaves this counter ahead.
+	//
+	// A batch withdrawn on an attempt that had not evaluated it records nothing: that attempt resolved no matches, and an earlier
+	// attempt's were discarded when it was retried rather than carried forward (#893).
+	//
+	// A batch only PARTLY withdrawn drops the whole attempt's matches. The survivors are evaluated again and counted then, but
+	// whatever the withdrawn events alone had matched has no later attempt to produce it. Recording the survivors' share instead
+	// would need this figure to say which event each match came from, and it is aggregated per rule and host for the batch.
+	//
+	// A withdrawal reported to an attempt that no longer owns the events loses them from both sides. An attempt whose processing
+	// outran its claim lease can withdraw rows a replacement has since claimed; the count it gets back describes its own view, so
+	// it can fall short of that attempt's batch and be rejected, while the replacement's later nack reports nothing because the
+	// rows are already withdrawn. That needs the queue's nack to be conditional on the claim it was issued for, as its ack already
+	// is since #817. Tracked as #840.
+	//
+	// Losing counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
+	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. It is accepted only because every
+	// alternative here over-counts systematically rather than losing rarely.
+	//
+	// A third once stood here and is gone: an evaluation outliving its claim lease could be re-offered while the first was still
+	// running, and Ack ignored claim ownership so both attempts recorded. Issue #817 made Ack conditional on still holding the
+	// claim and the caller skips this write when it has lost.
 	//
 	// Most importantly this counts MATCHES, not would-be alerts. AlertCreated fires only for a newly INSERTED alert, and alerts
 	// deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments this series every

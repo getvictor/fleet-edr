@@ -382,9 +382,9 @@ func (d *Detection) SetMonitorMatchRecorder(r rulesapi.MonitorMatchRecorder) {
 // SetModeResolver. cmd/main passes the rules context's store once both contexts are built. No-op in ModeIntake, where there is no
 // engine and so nothing evaluates.
 //
-// On the ENGINE and not the pipeline, unlike SetMonitorMatchRecorder: the statistics must be written on the nack path too, and the
-// pipeline's recording step runs only after a successful acknowledgement. Putting it there would silently lose exactly the
-// retryable-miss counter that half of issue #774 exists to provide.
+// On the ENGINE and not the pipeline, unlike SetMonitorMatchRecorder: the statistics must be written on the nack path too, and
+// the pipeline's recording step runs only once a batch will not be processed again, which an ordinary nack is not. Putting it
+// there would silently lose exactly the retryable-miss counter that half of issue #774 exists to provide.
 func (d *Detection) SetRuleEvalStatsRecorder(r rulesapi.RuleEvalStatsRecorder) {
 	if d.engine != nil {
 		d.engine.SetRuleEvalStatsRecorder(r)

@@ -381,12 +381,17 @@ const (
 // A claim is identified here by state alone, not by owner, which leaves one window this does not close: a worker whose fold outran
 // the 5-minute claim lease nacks rows a replacement worker has since re-claimed, resetting that claim and counting an attempt
 // against it. The window is narrow by construction, since a live claim is refused to every other claimer by both the claimable
-// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease. It is also pre-existing and bounded:
-// the replacement's Ack still lands and the event is still processed, so the cost is an inflated attempt count rather than lost
-// work, and a spurious set-aside would need that to recur twenty times across fifteen minutes on one batch. Closing it properly
-// means carrying the claim stamp back to the caller and making Nack and Ack conditional on still owning it, which changes a
-// cross-context interface and fixes a different defect (the same stale nack can also let two workers process one event). Tracked
-// as issue #840 rather than folded in here.
+// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease.
+//
+// What it costs was understated here until review corrected it, and the correction is a consequence of issue #817. This statement
+// clears the replacement's claim stamp along with its in-flight state, and Ack is conditional on that stamp, so the replacement's
+// acknowledgement is REJECTED rather than landing: its work is redone by whoever claims the rows next. And a spurious set-aside
+// does not need the race to recur, because the attempt bound is carried on the ROW: ordinary failures can have brought a row to
+// within one attempt of its bound already, and this stale nack supplies the last one.
+//
+// Closing it properly means carrying the claim stamp back to the caller and making Nack conditional on still owning it, as Ack
+// already is, which changes a cross-context interface and fixes a different defect (the same stale nack can also let two workers
+// process one event). Tracked as issue #840 rather than folded in here.
 func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
 		return 0, nil
@@ -412,13 +417,20 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 		return 0, fmt.Errorf("nack: %w", err)
 	}
 
-	// The processed = 0 guard restricts this to rows the statement above actually reset, and so keeps a row that was NOT in flight
-	// out of state 3: an event id in this batch that another worker already acked (1), or that an earlier failure already set aside
-	// (3), does not match and is left alone. It is NOT protection against a concurrent claimer. The statement above holds an
-	// exclusive lock on every row it modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED
-	// skips locked rows, so no other worker can take these rows between the two statements. (A row can still be reset by a worker
-	// whose claim lease expired, which is the ownership limitation documented on Nack above and tracked as issue #840; the guard
-	// here neither causes nor prevents that.)
+	// The processed = 0 guard keeps a row that is not PENDING out of state 3: an event id in this batch that another worker already
+	// acked (1), or that an earlier failure already set aside (3), does not match and is left alone.
+	//
+	// It does NOT restrict this to rows the statement above reset, and an earlier version of this comment claimed it did. Pending
+	// is a state, not a record of who put the row there, so a row another worker's nack returned to pending matches here too. That
+	// costs nothing: this transition is one-way, since nothing returns a row from 3 and the reset above requires 2, so a row makes
+	// it once in its life and exactly one caller is told it did. The count the caller receives is sound for that reason and not
+	// because of any ownership this guard establishes.
+	//
+	// It is not protection against a concurrent claimer either. The statement above holds an exclusive lock on every row it
+	// modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED skips locked rows, so no other
+	// worker can claim those rows between the two statements. (A row can still be reset by a worker whose claim lease expired,
+	// which is the ownership limitation documented on Nack above and tracked as issue #840; the guard here neither causes nor
+	// prevents that.)
 	//
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
