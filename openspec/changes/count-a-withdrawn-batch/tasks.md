@@ -14,5 +14,7 @@
 - [x] 2.2 A partly withdrawn batch records nothing.
 - [x] 2.3 An ordinary nack still records nothing, so the fix is not "record on every failure".
 - [x] 2.6 Pin the RESIDUAL: a batch that evaluated on one attempt and is withdrawn by a fold failure on a later one records nothing. Review was right that the first version of the requirement claimed more than the code does.
+- [x] 2.7 Finish the partial-withdrawal scenario. Its first version stopped at the nack, which passes just as well against a processor that had stopped counting the survivor at all; the survivor's own attempt is now driven and asserted.
+- [x] 2.8 Document the THIRD residual, which the partial case creates: whatever the withdrawn events alone matched is dropped, because the figure is aggregated per rule and host and cannot say which event a match came from. Stated in the requirement, the metric description, and the port.
 - [x] 2.4 Cover the ENGINE's two returns directly. The processor's tests stub the evaluator, so they prove nothing about whether a tally is handed over; the two mutants that drop it survived until this was added.
 - [x] 2.5 Mutation-test: discarding the tally on a withdrawal, loosening the condition to any withdrawal, and dropping the tally from either engine return.

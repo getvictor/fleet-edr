@@ -350,7 +350,9 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 
 		require.Len(t, rec.calls, 1, "the batch will never be evaluated again, so this attempt is the last word on what it matched")
 		assert.Equal(t, tally, rec.calls[0])
-		assert.Equal(t, 2, metrics.total, "the counter moves with the durable record, so the two series cannot disagree")
+		// Only that both moved on this path. The counter is incremented BEFORE the durable write, so a recorder failure leaves
+		// them different by design, and claiming they cannot disagree would be a stronger promise than the code makes.
+		assert.Equal(t, 2, metrics.total, "the counter moves on the same path as the durable record")
 		assert.Equal(t, []string{"evt-1"}, log.nacked, "and it really was the withdrawal path, not the ack")
 		assert.Empty(t, log.acked)
 	})
@@ -375,7 +377,7 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 		assert.Zero(t, metrics.total)
 	})
 
-	t.Run("a partly withdrawn batch records nothing", func(t *testing.T) {
+	t.Run("a partly withdrawn batch records nothing, and its survivor is counted by the attempt that finishes it", func(t *testing.T) {
 		t.Parallel()
 		rec := &recordingMonitorRecorder{}
 		metrics := &countingMonitorMetrics{}
@@ -387,8 +389,23 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 
 		p.ProcessOnce(t.Context())
 
-		assert.Empty(t, rec.calls,
+		require.Empty(t, rec.calls,
 			"the surviving row is evaluated again and this tally covers it, so recording now would count it twice")
-		assert.Zero(t, metrics.total)
+		require.Zero(t, metrics.total)
+
+		// The other half of the scenario, and the half that makes the first half acceptable rather than merely safe. Stopping at
+		// the nack would pass just as well against a processor that had stopped counting the survivor at all, which is the same
+		// loss this whole change is about.
+		survivor := &scriptedEventLog{batch: twoEvents[1:]}
+		finishing := newTestProcessor(t, survivor, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+		finishing.SetMonitorMatchRecorder(rec)
+		finishing.SetMetrics(metrics)
+
+		finishing.ProcessOnce(t.Context())
+
+		require.Len(t, rec.calls, 1, "the survivor's own attempt acknowledges and records, exactly once")
+		assert.Equal(t, tally, rec.calls[0])
+		assert.Equal(t, 2, metrics.total)
+		assert.Equal(t, []string{"evt-2"}, survivor.acked)
 	})
 }

@@ -262,13 +262,17 @@ func (m *countingMonitorMetrics) MonitorMatched(_ context.Context, _, _ string, 
 // spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-monitor-match-is-counted-once-for-a-batch-that-is-retried
 // spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-recording-failure-does-not-fail-the-batch
 //
-// TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck pins WHEN the counts are written, which is the whole reason the engine hands
-// a tally back instead of writing one itself.
+// TestProcessor_RecordsMonitorMatchesOnlyAfterASuccessfulAck pins WHEN the counts are written on the ACKNOWLEDGEMENT path, which
+// is the whole reason the engine hands a tally back instead of writing one itself.
+//
+// Scoped to that path in its name because it is no longer the only terminal one: a batch withdrawn from the queue for good is
+// also counted, which TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn covers (#843). "A nacked batch records nothing" below is
+// about an ORDINARY nack, which is not terminal.
 //
 // A batch that fails detection is nacked and replayed whole, so a count written during evaluation is written again by every
 // retry. Issue #631 measured roughly 130 materialization retries a minute from one host under a sustained condition, which is
 // enough to make a promotion decision read as far more expensive than it is.
-func TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck(t *testing.T) {
+func TestProcessor_RecordsMonitorMatchesOnlyAfterASuccessfulAck(t *testing.T) {
 	t.Parallel()
 
 	tally := rulesapi.MonitorTally{{RuleID: "imported", HostID: "host-a", Severity: "high", Count: 2}}

@@ -137,11 +137,22 @@ type MetricsRecorder interface {
 	// the withdrawn attempt's matches are recorded then instead (#843). Recorded only when the WHOLE batch was withdrawn, since a
 	// partial withdrawal leaves rows that are re-claimed and evaluated again.
 	//
-	// Two inaccuracies remain and a consumer has to know both. A crash between the transition and the durable record loses those
-	// counts, and so does a failure of that record, which is logged and dropped rather than allowed to fail a batch that is
-	// already finished with the queue. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing counts is
-	// the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is gets promoted, and
-	// promoting a noisy rule is the outcome monitor mode exists to prevent.
+	// Four inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
+	//
+	// A crash between the transition and the durable record loses those counts, and so does a failure of that record, which is
+	// logged and dropped rather than allowed to fail a batch that is already finished with the queue. Both leave THIS counter
+	// ahead of the durable table, since it is incremented first.
+	//
+	// A batch withdrawn on an attempt that had not evaluated it records nothing: that attempt resolved no matches, and an earlier
+	// attempt's were discarded when it was retried rather than carried forward (#893).
+	//
+	// A batch only PARTLY withdrawn drops the whole attempt's matches. The survivors are evaluated again and counted then, but
+	// whatever the withdrawn events alone had matched has no later attempt to produce it. Recording the survivors' share instead
+	// would need this figure to say which event each match came from, and it is aggregated per rule and host for the batch.
+	//
+	// Losing counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
+	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. It is accepted only because every
+	// alternative here over-counts systematically rather than losing rarely.
 	//
 	// A third once stood here and is gone: an evaluation outliving its claim lease could be re-offered while the first was still
 	// running, and Ack ignored claim ownership so both attempts recorded. Issue #817 made Ack conditional on still holding the

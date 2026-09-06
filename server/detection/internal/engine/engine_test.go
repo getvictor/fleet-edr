@@ -949,8 +949,8 @@ func (r overridingResolver) ResolveRuleMode(_, _ string, _ rulesapi.DetectionRul
 // comparison is wrong if one series is labelled differently from the other.
 //
 // Asserted on the tally rather than on a metrics fake, because the engine no longer touches the recorder: it hands the tally back
-// and the pipeline records it after acknowledging the batch (issue #813). The severity carried in the tally IS what reaches both
-// the counter and the durable row.
+// and the pipeline records it once the batch will not be processed again (issue #813). The severity carried in the tally IS what
+// reaches both the counter and the durable row.
 func TestEngine_MonitorTallyUsesTheOverriddenSeverity(t *testing.T) {
 	t.Parallel()
 
@@ -1096,8 +1096,9 @@ func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
 }
 
 // evaluateErr runs a batch and discards the monitor tally, for the many tests that assert only on whether evaluation failed.
-// Evaluate returns the tally so the pipeline can record it AFTER acknowledging the batch (issue #813); a test asserting on error
-// handling has no use for it, and threading `_, err :=` through every one of them would obscure what those tests are about.
+// Evaluate returns the tally so the pipeline can record it once the batch is finished with the queue (issue #813); a test
+// asserting on error handling has no use for it, and threading `_, err :=` through every one of them would obscure what those
+// tests are about.
 func evaluateErr(e *Engine, ctx context.Context, events []api.Event) error {
 	_, err := e.Evaluate(ctx, events)
 	return err
@@ -1215,7 +1216,7 @@ func (r *recordingEvalStats) byRule(id string) (rulesapi.RuleEvalStat, bool) {
 // TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne pins the counting rule that is the whole reason this type exists
 // separately from MonitorTally, and pins it on the path that would otherwise never record anything.
 //
-// A batch ending in a retryable outcome is NACKED, so the pipeline's record-after-acknowledgement step never runs for it. If the
+// A batch ending in a retryable outcome is NACKED, so the pipeline's record-on-a-terminal-transition step never runs for it. If the
 // statistics rode back the way the monitor tally does, the retryable-miss counter would be permanently zero: the only batches that
 // could report a miss are exactly the ones that never reach the recording step. That makes the counter worse than absent, because a
 // reader would take zero as evidence of no churn.

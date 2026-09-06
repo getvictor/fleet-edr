@@ -131,8 +131,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 			"Recorded once the batch will not be processed again, whether that is its acknowledgement or its withdrawal from the "+
 			"queue after repeated failure, so a nacked and replayed batch counts once rather than once per attempt; "+
 			"the residual inaccuracies are a crash between that transition and the record, which loses counts and so can make a "+
-			"noisy rule look safe to promote, and a batch withdrawn on an attempt that had not evaluated it, whose earlier "+
-			"attempts' matches are not carried forward."),
+			"noisy rule look safe to promote; a batch withdrawn on an attempt that had not evaluated it, whose earlier attempts' "+
+			"matches are not carried forward; and a batch only partly withdrawn, where whatever the withdrawn events alone had "+
+			"matched is dropped so the survivors cannot be counted twice."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
