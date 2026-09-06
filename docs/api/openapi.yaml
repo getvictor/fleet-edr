@@ -968,6 +968,20 @@ paths:
             application/json:
               schema:
                 type: object
+                # Every field is always emitted, and the difference lists are normalised to arrays rather than null, so a
+                # generated client should model them as guaranteed rather than optional.
+                required:
+                  [
+                    installed,
+                    available,
+                    previous,
+                    declined,
+                    current,
+                    can_roll_back,
+                    added,
+                    removed,
+                    changed,
+                  ]
                 properties:
                   installed:
                     type: string
@@ -1003,6 +1017,10 @@ paths:
                     description: Rules present in both whose content differs.
         "403":
           description: The caller may not read rule content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/v1/rule-content/pack:rollback:
     post:
       tags: [Rule authoring]
@@ -1025,6 +1043,7 @@ paths:
         that there is nothing further back rather than appearing to work.
       security:
         - SessionCookie: []
+          CSRF: []
       requestBody:
         required: true
         content:
@@ -1045,6 +1064,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [restored, version, withheld]
                 properties:
                   restored:
                     type: string
@@ -1058,11 +1078,24 @@ paths:
                     items: { type: string }
                     description: Shipped rules not restored because you have taken over that rule.
         "400":
-          description: No reason was given
+          description: >-
+            The request was rejected: no reason was given, or the body was not readable JSON.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "403":
           description: The caller may not change rule content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "409":
           description: No previous generation is retained, so there is nothing to roll back to
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/v1/rule-content/documents:
     get:
       tags: [Rule authoring]

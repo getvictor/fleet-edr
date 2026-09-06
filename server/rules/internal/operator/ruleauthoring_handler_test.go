@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
@@ -523,4 +524,70 @@ func TestPackStatus_EmptyDifferencesAreArraysNotNull(t *testing.T) {
 	assert.Contains(t, body, `"removed":[]`)
 	assert.Contains(t, body, `"changed":[]`)
 	assert.NotContains(t, body, "null", "no field on this response should marshal to null")
+}
+
+// TestPackStatus_RoundTripsAnyDifferenceLists is the serialization invariant the project asks for on a new wire shape, over the
+// input space a table cannot cover: any combination of rule identities in any of the three lists.
+//
+// The property is that what the handler emits decodes back to what it was given, with one deliberate exception stated as part of
+// the property rather than worked around: a nil list comes back as an empty one, because the handler normalises it so consumers
+// need no null check.
+//
+// It drives the handler through an httptest recorder rather than the shared server helpers, because rapid.T is neither a
+// *testing.T nor a testing.TB and cannot be handed to them. Going through the recorder still exercises the real route and the
+// real encoder, which is what the property is about.
+func TestPackStatus_RoundTripsAnyDifferenceLists(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		ids := func(label string) []string {
+			return rapid.SliceOfN(rapid.StringMatching(`[a-z_][a-z0-9_]{0,20}`), 0, 6).Draw(rt, label)
+		}
+		want := rulecontentapi.PackStatus{
+			Installed: rapid.StringMatching(`[0-9a-f]{0,64}`).Draw(rt, "installed"),
+			Available: rapid.StringMatching(`[0-9a-f]{0,64}`).Draw(rt, "available"),
+			Previous:  rapid.StringMatching(`[0-9a-f]{0,64}`).Draw(rt, "previous"),
+			Declined:  rapid.StringMatching(`[0-9a-f]{0,64}`).Draw(rt, "declined"),
+			Added:     ids("added"),
+			Removed:   ids("removed"),
+			Changed:   ids("changed"),
+		}
+
+		h, err := NewRuleAuthoringHandler(&fakeAuthoringSvc{}, fakeRCCorpus{}, &fakeRCPacks{status: want},
+			allowAllAuthZ{}, slog.New(slog.DiscardHandler))
+		require.NoError(rt, err)
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(
+			identityapi.WithActor(context.Background(),
+				&identityapi.Actor{Principal: identityapi.UserPrincipal(7, ""), SessionFresh: true}),
+			http.MethodGet, "/api/v1/rule-content/pack", nil)
+		mux.ServeHTTP(rec, req)
+		require.Equal(rt, http.StatusOK, rec.Code, rec.Body.String())
+
+		var got struct {
+			Installed   string   `json:"installed"`
+			Available   string   `json:"available"`
+			Previous    string   `json:"previous"`
+			Declined    string   `json:"declined"`
+			Current     bool     `json:"current"`
+			CanRollBack bool     `json:"can_roll_back"`
+			Added       []string `json:"added"`
+			Removed     []string `json:"removed"`
+			Changed     []string `json:"changed"`
+		}
+		require.NoError(rt, json.Unmarshal(rec.Body.Bytes(), &got))
+
+		assert.Equal(rt, want.Installed, got.Installed)
+		assert.Equal(rt, want.Available, got.Available)
+		assert.Equal(rt, want.Previous, got.Previous)
+		assert.Equal(rt, want.Declined, got.Declined)
+		assert.Equal(rt, want.Installed == want.Available, got.Current)
+		assert.Equal(rt, want.Previous != "", got.CanRollBack)
+		// Nil decodes as empty, which is the normalisation rather than a loss: as sequences the two are equal.
+		assert.Equal(rt, orEmpty(want.Added), got.Added)
+		assert.Equal(rt, orEmpty(want.Removed), got.Removed)
+		assert.Equal(rt, orEmpty(want.Changed), got.Changed)
+	})
 }

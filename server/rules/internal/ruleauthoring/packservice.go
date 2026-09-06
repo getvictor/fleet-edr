@@ -78,6 +78,18 @@ func (s *PackService) Rollback(
 	if actor != nil {
 		e.Actor = actor.Principal
 	}
+	// The row is written AFTER the rollback commits, and a failure to write it is logged rather than returned. Review flagged
+	// that this leaves a window where every shipped rule changed durably and no audit event names it, which is true and is the
+	// lesser of the two available outcomes.
+	//
+	// The alternative is not "roll back only if the audit succeeds": the corpus change has already committed by the time this
+	// runs, in its own transaction, so returning an error here would report failure for a change that DID happen. An operator
+	// told their rollback failed, whose rules have in fact been replaced, is worse off than one whose rollback is missing a
+	// record: the first acts on a false belief, the second has a gap that the error log names.
+	//
+	// Making them one transaction is the real fix and is not available here: the audit store is behind an interface that the
+	// identity context owns, deliberately, so this service cannot enlist it in rulecontent's transaction. That is the same
+	// trade the authoring service beside this one makes, and it is worth revisiting for both together rather than diverging.
 	if err := s.audit.Record(ctx, e); err != nil {
 		s.logger.ErrorContext(ctx, "rule pack rollback committed but its audit row was not written",
 			"err", err, "pack", rolled.Restored)
