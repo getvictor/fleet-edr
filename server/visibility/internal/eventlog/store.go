@@ -417,13 +417,20 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 		return 0, fmt.Errorf("nack: %w", err)
 	}
 
-	// The processed = 0 guard restricts this to rows the statement above actually reset, and so keeps a row that was NOT in flight
-	// out of state 3: an event id in this batch that another worker already acked (1), or that an earlier failure already set aside
-	// (3), does not match and is left alone. It is NOT protection against a concurrent claimer. The statement above holds an
-	// exclusive lock on every row it modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED
-	// skips locked rows, so no other worker can take these rows between the two statements. (A row can still be reset by a worker
-	// whose claim lease expired, which is the ownership limitation documented on Nack above and tracked as issue #840; the guard
-	// here neither causes nor prevents that.)
+	// The processed = 0 guard keeps a row that is not PENDING out of state 3: an event id in this batch that another worker already
+	// acked (1), or that an earlier failure already set aside (3), does not match and is left alone.
+	//
+	// It does NOT restrict this to rows the statement above reset, and an earlier version of this comment claimed it did. Pending
+	// is a state, not a record of who put the row there, so a row another worker's nack returned to pending matches here too. That
+	// costs nothing: this transition is one-way, since nothing returns a row from 3 and the reset above requires 2, so a row makes
+	// it once in its life and exactly one caller is told it did. The count the caller receives is sound for that reason and not
+	// because of any ownership this guard establishes.
+	//
+	// It is not protection against a concurrent claimer either. The statement above holds an exclusive lock on every row it
+	// modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED skips locked rows, so no other
+	// worker can claim those rows between the two statements. (A row can still be reset by a worker whose claim lease expired,
+	// which is the ownership limitation documented on Nack above and tracked as issue #840; the guard here neither causes nor
+	// prevents that.)
 	//
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
