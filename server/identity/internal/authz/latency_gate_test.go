@@ -74,9 +74,12 @@ func TestAllow_P99Latency(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Every trial is run: unlike a best-of-N reading there is no early exit, because a median needs the whole set.
+	// Every trial is kept, not just its p99: the verdict names one trial as representative, and which one that is cannot be
+	// known until all of them are in. An earlier revision picked it against the median of the trials collected SO FAR, which
+	// review caught: a later reading moves the median, and the failure then prints an unrelated trial's distribution, possibly
+	// showing a p99 under the target beside a verdict saying it was exceeded.
+	all := make([][]time.Duration, 0, trials)
 	trialP99s := make([]time.Duration, 0, trials)
-	var median []time.Duration
 	for range trials {
 		durations := make([]time.Duration, 0, samples)
 		for range samples {
@@ -86,25 +89,32 @@ func TestAllow_P99Latency(t *testing.T) {
 			require.NoError(t, err)
 		}
 		slices.Sort(durations)
+		all = append(all, durations)
 		trialP99s = append(trialP99s, durations[(samples*99)/100])
-		// The trial whose p99 turns out to be the median is the one worth printing, so keep each until the verdict is known.
-		if median == nil || durations[(samples*99)/100] == medianDuration(trialP99s) {
-			median = durations
-		}
 	}
 
 	got := medianDuration(trialP99s)
-	if got >= p99Target {
-		// A representative distribution, printed so a reviewer can tell a real regression (the whole distribution shifts) from
-		// a machine that was busy throughout (only the tail moves). The per-trial readings show which of the two this was.
-		t.Errorf("median-of-%d p99 latency %v exceeds %v target", trials, got, p99Target)
-		t.Logf("p50: %v  p95: %v  p99: %v  p99.9: %v",
-			median[samples/2],
-			median[(samples*95)/100],
-			median[(samples*99)/100],
-			median[(samples*999)/1000])
-		t.Logf("per-trial p99: %v", trialP99s)
+	if got < p99Target {
+		return
 	}
+
+	// The trial the verdict came from, so the numbers below and the verdict describe the same run.
+	median := all[0]
+	for _, d := range all {
+		if d[(samples*99)/100] == got {
+			median = d
+			break
+		}
+	}
+	// Printed so a reviewer can tell a real regression (the whole distribution shifts) from a machine that was busy throughout
+	// (only the tail moves). The per-trial readings show which of the two this was.
+	t.Errorf("median-of-%d p99 latency %v exceeds %v target", trials, got, p99Target)
+	t.Logf("p50: %v  p95: %v  p99: %v  p99.9: %v",
+		median[samples/2],
+		median[(samples*95)/100],
+		median[(samples*99)/100],
+		median[(samples*999)/1000])
+	t.Logf("per-trial p99: %v", trialP99s)
 }
 
 // medianDuration is the gate's reduction from per-trial p99 readings to one verdict.
