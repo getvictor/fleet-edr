@@ -115,11 +115,14 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 // Where a vendored rule falls outside a house rule, the exception is pinned by name in its own test, so the gap is visible and a
 // re-sync that changes it fails rather than passing quietly.
 func authored(r api.Rule) bool {
-	// Delegates to the classifier production uses (the exported pack skips these, the export endpoint serves their bytes) rather
-	// than re-deriving it from the concrete type. A second definition would drift the moment an imported rule is wrapped or its
-	// type changes, and it would drift silently, because both answers look plausible.
-	_, vendored := VendoredSource(r.ID())
-	return !vendored
+	// Delegates to the classifier production uses (the exported pack skips anything not ours) rather than re-deriving it from the
+	// concrete type. A second definition would drift the moment an imported rule is wrapped or its type changes, and it would
+	// drift silently, because both answers look plausible.
+	//
+	// Attribution rather than "does it carry a document", which the two callers of the deleted VendoredSource had conflated. This
+	// test applies THIS PROJECT'S style rules, so the question is whose rule it is; a rule an operator wrote on their deployment
+	// carries a document and is still not ours to hold to our house style.
+	return api.OriginOf(r) == api.ProjectOrigin
 }
 
 // spec:server-detection-rules-engine/canonical-rule-naming/a-rule-names-itself-the-same-way-everywhere

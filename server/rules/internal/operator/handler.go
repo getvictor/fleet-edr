@@ -16,6 +16,9 @@ import (
 // so the handler tests can substitute a fake without spinning up a DB.
 type Service interface {
 	api.Lister
+	// Exportable is what the export route needs: the rule itself alongside its metadata, since a rule's own document is not
+	// metadata, and both from one snapshot of the active set so the two cannot describe different generations.
+	Exportable(id string) (api.RuleMetadata, api.Rule, bool)
 }
 
 // Handler serves the rules-context operator routes. Construct it with the rules service handle and the authorization chokepoint;
@@ -163,30 +166,62 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	for _, rm := range h.svc.List() {
-		if rm.ID != id {
-			continue
-		}
-		// A vendored rule exports as the upstream file it was imported from, byte for byte (issue #764). Re-rendering it in this
-		// project's format would hand back a second description of a rule whose authoritative description already exists, and the
-		// upstream bytes are the more useful artifact anyway: they are what an operator can diff against SigmaHQ.
-		body, vendored := catalog.VendoredSource(rm.ID)
-		if !vendored {
-			rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
-			if err != nil {
-				h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
-				writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
-				return
-			}
-			body = rendered
-		}
-		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(body); err != nil {
-			h.logger.WarnContext(ctx, "write rule file", "rule", id, "err", err)
-		}
+	// The rule and its metadata come from one snapshot of the rule set in force, so the document served and the metadata
+	// describing it cannot be from different generations (see Service.Exportable, which also scopes what "in force" means during
+	// a content reload).
+	rm, rule, ok := h.svc.Exportable(id)
+	if !ok {
+		writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})
 		return
 	}
-	writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})
+
+	// A rule that came from a document exports as that document, byte for byte (issue #764). Re-rendering it would hand back a
+	// second description of a rule whose authoritative description already exists, and the document is the more useful artifact
+	// anyway: for a vendored rule it is what an operator diffs against SigmaHQ, and for one they wrote themselves it is what they
+	// wrote.
+	//
+	// Asked of the rule that is RUNNING, not by looking the id up in the corpus this build embeds. A rule's identity is its file
+	// stem (#873), so an operator storing their own version of a shipped detection keeps its id, and the embedded lookup went on
+	// answering with the shipped document: bytes the deployment was not running and they had not written (#879).
+	// An operator's OWN rule document is rule content, and #767 put reading that behind rule_content.read, which is admin or
+	// senior analyst. Until this change the route could only return the product's own content, so alert.read was the whole gate;
+	// serving an operator's document under it would hand their rule to an analyst or auditor, who are denied it on the route that
+	// exists for rule content. Widening the gate for every rule instead would take export away from those roles for the shipped
+	// ones, which they can already read on the catalog.
+	//
+	// The refusal reveals only that this rule is locally authored, which GET /api/rules already reports to the same roles on every
+	// rule's Origin field, so gating this way leaks nothing the catalog does not.
+	if api.OriginOf(rule) == api.LocalOrigin && !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionRuleContentRead, identityapi.Resource{Type: "rule_content"}) {
+		return
+	}
+
+	body, fromDocument := api.SourceOf(rule)
+	if !fromDocument {
+		rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
+		if err != nil {
+			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
+			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
+			return
+		}
+		body = rendered
+	}
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)
+	// A rule document can now be content an operator wrote, so this is the first version of this route whose body is not fixed at
+	// build time. Sniffing is what would make that reachable: a browser that ignored the declared type and decided a YAML document
+	// looked like HTML would execute whatever it found. The declared type plus the attachment disposition already say what this
+	// is; nosniff is what stops a browser overruling them, and apidocs sets it on the same reasoning.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// This URL now answers "what is this deployment running", and the answer changes when rule content is reloaded. A cached copy
+	// would keep serving a generation that is no longer running, which is the same wrong answer the fix removed from the server
+	// side. The rule-content routes set this for the same reason.
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	// G705 flags this because the rule id reaching Exportable comes from the path, so taint analysis marks what it returns. The
+	// body is the stored rule document, never the id, and it is served as an attachment of a declared non-HTML type with sniffing
+	// off. Escaping it is not an option either: the response IS the artifact, and an escaped YAML document is not one.
+	if _, err := w.Write(body); err != nil { //nolint:gosec // G705: see above
+		h.logger.WarnContext(ctx, "write rule file", "rule", id, "err", err)
+	}
 }

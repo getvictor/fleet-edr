@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -245,8 +247,14 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	assert.Positive(t, ours, "the rules this project wrote credit this project")
 }
 
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-expressed-in-code-is-rendered
+//
 // TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is
 // YAML rather than a JSON envelope the caller would have to unwrap before the bytes were useful.
+//
+// credential_keychain_dump is written in Go and was never a document, which is the other half of the export decision: it has no
+// bytes to serve, so it is rendered. Asserting on rendered content rather than on non-emptiness is deliberate, because a renderer
+// returning a plausible-looking wrong file is the failure worth catching and an empty response is not the way it would present.
 func TestHandler_ExportRule(t *testing.T) {
 	t.Parallel()
 	svc := service.New(catalog.New(nil), nil, slog.Default())
@@ -264,6 +272,10 @@ func TestHandler_ExportRule(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "application/yaml; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Contains(t, resp.Header.Get("Content-Disposition"), `filename="credential_keychain_dump.yml"`)
+	// A rule document can be content an operator wrote, so a browser must not be free to decide it looks like HTML.
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+	// The answer changes when rule content is reloaded, so a cached copy would serve a generation that is no longer running.
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -315,8 +327,7 @@ func TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
-	want, vendored := catalog.VendoredSource(id)
-	require.True(t, vendored, "fixture rule must be one of the vendored ones")
+	want := embeddedCorpusFile(t, id)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
 	require.NoError(t, err)
@@ -397,4 +408,256 @@ func (m stubGlobalModes) GlobalRuleMode(ruleID string, ruleDefault rulesapi.Dete
 		return got
 	}
 	return rulesapi.GlobalRuleMode{Mode: ruleDefault, Source: rulesapi.RuleModeSourceDefault}
+}
+
+// embeddedCorpusFile reads the vendored file whose stem is id, straight off the corpus embedded in the build.
+//
+// An INDEPENDENT oracle, and it has to be. Taking the expected bytes from the same active rule the handler serves would assert
+// only that two reads of one field agree, which is true however wrong that field is: the test would pass against a handler that
+// served the wrong document, which is the entire failure it exists to catch.
+//
+// Walked rather than composed from a path, because the corpus keeps upstream's own category directories and a rule's id is its
+// STEM (#873), so the directory a given rule sits in is not derivable from its id.
+func embeddedCorpusFile(t *testing.T, id string) []byte {
+	t.Helper()
+	var found []byte
+	require.NoError(t, fs.WalkDir(catalog.ImportedCorpusFS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || catalog.RuleIDForPath(p) != id {
+			return err
+		}
+		found, err = fs.ReadFile(catalog.ImportedCorpusFS(), p)
+		return err
+	}))
+	require.NotNil(t, found, "fixture rule %q must exist in the corpus this build embeds, or the test proves nothing", id)
+	return found
+}
+
+// sigmaDoc renders a minimal loadable Sigma document, varying only what a test needs to tell two of them apart.
+func sigmaDoc(id, title string) []byte {
+	return []byte("title: " + title + "\n" +
+		"id: " + id + "\n" +
+		"status: test\n" +
+		"description: fixture\n" +
+		"author: test\n" +
+		"logsource:\n    category: process_creation\n    product: macos\n" +
+		"detection:\n    selection:\n        Image|endswith: '/osascript'\n    condition: selection\n" +
+		"level: medium\n")
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestHandler_ExportRule_OverwrittenRuleServesTheOperatorsBytes is the #879 regression, and the fixture is built to fail against
+// the version this replaced rather than merely to pass against the new one.
+//
+// The stored document takes the stem of a rule the build SHIPS. A rule's identity is its file stem (#873), so the operator's rule
+// keeps that id, and the old export resolved the id against the corpus embedded in the binary and found upstream's document still
+// sitting under it. What came back was content the deployment was not running and the operator had not written.
+//
+// The two assertions are separate on purpose. That the operator's bytes come back is the requirement; that upstream's title is
+// absent is the failure mode, and a fix that returned some third rendering would satisfy the first and not the second.
+func TestHandler_ExportRule_OverwrittenRuleServesTheOperatorsBytes(t *testing.T) {
+	t.Parallel()
+
+	// The stem of a rule the embedded corpus really carries. Chosen from the corpus rather than invented, because the defect only
+	// appears when the embedded lookup HAS an answer to give.
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	const path = catalog.CorpusRoot + "/" + id + ".yml"
+	operatorDoc := sigmaDoc("44444444-4444-4444-8444-444444444444", "Operator rewrote this one")
+
+	stored := fstest.MapFS{path: &fstest.MapFile{Data: operatorDoc}}
+	loaded, _, err := catalog.LoadCorpus(stored, catalog.CorpusRoot, func(string) bool { return true })
+	require.NoError(t, err)
+	require.Len(t, loaded, 1, "the fixture corpus holds exactly the operator's rule")
+
+	svc := service.New(loaded, nil, slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, string(operatorDoc), string(got), "an operator exporting their own rule gets what they wrote")
+	assert.NotContains(t, string(got), "xattr", "and not the shipped document the build still carries under that stem")
+}
+
+// driftingService answers List and Exportable from DIFFERENT generations of the rule set, which is what a rule content reload
+// landing between two reads looks like from the handler's side.
+//
+// A fake rather than a real reload, because the race is not reproducible on demand: the window is one atomic pointer swap wide, so
+// a test racing a real Swap against a real request would pass by luck on almost every run. Making the two reads disagree ALWAYS
+// turns the property into something a test can decide.
+type driftingService struct {
+	// listed is the OLD generation, which still names a rule the new one has dropped.
+	listed []rulesapi.RuleMetadata
+	// exportable is the CURRENT generation, and it is empty: the rule is gone.
+	exportable map[string]rulesapi.Rule
+}
+
+func (d driftingService) List() []rulesapi.RuleMetadata { return d.listed }
+func (d driftingService) Exportable(id string) (rulesapi.RuleMetadata, rulesapi.Rule, bool) {
+	rule, ok := d.exportable[id]
+	if !ok {
+		return rulesapi.RuleMetadata{}, nil, false
+	}
+	return rulesapi.RuleMetadata{ID: id}, rule, true
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestHandler_ExportRule_ReadsOneGeneration is the regression guard for the defect review found in the first version of this fix,
+// which resolved the rule by pairing List with a separate lookup of the active set.
+//
+// Those are two reads of an atomically swapped pointer, and a reload landing between them leaves a rule listed by the first and
+// gone from the second. The first version read the listing to decide the rule existed, failed to find its document, and treated
+// that as "a rule written in code" and rendered the stale metadata. An imported rule renders to nothing, so the export became a
+// transient 500 for a rule the deployment was no longer running.
+//
+// 404 is the right answer, and asserting it rather than merely "not 500" is the point: the deployment does not run that rule, and
+// that is the same answer any other absent id gets (#775).
+func TestHandler_ExportRule_ReadsOneGeneration(t *testing.T) {
+	t.Parallel()
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	svc := driftingService{
+		listed:     []rulesapi.RuleMetadata{{ID: id}},
+		exportable: map[string]rulesapi.Rule{},
+	}
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"the rule is not in the running set, and a handler that trusted the stale listing would render it into a 500 instead")
+}
+
+// TestHandler_ExportRule_ServesTheGenerationExportableAnswered is the other half of the fake above: without it, a handler that
+// answered 404 to everything would pass the drift test and prove nothing.
+func TestHandler_ExportRule_ServesTheGenerationExportableAnswered(t *testing.T) {
+	t.Parallel()
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	running := findRule(t, catalog.New(nil), id)
+	svc := driftingService{
+		// The listing is EMPTY here, the opposite drift: a rule the current generation runs and the stale listing does not name.
+		listed:     nil,
+		exportable: map[string]rulesapi.Rule{id: running},
+	}
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a handler consulting the listing would 404 a rule the deployment runs")
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, string(embeddedCorpusFile(t, id)), string(got))
+}
+
+// findRule returns the registered rule with the given id, failing the test rather than returning a nil interface a caller would
+// dereference much later.
+func findRule(t *testing.T, rules []rulesapi.Rule, id string) rulesapi.Rule {
+	t.Helper()
+	for _, r := range rules {
+		if r.ID() == id {
+			return r
+		}
+	}
+	t.Fatalf("rule %q is not registered, so the fixture proves nothing", id)
+	return nil
+}
+
+// alertReadOnlyAuthZ is the analyst and auditor shape: alert.read, and no rule_content.read.
+type alertReadOnlyAuthZ struct{}
+
+func (alertReadOnlyAuthZ) Allow(_ context.Context, a identityapi.Action, _ identityapi.Resource) (identityapi.Decision, error) {
+	if a == identityapi.ActionRuleContentRead {
+		return identityapi.Decision{Allow: false, Reason: "role does not grant rule_content.read"}, nil
+	}
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/exporting-an-authored-rule-needs-more-access
+//
+// TestHandler_ExportRule_AuthorizesOperatorContentSeparately covers the authorization consequence of serving the RUNNING document,
+// which review found and which the earlier versions of this change shipped open.
+//
+// Before this change the route could only return the product's own content, so alert.read was the whole gate. Now the same URL can
+// return a rule an operator wrote, and #767 put reading that behind rule_content.read: analyst and auditor hold alert.read and not
+// rule_content.read, so without this the export would hand them a document the route built for rule content denies them.
+//
+// Both halves are asserted together because the value is precisely that they differ. Gating every rule on rule_content.read would
+// also pass the refusal half while taking export of the SHIPPED rules away from those roles, which they can already read on the
+// catalog, so a test that only checked the refusal would call that a fix.
+func TestHandler_ExportRule_AuthorizesOperatorContentSeparately(t *testing.T) {
+	t.Parallel()
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	const storedPath = catalog.CorpusRoot + "/" + id + ".yml"
+
+	export := func(t *testing.T, svc Service) *http.Response {
+		t.Helper()
+		h := New(svc, alertReadOnlyAuthZ{}, slog.Default())
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		// Closed by the caller rather than here: bodyclose reads the call site, and a Cleanup registered inside the helper is
+		// invisible to it. Closing where the response is used also keeps the two visible together.
+		return resp
+	}
+
+	t.Run("a rule the operator wrote is refused without rule_content.read", func(t *testing.T) {
+		t.Parallel()
+		stored := fstest.MapFS{storedPath: &fstest.MapFile{
+			Data: sigmaDoc("55555555-5555-4555-8555-555555555555", "Operator rewrote this one"),
+		}}
+		loaded, _, err := catalog.LoadCorpus(stored, catalog.CorpusRoot, func(string) bool { return true })
+		require.NoError(t, err)
+
+		resp := export(t, service.New(loaded, nil, slog.Default()))
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"their own rule content is denied to these roles on the route built for it, so this route must not hand it over")
+	})
+
+	t.Run("a shipped rule is still served, since it is not the operator's content", func(t *testing.T) {
+		t.Parallel()
+		resp := export(t, service.New(catalog.New(nil), nil, slog.Default()))
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode,
+			"these roles read the shipped rules on the catalog already, so gating every rule would be a regression")
+
+		got, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, string(embeddedCorpusFile(t, id)), string(got))
+	})
 }
