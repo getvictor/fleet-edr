@@ -109,6 +109,47 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	})
 }
 
+// UpgradePackFrom installs the shipped rule content in this build over the shipped content the corpus holds, and reports whether
+// anything changed.
+//
+// The counterpart to SeedFrom, which acts only on an EMPTY corpus. Once a deployment has seeded, the seed can never run again, so
+// without this a corpus keeps its first generation of shipped rules forever: an operator upgrading the product to get new
+// detections would not get them, and nothing would say so. That is a security regression rather than an inconvenience, which is
+// why this runs on its own rather than waiting to be asked.
+//
+// It replaces only the SHIPPED half. An operator's own rules survive an upgrade, including one written over a shipped rule's path,
+// and their tuning survives because per-rule mode, severity overrides and exclusions live in detection_rule_settings keyed by rule
+// id rather than in these files. That separation is what makes upgrading safe, and it is the reason issue #768 states the two
+// acceptance criteria it does.
+//
+// Failure is reported rather than fatal, matching SeedFrom for the same reason: a deployment that cannot install a newer pack
+// still detects with the pack it has.
+func (r *RuleContent) UpgradePackFrom(ctx context.Context, fsys fs.FS, root string, include func(path string) bool) (bool, error) {
+	docs, err := readAll(fsys, root, include)
+	if err != nil {
+		return false, err
+	}
+	if len(docs) == 0 {
+		// A build shipping no rules must not be read as "delete every shipped rule you have". Seeding treats this as a legitimate
+		// empty corpus because there is nothing to lose; here there is, so the only safe reading is that something is wrong with
+		// this build's embedded content rather than that the pack is deliberately empty.
+		r.logger.WarnContext(ctx, "rulecontent: this build ships no rule documents; leaving the stored pack alone", "root", root)
+		return false, nil
+	}
+
+	api.SortDocuments(docs)
+	upgraded, version, err := r.store.UpgradeVendoredTo(ctx, docs)
+	if err != nil {
+		return false, err
+	}
+	if !upgraded {
+		return false, nil
+	}
+	r.logger.InfoContext(ctx, "rulecontent: installed the rule pack from this build",
+		"documents", len(docs), "version", version)
+	return true, nil
+}
+
 // SeedFrom populates the corpus from fsys when the corpus is empty, and reports whether it wrote anything.
 //
 // Seeding rather than migrating the content in, because the content is not schema: it changes on its own cadence, it is large, and
