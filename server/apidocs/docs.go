@@ -15,7 +15,7 @@
 //
 // The canonical spec lives at docs/api/openapi.yaml in the repo root; the
 // copy in embed/openapi.yaml is refreshed via go generate (see the
-// directive below) and a `task sync:openapi-embed` helper is a follow-up.
+// directive below) and run `task sync:openapi-embed` after editing the canonical spec.
 // If you edit the canonical copy, run `go generate ./server/apidocs/...`
 // before building.
 //
