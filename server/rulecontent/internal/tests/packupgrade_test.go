@@ -56,8 +56,8 @@ func contentAt(t *testing.T, docs []api.Document, path string) string {
 	return ""
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-newer-pack-replaces-the-shipped-content
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/an-operator-s-own-rule-survives
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-newer-pack-replaces-the-shipped-content
+// spec:rule-content/a-build-installs-its-shipped-rule-content/an-operator-s-own-rule-survives
 //
 // TestUpgradePack_ReplacesTheShippedHalfOnly is the acceptance criterion issue #768 leads with, stated as the property that makes
 // upgrading safe: a newer pack must be installable without costing an operator the rules they wrote.
@@ -102,7 +102,7 @@ func TestUpgradePack_ReplacesTheShippedHalfOnly(t *testing.T) {
 	assert.Equal(t, "mine", contentAt(t, stored, "authored/mine.yml"))
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-path-the-operator-has-taken-over-stays-theirs
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-path-the-operator-has-taken-over-stays-theirs
 //
 // TestUpgradePack_LeavesAPathTheOperatorTookOver covers the case the path rule in #874 creates. Writing over a shipped rule makes
 // that document the operator's, so a pack that still ships the same path must not quietly take it back: they would lose the rule
@@ -129,8 +129,8 @@ func TestUpgradePack_LeavesAPathTheOperatorTookOver(t *testing.T) {
 	assert.Equal(t, api.SourceAuthored, pathsOf(t, stored)["imported/a.yml"])
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/installing-the-same-content-again-changes-nothing
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/installing-is-unaffected-by-an-operator-s-override
+// spec:rule-content/a-build-installs-its-shipped-rule-content/installing-the-same-content-again-changes-nothing
+// spec:rule-content/a-build-installs-its-shipped-rule-content/installing-is-unaffected-by-an-operator-s-override
 //
 // TestUpgradePack_IsIdempotent is what keeps this off the critical path of an ordinary restart, and the case it protects is not
 // the obvious one.
@@ -205,7 +205,7 @@ func TestUpgradePack_RecordsWhatItInstalled(t *testing.T) {
 		"the recorded identity must be the digest of the shipped content actually installed")
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-pack-declaring-authored-content-is-refused
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-pack-declaring-authored-content-is-refused
 //
 // TestUpgradePack_RefusesAPackClaimingAuthoredContent guards the one input that would let an upgrade launder provenance. A pack is
 // shipped content by definition, so a document in one declaring itself the operator's is a contradiction rather than an edge case,
@@ -228,7 +228,7 @@ func TestUpgradePack_RefusesAPackClaimingAuthoredContent(t *testing.T) {
 	assert.Len(t, stored, 1, "a refused upgrade must not have changed the corpus")
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-build-carrying-no-shipped-content-leaves-the-corpus-alone
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-build-carrying-no-shipped-content-leaves-the-corpus-alone
 //
 // TestUpgradePackFrom_ABuildWithNoRulesLeavesTheStoredPackAlone covers the input where the safe reading differs from seeding's.
 //
@@ -254,7 +254,7 @@ func TestUpgradePackFrom_ABuildWithNoRulesLeavesTheStoredPackAlone(t *testing.T)
 	assert.Len(t, docs, 2, "an empty pack must not be read as an instruction to delete every shipped rule")
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
 //
 // TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity is the failure review caught, and it is worse than the shadowing it
 // looks like.
@@ -305,7 +305,7 @@ func TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity(t *testing.T) {
 		"the operator is entitled to know the deployment is not running a rule the pack ships")
 }
 
-// spec:rule-content/the-shipped-rule-content-in-a-build-is-installed-over-the-stored-shipped-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
 //
 // TestUpgradePack_CollisionIsCaseInsensitive is the same defect one level down, and review found it after the exact-case one was
 // fixed. Rule ids are compared case-insensitively where they are STORED, because the columns they reach collate that way and

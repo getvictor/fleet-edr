@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: The shipped rule content in a build is installed over the stored shipped content
+### Requirement: A build installs its shipped rule content
 
 The system SHALL install the shipped rule content carried by the running build over the shipped rule content the corpus holds, so that a deployment upgraded to obtain new detections actually runs them.
 
