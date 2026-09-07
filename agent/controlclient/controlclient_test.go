@@ -129,32 +129,6 @@ func startClientWithSilence(
 	return startClientWithClock(t, fake, sender, silence, nil)
 }
 
-// steppingClock advances a fixed step on every read, which is what makes the silence watchdog testable without racing the
-// scheduler.
-//
-// The watchdog's question is "how long since the last frame", and it answers it by subtracting two clock reads: one taken when a
-// frame arrived, one taken on its own tick. Under a stepping clock that difference counts the READS BETWEEN THEM rather than the
-// wall time between them, so what the test measures is the ratio of watchdog ticks to frames. That is the property. A loaded
-// runner stalls the whole process, so it delays frames and ticks together and the ratio holds; wall time, which is what the
-// previous version asserted against, does not survive that.
-type steppingClock struct {
-	mu   sync.Mutex
-	at   time.Time
-	step time.Duration
-}
-
-func newSteppingClock(step time.Duration) *steppingClock {
-	return &steppingClock{at: time.Unix(0, 0), step: step}
-}
-
-// Now advances and returns. Called from the stream goroutine and the watchdog goroutine, so it locks.
-func (c *steppingClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.at = c.at.Add(c.step)
-	return c.at
-}
-
 func startClientWithClock(
 	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration, now func() time.Time,
 ) (isConnected func() bool, authFails func() int) {
@@ -466,28 +440,24 @@ func TestSilentStreamIsTornDownAndReconnected(t *testing.T) {
 // The counter-case, and the reason the deadline is measured against ANY frame rather than against command traffic: an idle fleet is
 // normal, and a heartbeat is what separates idle from forgotten. Without this the watchdog would just be a periodic disconnect.
 // spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/an-idle-connection-still-carries-proof-that-the-server-holds-it
-// TestAHeartbeatingStreamIsLeftAlone pins that heartbeats keep a stream alive: an idle but heartbeating stream carries no commands
-// and must not be torn down for silence.
+// TestAHeartbeatingStreamIsLeftAlone pins that an idle stream carrying heartbeats stays up: no reconnect, still connected.
 //
-// It measures with a stepping clock rather than the wall clock (issue #834). The previous version heartbeat every 20ms against a
-// 150ms deadline and asserted one connection attempt after sleeping 600ms, so it needed the process never to stall for 7.5
-// heartbeat intervals across that window. On a contended hosted runner it does: the failure was reproduced at silent_for=150.3ms,
-// on a server-only PR touching nothing under agent/. Widening the ratio would have lowered the rate without removing the cause,
-// which is that a timing property was being asserted against a clock CI does not control.
+// It runs against a FROZEN clock, so the silence watchdog cannot conclude anything during the test whatever the scheduler does.
+// That is deliberate. This test used to assert the watchdog's own decision by sleeping 600ms against a 150ms deadline fed by 20ms
+// heartbeats, which needed the process never to stall for 7.5 intervals and failed on a contended runner at silent_for=150.327ms
+// (issue #834). The watchdog's decision is now decided by arithmetic in silence_internal_test.go, where both operands are driven
+// by the test rather than by two goroutines racing.
 //
-// Under the stepping clock the watchdog's "time since the last frame" counts clock READS between a frame and a tick, and a stall
-// pauses the frames and the ticks together, so the property holds however the scheduler behaves. The step is a tenth of the
-// deadline, so the watchdog would have to tick ten times without a single frame landing to conclude silence, against a heartbeat
-// arriving twice as often as it ticks.
+// What is left here is still worth asserting and cannot flake on timing: nothing ELSE reconnects an idle stream. A frozen clock
+// rules out the silence path, so a second connection attempt means a genuine defect somewhere else in the loop.
 func TestAHeartbeatingStreamIsLeftAlone(t *testing.T) {
 	t.Parallel()
-	const silence = 150 * time.Millisecond
+	frozen := func() time.Time { return time.Unix(0, 0) }
 	fake := &fakeGateway{heartbeatEvery: 20 * time.Millisecond}
-	isConnected, _ := startClientWithClock(t, fake, &recordingSender{}, silence, newSteppingClock(silence/10).Now)
+	isConnected, _ := startClientWithClock(t, fake, &recordingSender{}, 150*time.Millisecond, frozen)
 
 	require.Eventually(t, isConnected, 2*time.Second, 10*time.Millisecond)
-	// Long enough for many watchdog ticks (the watchdog ticks at a quarter of the deadline) and many heartbeats.
 	time.Sleep(600 * time.Millisecond)
-	assert.Equal(t, 1, fake.attemptCount(), "a stream carrying heartbeats is alive even with no commands on it")
+	assert.Equal(t, 1, fake.attemptCount(), "an idle stream carrying heartbeats must not be reconnected")
 	assert.True(t, isConnected())
 }
