@@ -42,10 +42,46 @@ export async function takeGlobalRuleSetting(ruleId: string): Promise<GlobalRuleS
   }
 }
 
-/** restoreGlobalRuleSetting puts back exactly what takeGlobalRuleSetting found, including the absence of a row. */
+/**
+ * lastWritten records what each fixture write left in a rule's global row, so a restore can tell its own change apart from
+ * somebody else's.
+ *
+ * Module state rather than a parameter because the alternative is asking every call site to describe what it just wrote, which is
+ * a second copy of the same fact and the copy that goes stale. The suite runs one worker (playwright.config.ts sets workers: 1),
+ * so there is one spec writing at a time and the map cannot interleave with itself.
+ */
+const lastWritten = new Map<string, GlobalRuleSetting | null>();
+
+/**
+ * restoreGlobalRuleSetting puts back the operator's row, unless somebody else has written it since.
+ *
+ * What is restored is every column an operator sets: mode, severity_override, settings and updated_by. NOT the row's identity or
+ * history. The row is deleted and re-inserted, so it returns with a fresh auto-increment id and fresh timestamps, and this makes
+ * no attempt to preserve them: nothing in the product keys off that id, and a test helper reinstating an auto-increment value
+ * could collide with a row inserted meanwhile, which is a worse failure than the one it would prevent.
+ *
+ * The concurrency check is the other half. Between the snapshot and the restore this used to assume nothing else wrote the row, so
+ * an operator editing the same rule in the UI while the suite ran had their change reverted at teardown. Now the restore first
+ * reads what is there: if it is not what this fixture last wrote, the row belongs to somebody else and is left alone. Reverting
+ * their edit is the bug; failing the run over it would be worse, since teardown is not the place to fail, so it warns instead.
+ */
 export async function restoreGlobalRuleSetting(ruleId: string, previous: GlobalRuleSetting | null): Promise<void> {
+  const expected = lastWritten.get(ruleId);
+  if (expected !== undefined) {
+    const current = await takeGlobalRuleSetting(ruleId);
+    if (!sameSetting(current, expected)) {
+      console.warn(
+        `restoreGlobalRuleSetting(${ruleId}): the row changed since this spec wrote it, so it was left as it stands rather than ` +
+          `reverted. Something else is editing this rule's global setting while the suite runs.`,
+      );
+      lastWritten.delete(ruleId);
+      return;
+    }
+  }
+  lastWritten.delete(ruleId);
+
   if (previous === null) {
-    await clearGlobalRuleSetting(ruleId);
+    await writeCleared(ruleId);
     return;
   }
   const db = await openDB();
@@ -63,6 +99,12 @@ export async function restoreGlobalRuleSetting(ruleId: string, previous: GlobalR
   }
 }
 
+/** sameSetting compares two snapshots by the columns an operator sets, which is everything a restore writes. */
+function sameSetting(a: GlobalRuleSetting | null, b: GlobalRuleSetting | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.mode === b.mode && a.severityOverride === b.severityOverride && a.settings === b.settings && a.updatedBy === b.updatedBy;
+}
+
 /**
  * clearGlobalRuleSetting removes the GLOBAL-scope operator setting for one rule and bumps the configuration version.
  *
@@ -74,6 +116,12 @@ export async function restoreGlobalRuleSetting(ruleId: string, previous: GlobalR
  * write without it is invisible to the running server for the life of the process.
  */
 export async function clearGlobalRuleSetting(ruleId: string): Promise<void> {
+  await writeCleared(ruleId);
+  lastWritten.set(ruleId, null);
+}
+
+/** writeCleared is the delete itself, without recording it, so a restore can put the absence back without arming the check. */
+async function writeCleared(ruleId: string): Promise<void> {
   const db = await openDB();
   try {
     await db.query("DELETE FROM detection_rule_settings WHERE rule_id = ? AND host_group_id = 0", [ruleId]);
@@ -106,6 +154,9 @@ export async function setGlobalRuleMode(ruleId: string, mode: string, updatedBy:
   } finally {
     await db.end();
   }
+  // Read back rather than assume: the insert leaves severity_override and settings at whatever the row already held on the
+  // conflict path, so what this write LEFT is not what it asked for, and the restore compares against what is there.
+  lastWritten.set(ruleId, await takeGlobalRuleSetting(ruleId));
 }
 
 /**

@@ -282,7 +282,7 @@ echo "$END_GROUP"
 # shared fixture all three pass together in under a second.
 #
 # Grouped as their own phase for legibility rather than necessity, since two submissions would also fit inside phase 2.
-echo "::group::Phase 6: UI presentation regressions (detection tuning, rule detail, host health)"
+echo "::group::Phase 6: UI presentation regressions + the detection-config fixture guarantee"
 start_server "default-env-ui-regressions"
 seed_oidc 1
 (
@@ -291,6 +291,7 @@ seed_oidc 1
     tests/qa/detection-tuning-cost-column.spec.ts \
     tests/qa/rule-detail-mode-row.spec.ts \
     tests/qa/host-health-components.spec.ts \
+    tests/qa/detection-config-fixture.spec.ts \
     --workers=1
 )
 stop_server
