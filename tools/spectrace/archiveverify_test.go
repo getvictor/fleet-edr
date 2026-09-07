@@ -310,20 +310,25 @@ func TestLastBatchRestatement(t *testing.T) {
 		}
 	})
 
-	// The malformed double-date folders that predate this still group by their first ten characters.
-	t.Run("a malformed double-date folder still carries its date", func(t *testing.T) {
-		t.Parallel()
-		assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-2026-06-09-dns-proxy-on-by-default"))
-		assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-some-change"))
-		assert.Equal(t, "short", archiveDate("short"))
-	})
+	// The batch a folder belongs to is its first ten characters, including for the malformed double-date folders that predate this.
+	for _, tc := range []struct{ name, folder, want string }{
+		{"an ordinary archive folder", "2026-06-09-some-change", "2026-06-09"},
+		{"a malformed double-date folder", "2026-06-09-2026-06-09-dns-proxy-on-by-default", "2026-06-09"},
+		{"a folder too short to carry a date", "short", "short"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, archiveDate(tc.folder))
+		})
+	}
 }
 
 // TestVerifyArchive_ARetirementALaterChangeUndidIsNotAFinding covers what a flat "was it ever retired" set could not answer: a
 // retirement is not the last word, and a later archived change may legitimately add the requirement back.
 //
-// A retirement and an addition stamped the SAME date are one batch, whose internal order is not recoverable, so they say nothing
-// about each other and the requirement's presence is not claimed as damage.
+// A retirement and an addition stamped the SAME date ARE reported, which is the one place this file does not treat a same-batch
+// question as unanswerable. Every change in the current release carries one date, so that pair archived remove-then-add is exactly
+// the outcome to catch; a historical one appears in the before report too and costs the reader nothing.
 func TestVerifyArchive_ARetirementALaterChangeUndidIsNotAFinding(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -333,7 +338,7 @@ func TestVerifyArchive_ARetirementALaterChangeUndidIsNotAFinding(t *testing.T) {
 	}{
 		{"retired, never added back", requirementLifecycle{retired: "2026-06-02"}, 1},
 		{"added back in a later batch", requirementLifecycle{retired: "2026-06-02", added: "2026-06-09"}, 0},
-		{"added and retired in one batch", requirementLifecycle{retired: "2026-06-02", added: "2026-06-02"}, 0},
+		{"added and retired in one batch", requirementLifecycle{retired: "2026-06-02", added: "2026-06-02"}, 1},
 		{"added before it was retired", requirementLifecycle{retired: "2026-06-09", added: "2026-06-02"}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -357,4 +362,40 @@ func TestArchiveCommands_RefuseAChangesDirThatIsNotThere(t *testing.T) {
 		assert.Equal(t, 2, runArchiveVerify([]string{"--changes-dir", dir}))
 		assert.Equal(t, 2, runArchiveOrder([]string{"--changes-dir", dir}))
 	}
+}
+
+// TestVerifyArchive_ACanonicalScenarioNoRestatementKeptIsAFinding covers the comparison in the other direction. A restatement
+// replaces a requirement WHOLE, so a scenario it does not list is one it retires; archiving a MODIFIED before the ADDED it refines
+// re-applies the original body last, and then every scenario the restatement KEPT is present and only the dropped ones show it.
+func TestVerifyArchive_ACanonicalScenarioNoRestatementKeptIsAFinding(t *testing.T) {
+	t.Parallel()
+
+	// The restatement kept only "kept"; canonical still carries the "dropped" the original ADDED introduced.
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{change: "2026-06-02-refines-it", scenarios: []string{"kept"}}},
+		},
+		canonicalWith("cap/the-thing", "kept", "dropped"),
+		nil,
+	)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "cap/the-thing/dropped")
+	assert.Contains(t, findings[0], "in the canonical spec, and retired by 2026-06-02-refines-it")
+}
+
+// A scenario ANY restatement in the batch kept could be there because that one won, so the canonical side is checked against the
+// batch's union while the restatement side is checked against its intersection. Getting this backwards would report every
+// scenario the two changes disagree about, twice, in opposite directions.
+func TestVerifyArchive_TheCanonicalSideIsCheckedAgainstTheWholeBatch(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {
+				{change: "2026-09-07-aaa", scenarios: []string{"shared", "only-aaa"}},
+				{change: "2026-09-07-zzz", scenarios: []string{"shared"}},
+			},
+		},
+		canonicalWith("cap/the-thing", "shared", "only-aaa"),
+		nil,
+	), "aaa may have won, so its scenario being canonical is not a retirement that failed")
 }

@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 )
 
@@ -55,9 +57,14 @@ func archiveConstraints(d *deltaSections, canonical map[string]struct{}) []archi
 // files. What separates them is whether the requirement exists yet, which is why this reads the canonical tree.
 //
 // A pending ADDED for a requirement that already exists is malformed rather than ambiguous: openspec has no "add it again", and
-// whichever order such a pair is archived in, one of the two authors does not get what their delta says. So the edge is emitted in
+// whichever order such a PAIR is archived in, one of the two authors does not get what their delta says. So the edge is emitted in
 // BOTH directions and the pair surfaces through the cycle path, whose message already says to reconcile and whose constraint
 // listing already names the requirement they contend over. No pending pair is in this state today.
+//
+// The PAIR is the whole of it, and the narrowness is deliberate: a lone pending ADDED for an existing requirement, or one beside a
+// MODIFIED, still orders cleanly and is not reported. Validating a delta against the canonical tree is `openspec validate`'s job
+// and would be a second implementation of it here; what this command owns is the ORDER, and a lone ADDED does not make one
+// ambiguous. Review asked for the claim to match the code, and this is the half that is true.
 func adderBeforeTheRest(d *deltaSections, canonical map[string]struct{}) []archiveConstraint {
 	var out []archiveConstraint
 	for requirement, adders := range d.addedBy {
@@ -108,7 +115,7 @@ func modifierBeforeRemover(d *deltaSections) []archiveConstraint {
 	var out []archiveConstraint
 	for requirement, removers := range d.removedBy {
 		for _, remover := range sortedKeys(removers) {
-			for _, modifier := range sortedKeysOfRestatements(d.modifiedRestatements[requirement]) {
+			for _, modifier := range sortedKeys(d.modifiedRestatements[requirement]) {
 				if remover != modifier {
 					out = append(out, archiveConstraint{before: modifier, after: remover, requirement: requirement})
 				}
@@ -335,24 +342,10 @@ func writeFailure(err error) int {
 	return 2
 }
 
-// sortedKeys returns a set's keys in a stable order.
-func sortedKeys(m map[string]struct{}) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// sortedKeysOfRestatements is sortedKeys for the restatement index, whose value type differs.
-func sortedKeysOfRestatements(m map[string]restatement) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+// sortedKeys returns a map's keys in a stable order, whatever the map holds. Generic because the two callers here differ only in
+// the value type, and two copies of this that agree until one is edited is the shape this codebase keeps paying for.
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
 }
 
 // sortedUnique returns the distinct values in a stable order.

@@ -73,12 +73,25 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 			continue
 		}
 		winner := lastBatchRestatement(entries)
+		by := strings.Join(winner.changes, " and ")
 		for _, scenario := range winner.scenarios {
 			if _, ok := have[scenario]; ok {
 				continue
 			}
-			losses = append(losses, fmt.Sprintf("%s/%s\n    listed by %s, and not in the canonical spec",
-				requirement, scenario, strings.Join(winner.changes, " and ")))
+			losses = append(losses, fmt.Sprintf("%s/%s\n    listed by %s, and not in the canonical spec", requirement, scenario, by))
+		}
+		// The same comparison the other way round, which review caught missing. A restatement replaces a requirement WHOLE, so a
+		// scenario it does NOT list is one it retires, and a canonical scenario no restatement in the last batch mentions is a
+		// retirement that did not take effect. Archiving a MODIFIED before the ADDED it refines lands exactly here: the ADDED body
+		// is re-applied last, every scenario the restatement kept is present, and only the ones it dropped give it away.
+		//
+		// The UNION across the batch, not the intersection the other direction uses: a scenario any restatement in the batch kept
+		// could be there because that one won.
+		for _, scenario := range sortedKeys(have) {
+			if _, ok := winner.everListed[scenario]; ok {
+				continue
+			}
+			losses = append(losses, fmt.Sprintf("%s/%s\n    in the canonical spec, and retired by %s", requirement, scenario, by))
 		}
 	}
 	sort.Strings(losses)
@@ -90,6 +103,9 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 type winningRestatement struct {
 	changes   []string
 	scenarios []string
+	// everListed is every scenario ANY restatement in the batch named, which is what a canonical scenario is checked against: one
+	// that any of them kept could be there because that one won, and only one none of them kept is a retirement that did not land.
+	everListed map[string]struct{}
 }
 
 // lastBatchRestatement returns what the last archive batch to restate a requirement agreed on.
@@ -109,7 +125,7 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			last = d
 		}
 	}
-	var out winningRestatement
+	out := winningRestatement{everListed: map[string]struct{}{}}
 	shared := map[string]int{}
 	batch := 0
 	for _, e := range entries {
@@ -120,6 +136,7 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 		out.changes = append(out.changes, e.change)
 		for _, s := range e.scenarios {
 			shared[s]++
+			out.everListed[s] = struct{}{}
 		}
 	}
 	for s, n := range shared {
@@ -170,8 +187,16 @@ type requirementLifecycle struct {
 	retired string
 }
 
-// retiredLast reports a retirement no later addition undid. Equal dates are the same batch, which is not an answer.
-func (l requirementLifecycle) retiredLast() bool { return l.retired != "" && l.retired > l.added }
+// retiredLast reports a retirement no later addition undid.
+//
+// Equal dates count as retired, which looks like the wrong way round for a file that treats every other same-batch question as
+// unanswerable, and review is right that it is. Every change in the CURRENT release carries one date, so an addition and a
+// retirement of the same requirement archived remove-then-add land on equal dates, leave the requirement canonical, and are
+// exactly the out-of-order outcome this exists to catch. Staying silent there would blind it to the release it runs against.
+//
+// What makes that safe is the procedure rather than the rule: a historical pair reported on this basis appears in the BEFORE
+// report too, so it is not a new line and costs the release engineer nothing. No requirement is in that state today.
+func (l requirementLifecycle) retiredLast() bool { return l.retired != "" && l.retired >= l.added }
 
 // collectArchivedRestatements walks the archive subtree and returns each requirement's restatements in archive order, plus when
 // each requirement was last added and last retired.
