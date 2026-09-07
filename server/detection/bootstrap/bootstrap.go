@@ -445,8 +445,12 @@ func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 // answers from a primary-key lookup and skips the lock and the scan entirely. The second is inside the lock, where it is the
 // authoritative one, and it closes the window where two replicas both read "not done" before either finished.
 //
-// Reports how many rows it credited, so an operator upgrading can see whether the obligation was outstanding at all. Returns
-// (false, nil) when another replica holds the lock or when the work is already recorded as done, neither of which is a failure.
+// Reports how many rows it credited, so an operator upgrading can see whether the obligation was outstanding at all.
+//
+// The returned bool is whether this replica took the LOCK, which this change is what makes distinct from whether the pass ran. It
+// is false when another replica holds the lock and when the completion was already recorded before the lock was sought, neither of
+// which is a failure. It is TRUE when this replica took the lock and then found a peer's record inside it, because the lock was
+// genuinely held; the caller uses it to log, and there is nothing there for it to decide differently about.
 func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coordinator, rules []rulesapi.Rule) (bool, error) {
 	if d.store == nil || coord == nil {
 		return false, nil

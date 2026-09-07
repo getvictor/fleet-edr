@@ -8,7 +8,7 @@ The system SHALL credit alerts that carry no attribution but were raised by a ru
 
 Two replicas SHALL NOT run the pass concurrently, and a replica SHALL NOT block startup on winning the right to run it.
 
-The pass SHALL run at most once per deployment rather than once per start. A leader lock alone does not give that: it excludes callers that OVERLAP and is released when the work returns, so replicas starting in sequence each acquire it in turn and each run the whole pass. The system SHALL therefore record durably that the pass completed, and a later start SHALL determine from that record that there is nothing to do without reading the alerts it would otherwise credit.
+The pass SHALL run at most once SUCCESSFULLY per deployment rather than once per start, which is a bound on completed work and not on attempts: an attempt that does not finish is retried, per the paragraph below. A leader lock alone does not give that: it excludes callers that OVERLAP and is released when the work returns, so replicas starting in sequence each acquire it in turn and each run the whole pass. The system SHALL therefore record durably that the pass completed, and a later start SHALL determine from that record that there is nothing to do without reading the alerts it would otherwise credit.
 
 Recording completion SHALL follow a successful pass rather than accompany it. A pass that fails, or that a shutdown cuts short, SHALL record nothing and SHALL be retried on the next start: an unmet licence obligation that no later start will notice is worse than repeating work that is idempotent.
 

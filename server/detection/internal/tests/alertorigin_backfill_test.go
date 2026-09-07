@@ -260,26 +260,77 @@ func TestBackfillAlertOrigins_AFailedPassIsRetried(t *testing.T) {
 
 // spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-pass-that-fails-is-retried
 //
-// TestBackfillAlertOrigins_AnInterruptedStartIsRetried covers the other way a pass ends without finishing: the process is going
-// down. It reaches the same return as an error does, before anything is recorded, which is the point being pinned.
+// TestBackfillAlertOrigins_APassThatStopsPartwayIsRetried is the case the failing test above cannot reach: a pass that credited
+// SOME rows and then stopped. That is the shape a shutdown produces, and it is the one where recording completion too early would
+// be silently destructive, because the rows already credited make the outcome look like a success.
 //
-// The context is cancelled before the call rather than during the walk. Cancelling mid-walk would race the batch loop, and it
-// would exercise the same ordering: the store returns the context's error, the caller returns it, and the marker is never
-// reached.
-func TestBackfillAlertOrigins_AnInterruptedStartIsRetried(t *testing.T) {
+// Deterministic rather than timed, which is the reason it is built this way. Cancelling a context mid-walk would race the batch
+// loop, and a race that loses does not fail the test, it completes the pass and records the marker. Instead the failure is placed
+// in the SECOND batch by id: a full batch of rows for a rule whose origin fits, then one row, at a higher id, for a rule whose
+// origin does not. The walk is by primary key, so the first batch commits and the second cannot.
+func TestBackfillAlertOrigins_APassThatStopsPartwayIsRetried(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const firstRule = "proc_creation_macos_applescript"
+	const secondRule = "proc_creation_macos_base64_decode"
+	// One full batch. Mirrors mysql.backfillBatchSize, which is unexported; TestBackfillAlertOrigins_CreditsMoreThanOneBatch
+	// hardcodes the same number for the same reason. If that constant moves, this test stops being a partial pass and the
+	// require below says so rather than passing quietly.
+	const oneBatch = 1000
+	values := make([]string, 0, oneBatch)
+	args := make([]any, 0, oneBatch*2)
+	for i := range oneBatch {
+		values = append(values, "(?, '"+firstRule+"', 'detection', 'high', 'seeded', 'seeded', '', ?, '[]')")
+		args = append(args, "host-partway", fmt.Sprintf(`{"pid":%d}`, i))
+	}
+	_, err := d.Store().DB().ExecContext(ctx,
+		`INSERT INTO alerts (host_id, rule_id, source, severity, title, description, origin, subject, techniques) VALUES `+
+			strings.Join(values, ", "), args...)
+	require.NoError(t, err)
+	// Inserted after the batch, so it carries a higher id and lands in the second pass of the walk.
+	last := insertAlertWithOrigin(t, ctx, d, secondRule, "", `{"pid":999999}`)
+
+	_, err = d.BackfillAlertOrigins(ctx, soleLeader{}, []rulesapi.Rule{
+		stubOriginRule{id: firstRule, origin: "SigmaHQ"},
+		stubOriginRule{id: secondRule, origin: strings.Repeat("A", 300)},
+	})
+	require.Error(t, err, "the second batch cannot be written")
+
+	var credited int
+	require.NoError(t, d.Store().DB().GetContext(ctx, &credited,
+		`SELECT COUNT(*) FROM alerts WHERE host_id = 'host-partway' AND origin = 'SigmaHQ'`))
+	require.Equal(t, oneBatch, credited, "the first batch did commit, which is what makes this a PARTIAL pass")
+	require.Empty(t, originOfAlert(t, ctx, d, last))
+
+	ran, err := d.BackfillAlertOrigins(ctx, soleLeader{}, []rulesapi.Rule{
+		stubOriginRule{id: firstRule, origin: "SigmaHQ"},
+		stubOriginRule{id: secondRule, origin: "SigmaHQ"},
+	})
+	require.NoError(t, err)
+	assert.True(t, ran, "a partial pass recorded nothing, so the next start runs")
+	assert.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, last), "and finishes the row the interrupted one never reached")
+}
+
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-pass-that-fails-is-retried
+//
+// TestBackfillAlertOrigins_AStartCutShortBeforeThePassIsRetried covers the earlier half of a shutdown: the process is already
+// going down when the start-up work is reached, so nothing runs at all. It is the cheap end of the same ordering, and it is here
+// because the completion LOOKUP is the first thing that touches the database, so it is the first thing a cancelled context stops.
+func TestBackfillAlertOrigins_AStartCutShortBeforeThePassIsRetried(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
-	coord := soleLeader{}
 	rules := []rulesapi.Rule{stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"}}
 
 	id := insertAlertWithOrigin(t, t.Context(), d, "proc_creation_macos_applescript", "", `{"pid":40}`)
 
 	stopped, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := d.BackfillAlertOrigins(stopped, coord, rules)
+	_, err := d.BackfillAlertOrigins(stopped, soleLeader{}, rules)
 	require.Error(t, err)
 
-	ran, err := d.BackfillAlertOrigins(t.Context(), coord, rules)
+	ran, err := d.BackfillAlertOrigins(t.Context(), soleLeader{}, rules)
 	require.NoError(t, err)
 	assert.True(t, ran, "a start that was cut short recorded nothing, so the next one runs")
 	assert.Equal(t, "SigmaHQ", originOfAlert(t, t.Context(), d, id))
