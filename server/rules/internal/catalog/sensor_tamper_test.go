@@ -136,6 +136,15 @@ func TestSensorTamper_DiscriminatesUpgradeFromTamper(t *testing.T) {
 			assert.Equal(t, tamperHost, findings[0].HostID)
 			assert.Equal(t, []string{"stop-1"}, findings[0].EventIDs, "the alert must cite the stop it fired on")
 			assert.Contains(t, findings[0].Description, "content_filter")
+			// And no ATT&CK identifier in it. The description is copied onto the alert verbatim, so an identifier here is the
+			// same claim the rule declines to make in its technique list, by another route (issue #754's finding, applied to
+			// this rule by #755). Asserted on the FINDING rather than on the helper that builds the string, because the finding
+			// is what persistence carries and a helper test would pass while a caller stamped something else.
+			//
+			// The SHAPE rather than the identifier that was removed, so a later edit cannot put a different one in the same
+			// sentence and leave this green.
+			assert.NotRegexp(t, `\bT\d{4}(\.\d{3})?\b`, findings[0].Description,
+				"the alert text must not name a technique the rule declines to declare")
 			assert.Contains(t, findings[0].Description, "stop reason 1",
 				"the platform reason belongs in the alert even though the rule does not judge on it")
 		})

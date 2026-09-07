@@ -9,8 +9,8 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// SensorTamper fires when one of the EDR's own capture providers stops and does not come back within a few seconds
-// (T1562.001). Switching off the sensor is the first move in a great many intrusions, and until this rule the product
+// SensorTamper fires when one of the EDR's own capture providers stops and does not come back within a few seconds.
+// Switching off the sensor is the first move in a great many intrusions, and until this rule the product
 // detected it nowhere: the sudoers rule covers tampering with the HOST's controls, but nothing watched our own.
 //
 // The self-heal (issue #632) makes the detection more necessary rather than less. It restores a disabled provider in
@@ -244,7 +244,7 @@ func sensorTamperDescription(p sensorTransitionPayload) string {
 		reason = fmt.Sprintf("platform stop reason %d", *p.StopReason)
 	}
 	return fmt.Sprintf(
-		"EDR capture provider %s stopped (%s) and had not resumed %s later: the host is not reporting this telemetry (MITRE T1562.001)",
+		"EDR capture provider %s stopped (%s) and had not resumed %s later: the host is not reporting this telemetry",
 		p.Provider, reason, sensorRecoveryWindow,
 	)
 }

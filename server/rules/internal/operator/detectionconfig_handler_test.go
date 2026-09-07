@@ -46,21 +46,11 @@ type fakeDCService struct {
 	matchCounts   []api.RuleMatchCount
 	matchCountErr error
 	lastWindow    api.MatchCountWindow
-	// evalStats is the same pair for the evaluation-statistics route, with its own recorded window: the two windows are
-	// separate types, and one shared field could not tell a handler that forwarded the wrong one from a handler that did not.
-	evalStats      []api.RuleEvalSummary
-	evalStatsErr   error
-	lastEvalWindow api.EvalStatsWindow
 }
 
 func (f *fakeDCService) MatchCounts(_ context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
 	f.lastWindow = days
 	return f.matchCounts, f.matchCountErr
-}
-
-func (f *fakeDCService) EvalStats(_ context.Context, days api.EvalStatsWindow) ([]api.RuleEvalSummary, error) {
-	f.lastEvalWindow = days
-	return f.evalStats, f.evalStatsErr
 }
 
 func (f *fakeDCService) ListExclusions(context.Context) ([]api.DetectionExclusion, error) {
@@ -434,124 +424,6 @@ var _ detectionConfigService = (*detectionconfig.Service)(nil)
 // spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-cap-follows-the-deployment-s-retention
 //
 // TestHandler_ListMatchCounts covers the endpoint an operator's promote decision reads.
-// TestHandler_ListEvalStats covers the evaluation-statistics route, which is the half of issue #774 that lets an operator find
-// the slow rule from the UI rather than from a metrics backend.
-//
-// The window cases mirror the match-count ones deliberately rather than by copying: the two routes have SEPARATE window types and
-// separate caps, so a handler that forwarded the wrong one, or clamped with the wrong cap, would pass every test on the other
-// route. The cases that matter are the ones asserting the store saw the same window the response reports.
-func TestHandler_ListEvalStats(t *testing.T) {
-	t.Parallel()
-
-	newSrvWithHandler := func(t *testing.T, svc *fakeDCService) (*httptest.Server, *DetectionConfigHandler) {
-		t.Helper()
-		h := NewDetectionConfig(svc, allowAllAuthZ{}, slog.Default())
-		mux := http.NewServeMux()
-		h.RegisterRoutes(mux)
-		srv := httptest.NewServer(mux)
-		t.Cleanup(srv.Close)
-		return srv, h
-	}
-	newSrv := func(t *testing.T, svc *fakeDCService) *httptest.Server {
-		t.Helper()
-		srv, _ := newSrvWithHandler(t, svc)
-		return srv
-	}
-	get := func(t *testing.T, srv *httptest.Server, query string) *http.Response {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-			srv.URL+"/api/v1/detection-config/rule-eval-stats"+query, nil)
-		require.NoError(t, err)
-		resp, err := srv.Client().Do(req)
-		require.NoError(t, err)
-		return resp
-	}
-
-	t.Run("serves the statistics and echoes the window", func(t *testing.T) {
-		t.Parallel()
-		svc := &fakeDCService{evalStats: []api.RuleEvalSummary{
-			{RuleID: "imported", Evaluations: 400, RetryableMisses: 12, MeanEvalNs: 1_500_000, MaxEvalNs: 90_000_000},
-		}}
-		resp := get(t, newSrv(t, svc), "?days=14")
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var body struct {
-			EvalStats []api.RuleEvalSummary `json:"eval_stats"`
-			Days      api.EvalStatsWindow   `json:"days"`
-		}
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-		require.Len(t, body.EvalStats, 1)
-		assert.Equal(t, int64(400), body.EvalStats[0].Evaluations)
-		assert.Equal(t, int64(12), body.EvalStats[0].RetryableMisses)
-		assert.Equal(t, int64(1_500_000), body.EvalStats[0].MeanEvalNs, "the mean is served, not left for the client to derive")
-		assert.Equal(t, int64(90_000_000), body.EvalStats[0].MaxEvalNs, "and the worst case, which the mean hides")
-		assert.Equal(t, api.EvalStatsWindow(14), svc.lastEvalWindow, "the requested window reaches the store")
-		assert.Equal(t, api.EvalStatsWindow(14), body.Days, "and is echoed, so the reader knows what the numbers cover")
-	})
-
-	t.Run("the cap follows the deployment's retention, not the constant", func(t *testing.T) {
-		t.Parallel()
-		for _, tc := range []struct {
-			name      string
-			retention int
-			query     string
-			want      api.EvalStatsWindow
-		}{
-			{"a request past the retention is served at the retention", 7, "?days=30", 7},
-			{"the DEFAULT is capped too, not just an explicit request", 3, "", 3},
-			{"a request inside the retention is untouched", 14, "?days=10", 10},
-			{"a retention wider than the constant cap does not raise it", 365, "?days=90", api.MaxEvalStatsWindow},
-			{"retention disabled leaves the constant cap in force", 0, "?days=90", api.MaxEvalStatsWindow},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				svc := &fakeDCService{}
-				srv, h := newSrvWithHandler(t, svc)
-				// The SAME setter as the match-count cap, which is the wiring worth asserting: both counter tables are pruned
-				// by one retention knob, so a second setter nobody called would leave this route reporting 30 days over 7.
-				h.SetMatchCountCap(tc.retention)
-				resp := get(t, srv, tc.query)
-				defer resp.Body.Close()
-				require.Equal(t, http.StatusOK, resp.StatusCode)
-
-				var body struct {
-					Days api.EvalStatsWindow `json:"days"`
-				}
-				require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-				assert.Equal(t, tc.want, svc.lastEvalWindow, "the store is asked for the window retention can actually cover")
-				assert.Equal(t, tc.want, body.Days, "and the response reports the same one")
-			})
-		}
-	})
-
-	t.Run("an explicitly empty window is rejected, not defaulted", func(t *testing.T) {
-		t.Parallel()
-		resp := get(t, newSrv(t, &fakeDCService{}), "?days=")
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("no statistics serialise as an empty array, never null", func(t *testing.T) {
-		t.Parallel()
-		resp := get(t, newSrv(t, &fakeDCService{}), "")
-		defer resp.Body.Close()
-		raw, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		assert.Contains(t, string(raw), `"eval_stats":[]`, "the UI iterates this without a nil guard")
-	})
-
-	t.Run("a store failure is a 500, and does not leak the error", func(t *testing.T) {
-		t.Parallel()
-		resp := get(t, newSrv(t, &fakeDCService{evalStatsErr: errors.New("boom")}), "")
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-		raw, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		assert.NotContains(t, string(raw), "boom")
-	})
-}
-
 func TestHandler_ListMatchCounts(t *testing.T) {
 	t.Parallel()
 

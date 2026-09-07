@@ -19,3 +19,5 @@
 - [x] 3.3 Regenerate the rule reference, the Navigator layer and the rule pack, and read the coverage diff as the deliberate change it is.
 - [x] 3.4 Rename the L6 corpus scenario to the sub-technique it exercises, and correct the technique labels on the scenarios whose rules changed.
 - [x] 3.5 Restate the requirement identically in the in-flight delta that also modifies it, since `openspec archive` replaces a requirement whole and the last to archive would otherwise discard the other's text (#815).
+- [x] 3.7 Take the technique out of the tamper rule's alert TEXT too, and assert it on the FINDING rather than on the helper that builds the string, since the finding is what persistence carries.
+- [x] 3.8 State the behaviour-versus-actor test in the requirement itself, so a reader can tell why one rule keeps a technique it cannot prove intent for and another loses one it can.

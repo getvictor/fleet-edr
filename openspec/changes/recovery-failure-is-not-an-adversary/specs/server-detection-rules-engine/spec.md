@@ -8,9 +8,13 @@ The system SHALL stamp each persisted alert with MITRE ATT&CK technique identifi
 
 The stamped list MUST be preserved on the alert row even if the rule's technique mapping is later refined.
 
-A rule SHALL declare a technique only for something it OBSERVED, not for the subject it is about. A technique names adversary behaviour, so declaring one asserts that an adversary did something, and a rule that cannot attribute what it reports to anyone SHALL declare none.
+A rule SHALL declare a technique only for something it OBSERVED, not for the subject it is about.
 
-Naming this product's own components in a rule's documentation is not by itself that condition, and telling the two apart is the whole test. A rule that names a product-caused explanation as a known false positive and then SEPARATES it from the behaviour it reports still attributes what it does report, because that separation is itself the observation. A rule whose documentation names this product's components among the likely causes of the very thing it reports, and which offers nothing that tells those causes apart from an adversary, is the rule this excludes.
+What counts as observing it depends on what the technique NAMES, and the two cases are different obligations. A technique that names a BEHAVIOUR is observed when the behaviour is: a Unix shell ran whether an administrator or an intruder started it, so a rule that matches the shell has seen the technique and does not owe an account of intent. A technique that names an ACTOR'S ACTION is observed only when something about the actor is: impairing defenses is somebody doing something, and a rule that sees only the resulting state has not seen it, however reliably that state follows from the action.
+
+A rule that cannot observe what its technique names SHALL declare none.
+
+Separating a known benign explanation from what a rule reports is what makes the rule's signal sound, and it is a different question from which technique the rule may declare. A rule that names a product-caused false positive and then discriminates against it still has to meet the test above for whatever it declares: the separation earns the alert, not the attribution. And a rule whose own documentation names this product's components among the likely causes of the very thing it reports has separated nothing. It is describing a state with several possible causes, one of them ours, which is neither an observed behaviour nor an observed actor.
 
 Declaring none is a complete mapping rather than a gap. A signal that a host has stopped capturing is an operational statement, and it earns its severity from the consequence rather than from an attribution: a host that is not capturing needs an operator whatever caused it. An unearned technique is not a harmless overstatement either, because it reaches the alert row an analyst reads and, for a rule that appears on the operator-facing catalog, the coverage export a customer reads.
 
