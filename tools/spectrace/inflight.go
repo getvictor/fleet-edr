@@ -119,13 +119,16 @@ func canonicalIDs(scenarios []Scenario) map[string]struct{} {
 	return ids
 }
 
-// inFlightIDsAtMergeBase returns the scenario IDs the changed delta files already declared at the merge base.
+// inFlightIDsAtMergeBase returns every scenario ID the in-flight deltas declared at the merge base.
 //
-// Only the CHANGED files are read, which is the whole set that matters: a scenario in a file this branch did not touch cannot
-// have been reported as touched in the first place.
+// EVERY delta, not only the files this branch changed, and review was right that the difference is reachable. Concurrent
+// MODIFIED restatements of one requirement are required to be identical, so the same scenario ID legitimately appears in several
+// delta files. A branch that adds a delta restating a requirement another delta already carries would otherwise find that ID
+// touched and not in the baseline, and be blamed for a scenario that was already there unmarked.
 //
-// A file that does not exist at the merge base is a delta this branch created, and `git show` fails for it. That is not an error
-// to propagate: everything in a new file is new, which is exactly what an empty result for it means.
+// Enumerating the tree at the merge base also removes the need to guess at git failures. Every path here is one `git ls-tree`
+// just reported, so `git show` failing on it is a real error rather than a file this branch created, and it propagates: an
+// earlier revision treated any failure as "new file", which would have turned a timeout into a silent false accusation.
 func inFlightIDsAtMergeBase(ctx context.Context, changesDir, baseRef string) (map[string]struct{}, error) {
 	if baseRef == "" {
 		baseRef = defaultBaseRef
@@ -144,30 +147,59 @@ func inFlightIDsAtMergeBase(ctx context.Context, changesDir, baseRef string) (ma
 	if err != nil {
 		return nil, fmt.Errorf("git merge-base HEAD %s: %w", baseRef, err)
 	}
-	changed, err := gitChangedFiles(ctx, repoRoot, mergeBase, changesDir)
+	files, err := gitListFiles(ctx, repoRoot, mergeBase, changesDir)
 	if err != nil {
-		return nil, fmt.Errorf("git diff --name-only: %w", err)
+		return nil, fmt.Errorf("git ls-tree %s: %w", mergeBase, err)
 	}
 
+	return collectScenarioIDs(files, func(file string) (string, error) {
+		return gitShowFile(ctx, repoRoot, mergeBase, file)
+	})
+}
+
+// collectScenarioIDs parses the delta spec.md files in files, reading each through read, and returns the scenario IDs they
+// declare.
+//
+// read is a parameter so the failure contract can be tested. It is the part that matters and the part a real repository cannot
+// exercise: every path here was just listed at the revision being read, so git succeeding is the only outcome an integration
+// test can produce. Propagating rather than skipping is what keeps a timeout or a repository error from being read as "this file
+// is new", which would silently turn an infrastructure failure into a false accusation against the branch.
+func collectScenarioIDs(files []string, read func(file string) (string, error)) (map[string]struct{}, error) {
 	out := make(map[string]struct{})
-	for _, file := range changed {
+	for _, file := range files {
 		if filepath.Base(file) != "spec.md" || strings.Contains(filepath.ToSlash(file), "/"+archiveDirName+"/") {
 			continue
 		}
-		blob, showErr := gitShowFile(ctx, repoRoot, mergeBase, file)
-		if showErr != nil {
-			// The file is new on this branch, so it declared nothing at the merge base.
-			continue
+		blob, readErr := read(file)
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", file, readErr)
 		}
 		scenarios, parseErr := parseSpec(strings.NewReader(blob), filepath.Base(filepath.Dir(file)), file)
 		if parseErr != nil {
-			return nil, fmt.Errorf("parse %s at %s: %w", file, mergeBase, parseErr)
+			return nil, fmt.Errorf("parse %s: %w", file, parseErr)
 		}
 		for _, sc := range scenarios {
 			out[sc.ID] = struct{}{}
 		}
 	}
 	return out, nil
+}
+
+// gitListFiles lists the files under dir at a revision.
+func gitListFiles(ctx context.Context, repoRoot, rev, dir string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-tree", "-r", "--name-only", rev, "--", dir) //nolint:gosec // rev is a merge base
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, wrapGitErr(err, out)
+	}
+	var files []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
 }
 
 // gitShowFile returns a file's contents at a revision.

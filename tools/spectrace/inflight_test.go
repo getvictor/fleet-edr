@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,26 @@ func TestUngatedInFlight_E2E(t *testing.T) { //nolint:paralleltest // uses t.Chd
 		assert.Contains(t, ids, "cap-mine/my-req/my-scenario", "and the one this branch did add is still gated")
 	})
 
+	t.Run("a scenario another delta already carried is not blamed on this branch", func(t *testing.T) {
+		// Concurrent MODIFIED restatements of one requirement must be identical, so the same ID legitimately appears in several
+		// delta files. A branch adding a delta that restates a requirement another delta already carries would, with a baseline
+		// read only from the files it changed, find that ID touched and absent from the baseline, and be blamed for a scenario
+		// that was already there unmarked. Review caught this; the baseline is read from every delta at the merge base.
+		restating := normativeDelta("Their req", "Their scenario")
+		writeInFlightDelta(t, changes, "my-restatement", "cap-other", restating)
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "--quiet", "-m", "restate their requirement in my own delta")
+
+		got, err := UngatedInFlight(context.Background(), "openspec/changes", "base", nil, nil)
+		require.NoError(t, err)
+		ids := make([]string, 0, len(got))
+		for _, s := range got {
+			ids = append(ids, s.ID)
+		}
+		assert.NotContains(t, ids, "cap-other/their-req/their-scenario",
+			"the ID was already declared by an untouched delta at the merge base, so this branch did not introduce it")
+	})
+
 	t.Run("a branch that touched no delta gates nothing", func(t *testing.T) {
 		got, err := UngatedInFlight(context.Background(), "openspec/changes", "HEAD", nil, nil)
 		require.NoError(t, err)
@@ -178,4 +199,51 @@ func TestUngatedInFlight_GitFailureIsReturned(t *testing.T) {
 	t.Parallel()
 	_, err := UngatedInFlight(context.Background(), t.TempDir(), "--not-a-ref", nil, nil)
 	require.Error(t, err)
+}
+
+// TestCollectScenarioIDs pins the failure contract the branch-attribution rests on.
+//
+// A read failure must propagate rather than be skipped. Skipping it would leave the file's scenarios out of the baseline, and a
+// scenario absent from the baseline is one the gate blames on this branch: an infrastructure failure would become a false
+// accusation, which is worse than the exit-2 it should be. No repository can produce that failure, because every path handed to
+// the reader was listed at the revision being read, so the reader is a parameter.
+func TestCollectScenarioIDs(t *testing.T) {
+	t.Parallel()
+
+	delta := normativeDelta("A req", "A scenario")
+
+	t.Run("declares what the deltas carry", func(t *testing.T) {
+		t.Parallel()
+		got, err := collectScenarioIDs(
+			[]string{"openspec/changes/c/specs/cap-a/spec.md"},
+			func(string) (string, error) { return delta, nil },
+		)
+		require.NoError(t, err)
+		assert.Contains(t, got, "cap-a/a-req/a-scenario")
+	})
+
+	t.Run("skips the archive and non-spec files without reading them", func(t *testing.T) {
+		t.Parallel()
+		var read []string
+		got, err := collectScenarioIDs(
+			[]string{
+				"openspec/changes/archive/2026-01-01-old/specs/cap-b/spec.md",
+				"openspec/changes/c/proposal.md",
+			},
+			func(f string) (string, error) { read = append(read, f); return delta, nil },
+		)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+		assert.Empty(t, read, "an archived delta is canonical already, and a proposal is not a spec")
+	})
+
+	t.Run("a read failure propagates rather than dropping the file", func(t *testing.T) {
+		t.Parallel()
+		_, err := collectScenarioIDs(
+			[]string{"openspec/changes/c/specs/cap-a/spec.md"},
+			func(string) (string, error) { return "", errors.New("git timed out") },
+		)
+		require.Error(t, err, "dropping it would put the file's scenarios outside the baseline and blame this branch for them")
+		assert.Contains(t, err.Error(), "git timed out")
+	})
 }
