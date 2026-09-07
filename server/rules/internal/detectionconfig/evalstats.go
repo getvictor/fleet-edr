@@ -19,9 +19,12 @@ import (
 // Unlike RecordMonitorMatches, this is called whether or not the batch is finished with the queue, and a replayed batch adds again.
 // That is not the retry inflation the sibling avoids, it is a different quantity: a monitor match is a fact about the world, so a
 // replay must not make it two, whereas an evaluation is work the server actually performed and a replay really did perform it
-// again. The figures a reader derives survive it, because evaluations and eval_ns_sum inflate by the same factor and their ratio
-// does not move. Recording only on a batch's terminal transition would also put retryable_misses nearly out of reach, since a batch
-// ending in a retryable miss is nacked rather than acknowledged, and that counter is what names the rule driving the churn.
+// again. The figure a reader derives survives it, because evaluations and eval_ns_sum grow together, so the mean stays a mean per
+// ATTEMPT rather than being inflated the way a per-batch figure would be. Not invariant, since a replay that ran faster or slower
+// than the others moves it, but not systematically distorted either.
+//
+// Recording only on a batch's terminal transition would also put retryable_misses nearly out of reach, since a batch ending in a
+// retryable miss is nacked rather than acknowledged, and that counter is what names the rule driving the churn.
 //
 // The day comes from the SERVER's clock (UTC), for the same reason the sibling takes it from there: the counters answer "what is this rule
 // costing lately", a question about now, and attributing work to an event's own timestamp would let a skewed host clock or a long queue

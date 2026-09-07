@@ -12,7 +12,7 @@ Each rule's entry SHALL report its evaluation attempts, how many of those ended 
 
 The mean SHALL be computed from the recorded totals rather than stored, so it stays correct as the window widens and as retention prunes days out of it.
 
-Attempts SHALL be reported as attempts, not as logical batches, matching how they are recorded. A replayed batch really did evaluate again. The derived mean is unaffected, since the time inflates by the same factor, but a reader comparing attempt counts between rules is comparing work performed rather than events seen, and the surface SHALL say so rather than let the count read as a fire count.
+Attempts SHALL be reported as attempts, not as logical batches, matching how they are recorded. A replayed batch really did evaluate again, and contributes its own duration. The mean therefore remains a mean per ATTEMPT, which is what keeps it from being inflated by replay the way a per-batch figure would be; it is not invariant under replay, since an attempt that ran faster or slower than the others moves it. A reader comparing attempt counts between rules is comparing work performed rather than events seen, and the surface SHALL say so rather than let the count read as a fire count.
 
 A rule that did not evaluate in the window SHALL be absent from the response rather than present with zeros, and the response SHALL be an empty list rather than null when no rule evaluated.
 

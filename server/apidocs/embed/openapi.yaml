@@ -2012,6 +2012,12 @@ components:
         matches:
           type: integer
           format: int64
+          minimum: 0
+          # Same bound and same reason as RuleEvalSummary's counters: a JSON
+          # number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a parser, and the client refuses one. Stated
+          # here so the contract matches what both readers accept.
+          maximum: 9007199254740991
           description: |
             Total monitor-mode matches in the window. Approximate: it counts
             matches, not the alerts a promotion would raise.
@@ -2019,6 +2025,8 @@ components:
         hosts:
           type: integer
           format: int64
+          minimum: 0
+          maximum: 9007199254740991
           description: |
             Distinct hosts that contributed. The same total means opposite
             things at one host (an exclusion candidate) and at many (the rule

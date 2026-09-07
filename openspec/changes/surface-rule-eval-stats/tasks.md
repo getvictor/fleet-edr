@@ -39,3 +39,5 @@
 - [x] 3.17 Extend the server-level wiring test to the second read, since one setter now narrows both caps and the operator-package tests set them directly: a cap nothing ever narrowed would report 30 days over 7 and every one of those tests would still pass.
 - [x] 2.9 Decide whether there is anything to sort by from what is RENDERED, not from what the response contained. Statistics outlive the rule they describe, so a non-empty response can leave every visible row without a figure.
 - [x] 3.18 Render sub-microsecond timings in nanoseconds, since `(49 / 1000).toFixed(1)` is "0.0" and a measured 49ns would read as a rule that measured nothing, which this column treats as a different claim.
+- [x] 3.19 Correct the claim that replay leaves the mean unaffected, in all five places it was stated for this feature. It is not invariant; what is true is that the count and the total grow together, so the mean stays a mean per attempt rather than being inflated the way a per-batch figure would be.
+- [x] 3.20 Bound the match-count schema the same way, since hoisting the shared validator made its comment claim a bound only one of its two users had.
