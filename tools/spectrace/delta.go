@@ -17,6 +17,11 @@ import (
 type deltaSections struct {
 	// removedRequirements holds "<capability>/<requirement-slug>" for each requirement marked under `## REMOVED Requirements`.
 	removedRequirements map[string]struct{}
+	// addedBy and removedBy map a requirement to the changes that ADD or REMOVE it, which removedRequirements above cannot answer
+	// because it is a flat set: the exemption filter only needs to know THAT a requirement is retired, while archive ordering
+	// needs to know BY WHICH change (issue #901).
+	addedBy   map[string]map[string]struct{}
+	removedBy map[string]map[string]struct{}
 	// modifiedRestatements maps "<capability>/<requirement-slug>" to what each in-flight change restates for it, keyed by change
 	// name so a divergence between two changes can be reported against the changes that caused it.
 	modifiedRestatements map[string]map[string]restatement
@@ -67,6 +72,8 @@ func (d *deltaSections) restatedScenarios() map[string]map[string]struct{} {
 func parseDeltaSections(changesDir string) (*deltaSections, error) {
 	d := &deltaSections{
 		removedRequirements:  make(map[string]struct{}),
+		addedBy:              make(map[string]map[string]struct{}),
+		removedBy:            make(map[string]map[string]struct{}),
 		modifiedRestatements: make(map[string]map[string]restatement),
 	}
 	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
@@ -125,6 +132,7 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 		sectionOther = iota
 		sectionRemoved
 		sectionModified
+		sectionAdded
 	)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -148,6 +156,8 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 		case strings.HasPrefix(line, "## "):
 			flush()
 			switch strings.TrimSpace(line) {
+			case "## ADDED Requirements":
+				section = sectionAdded
 			case "## REMOVED Requirements":
 				section = sectionRemoved
 			case "## MODIFIED Requirements":
@@ -155,8 +165,12 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 			default:
 				section = sectionOther
 			}
+		case section == sectionAdded && strings.HasPrefix(line, "### Requirement:"):
+			d.note(d.addedBy, capability+"/"+requirementSlug(line), change)
 		case section == sectionRemoved && strings.HasPrefix(line, "### Requirement:"):
-			d.removedRequirements[capability+"/"+requirementSlug(line)] = struct{}{}
+			key := capability + "/" + requirementSlug(line)
+			d.removedRequirements[key] = struct{}{}
+			d.note(d.removedBy, key, change)
 		case section == sectionModified && strings.HasPrefix(line, "### Requirement:"):
 			flush()
 			current = capability + "/" + requirementSlug(line)
@@ -175,6 +189,14 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 	}
 	flush()
 	return scanner.Err()
+}
+
+// note records that a change touched a requirement in one of the by-change indexes.
+func (d *deltaSections) note(index map[string]map[string]struct{}, requirement, change string) {
+	if index[requirement] == nil {
+		index[requirement] = make(map[string]struct{})
+	}
+	index[requirement][change] = struct{}{}
 }
 
 // requirementSlug turns a `### Requirement: <title>` heading into the slug used in a scenario ID prefix.
