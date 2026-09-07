@@ -114,6 +114,7 @@ The system MUST rate-limit break-glass attempts with tighter caps than SSO login
 - **WHEN** the IP issues another login attempt
 - **THEN** the server returns `429 Too Many Requests` with `Retry-After`
 - **AND** the user store is not consulted for that request
+- **AND** the audit log records the rate-limit denial
 
 #### Scenario: Successful break-glass emits a WARN audit row
 

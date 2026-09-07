@@ -30,7 +30,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     private let providerLookup = NetworkExtensionProviderLookup.shared
     /// Signing identifiers already reported as tunnel-avoiding, so the fact is logged once per provider rather than once
     /// per flow. Bounded by the number of network extensions installed on the host, which is a handful.
-    private let notedPeers = OSAllocatedUnfairLock<Set<String>>(initialState: [])
+    private let notedPeers = OSAllocatedUnfairLock<TunnelAvoidanceNotices>(initialState: TunnelAvoidanceNotices())
     /// Live interface snapshot, used to pin an upstream forward to the interface the client bound its flow to. Started in
     /// startProxy so the first flow already has a snapshot to match against.
     private let interfaces = InterfaceSnapshot()
@@ -100,7 +100,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     /// incident host produced 730 such flows in 18 minutes); the operator needs to know WHICH provider is being routed
     /// around, not how often.
     private func noteTunnelAvoidance(signingIdentifier: String) {
-        let firstTime = notedPeers.withLock { $0.insert(signingIdentifier).inserted }
+        let firstTime = notedPeers.withLock { $0.shouldReport(provider: signingIdentifier) }
         guard firstTime else { return }
         logger.info("""
         Keeping DNS forwards for \(signingIdentifier, privacy: .public) off tunnel interfaces: it is itself a network \

@@ -24,7 +24,7 @@ func TestOverlongMarkers_ScopedToTouchedLines(t *testing.T) {
 	}
 	touched := map[string][]lineRange{"server/new_test.go": {{Start: 8, End: 12}}}
 
-	got := OverlongMarkers(markers, touched)
+	got := OverlongMarkers(markers, touched, nil)
 	assert.Len(t, got, 1, "only the over-long marker on a line this branch touched is reported")
 	assert.Equal(t, "a/b/c", got[0].ID)
 }
@@ -48,7 +48,7 @@ func TestOverlongMarkers_Boundary(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := OverlongMarkers([]Marker{{SourcePath: "f.go", SourceLine: 1, LineLen: tc.lineLen}}, touched)
+			got := OverlongMarkers([]Marker{{SourcePath: "f.go", SourceLine: 1, LineLen: tc.lineLen}}, touched, nil)
 			assert.Equal(t, tc.reported, len(got) == 1, "%d characters", tc.lineLen)
 		})
 	}
@@ -62,7 +62,7 @@ func TestOverlongMarkers_NilTouchedReportsEverything(t *testing.T) {
 		{ID: "a", SourcePath: "x.go", SourceLine: 1, LineLen: MaxMarkerLineLen + 1},
 		{ID: "b", SourcePath: "y.go", SourceLine: 2, LineLen: MaxMarkerLineLen + 2},
 	}
-	assert.Len(t, OverlongMarkers(markers, nil), 2)
+	assert.Len(t, OverlongMarkers(markers, nil, nil), 2)
 }
 
 // TestOverlongMarkers_UntouchedFileIsIgnored is the same property from the file side: a branch that never opened a file is not
@@ -70,7 +70,7 @@ func TestOverlongMarkers_NilTouchedReportsEverything(t *testing.T) {
 func TestOverlongMarkers_UntouchedFileIsIgnored(t *testing.T) {
 	t.Parallel()
 	markers := []Marker{{ID: "a", SourcePath: "untouched.go", SourceLine: 5, LineLen: MaxMarkerLineLen + 50}}
-	assert.Empty(t, OverlongMarkers(markers, map[string][]lineRange{"other.go": {{Start: 1, End: 100}}}))
+	assert.Empty(t, OverlongMarkers(markers, map[string][]lineRange{"other.go": {{Start: 1, End: 100}}}, nil))
 }
 
 // TestScanFile_DoesNotCountACarriageReturn covers the CRLF checkout: a marker line of exactly the limit must not be reported as
@@ -94,7 +94,7 @@ func TestScanFile_DoesNotCountACarriageReturn(t *testing.T) {
 	assert.Equal(t, MaxMarkerLineLen, markers[0].LineLen, "the carriage return is not part of the line's width")
 
 	touched := map[string][]lineRange{"f.go": {{Start: 1, End: 1}}}
-	assert.Empty(t, OverlongMarkers(markers, touched), "a compliant line must not be reported because of its line ending")
+	assert.Empty(t, OverlongMarkers(markers, touched, nil), "a compliant line must not be reported because of its line ending")
 }
 
 // TestMarkerPathKey_ComponentWise pins that a path is judged outside the scan root by its COMPONENTS, not by a string prefix.
@@ -131,4 +131,24 @@ func TestMarkerPathKey_ComponentWise(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestOverlongMarkers_CanonicalTargetIsExempt covers the case the gate cannot ask anyone to fix. Its only remedy is a shorter
+// requirement or scenario title, and once a scenario is canonical that title is fixed by the archive: renaming it would leave the
+// canonical spec disagreeing with the archived delta that stated it, which archive-verify reports as a loss. So a marker for a
+// canonical scenario is exempt however long its line, while an in-flight one on the same line length is still reported, because
+// that is a title the PR coining it can still shorten.
+func TestOverlongMarkers_CanonicalTargetIsExempt(t *testing.T) {
+	t.Parallel()
+
+	markers := []Marker{
+		{ID: "cap/archived-requirement/archived-scenario", SourcePath: "f.go", SourceLine: 1, LineLen: MaxMarkerLineLen + 7},
+		{ID: "cap/in-flight-requirement/in-flight-scenario", SourcePath: "f.go", SourceLine: 2, LineLen: MaxMarkerLineLen + 7},
+	}
+	touched := map[string][]lineRange{"f.go": {{Start: 1, End: 2}}}
+	canonical := map[string]struct{}{"cap/archived-requirement/archived-scenario": {}}
+
+	got := OverlongMarkers(markers, touched, canonical)
+	require.Len(t, got, 1, "only the marker whose title the author can still shorten is reported")
+	assert.Equal(t, "cap/in-flight-requirement/in-flight-scenario", got[0].ID)
 }

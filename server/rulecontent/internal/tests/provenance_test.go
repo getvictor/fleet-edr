@@ -250,6 +250,7 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 func TestUnknownSource_IsRefused(t *testing.T) {
 	t.Parallel()
 
+	// spec:rule-content/an-unrecognised-provenance-is-refused/content-declaring-an-unrecognised-provenance-is-not-stored
 	t.Run("on the way in, before anything is stored", func(t *testing.T) {
 		t.Parallel()
 		s := newStore(t)
@@ -273,6 +274,7 @@ func TestUnknownSource_IsRefused(t *testing.T) {
 		assert.Len(t, stored, 1, "a refused replacement must not have changed the corpus")
 	})
 
+	// spec:rule-content/an-unrecognised-provenance-is-refused/a-stored-document-with-an-unrecognised-provenance-is-not-interpreted
 	t.Run("on the way out, for a row this version cannot interpret", func(t *testing.T) {
 		t.Parallel()
 		db := full.Open(t)

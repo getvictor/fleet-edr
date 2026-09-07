@@ -75,3 +75,21 @@ extension DNSForwardPolicy.Routing {
         self == .honourBoundInterface
     }
 }
+
+/// TunnelAvoidanceNotices decides whether a tunnel-avoiding forward is worth telling the operator about.
+///
+/// Once per PROVIDER, not once per flow. The incident host produced 730 such flows in 18 minutes, and a per-flow line
+/// would bury the one fact an operator needs: WHICH provider is being routed around. How often it happens says nothing
+/// they can act on, since a tunnel provider that resolves continuously produces the routing continuously by design.
+///
+/// Split out of the provider so the decision is testable: the provider imports NetworkExtension and cannot be reached
+/// from the pure-logic test target, and the decision is the part with a rule in it. The provider still owns the lock and
+/// the logging; this owns only "have we said this yet".
+struct TunnelAvoidanceNotices {
+    private var noted: Set<String> = []
+
+    /// shouldReport records the provider and answers true only the first time it is seen.
+    mutating func shouldReport(provider: String) -> Bool {
+        noted.insert(provider).inserted
+    }
+}

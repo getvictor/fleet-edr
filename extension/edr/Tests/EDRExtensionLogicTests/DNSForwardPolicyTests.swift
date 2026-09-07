@@ -39,6 +39,7 @@ final class DNSForwardPolicyTests: XCTestCase {
         XCTAssertEqual(routing, .honourBoundInterface)
     }
 
+    // spec:extension-network-response/dns-proxy-forwards-away-from-another-provider-s-tunnel/the-system-s-own-provider-takes-ordinary-routing
     func testOwnProviderTakesOrdinaryRoutingDespiteHoldingTheEntitlement() {
         // Our own provider holds content-filter-provider-systemextension + dns-proxy-systemextension, so the probe
         // answers true for us too. The system already keeps our outbound connections out of the proxy chain, so there is
@@ -98,5 +99,28 @@ final class DNSForwardPolicyTests: XCTestCase {
         // than the fail-open it is named for, so they must stay out of the accounting.
         XCTAssertTrue(DNSForwardPolicy.Routing.honourBoundInterface.feedsHealthWatchdog)
         XCTAssertFalse(DNSForwardPolicy.Routing.avoidTunnelEgress.feedsHealthWatchdog)
+    }
+
+    // spec:extension-network-response/dns-proxy-forwards-away-from-another-provider-s-tunnel/a-provider-routed-away-from-tunnels-is-reported-once
+    func testAProviderIsReportedOnceHoweverManyOfItsFlowsAreRouted() {
+        // A tunnel provider that resolves continuously produces this routing continuously: the incident host made 730
+        // such flows in 18 minutes. Reporting each one buries the only fact an operator can act on, which is WHICH
+        // provider is being routed around.
+        var notices = TunnelAvoidanceNotices()
+        let peer = "io.tailscale.ipn.macos.network-extension"
+
+        XCTAssertTrue(notices.shouldReport(provider: peer), "the first flow from a provider is worth reporting")
+        let laterFlows = (0 ..< 729).filter { _ in notices.shouldReport(provider: peer) }
+        XCTAssertEqual(laterFlows, [], "no later flow from the same provider reports again")
+    }
+
+    // spec:extension-network-response/dns-proxy-forwards-away-from-another-provider-s-tunnel/a-provider-routed-away-from-tunnels-is-reported-once
+    func testEachProviderIsReportedOnItsOwnAccount() {
+        // "Once" is per provider, not once in total. A second tunnel provider appearing later is news, and suppressing
+        // it would leave the operator reading a log that names one provider while two are being routed around.
+        var notices = TunnelAvoidanceNotices()
+        XCTAssertTrue(notices.shouldReport(provider: "io.tailscale.ipn.macos.network-extension"))
+        XCTAssertTrue(notices.shouldReport(provider: "com.wireguard.macos.network-extension"))
+        XCTAssertFalse(notices.shouldReport(provider: "io.tailscale.ipn.macos.network-extension"))
     }
 }

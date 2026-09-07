@@ -254,7 +254,7 @@ func runCheck(args []string) int {
 			fmt.Fprintf(os.Stderr, "spectrace: pass --base-ref for a ref this checkout has, or fetch history for a merge base\n")
 			return 2
 		}
-		overlong = OverlongMarkers(markers, touchedLines)
+		overlong = OverlongMarkers(markers, touchedLines, canonicalIDs(scenarios))
 	}
 
 	// The in-flight gate, which closes the other half of referenceValid (issue #841). A delta-declared ID is a valid marker

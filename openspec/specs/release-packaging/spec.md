@@ -174,3 +174,56 @@ The packaged Endpoint Security and Network system extensions SHALL each carry a 
 - **WHEN** the build inspects the staged `com.fleetdm.edr.networkextension.systemextension` bundle
 - **THEN** its `CFBundleDisplayName` is "Fleet EDR Network Extension"
 - **AND** the build fails if the display name is anything else
+
+### Requirement: Packaged bundles carry the entitlements they need to activate
+
+The build SHALL sign the host app and both system extensions with their entitlements in EVERY build mode, and SHALL fail if any of the three is missing the entitlement that makes it usable.
+
+This is the only place those entitlements are applied. The Xcode project sets none, so every bundle it produces carries `get-task-allow` alone: an app without `com.apple.developer.system-extension.install` cannot submit an activation request, and an extension that declares no category is rejected by the operating system as not belonging to any extension category. Both failures appear only when somebody installs the package and watches activation fail, and the platform reports the reason in a form that is redacted by default, so the build MUST assert the entitlements rather than assume the signing step ran.
+
+Restricted entitlements additionally require an embedded provisioning profile to be honoured on a host with System Integrity Protection enabled. Profiles are issued per signing identity, so a package built without release credentials cannot carry them, and such a package is usable only where those entitlements are not enforced.
+
+#### Scenario: Every build mode applies the entitlements
+
+- **GIVEN** a package built without release signing credentials
+- **WHEN** the build completes
+- **THEN** the host app is signed with the system-extension install entitlement
+- **AND** each system extension is signed with the entitlement that declares its category
+
+#### Scenario: A bundle missing its entitlement fails the build
+
+- **GIVEN** a build in which one of the three bundles is signed without its entitlement
+- **WHEN** the build reaches the entitlement check
+- **THEN** the build fails and names the bundle and the missing entitlement
+
+### Requirement: A package built for testing replaces what is already installed
+
+A package built without release signing credentials SHALL replace the installed application regardless of the version already present.
+
+Such a package is a test artifact for a development host, and it carries whatever version the local build produced rather than a release version. Under the version-checking the released package relies on, installing one over an existing install skips the application while still replacing the agent, and the installer reports success: the host is left running a new agent against the previously installed application and extensions. A mixed install that reports success is worse than a refused one, because nothing surfaces it.
+
+The released package SHALL keep version-checking, so a genuine upgrade replaces the application only when its version moves.
+
+#### Scenario: A test package installs over an existing install
+
+- **GIVEN** a host with the application already installed
+- **WHEN** a package built without release signing credentials is installed, whatever version it carries
+- **THEN** the installed application is replaced by the one in the package
+
+### Requirement: The packaged agent carries the identifier the extension expects
+
+The system extension authenticates its XPC peer partly by code-signing identifier, so the agent shipped in the package MUST carry the identifier the extension is built to accept. The identifier SHALL be set explicitly at signing time rather than inherited from the signing tool's default, because that default varies with the signing mode: an ad-hoc signature of a bare executable derives a name that includes a content hash, which the extension does not accept.
+
+This applies to the dry-run path as well as the release path. A package whose agent cannot establish its extension session installs successfully and then produces no telemetry, with the failure visible only as a health condition, so the dry-run path being usable is part of what makes it a meaningful rehearsal.
+
+#### Scenario: The packaged agent is accepted by the extension
+
+- **GIVEN** a package built by the dry-run path, without release signing material
+- **WHEN** it is installed on a host whose extension is built for development
+- **THEN** the agent establishes its session with the extension
+- **AND** the extension component does not report never-connected
+
+#### Scenario: The identifier does not vary with signing mode
+
+- **WHEN** the agent is signed by either the dry-run or the release path
+- **THEN** the resulting binary carries the same code-signing identifier

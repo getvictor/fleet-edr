@@ -305,7 +305,7 @@ func TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity(t *testing.T) {
 		"the operator is entitled to know the deployment is not running a rule the pack ships")
 }
 
-// spec:rule-content/a-build-installs-its-shipped-rule-content/a-pack-rule-colliding-with-an-operator-s-rule-is-not-installed
+// spec:rule-content/a-build-installs-its-shipped-rule-content/a-pack-rule-differing-only-in-case-is-not-installed
 //
 // TestUpgradePack_CollisionIsCaseInsensitive is the same defect one level down, and review found it after the exact-case one was
 // fixed. Rule ids are compared case-insensitively where they are STORED, because the columns they reach collate that way and

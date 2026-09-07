@@ -22,12 +22,64 @@ The system SHALL process events in non-decreasing timestamp order within a batch
 
 The system SHALL create a new process record on receipt of a `fork` event. The record MUST capture the host, the new PID, the parent PID, and the fork timestamp.
 
+A fork-without-exec child has no image of its own, so the system SHALL give it the parent's image path. That path MUST be resolved as of the fork's OWN timestamp: the system MUST select the newest generation of the parent PID that had forked at or before that instant. Resolving by parent PID alone MUST NOT be done, because PIDs are reused and a fork is routinely materialized after its parent's PID has been recycled, so the newest generation of that PID at materialization time is not in general the one that forked the child. A generation that forked AFTER the child cannot be the child's parent, and that is the whole of the constraint. The resolution MUST be identical whether the batch is applied as a set or event by event, since the batched path is the production one.
+
+Selecting the generation is not sufficient on its own, because a same-PID re-exec chain preserves the ORIGINAL fork timestamp on every image it holds and distinguishes those rows by their exec timestamp alone. Within the selected generation the system SHALL therefore resolve the image in force at the fork's timestamp: the latest image whose exec landed at or before that instant. Selecting by row recency instead MUST NOT be done, because it returns whatever the PID ran LAST and so hands the child an image its parent had not yet executed, which is the same misattribution one level down from the recycled-PID case. When no image in the chain had been applied yet, the child's timestamp falls inside its parent's own fork-to-exec window, and the system SHALL fall back to the chain's EARLIEST image rather than discard the generation and attribute the child to an older one. That window is reachable because fork and exec are stamped independently at handler time, so their errors are independent and a child's fork can carry a stamp below its parent's exec even when it truly followed it. The pre-exec image itself is unrecoverable, since the first exec after a fork updates that row in place, so the chain's first image is the closest surviving evidence. Where two generations of one PID carry the SAME fork timestamp, which the PID-reuse sweep permits because it closes only rows stamped strictly earlier, that timestamp cannot separate them and the resolution ranks their images together. The system SHALL then answer with the latest image application at or before the instant, in preference to breaking the tie by insertion order, because insertion order is the very thing this requirement exists to stop depending on. This is a documented ambiguity rather than a resolution, and separating such generations by the kernel generation counter is tracked separately. This resolution SHALL be expressed by comparing timestamps and MUST NOT subtract them: intake rejects only a zero timestamp, so any other int64 reaches this resolution, and a difference between a negative instant and one near the maximum overflows. In the persisted store that surfaces as an out-of-range error rather than a wrapped value, which would fail the lookup for every fork on that host instead of mis-ranking a single image.
+
+The system MUST NOT additionally require the parent generation to be recorded as still alive at the fork's timestamp. A parent is alive when its child forks, by construction, so an aliveness test can never correct the answer here; it can only discard the sole candidate on the strength of an exit timestamp, and those timestamps are the least reliable data the record holds. The extension stamps events at handler time, and the PID-reuse sweep SYNTHESIZES an exit at the recycling fork's timestamp, so a record stating that a parent exited before its own child forked is a record that is wrong rather than a parent that is disqualified. Requiring aliveness was measured on 154,660 never-exec'd rows: it blanked the inherited path on 29,880 of them while correcting 3,413 FEWER than the fork bound alone, a roughly 4:1 net loss of information. A parent generation with no observed exit MUST likewise still supply the path, so that a host whose exit events are late, reordered, or dropped does not stop inheriting paths.
+
+The record MUST carry no inherited path when, and only when, no generation of the parent PID had forked yet at the child's fork timestamp. An absent path states that the parent's image is unknown, which is the honest answer where no candidate exists; asserting an image the parent could not have been running is not, because the process tree, the process detail view, and every detection rule that gates on the process path then read it as fact.
+
 #### Scenario: A daemon forks a worker
 
 - **GIVEN** a `fork` event carrying child PID and parent PID
 - **WHEN** the builder applies the event
 - **THEN** a process record exists for the host and child PID with the parent PID and fork timestamp set
 - **AND** the record has no exec metadata and no exit metadata yet
+
+#### Scenario: A fork arrives after its parent's PID was recycled
+
+- **GIVEN** two generations of one parent PID, an earlier one that ran a known image, and a later one that recycled the PID and runs a different image
+- **WHEN** a `fork` event stamped before the later generation forked is applied after both generations are already recorded
+- **THEN** the child record carries the earlier generation's image path
+- **AND** it does not carry the recycling generation's image path
+- **AND** a `fork` stamped at or after the later generation's fork carries the later generation's path instead
+- **AND** the result is the same whether the earlier generation ended at an observed exit or was closed by the PID-reuse sweep
+
+#### Scenario: A parent whose exit was never observed still supplies the path
+
+- **GIVEN** a parent generation that ran a known image and whose exit event never arrived
+- **WHEN** a `fork` event naming it as parent is applied
+- **THEN** the child record carries that generation's image path
+
+#### Scenario: A parent recorded as exited before its child forked still resolves
+
+- **GIVEN** a parent PID whose newest recorded generation ran a known image and carries an exit timestamp earlier than a later instant
+- **WHEN** a `fork` event stamped at that later instant naming that PID as parent is applied
+- **THEN** the child record carries that generation's image path
+- **AND** the recorded exit does not disqualify it, since a parent cannot fork after it dies and the exit record is therefore the unreliable half
+
+#### Scenario: No generation of the parent PID had forked yet
+
+- **GIVEN** a parent PID whose every recorded generation forked after a given instant
+- **WHEN** a `fork` event stamped at that instant naming that PID as parent is applied
+- **THEN** the child record carries no inherited path
+- **AND** it does not carry the path of a generation that did not yet exist
+
+#### Scenario: A fork resolves the image in force inside a re-exec chain
+
+- **GIVEN** a parent PID whose generation exec'd one image and later re-exec'd into a second, both rows carrying the generation's original fork timestamp
+- **WHEN** a child's fork timestamp falls between the two execs
+- **THEN** the child inherits the image in force at that instant, not the later one the PID ran afterwards
+- **GIVEN** instead a child whose fork timestamp falls before the generation's first exec had been applied
+- **WHEN** its path is resolved
+- **THEN** the generation is still selected and the chain's earliest image is inherited, rather than the child being attributed to an older generation of that PID
+
+#### Scenario: An extreme timestamp pair cannot defeat the image ordering
+
+- **GIVEN** a parent generation forked at a negative instant whose later image exec'd at the maximum representable timestamp
+- **WHEN** a child forked between the two execs resolves its inherited path
+- **THEN** it inherits the image in force at its own timestamp, and the resolution neither overflows nor fails
 
 ### Requirement: Exec updates image metadata
 
@@ -55,12 +107,25 @@ The system SHALL set the exit timestamp and exit code on the in-flight process r
 
 The system SHALL recognize that operating-system PIDs are reused. When a `fork` event arrives for a PID that already has a non-exited record, the system MUST close the prior record and create a new record for the new generation so the two generations remain distinguishable in the forest.
 
+Only a generation that started BEFORE the incoming fork SHALL be closed. PID reuse means a new fork takes over a PID an older generation held, so a non-exited record whose own fork timestamp is at or after the incoming fork's timestamp is not the generation being displaced: it is a later generation that was merely materialized first, which happens whenever concurrently processed claim batches split a fork/exec pair and deliver the exec's batch first (the exec synthesizes its record stamped at the exec time, and the fork then arrives with an earlier timestamp). Closing such a record produced an impossible lifetime, with an exit timestamp earlier than its own fork timestamp.
+
+The system MUST NOT write a process record whose exit timestamp precedes its own fork timestamp. Such a record is invisible to every point-in-time process lookup, because those lookups bracket on the record being alive at the event time. That silently redirected flow-to-process correlation onto the bare fork record for the same PID, whose path is only the parent's inherited image, and a rule gating on the process path then declined the process as unremarkable instead of matching the exec'd image.
+
 #### Scenario: A new fork lands on a stale PID
 
 - **GIVEN** an existing process record for a host and PID whose original exit was never observed
 - **WHEN** a `fork` event arrives for the same host and PID with a different parent
+- **AND** the incoming fork's timestamp is later than the existing record's fork timestamp
 - **THEN** the prior record is closed at the new fork's timestamp
 - **AND** a new process record is created for the new generation with its own fork metadata
+
+#### Scenario: A fork arrives after the exec-synthesized record for the same PID
+
+- **GIVEN** a process record synthesized by an `exec` event, stamped with the exec's timestamp as its fork timestamp
+- **WHEN** a `fork` event for the same host and PID arrives afterwards carrying an EARLIER timestamp
+- **THEN** the exec-synthesized record is left open, because it did not start before the incoming fork and so is not a generation the fork displaces
+- **AND** no process record has an exit timestamp earlier than its own fork timestamp
+- **AND** a point-in-time lookup at the exec's timestamp resolves the exec-imaged record, not a bare fork record for the same PID
 
 ### Requirement: Exec without prior fork is tolerated
 
@@ -76,6 +141,8 @@ The system SHALL synthesize a process record when an `exec` event arrives for a 
 
 The system SHALL preserve the full sequence of exec generations on a single PID. When an `exec` event arrives for a PID that already has an exec'd record, the system MUST close the prior generation and create a new linked record so that a chain like `python -> sh -> bash -> payload` is visible in its entirety.
 
+Each generation SHALL record the kernel PID generation (`pidversion`) reported by its own `exec` event, because execve increments that generation and the new image therefore has an identity the generation it replaced does not share. Recording the replaced generation's value instead names an identity that no longer exists and causes a response action aimed at that record to be refused. When the `exec` event reports no `pidversion` at all, the new generation MUST keep the value of the generation it replaced: the agent derives the generation it enforces against from this same event stream, so an event that reports none leaves both sides holding the replaced value and therefore agreeing, and the record stays pinned well enough to still reject a response action aimed at a recycled PID, which arrives with a distant generation. Recording none in that case would instead drop the pin entirely and admit a response action that identifies its target by PID alone. This is the same rule the first `exec` after a fork already applies when it images its fork record.
+
 #### Scenario: A shell exec-optimization chain runs on one PID
 
 - **GIVEN** a process record that has already been exec'd at least once
@@ -84,9 +151,24 @@ The system SHALL preserve the full sequence of exec generations on a single PID.
 - **AND** a new process record is created carrying a back-reference to the prior generation
 - **AND** the prior generations are retrievable in order as the re-exec chain for that process
 
+#### Scenario: A re-exec generation records its own kernel generation
+
+- **GIVEN** a process record already exec'd as a shell and carrying that shell's `pidversion`
+- **WHEN** an `exec` event replaces the image on the same PID without an intervening fork, reporting the new image's `pidversion`
+- **THEN** the new generation records the `pidversion` its own exec event reported
+- **AND** the closed generation keeps the `pidversion` it was stored with
+- **AND** the two generations of that PID do not share a `pidversion`
+
+#### Scenario: An exec event without a kernel generation keeps the replaced one
+
+- **GIVEN** a process record already exec'd on some PID and carrying a `pidversion`
+- **WHEN** an `exec` event replaces the image on the same PID without an intervening fork and reports no `pidversion`
+- **THEN** the new generation keeps the `pidversion` of the generation it replaced
+- **AND** the record stays pinned, so a response action identifying that PID by a different generation is still refused
+
 ### Requirement: Network and DNS events are linked to the process at event time
 
-The system SHALL link `network_connect` and `dns_query` events to the process record for the originating host and PID. When the event carries a `pidversion`, the system MUST restrict candidate generations to those matching the exact `(host_id, pid, pidversion)` identity, which immunises the link against PID reuse without clock-drift padding. Because a same-PID re-exec preserves the kernel PID generation, several generations can share one `pidversion`: when the identity matches exactly one generation the system MUST link to it regardless of whether the event timestamp falls inside its lifetime window, and when the identity matches more than one generation the system MUST use the event's timestamp to select the generation that was the running image at the event time, and MUST NOT link the event to a generation carrying a different `pidversion` merely because of timestamp proximity. When the event carries no `pidversion`, or no generation matches that exact identity, the system MUST fall back to linking the event to the process record that was alive on that host and PID at the event's timestamp, and a network or DNS event MUST NOT be associated with a stale generation that exited before the event or with a future generation that had not yet forked.
+The system SHALL link `network_connect` and `dns_query` events to the process record for the originating host and PID. When the event carries a `pidversion`, the system MUST restrict candidate generations to those matching the exact `(host_id, pid, pidversion)` identity, which immunises the link against PID reuse without clock-drift padding. The identity is not guaranteed to select a single generation, because records written before generations recorded their own `pidversion` inherited the value of the generation they replaced and those repeats remain in place for the life of the record: when the identity matches exactly one generation the system MUST link to it regardless of whether the event timestamp falls inside its lifetime window, and when the identity matches more than one generation the system MUST use the event's timestamp to select the generation that was the running image at the event time, and MUST NOT link the event to a generation carrying a different `pidversion` merely because of timestamp proximity. When the event carries no `pidversion`, or no generation matches that exact identity, the system MUST fall back to linking the event to the process record that was alive on that host and PID at the event's timestamp, and a network or DNS event MUST NOT be associated with a stale generation that exited before the event or with a future generation that had not yet forked.
 
 #### Scenario: A short-lived process opens a connection
 
@@ -103,7 +185,7 @@ The system SHALL link `network_connect` and `dns_query` events to the process re
 
 #### Scenario: A flow within a re-exec chain links to the generation running at the event time
 
-- **GIVEN** two exec generations on the same host and PID that share one `pidversion` (a re-exec chain), an earlier generation that has exited and a later generation that is alive
+- **GIVEN** two exec generations on the same host and PID that share one `pidversion`, an earlier generation that has exited and a later generation that is alive
 - **WHEN** a `network_connect` event carrying that shared `pidversion` and a timestamp inside the earlier generation's running window is correlated
 - **THEN** the event is linked to the earlier generation, the one that was the running image at the event time, not the later or live generation
 - **AND** a flow carrying the same `pidversion` whose timestamp falls inside the later generation's window links to the later generation
@@ -342,3 +424,71 @@ The system SHALL provide a read-time transform over the per-host process forest 
 - **GIVEN** two childless children under one parent that share an image path but differ in content hash
 - **WHEN** the forest is aggregated
 - **THEN** they remain two separate nodes rather than one aggregated node
+
+### Requirement: A process lookup at an instant returns the image that was running then
+
+The system SHALL resolve a process lookup at an instant to the generation whose IMAGE was running at that instant, and SHALL NOT resolve it by when the process was forked.
+
+The two differ whenever a process replaces its image. Executing preserves the fork time, so every generation of one pid carries the same one, and ordering by it cannot distinguish them: the answer becomes whichever generation happened to be recorded last. For a process that forked a child and then executed something else, that is an image which had not run when the child was forked.
+
+A generation that has forked and not yet executed SHALL still be resolvable, at its fork instant, because that is the only start instant such a generation has.
+
+This matters because it is the lookup that answers every parent-image and attribution question. A wrong answer costs the detection and not only its label: a parent that executed something benign after the fork reads as benign, so the rule that would have fired does not.
+
+#### Scenario: A parent that re-executed after the fork still reports the forking image
+
+- **GIVEN** a process that forked a child and then replaced its image with a different binary
+- **WHEN** the process is looked up at the instant it forked the child
+- **THEN** the image it was running at that instant is returned, not the one it adopted afterwards
+
+#### Scenario: The adopted image is returned once it is running
+
+- **GIVEN** the same process after it has replaced its image
+- **WHEN** it is looked up at or after that instant
+- **THEN** the adopted image is returned
+
+#### Scenario: A generation that has not executed is still resolvable
+
+- **GIVEN** a generation that forked and has not executed
+- **WHEN** it is looked up at its fork instant
+- **THEN** it is returned
+
+### Requirement: Inherited parent path resolves the generation that forked the child
+
+When a fork event carries no parent path of its own, the system resolves it from the parent PID's own record, and SHALL answer with the generation of that PID which was running at the child's fork instant.
+
+Two generations of one PID CAN share a fork timestamp: a stale generation is closed only when a strictly earlier stamp is seen, and the sensor stamps events when it handles them rather than when they occur, so an exact collision is not prevented upstream. Where two records share a stamp AND the image ordering cannot separate them, the system SHALL prefer the one whose kernel generation counter is higher, and SHALL NOT resolve that tie by the order in which the records were ingested. Ingest order is not evidence: a later generation's fork is routinely materialized before an earlier one's, which is why the inherited path was wrong often enough to be worth fixing in the first place.
+
+The qualification is load-bearing rather than hedging. Where the records DO differ in which image was in force at the instant, that difference decides, even if it selects the record with the lower kernel counter. Preferring the counter there would select a chain's newest image regardless of the instant being asked about, which is the re-exec error the image ordering exists to prevent, so the kernel counter is a tie-break within the existing ordering and not an override of it.
+
+Where one record carries a kernel generation and the other does not, and the image ordering again cannot separate them, the system SHALL prefer the one that does, so the outcome follows the available evidence rather than the storage layer's ordering of absent values.
+
+A record whose image was never applied at all SHALL NOT outrank one whose image was applied at the same instant. Both describe an image starting at the same moment, so every ordering key up to that point ties, and the record that never exec'd still carries the path it inherited at fork. Preferring it reports the pre-exec image for an instant at which the process HAD executed. The tie SHALL fall through to the kernel generation instead, which is what separates two records the image ordering genuinely cannot.
+
+The key that prefers the EARLIEST image SHALL apply only to records whose image had not been applied by the instant, which is the group it exists for. Applied to every record it decides nothing for the group it was written for, where each record has an image starting in the future, while silently reversing the case above for records that had been applied.
+
+The kernel generation SHALL be consulted only AFTER the image ordering has selected within a generation, never before it. That counter increments on exec as well as on fork, so the records of a single re-exec chain carry ascending values; ranked earlier it would select a chain's newest image regardless of the instant being asked about, which is the re-exec error the image ordering exists to prevent. It therefore decides only between generations that the image ordering cannot separate.
+
+Both implementations of this lookup, the stored query and the in-batch overlay, SHALL order identically. An ordering corrected in one and not the other makes the answer depend on whether a parent happened to be processed in the same batch as its child.
+
+#### Scenario: Two generations sharing a fork timestamp are separated by kernel generation
+
+- **GIVEN** two generations of one PID recorded with the same fork timestamp and neither having exec'd
+- **AND** the generation with the LOWER kernel counter was ingested last
+- **WHEN** a child's inherited parent path is resolved at an instant after both forks
+- **THEN** the path of the generation with the higher kernel counter is returned
+- **AND** the answer does not depend on the order the two records were ingested in
+
+#### Scenario: A generation carrying kernel evidence outranks one without
+
+- **GIVEN** two generations of one PID recorded with the same fork timestamp
+- **AND** only one of them carries a kernel generation counter
+- **WHEN** a child's inherited parent path is resolved
+- **THEN** the path of the generation carrying the counter is returned
+
+#### Scenario: A never-executed row does not win
+
+- **GIVEN** two records of one PID sharing a fork timestamp, one that never exec'd and one whose exec landed at that same instant
+- **WHEN** a child's inherited parent path is resolved at a later instant
+- **THEN** the record that never exec'd does not win on the strength of having no exec
+- **AND** the stored query and the in-batch overlay return the same record
