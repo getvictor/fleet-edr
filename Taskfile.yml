@@ -463,8 +463,13 @@ tasks:
       (via a virtual authenticator), OIDC sign-in (via the local dex
       from `task qa:up`), UI affordances. The playwright.config.ts
       auto-starts the dev server pointed at dex via
-      task:dev:server:qa-oidc when no listener is on :8088. Pre-req:
-      `task qa:up` (mysql + dex).
+      task:dev:server:qa-oidc when no listener is on the lane's port.
+      Pre-req: `task qa:up` (mysql + dex).
+
+      From the second worktree, pass the lane: E2E_PORT=8089
+      E2E_DB=edr2 (together, they are validated as a pair). The spawn
+      is lane-aware, so a cold lane B boots its own server rather than
+      requiring one already running (issue #826).
     deps: [test:e2e:install]
     dir: test/e2e
     cmds:
