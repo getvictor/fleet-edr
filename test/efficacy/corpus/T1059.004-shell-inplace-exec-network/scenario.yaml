@@ -1,4 +1,4 @@
-# T1059.004 Unix Shell (+ T1105 Ingress Tool Transfer), in the shape that used to be invisible.
+# T1059.004 Unix Shell, in the shape that used to be invisible. The connection is observed; no transfer is, so no T1105.
 #
 # A shell invoked as `zsh -c '<cmd>'` replaces its own image with the payload rather than forking
 # it, so the payload runs at the SHELL's pid and nothing in the payload's ancestry is a shell. The

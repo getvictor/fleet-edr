@@ -13,8 +13,8 @@ import (
 
 const (
 	// matchCountDeadlockAttempts and matchCountDeadlockStep bound the retry on a deadlocked upsert. Short and few: the statement is
-	// idempotent in the sense that retrying it applies the same additions, and the caller has already acknowledged the batch, so a
-	// long retry would hold the drain loop for a counter.
+	// idempotent in the sense that retrying it applies the same additions, and the batch it describes is already finished with the
+	// queue either way, so a long retry would hold the drain loop for a counter.
 	matchCountDeadlockAttempts = 3
 	matchCountDeadlockStep     = 20 * time.Millisecond
 	// matchCountPruneBatch bounds one DELETE's row-lock and undo-log footprint, the same reason the retention runner batches its
@@ -54,8 +54,8 @@ func (s *Store) RecordMonitorMatches(ctx context.Context, tally api.MonitorTally
 
 	// Sorted, so every concurrent statement locks these rows in the SAME order. Map iteration order is randomised per range in Go,
 	// so building the VALUES list straight from the map let two overlapping upserts take the same row locks in opposite orders and
-	// deadlock each other. That is worth more care here than in most places: this runs AFTER the batch is acknowledged, so an error
-	// is not retried by the pipeline and the counts are gone for good.
+	// deadlock each other. That is worth more care here than in most places: this runs once the batch will not be processed again,
+	// so an error is not retried by the pipeline and the counts are gone for good.
 	//
 	// NOTE ON COVERAGE: removing this sort is a MISSED mutation and always will be. Lock ordering is only observable under
 	// concurrent statements contending for the same rows, which a test in this package cannot stage against a shared MySQL without

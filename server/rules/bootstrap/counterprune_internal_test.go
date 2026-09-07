@@ -32,9 +32,14 @@ func newPruneHarness(t *testing.T, retentionDays int) (*Rules, *sqlx.DB) {
 	store := detectionconfig.NewStore(db)
 	return &Rules{
 		detectionConfigStore: store,
-		// Run fans out to the config refresh as well as the prune, so it needs a real service; the prune tests below do not touch
-		// it, and a nil one would turn a Run lifecycle test into a nil dereference rather than a test.
+		// Run fans out to every loop in its list, so each one this harness does not use still needs a value it can call: a nil
+		// turns a Run lifecycle test into a nil dereference rather than a test. The prune tests below touch none of them.
+		//
+		// This is the cost of building the struct by hand rather than through New, and it is a real one: adding the eval-stats
+		// flush to Run panicked here until this line was added. Kept by hand anyway, because going through New would drag in
+		// authz and the whole corpus for a test about one DELETE.
 		detectionConfigSvc: detectionconfig.NewService(store, nil, nil, slog.New(slog.DiscardHandler)),
+		evalStatsBuffer:    detectionconfig.NewBufferedEvalStats(store, slog.New(slog.DiscardHandler)),
 		retentionDays:      retentionDays,
 		logger:             slog.New(slog.DiscardHandler),
 	}, db
@@ -161,8 +166,8 @@ func TestPruneCountersLoop(t *testing.T) {
 // production and leave the whole suite green. That is the failure this exists to catch: the loop is well covered and the line that
 // starts it was not covered at all.
 //
-// It also pins that Run RETURNS on cancellation. Run fans out to two goroutines under a WaitGroup, so a fan-out that forgets to
-// wait, or a loop that ignores its context, hangs shutdown rather than failing anything.
+// It also pins that Run RETURNS on cancellation. Run fans out to a goroutine per loop under a WaitGroup, so a fan-out that
+// forgets to wait, or a loop that ignores its context, hangs shutdown rather than failing anything.
 func TestRun_DrivesTheMatchCountPrune(t *testing.T) {
 	t.Parallel()
 
@@ -212,7 +217,7 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 // spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-cap-follows-the-deployment-s-retention
 //
 // TestSetRetentionDays_BoundsTheReadWindow pins the WIRING, which is the half the operator-package tests cannot see: they set the
-// cap on the handler directly, so they pass just as well when nothing in the server ever calls SetMatchCountCap.
+// cap on the handler directly, so they pass just as well when nothing in the server ever calls SetCounterRetentionCap.
 //
 // Driven through the real HTTP surface rather than by reading the handler's field, because the field is unexported in another
 // package and because what matters is the number an operator is shown, not where it is stored.
@@ -225,10 +230,10 @@ func TestSetRetentionDays_BoundsTheReadWindow(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	readWindow := func(t *testing.T) int {
+	readWindow := func(t *testing.T, route string) int {
 		t.Helper()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-			srv.URL+"/api/v1/detection-config/rule-match-counts?days=30", nil)
+			srv.URL+"/api/v1/detection-config/"+route+"?days=30", nil)
 		require.NoError(t, err)
 		resp, err := srv.Client().Do(req)
 		require.NoError(t, err)
@@ -241,10 +246,17 @@ func TestSetRetentionDays_BoundsTheReadWindow(t *testing.T) {
 		return body.Days
 	}
 
-	assert.Equal(t, 30, readWindow(t), "before retention is known the constant cap stands")
+	// BOTH counter reads, because one setter now narrows both caps (issue #774) and the operator-package tests set them directly.
+	// A second cap that nothing in the server ever narrowed would report 30 days over 7 days of surviving rows, and every test in
+	// that package would still pass: this is the only place the wiring itself is visible.
+	for _, route := range []string{"rule-match-counts", "rule-eval-stats"} {
+		assert.Equal(t, 30, readWindow(t, route), "%s: before retention is known the constant cap stands", route)
+	}
 
 	r.SetRetentionDays(7)
 
-	assert.Equal(t, 7, readWindow(t),
-		"the prune keeps 7 days, so the read surface must not claim 30: pruning and reporting share one number")
+	for _, route := range []string{"rule-match-counts", "rule-eval-stats"} {
+		assert.Equal(t, 7, readWindow(t, route),
+			"%s: the prune keeps 7 days, so the read surface must not claim 30: pruning and reporting share one number", route)
+	}
 }

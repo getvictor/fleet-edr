@@ -26,8 +26,13 @@ type batchBuilder interface {
 // batchEvaluator runs the detection rules over a materialized batch. *engine.Engine is the production implementation.
 //
 // The tally it returns is what the batch found in monitor mode, and it comes back rather than being written by the engine so this
-// processor can record it AFTER the acknowledgement. A nacked batch is replayed whole, so anything the engine wrote while
-// evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
+// processor can record it on whichever transition ends the batch's life. A nacked batch is replayed whole, so anything the engine
+// wrote while evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
+//
+// It is returned ALONGSIDE an error too, and not instead of one. An error usually means a replay, where this attempt's tally is
+// discarded because a later one will produce it again; but the queue can also withdraw the batch from processing for good, and
+// then this attempt is the only one there will ever be. The engine cannot tell those apart because only the queue knows, so it
+// hands the tally over on every path and the decision is made here (#843).
 type batchEvaluator interface {
 	Evaluate(ctx context.Context, events []visibilityapi.Event) (rulesapi.MonitorTally, error)
 }
@@ -58,8 +63,9 @@ type Processor struct {
 	detection   batchEvaluator
 	coordinator leader.Coordinator
 	metrics     api.MetricsRecorder
-	// monitorMatches persists what a batch found in monitor mode, after the batch is acknowledged. Nil records nothing, which is
-	// the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert either way.
+	// monitorMatches persists what a batch found in monitor mode, once that batch will not be processed again. Nil records nothing,
+	// which is the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert
+	// either way.
 	monitorMatches rulesapi.MonitorMatchRecorder
 	logger         *slog.Logger
 	interval       time.Duration
@@ -331,10 +337,11 @@ func (p *Processor) hostCandidates() int {
 func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 	var (
 		events      []visibilityapi.Event
+		claimStamp  int64
 		buildFailed bool
 	)
 	claimAndBuild := func(lockedCtx context.Context) error {
-		claimed, err := p.eventLog.ClaimForHost(lockedCtx, host, p.batch)
+		claimed, stamp, err := p.eventLog.ClaimForHost(lockedCtx, host, p.batch)
 		if err != nil {
 			p.logger.ErrorContext(lockedCtx, "claim events", "host_id", host, "err", err)
 			return nil
@@ -342,7 +349,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		if len(claimed) == 0 {
 			return nil
 		}
-		events = claimed
+		events, claimStamp = claimed, stamp
 		if err := p.builder.ProcessBatch(lockedCtx, claimed); err != nil {
 			p.logger.WarnContext(lockedCtx, "graph builder failure, will retry batch", "err", err)
 			buildFailed = true
@@ -350,11 +357,12 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			// host first would let the next claimer take this host's LATER events and fold them ahead of these, so the retry would
 			// arrive behind generations it precedes. The claim's in-flight bound makes that window harmless even if this Nack
 			// fails, but closing the window is cheaper than relying on the bound to cover it.
-			setAside, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed))
+			setAside, held, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed), stamp)
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportSetAside(lockedCtx, host, setAside, "builder")
+			p.reportLostClaim(lockedCtx, nackErr, held, host, len(claimed))
+			p.reportSetAside(lockedCtx, host, setAside, stageBuilder)
 		}
 		return nil
 	}
@@ -388,7 +396,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		return 0, true
 	}
 
-	return p.evaluateAndAck(ctx, events, eventIDsOf(events)), true
+	return p.evaluateAndAck(ctx, events, eventIDsOf(events), claimStamp), true
 }
 
 // eventIDsOf projects a claimed batch to the identities Ack and Nack take, so neither the locked region nor the post-lock path has to
@@ -403,7 +411,7 @@ func eventIDsOf(events []visibilityapi.Event) []string {
 
 // evaluateAndAck runs detection over an already-materialized batch and acknowledges it, returning the events processed or 0 if the
 // batch was nacked or the ack failed. Split from processHost so the locked region above stays readable as claim-fold-flush.
-func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.Event, eventIDs []string) int {
+func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.Event, eventIDs []string, claimStamp int64) int {
 	// Run detection rules after processes are materialized.
 	var tally rulesapi.MonitorTally
 	if p.detection != nil {
@@ -411,45 +419,92 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		tally, err = p.detection.Evaluate(ctx, events)
 		if err != nil {
 			p.logDetectionRetry(ctx, err)
-			setAside, nackErr := p.eventLog.Nack(ctx, eventIDs)
+			setAside, held, nackErr := p.eventLog.Nack(ctx, eventIDs, claimStamp)
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportSetAside(ctx, hostOf(events), setAside, "detection")
+			p.reportLostClaim(ctx, nackErr, held, hostOf(events), len(eventIDs))
+			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
+			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
+			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
+			//
+			// This covers a withdrawal HERE and not one at the fold, which is a residual rather than an oversight. A batch can
+			// evaluate and fail on one attempt, then fail its fold on the attempt that withdraws it, and that attempt resolved
+			// no matches while the earlier one's were discarded when it was retried. Carrying them across attempts would mean
+			// telemetry state in the work queue or per-replica state a stateless app tier cannot keep, so the limit is stated
+			// in the requirement and pinned by a test rather than closed here.
+			//
+			// Only a WHOLE batch counts, and the comparison is against the batch rather than against zero. The withdrawal
+			// predicate is per row, so a partial withdrawal leaves rows that are re-claimed and re-evaluated, and this tally
+			// covers all of them: recording it would count the survivors twice.
+			//
+			// Exactly-once across replicas comes from the queue rather than from a lock here, and specifically from set-aside
+			// being TERMINAL. Nack's withdrawing statement matches rows at processed = 0, and a withdrawn row sits at 3, which
+			// nothing moves it back from: Nack's own reset requires 2. So the 0 -> 3 transition happens once for a row in its
+			// life, row locks serialise concurrent attempts at it, and only the caller whose statement performed it counts it.
+			//
+			// NOT because that statement is restricted to rows this transaction reset, which review corrected: its predicate is
+			// the requested ids at processed = 0, so it can also match a row another nack had already returned to pending. That
+			// makes no difference to the count, and the distinction matters for anyone changing this queue.
+			//
+			// Per claim as well as per row, since #840: a nack acts only on the events the claim it names still holds, so an
+			// attempt that outran its lease withdraws nothing and is told so, rather than withdrawing a replacement's events and
+			// being rejected here for a count short of its own batch.
+			if setAside == int64(len(eventIDs)) {
+				p.recordMonitorMatches(ctx, tally)
+			}
 			return 0
 		}
 	}
 
-	if err := p.eventLog.Ack(ctx, eventIDs); err != nil {
+	held, err := p.eventLog.Ack(ctx, eventIDs, claimStamp)
+	if err != nil {
 		// The batch processed but the queue was not durably advanced (the rows stay leased until the claim lease expires).
 		// Returning 0 stops the drain loop so the worker waits for the next tick rather than treating this as a full-batch
 		// drain and immediately re-claiming, which would spread a transient ack outage into a tight re-processing loop.
 		p.logger.ErrorContext(ctx, "ack events", "err", err)
 		return 0
 	}
+	if !held {
+		// This evaluation outlived its claim lease and another attempt owns the rows now (issue #817). Everything up to here is
+		// idempotent: the graph builder is keyed on event identity and alert persistence deduplicates on
+		// (source, host, rule, subject). What follows is not, so it belongs to whichever attempt still holds the claim.
+		//
+		// Logged at WARN because it is also the first visibility anyone has that leases are being exceeded at all, which was
+		// previously invisible by construction: both attempts acknowledged successfully and neither learned it had lost.
+		p.logger.WarnContext(ctx, "lost the claim before acknowledging; another attempt owns this batch",
+			"host_id", hostOf(events), "events", len(eventIDs))
+		return 0
+	}
 	p.recordMonitorMatches(ctx, tally)
 	return len(events)
 }
 
-// recordMonitorMatches persists and counts a batch's monitor-mode matches, AFTER the acknowledgement.
+// recordMonitorMatches persists and counts a batch's monitor-mode matches, on whichever transition ends the batch's life.
 //
-// After, so a replayed batch is counted once: everything before this point can still nack, and a nacked batch re-evaluates and
-// produces the same matches again. The cost is the opposite failure, a crash between the ack and this write, which loses those
-// counts.
+// Two transitions end it, and both call here. The ordinary one is the acknowledgement, and this runs AFTER it so a replayed batch
+// is counted once: everything before that point can still nack, and a nacked batch re-evaluates and produces the same matches
+// again. The other is the batch being withdrawn from processing for good once its retry bounds are passed (#836), where there is
+// no later attempt to count it and the attempt that was withdrawn is the last word on what it matched (#843).
+//
+// The cost of recording after a transition rather than during evaluation is the opposite failure, a crash between the transition
+// and this write, which loses those counts.
 //
 // That loss is the RISK-BEARING direction and is accepted rather than preferred. A count that is too low makes a rule look quiet,
 // which is exactly what persuades an operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to
 // prevent. It is the better trade only because the alternative is systematic: counting during evaluation inflates on every
 // retry, while this loses counts only in the window between two adjacent statements.
 //
-// A successful Ack is NOT proof that this attempt uniquely processed the batch. Ack is an unconditional update that ignores its
-// affected-row count, and a claim expires after five minutes and is re-offered, so an evaluation that outlives its lease can be
-// running alongside its own reclaimer with both acknowledging successfully. Alert persistence is immune because it deduplicates
-// on (host, rule, subject); this additive counter is not, and can double-count that batch. Tracked as #817, which belongs in the
-// queue contract rather than here.
+// A successful Ack IS now proof that this attempt uniquely processed the batch, which it was not when this comment was first
+// written. Ack was an unconditional update that ignored its affected-row count, so an evaluation outliving its five-minute lease
+// ran alongside its own reclaimer and both acknowledged successfully, double-counting this additive counter (alert persistence was
+// immune, deduplicating on (host, rule, subject)). Issue #817 fixed that in the queue contract, where it belonged: Ack is
+// conditional on still holding the claim and reports whether it did, and the caller skips this write when it has lost.
 //
-// A failure here cannot fail the batch: the events are already acknowledged, and re-nacking them to save a counter would replay
-// real detection work. It is logged and dropped.
+// A failure here cannot fail the batch, on either path, and for the same reason on both: the batch has already reached a state it
+// will not be processed again from, so there is nothing left to fail. Acknowledged events are done, and withdrawn ones are not
+// coming back; re-nacking either to save a counter would replay real detection work or undo a withdrawal. It is logged and
+// dropped.
 func (p *Processor) recordMonitorMatches(ctx context.Context, tally rulesapi.MonitorTally) {
 	if len(tally) == 0 {
 		return
@@ -504,20 +559,88 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 // an absence of detections nobody was watching for. So the counter carries host_id, because "which host stopped contributing" is
 // the question, and the log names the host and the stage that failed, because the counter says it happened and not what to look at.
 //
-// Logged at ERROR rather than WARN. The consequence is a gap in one host's process tree and a set of events no rule ever saw,
-// which is not a condition to notice in aggregate later.
+// Logged at ERROR rather than WARN. Whichever stage it came from, a host has permanently stopped contributing some of its
+// activity, which is not a condition to notice in aggregate later. What exactly it stopped contributing depends on the stage and
+// is carried on the consequence attribute rather than stated here.
 //
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
-func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string) {
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage setAsideStage) {
 	if setAside <= 0 {
 		return
 	}
-	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
-		"host_id", hostID, "events", setAside, "stage", stage)
+	// The message is fixed and the consequence rides on an attribute, so the line stays greppable while saying something true
+	// of the stage it came from. It previously claimed a process-graph gap for both, which is false for the detection stage:
+	// processHost completes the builder before evaluating, so a batch withdrawn there IS in the graph, and the claim sent an
+	// operator to inspect a process tree that was intact.
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure",
+		"host_id", hostID, "events", setAside, "stage", stage.name, "consequence", stage.consequence)
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}
 }
+
+// reportLostClaim says when a batch was returned to the queue by an attempt that no longer owned it.
+//
+// The ack path has reported this since issue #817 and its own comment calls it the first visibility anyone has that leases are
+// being exceeded at all. Making the nack conditional on the claim too (issue #840) created a second way to lose one, and without
+// this it would be the silent way: a superseded attempt withdraws nothing, which is the same count a held batch gets when no
+// event reached its bounds.
+//
+// WARN rather than ERROR, matching the ack path. Nothing is lost when this happens: the attempt that holds the claim carries on,
+// and everything this attempt did before here is idempotent.
+func (p *Processor) reportLostClaim(ctx context.Context, nackErr error, held bool, hostID string, events int) {
+	// A failed nack reports held=false because it never got as far as establishing ownership, so it is not evidence that this
+	// attempt lost its claim. Warning on it would put "another attempt owns this batch" beside a queue outage that has already
+	// been logged, and send an operator looking for a lease overrun that did not happen (review caught it).
+	if nackErr != nil || held {
+		return
+	}
+	p.logger.WarnContext(ctx, "lost the claim before returning the batch; another attempt owns it",
+		"host_id", hostID, "events", events)
+}
+
+// setAsideStage is the pipeline stage a withdrawal happened at, together with what it cost an operator.
+//
+// The consequence is carried ON the value rather than looked up from it, which is the second thing review corrected here. A named
+// string type was the first attempt and does not do the job the call sites need: Go assigns an untyped literal to one happily, so
+// a misspelling compiles and a lookup keyed on it then reports every value that is not the builder as detection. Pairing the two
+// removes the lookup, so there is no mapping left to get wrong and nothing to keep in step.
+type setAsideStage struct {
+	// name is the stage as it appears on the record's stage attribute.
+	name string
+	// consequence is what the host lost, phrased as what an operator should go and check.
+	consequence string
+}
+
+var (
+	// stageBuilder is the process-graph materialisation.
+	//
+	// "MAY have a gap" rather than "has a gap", and review was right that the definite form is reachable. Attempts accumulate on
+	// the queue row whichever stage nacked it, so a batch can fold successfully, fail at detection, and then be withdrawn on a
+	// later attempt whose fold is the thing that failed. Those events are in the graph, put there by the earlier attempt, and
+	// nothing on the row records that they got that far. Claiming a gap there would be this change's own defect, one attempt
+	// further back.
+	stageBuilder = setAsideStage{
+		name:        "builder",
+		consequence: "this host may have a gap in its process graph",
+	}
+
+	// stageDetection is detection: rule evaluation and the persistence of what it finds, running on an already-materialised batch.
+	//
+	// Names the OUTCOME rather than the step that failed. Exactly two things reach this withdrawal, and "a rule failed" is neither:
+	// evaluateRule logs a rule's own non-retryable error and returns nil, so per-rule isolation keeps it inside the engine. What
+	// does leave is an alert-persistence error, returned from inside routeFinding's loop so the batch aborts at the finding it
+	// happened on and the rules after it never run; or a retryable miss that ran out of attempts, where every rule did run.
+	// Naming rule evaluation would be false for the first, and would send a responder to rule execution while the failure was in
+	// alert storage.
+	//
+	// "may be missing" rather than "are missing", because alerts written before a persistence failure stay durable. Overstating
+	// the loss sends someone hunting for alerts that are already there.
+	stageDetection = setAsideStage{
+		name:        "detection",
+		consequence: "detection did not complete for these events, so alerts they would have raised may be missing",
+	}
+)
 
 // hostOf returns the host a claimed batch belongs to. The processor claims per host, so every event in the batch carries the same
 // one; an empty batch never reaches a nack.

@@ -56,10 +56,27 @@ func Open(tb testing.TB) *sqlx.DB {
 // applySchemas applies every context's schema in dependency order. Called once per process by OpenTemplated; the ordering
 // comment on the package doc explains why identity leads.
 func applySchemas(ctx context.Context, db *sqlx.DB) error {
-	for _, step := range []struct {
-		name  string
-		apply func(context.Context, *sqlx.DB) error
-	}{
+	for _, step := range schemaSteps() {
+		if err := step.apply(ctx, db); err != nil {
+			return fmt.Errorf("apply %s schema: %w", step.name, err)
+		}
+	}
+	return nil
+}
+
+// schemaStep is one context's schema application, named so a failure and the registration test can both say which context.
+type schemaStep struct {
+	name  string
+	apply func(context.Context, *sqlx.DB) error
+}
+
+// schemaSteps is the ordered list of contexts this fixture applies.
+//
+// A function returning the slice rather than a literal inside applySchemas, so the registration test can enumerate it. That test
+// is the point: a context added to the tree without an entry here yields a fixture that omits the tables it promises, and the
+// symptom is a test hand-applying a schema rather than anything failing (#849).
+func schemaSteps() []schemaStep {
+	return []schemaStep{
 		{"identity", identitytestkit.ApplySchema},
 		{"endpoint", endpointtestkit.ApplySchema},
 		// rulecontent before rules, matching cmd/main and the standalone migrator: it supplies the definitions rules evaluates
@@ -70,10 +87,5 @@ func applySchemas(ctx context.Context, db *sqlx.DB) error {
 		{"detection", detectiontestkit.ApplySchema},
 		{"observability", observabilitytestkit.ApplySchema},
 		{"visibility", visibilitytestkit.ApplySchema},
-	} {
-		if err := step.apply(ctx, db); err != nil {
-			return fmt.Errorf("apply %s schema: %w", step.name, err)
-		}
 	}
-	return nil
 }

@@ -83,8 +83,14 @@ func rankGreater(a, b *procRow) bool {
 }
 
 // GetProcessByPID returns the row whose (host, pid) lifetime brackets atTimeNs, mirroring the store query: fork_time_ns <= atTimeNs
-// AND (exit_time_ns IS NULL OR exit_time_ns >= atTimeNs), most recent by (fork_time_ns, id). Returns a copy so handlers cannot mutate
-// the overlay through the returned pointer.
+// AND (exit_time_ns IS NULL OR exit_time_ns >= atTimeNs). Returns a copy so handlers cannot mutate the overlay through the returned
+// pointer.
+//
+// Ranked by imageRankGreater, the same ordering GetParentPath below uses, rather than by fork time and row sequence (issue #799).
+// Every generation of a re-exec chain carries the SAME fork time, so sequence there means "whatever the pid ran last" instead of
+// "what it was running then", and this lookup answers the second question. Sharing the ordering is the point: rules read through
+// this overlay, so an ordering fixed in the store and not here makes the answer depend on whether the parent happened to be in the
+// same batch as its child, which is the shape of bug that reproduces only at a batch boundary.
 //
 // The aliveness half of that bracket is deliberately NOT shared with GetParentPath below, even though both answer "which generation
 // held this pid" for an instant. The instants differ in what backs them: this one arrives from an unrelated event (a network flow's
@@ -100,7 +106,7 @@ func (s *batchSession) GetProcessByPID(_ context.Context, hostID string, pid int
 		if r.proc.ExitTimeNs != nil && *r.proc.ExitTimeNs < atTimeNs {
 			continue
 		}
-		if best == nil || rankGreater(r, best) {
+		if best == nil || imageRankGreater(r, best, atTimeNs) {
 			best = r
 		}
 	}

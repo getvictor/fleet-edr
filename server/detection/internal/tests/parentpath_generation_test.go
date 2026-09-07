@@ -395,3 +395,42 @@ func TestGenerationWithPIDVersionOutranksOneWithout(t *testing.T) {
 	assert.Equal(t, secondImage, got,
 		"a row carrying kernel evidence outranks one carrying none, rather than the answer depending on NULL ordering")
 }
+
+// spec:server-process-graph-builder/inherited-parent-path-resolves-the-generation-that-forked-the-child/a-never-executed-row-does-not-win
+//
+// TestInheritedPathWhenOneGenerationNeverExeced covers the tie issue #861 named, and it is here rather than beside the SQL because
+// the disagreement between the two implementations is the point.
+//
+// Two rows share a fork instant. One never exec'd, so its image started at that fork; the other exec'd AT the same instant, so its
+// image started there too. Every earlier key ties, and the trailing key used to be a bare `exec_time_ns ASC`, which MySQL sorts
+// NULL-first: the row that never executed won, reporting the pre-exec image for an instant at which the process had executed. The
+// batch overlay has no counterpart to that key and fell through to pidversion, so the two disagreed, and which one answered
+// depended on whether the row was preloaded into the batch.
+//
+// Asserting through requireInheritedPath is what makes this a regression test rather than a restatement: it drives the store's SQL
+// and the overlay, so reverting the SQL alone fails it. The expected image is the one whose exec had landed, chosen by pidversion
+// now that both sides fall through to it.
+//
+// The shape is seeded directly because it takes ingest ordering the builder does not normally produce: the first exec after a fork
+// updates that row in place, so a NULL-exec row surviving beside a re-exec row stamped at the fork instant needs the exec that
+// would have filled it to have never arrived.
+func TestInheritedPathWhenOneGenerationNeverExeced(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openProcessStore(t)
+	const host, parentPID, childPID = "null-exec-tie", 500, 600
+	const forkAt int64 = 100
+
+	neverExeced, exceedAtFork := uint32(7), uint32(9)
+	execAtFork := forkAt
+	for _, p := range []api.Process{
+		{HostID: host, PID: parentPID, PPID: 1, Path: firstImage, ForkTimeNs: forkAt, PIDVersion: &neverExeced},
+		{HostID: host, PID: parentPID, PPID: 1, Path: secondImage, ForkTimeNs: forkAt, ExecTimeNs: &execAtFork, PIDVersion: &exceedAtFork},
+	} {
+		_, err := store.InsertProcess(ctx, p)
+		require.NoError(t, err)
+	}
+
+	b := graph.NewBuilder(store, discardLogger())
+	requireInheritedPath(ctx, t, b, store, db, host, parentPID, childPID, 150, secondImage)
+}

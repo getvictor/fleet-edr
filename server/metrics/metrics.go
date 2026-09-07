@@ -34,6 +34,12 @@ const (
 // httpDurationBuckets is the OTel HTTP semantic-convention default bucket set for http.server.request.duration, in seconds.
 // Using the conventional boundaries keeps p50/p95/p99 readings comparable with any other OTel-instrumented service and with
 // SigNoz's built-in expectations for this metric.
+// ruleEvalDurationBuckets covers the measured range of a rule's evaluation: the mean on the dev server was 0.094ms and the
+// slowest rule doing legitimate work 17.8ms, so the interesting span is tens of microseconds to tens of milliseconds. The top
+// boundaries sit above the 100ms evaluation budget (issue #767) so a rule approaching its skip is visible here first, which is
+// while an operator can still act on it.
+var ruleEvalDurationBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1}
+
 var httpDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
 
 // knownHTTPMethods bounds the http.request.method label. An unrecognized method (a scanner sending garbage verbs) collapses to
@@ -64,7 +70,9 @@ type Recorder struct {
 	queueDropped                    metric.Int64Counter
 	detectionMaterializationRetries metric.Int64Counter
 	eventsSetAside                  metric.Int64Counter
+	ruleEvalSkipped                 metric.Int64Counter
 	httpRequestDuration             metric.Float64Histogram
+	ruleEvaluationDuration          metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
 	enrolledGauge metric.Int64ObservableGauge
@@ -120,10 +128,12 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 			"(host, rule, subject) forever, so a rule that keeps matching one subject raises this series repeatedly and would "+
 			"raise exactly one alert. Read it as volume and reach: it is biased upward by repeated subjects and downward by the "+
 			"losses below, so it is an approximation of what promotion produces rather than a bound in either direction. "+
-			"Recorded once the batch is acknowledged, so a nacked and replayed batch counts once rather than once per attempt; "+
-			"the residual inaccuracies are a crash between the acknowledgement and the record, which loses counts and so can "+
-			"make a noisy rule look safe to promote, and an evaluation outliving its claim lease, which can let a reclaimer "+
-			"count the same batch again."),
+			"Recorded once the batch will not be processed again, whether that is its acknowledgement or its withdrawal from the "+
+			"queue after repeated failure, so a nacked and replayed batch counts once rather than once per attempt; "+
+			"the residual inaccuracies are a crash between that transition and the record, which loses counts and so can make a "+
+			"noisy rule look safe to promote; a batch withdrawn on an attempt that had not evaluated it, whose earlier attempts' "+
+			"matches are not carried forward; and a batch only partly withdrawn, where whatever the withdrawn events alone had "+
+			"matched is dropped so the survivors cannot be counted twice."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
@@ -154,14 +164,32 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// The description stays short because it renders as dashboard metadata beside the counter, where it competes with the chart for
 	// the reader's attention; the reasoning a maintainer needs lives here instead. Setting events aside is NOT data loss: ingest
 	// writes the archive before the work queue and retains it on its own window (ADR-0015), so the events stay available to hunting
-	// queries and alert evidence. What is given up is their contribution to the process graph and their evaluation by whichever
-	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
+	// queries and alert evidence.
+	//
+	// What IS given up depends on the stage the batch was withdrawn at, and stating it unconditionally is the defect #845 fixed.
+	// One withdrawn at detection was folded into the graph first, so its graph contribution stands and what is lost is the rest of
+	// detection. For one withdrawn while the graph was being built, BOTH losses are possibilities rather than certainties: the
+	// retry bounds accrue on the queue entry across attempts whichever stage failed, so an earlier attempt may have folded the
+	// batch and may even have reached detection before a later fold failed. Neither is stated more precisely, because neither can
+	// be, and the log's consequence attribute is worded to the same limit.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
-		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). The host in `host_id` "+
-			"has a gap in its process graph. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
-			"condition never clears once it fires."),
+		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). What the host in "+
+			"`host_id` lost depends on the stage, which the accompanying log line names on a `consequence` attribute: a batch withdrawn "+
+			"while the process graph was being built may leave a gap in that graph, while one withdrawn at detection is already in "+
+			"the graph and instead may be missing alerts. Alert on a non-zero increase, per host: the counter is cumulative, so an "+
+			"absolute-value condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
+	)
+	// One increment per rule per replica when the budget is exhausted, not per skipped batch: see the interface comment on
+	// RuleEvaluationSkipped. An operator reads this to find the rule to fix; a rule appearing here has stopped contributing
+	// detections on that replica, which no alert-volume signal can show because the absence looks like quiet.
+	r.ruleEvalSkipped, _ = meter.Int64Counter(
+		"edr.detection.rule_evaluation_skipped",
+		metric.WithDescription("Rules a replica stopped evaluating after they exceeded their evaluation budget repeatedly (issue #767). "+
+			"The rule in `rule_id` is no longer contributing detections on that replica and needs its patterns looked at. Cleared by a "+
+			"restart, so alert on an increase rather than an absolute value."),
+		metric.WithUnit("{rule}"),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
 	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
@@ -171,6 +199,17 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		metric.WithDescription("Duration of inbound HTTP requests, by route + method + status. The per-request access log only fires for 4xx/5xx/slow; this metric is the volume + latency signal."),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(httpDurationBuckets...),
+	)
+
+	// Buckets chosen against the measured distribution rather than the default: on the dev server the mean rule evaluation was
+	// 0.094ms and the slowest doing legitimate work 17.8ms, so the interesting range is tens of microseconds to tens of
+	// milliseconds. The top bucket sits above the 100ms evaluation budget (issue #767) so a rule approaching its skip is visible
+	// here before it is skipped, which is the point at which an operator can still act.
+	r.ruleEvaluationDuration, _ = meter.Float64Histogram(
+		"edr.detection.rule_evaluation.duration",
+		metric.WithDescription("Duration of one detection rule's evaluation of one event batch, by rule."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(ruleEvalDurationBuckets...),
 	)
 
 	if gauges != nil {
@@ -224,13 +263,32 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 // EventsSetAside increments the set-aside counter by n for a host. Called by the processor when a nack withdraws events from
 // processing rather than returning them, which happens only once a batch has passed both retry bounds.
 //
-// Attributed per host deliberately: the question this answers is which host stopped contributing to the graph, and a fleet-wide
-// total cannot answer it.
+// Attributed per host deliberately: the question this answers is which host stopped contributing some of its activity, and a
+// fleet-wide total cannot answer it. WHAT it stopped contributing depends on the stage, which the accompanying log line names.
 func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
 	if r == nil || r.eventsSetAside == nil || n <= 0 {
 		return
 	}
 	r.eventsSetAside.Add(ctx, n, metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// RuleEvaluationDuration records how long one rule took to evaluate one batch (issue #837).
+//
+// This is the tier that answers "which rule is slow" with percentiles. The nil check matches the recorder's other methods: a
+// Recorder built without a meter records nothing rather than panicking.
+func (r *Recorder) RuleEvaluationDuration(ctx context.Context, ruleID string, d time.Duration) {
+	if r == nil || r.ruleEvaluationDuration == nil {
+		return
+	}
+	r.ruleEvaluationDuration.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("rule_id", ruleID)))
+}
+
+// RuleEvaluationSkipped records that this replica has stopped evaluating a rule for exceeding its evaluation budget (issue #767).
+func (r *Recorder) RuleEvaluationSkipped(ctx context.Context, ruleID string) {
+	if r == nil || r.ruleEvalSkipped == nil {
+		return
+	}
+	r.ruleEvalSkipped.Add(ctx, 1, metric.WithAttributes(attribute.String("rule_id", ruleID)))
 }
 
 // EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the
@@ -259,8 +317,8 @@ func (r *Recorder) AlertCreated(ctx context.Context, ruleID, severity string) {
 // MonitorMatched adds n to the monitor-match counter: a rule matched n times, and its resolved mode suppressed the alerts. Same
 // attribute shape as AlertCreated so the two can be compared per rule, which is exactly the comparison promoting a rule turns on.
 //
-// n rather than one call per match, because the caller aggregates a batch and records it only once the batch is acknowledged. See
-// api.MetricsRecorder for why that timing is what makes the series survive a retry.
+// n rather than one call per match, because the caller aggregates a batch and records it only once that batch will not be
+// processed again. See api.MetricsRecorder for why that timing is what makes the series survive a retry.
 func (r *Recorder) MonitorMatched(ctx context.Context, ruleID, severity string, n int) {
 	if r == nil || r.monitorMatches == nil || n <= 0 {
 		return

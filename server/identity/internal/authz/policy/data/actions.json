@@ -33,6 +33,8 @@
     "application_control.policy_delete",
     "detection_config.read",
     "detection_config.write",
+    "rule_content.read",
+    "rule_content.write",
     "tracing.manage"
   ]
 }

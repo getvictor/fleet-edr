@@ -287,3 +287,74 @@ func parseSpecScenarioRanges(path string) ([]scenarioRange, error) {
 	closeScenario(lineNo + 1)
 	return ranges, scanner.Err()
 }
+
+// ChangedMarkerLines returns, per repo-relative file, the new-side line ranges the branch added or modified.
+//
+// Used to scope the over-long-marker gate to lines this branch is responsible for. It diffs the whole tree rather than the spec
+// directory, because markers live in source files; files git cannot diff are skipped rather than failing the run, since a marker
+// on an undiffable file is not a reason to fail a build.
+func ChangedMarkerLines(baseRef, scanRoot string) (map[string][]lineRange, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel()
+
+	repoRoot, err := gitTopLevel(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("git rev-parse --show-toplevel: %w", err)
+	}
+	mergeBase, err := gitMergeBase(ctx, repoRoot, baseRef)
+	if err != nil {
+		return nil, err
+	}
+
+	// -z so paths are NUL-delimited. Splitting on whitespace loses any path containing a space, and the fragments then fail
+	// their own diff and are dropped, which would quietly take every marker in that file out of the gate's scope.
+	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "-z", "--diff-filter=ACMR", mergeBase) //nolint:gosec // args bounded
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-only: %w", wrapGitErr(err, nil))
+	}
+
+	touched := make(map[string][]lineRange)
+	for file := range strings.SplitSeq(strings.TrimRight(string(out), "\x00"), "\x00") {
+		if file == "" {
+			continue
+		}
+		ranges, rerr := gitDiffNewLineRanges(ctx, repoRoot, mergeBase, file)
+		if rerr != nil {
+			// A file git cannot diff is not a reason to fail the build; it simply contributes no touched lines.
+			continue
+		}
+		if len(ranges) > 0 {
+			// Keyed the way ScanMarkers reports a path, which is relative to the scan root rather than to the repository.
+			// The two are the same for a whole-repo run and differ for `--root server`, where every marker would otherwise
+			// look untouched and the gate would silently pass.
+			key, kerr := markerPathKey(repoRoot, scanRoot, file)
+			if kerr != nil {
+				continue
+			}
+			touched[key] = ranges
+		}
+	}
+	return touched, nil
+}
+
+// markerPathKey converts a repo-relative git path into the form ScanMarkers reports for the same file: relative to the scan
+// root, forward-slashed. A file outside the scan root has no marker to match and is reported as such.
+func markerPathKey(repoRoot, scanRoot, repoRelative string) (string, error) {
+	absRoot, err := filepath.Abs(scanRoot)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, filepath.Join(repoRoot, filepath.FromSlash(repoRelative)))
+	if err != nil {
+		return "", err
+	}
+	// Component-wise, not a string prefix. A file legitimately named "..checks.go" starts with two dots without being outside
+	// anything, and rejecting it would drop every marker in it from the gate silently, which is the failure this whole change
+	// exists to stop.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside the scan root", repoRelative)
+	}
+	return filepath.ToSlash(rel), nil
+}

@@ -26,7 +26,6 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
-	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -165,7 +164,7 @@ func TestCatalog_ListShape(t *testing.T) {
 	// asserts them and would bury the thing this test is for, which is the shape and order of the rules this project wrote.
 	var authored, vendored []rulesapi.RuleMetadata
 	for _, rm := range full {
-		if _, isVendored := catalog.VendoredSource(rm.ID); isVendored {
+		if rm.Origin != rulesapi.ProjectOrigin {
 			vendored = append(vendored, rm)
 			continue
 		}

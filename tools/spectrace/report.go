@@ -114,21 +114,16 @@ func loadScenariosAndMarkers(specsDir, changesDir, rootDir string) ([]Scenario, 
 // heading (and two proposals may touch the same capability), so collisions are expected and collapse harmlessly into the
 // set. A missing or empty changesDir yields an empty set so a repo with no in-flight proposals behaves exactly as before.
 func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
-	ids := make(map[string]struct{})
-	// Parse each in-flight proposal directory's delta specs. Skip the archive subtree (already applied into the live
-	// specs) and any plain files, so only genuinely in-flight scenario IDs widen the reference-valid set.
-	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
-		scenarios, err := ParseAllSpecs(changeDir)
-		if err != nil {
-			return err
-		}
-		for _, s := range scenarios {
-			ids[s.ID] = struct{}{}
-		}
-		return nil
-	})
+	// Projected from InFlightScenarios rather than walking the tree again. The two used to read the same files through
+	// different roots, which is the semantic duplication that lets a marker be VALID against one traversal and ungated by the
+	// other: exactly the drift the in-flight gate exists to remove.
+	scenarios, err := InFlightScenarios(changesDir)
 	if err != nil {
 		return nil, err
+	}
+	ids := make(map[string]struct{}, len(scenarios))
+	for _, s := range scenarios {
+		ids[s.ID] = struct{}{}
 	}
 	return ids, nil
 }
@@ -358,4 +353,44 @@ func formatMarkerLink(m Marker) string {
 // `--include-invalid` flag), the escape keeps the table well-formed.
 func escapeMarkdownPipe(s string) string {
 	return strings.ReplaceAll(s, "|", "&#124;")
+}
+
+// MaxMarkerLineLen is the source line-length limit a spec marker must respect, matching the project's own.
+//
+// It lives here rather than in a linter config because no linter enforces line length on this repository, and a marker is the one
+// construct that cannot be wrapped to comply: splitting it breaks the reference. The fix is always to shorten the requirement or
+// scenario title, which is why the message says so.
+const MaxMarkerLineLen = 140
+
+// OverlongMarkers returns the markers whose source line exceeds the limit.
+//
+// Reported against the LINE rather than the marker, because a marker inside an indented block comment has less room than one at
+// column 0, and the line is what a reader and a formatter see.
+//
+// touched scopes the result: a marker is reported only if its file and line were added or modified in the branch. That scoping is
+// what makes the gate shippable rather than a wedge. There are several hundred over-long markers already on main, and failing the
+// build on all of them would block every pull request in the repository for a defect none of them introduced. Passing a nil map
+// reports every marker, which is what a deliberate sweep would want.
+func OverlongMarkers(markers []Marker, touched map[string][]lineRange) []Marker {
+	var over []Marker
+	for _, m := range markers {
+		if m.LineLen <= MaxMarkerLineLen {
+			continue
+		}
+		if touched != nil && !lineTouched(touched[m.SourcePath], m.SourceLine) {
+			continue
+		}
+		over = append(over, m)
+	}
+	return over
+}
+
+// lineTouched reports whether line falls in any of the changed ranges.
+func lineTouched(ranges []lineRange, line int) bool {
+	for _, r := range ranges {
+		if line >= r.Start && line <= r.End {
+			return true
+		}
+	}
+	return false
 }

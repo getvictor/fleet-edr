@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleEvalStats,
   listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
@@ -148,6 +149,99 @@ describe("detection-config API client", () => {
     it(`listDetectionRuleMatchCounts rejects a malformed envelope: ${name}`, async () => {
       stubFetch(envelope);
       await expect(listDetectionRuleMatchCounts()).rejects.toThrow(/malformed rule-match-counts/);
+    });
+  }
+
+  // The eval-stats client is the same trust boundary as the match-count one and fails the same way, so it gets the same
+  // treatment. The difference worth its own coverage is the evaluations floor: a row exists only because a rule evaluated, and the
+  // mean is a division by that number, so 0 is malformed here where it is legitimate on the match-count side.
+  it("listDetectionRuleEvalStats accepts a well-formed row", async () => {
+    const row = {
+      rule_id: "suspicious_exec", evaluations: 400, retryable_misses: 12,
+      mean_eval_ns: 1_500_000, max_eval_ns: 90_000_000, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
+  // Zero misses and zero timings are real: a rule can evaluate cheaply and never miss. Only `evaluations` has a floor.
+  it("listDetectionRuleEvalStats accepts zero misses and zero timings", async () => {
+    const row = {
+      rule_id: "suspicious_exec", evaluations: 1, retryable_misses: 0,
+      mean_eval_ns: 0, max_eval_ns: 0, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
+  it("listDetectionRuleEvalStats omits the query when no window is given", async () => {
+    const mock = stubFetch({ eval_stats: [], days: 7 });
+    const out = await listDetectionRuleEvalStats();
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("/api/v1/detection-config/rule-eval-stats");
+    expect(target.toString()).not.toContain("days=");
+    expect(out).toEqual({ stats: [], days: 7 });
+  });
+
+  it("listDetectionRuleEvalStats serialises an explicit window", async () => {
+    const mock = stubFetch({ eval_stats: [], days: 14 });
+    await listDetectionRuleEvalStats(14);
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("days=14");
+  });
+
+  it("listDetectionRuleEvalStats reports the server's window, not the requested one", async () => {
+    stubFetch({ eval_stats: [], days: 30 });
+    expect(await listDetectionRuleEvalStats(365)).toEqual({ stats: [], days: 30 });
+  });
+
+  // Each row is malformed in exactly ONE way, with every other field valid, so a mutant that breaks one guard is caught by the
+  // case for that guard rather than by a fixture that was already failing for a different reason.
+  //
+  // Built from a valid row rather than written out, which is what keeps that property true as fields are added: a hand-written
+  // fixture set drifts the moment one field changes and starts failing for reasons the case name does not claim.
+  const validEvalRow = {
+    rule_id: "r", evaluations: 1, retryable_misses: 0,
+    mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS,
+  };
+  const rowWith = (over: Record<string, unknown>) => ({ eval_stats: [{ ...validEvalRow, ...over }], days: 7 });
+  // Built by filtering rather than by deleting a computed key, which is the same result without the dynamic-index sink eslint
+  // flags: the key is a literal from the table below, but a rule that cannot see that is right to be suspicious of the shape.
+  const rowWithout = (field: string) => ({
+    eval_stats: [Object.fromEntries(Object.entries(validEvalRow).filter(([k]) => k !== field))],
+    days: 7,
+  });
+
+  for (const [name, envelope] of [
+    ["null eval_stats", { eval_stats: null, days: 7 }],
+    ["omitted eval_stats", { days: 7 }],
+    ["eval_stats is not an array", { eval_stats: { "0": {} }, days: 7 }],
+    ["omitted days", { eval_stats: [] }],
+    ["days is not a number", { eval_stats: [], days: "7" }],
+    ["days is zero", { eval_stats: [], days: 0 }],
+    ["days is fractional", { eval_stats: [], days: 1.5 }],
+    ["a row with an empty rule_id", rowWith({ rule_id: "" })],
+    ["a row with no rule_id", rowWithout("rule_id")],
+    // The floor. Without it a zero row divides by zero somewhere upstream and reads here as a rule that ran for free.
+    ["a row with zero evaluations", rowWith({ evaluations: 0 })],
+    ["a row missing evaluations", rowWithout("evaluations")],
+    ["a row missing retryable_misses", rowWithout("retryable_misses")],
+    ["a row missing mean_eval_ns", rowWithout("mean_eval_ns")],
+    ["a row missing max_eval_ns", rowWithout("max_eval_ns")],
+    ["a row missing last_seen", rowWithout("last_seen")],
+    ["a row whose last_seen is unparseable", rowWith({ last_seen: "not-a-date" })],
+    ["a row with a negative timing", rowWith({ mean_eval_ns: -1 })],
+    ["a row with a fractional timing", rowWith({ mean_eval_ns: 1.5 })],
+    // The two relations. Well-typed and still impossible: the store derives both sides of each from the same rows, so a row
+    // breaking one is a response that is not what it claims rather than a rule with unusual numbers.
+    ["a row with more undecided attempts than attempts", rowWith({ evaluations: 2, retryable_misses: 3 })],
+    ["a row whose mean exceeds its maximum", rowWith({ mean_eval_ns: 900, max_eval_ns: 100 })],
+    ["a row that is null", { eval_stats: [null], days: 7 }],
+    ["an empty row", { eval_stats: [{}], days: 7 }],
+  ] as [string, unknown][]) {
+    it(`listDetectionRuleEvalStats rejects a malformed envelope: ${name}`, async () => {
+      stubFetch(envelope);
+      await expect(listDetectionRuleEvalStats()).rejects.toThrow(/malformed rule-eval-stats/);
     });
   }
 

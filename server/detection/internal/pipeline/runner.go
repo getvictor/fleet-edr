@@ -92,8 +92,8 @@ func NewRunner(opts RunnerOptions) *Runner {
 	}
 }
 
-// SetMonitorMatchRecorder propagates the durable monitor-match counter to the processor, which writes to it after acknowledging a
-// batch (issue #813). Only the processor needs it: the periodic sweeps evaluate no rules.
+// SetMonitorMatchRecorder propagates the durable monitor-match counter to the processor, which writes to it once a batch will not
+// be processed again (issue #813). Only the processor needs it: the periodic sweeps evaluate no rules.
 func (r *Runner) SetMonitorMatchRecorder(rec rulesapi.MonitorMatchRecorder) {
 	if r.processor != nil {
 		r.processor.SetMonitorMatchRecorder(rec)

@@ -20,6 +20,10 @@ type Marker struct {
 	SourcePath string
 	SourceLine int
 	Layer      Layer
+	// LineLen is the width of the source line the marker sits on, in characters. Recorded at scan time because a marker is a
+	// single unwrappable token: a precise requirement or scenario title pushes the line past the project's limit, and the fix is
+	// to shorten the title rather than to wrap the line. Nothing else catches that, so the tool that already reads the line does.
+	LineLen int
 }
 
 // markerRE captures candidate IDs after the literal `spec:` prefix. The capture allows uppercase, underscores, and
@@ -154,11 +158,17 @@ func scanFile(r io.Reader, path string, isSwift bool, canonicalIDs map[string]st
 		lineNo++
 		line := scanner.Text()
 		for _, m := range markerRE.FindAllStringSubmatch(line, -1) {
-			out = append(out, Marker{ID: m[1], SourcePath: path, SourceLine: lineNo, Layer: layer})
+			out = append(out, Marker{
+				ID: m[1], SourcePath: path, SourceLine: lineNo, Layer: layer,
+				// Runes rather than bytes, because the limit is about how wide a line reads.
+				LineLen: len([]rune(line)),
+			})
 		}
 		if isSwift {
 			for _, m := range swiftMarkerRE.FindAllStringSubmatch(line, -1) {
-				out = append(out, resolveSwiftMarker(m[1], path, lineNo, layer, swiftIndex))
+				sm := resolveSwiftMarker(m[1], path, lineNo, layer, swiftIndex)
+				sm.LineLen = len([]rune(line))
+				out = append(out, sm)
 			}
 		}
 		_ = canonicalIDs // unused; reserved for future per-line validation hooks

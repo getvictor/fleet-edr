@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"sort"
 	"strings"
@@ -16,6 +17,17 @@ import (
 type Document struct {
 	Path    string
 	Content []byte
+	// Source is where this document came from, and it is always populated on a document READ back.
+	//
+	// On the way IN it depends on WHICH WRITE SURFACE the document arrived through, never on the document's own path. The
+	// distinction is contractual: deriving provenance from a path is the specific thing this design rules out, since an operator
+	// chooses their own paths and could then launder an authored rule into a vendored one.
+	//
+	// Through the AUTHORING surface this field is ignored: that write records the operator's provenance itself, because how a
+	// document arrived is an observation rather than a claim the caller gets to make. A whole-corpus replacement may state it,
+	// and must be able to, since that is the surface a pack upgrade and a restore go through and both have to put an operator's
+	// own rules back as theirs rather than relabelling them. Empty there means "not stated", which is recorded as vendored.
+	Source Source
 }
 
 // Corpus is the read surface `rules` consumes to build its evaluatable rule set.
@@ -59,3 +71,107 @@ func FS(docs []Document) fs.FS {
 func SortDocuments(docs []Document) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
+
+// PackStatus is what shipped rule content a deployment is running, and what it would run if it took this build's pack.
+//
+// Reported as digests plus the rules that differ, rather than as a version string, because a version has to be maintained by hand
+// and forgetting to bump one is silent: the deployment believes it is current while running different rules.
+type PackStatus struct {
+	// Installed identifies the shipped content stored now.
+	Installed string
+	// Available identifies the pack this build carries. Equal to Installed on a current deployment.
+	Available string
+	// Previous identifies the generation a rollback would restore. Empty when there is none, which is the ordinary state of a
+	// deployment that has never upgraded.
+	Previous string
+	// Declined is the pack an operator rolled back from, which this deployment will not install. Empty when none.
+	Declined string
+	// Added, Removed and Changed name the RULES that differ between Installed and Available, by identity rather than by path,
+	// because that is what an operator recognises and what their tuning is keyed on.
+	Added   []string
+	Removed []string
+	Changed []string
+}
+
+// Current reports whether the deployment is running the shipped content this build carries.
+func (p PackStatus) Current() bool { return p.Installed == p.Available }
+
+// PackRollback is what rolling back did.
+type PackRollback struct {
+	// Restored is the identity of the generation now installed.
+	Restored string
+	// Version is the corpus version after the rollback.
+	Version int64
+	// Withheld names retained documents NOT restored because the operator has taken over that rule since the upgrade. Their
+	// rule wins, as it does on the way in, and they are told which shipped rules the rollback therefore did not bring back.
+	Withheld []string
+}
+
+// PackInstall is what installing a build's rule pack did.
+//
+// Skipped is reported rather than logged and forgotten because it is a real divergence: the deployment is not running a rule the
+// pack ships, and the reason is the operator's own rule of the same identity. That is the correct outcome and still something they
+// are entitled to see, since nothing else would tell them.
+type PackInstall struct {
+	Changed bool
+	Version int64
+	Skipped []string
+	// Declined reports that this build's pack was not installed because the operator rolled back from it. It is distinct from
+	// "nothing to do": the deployment is deliberately running older shipped content, which is a state worth surfacing rather
+	// than one to infer from an absence.
+	Declined bool
+}
+
+// RuleIdentity maps a document's path to the identity the rule it holds will load under.
+//
+// Supplied by the caller rather than derived here, for the reason the provenance projection is: the derivation belongs to the
+// loader, and a second copy of it in this context would agree until one of them changed. Then the copies would disagree silently,
+// which for this particular question means installing a pack document that collides with an operator's rule.
+//
+// It matters that this is identity and not path. A rule is identified by its file STEM (#873), so `authored/foo.yml` and
+// `imported/foo.yml` are the SAME rule stored twice, and a corpus holding both does not load at all: the loader refuses the whole
+// set rather than choosing between them, so every rule on the deployment stops, not just the pair.
+type RuleIdentity func(path string) string
+
+// Identify answers safely for a nil RuleIdentity, for which a document's identity is its path. That is the weakest correct
+// answer rather than a convenient one: it still catches a pack document landing on the exact path an operator holds, and it is
+// what a caller with no loader of its own can honestly claim to know.
+func (r RuleIdentity) Identify(path string) string {
+	if r == nil {
+		return path
+	}
+	return r(path)
+}
+
+// Source says where a rule document came from: shipped with the product, or written by an operator.
+//
+// Recorded when the document is stored rather than derived from its path, which is the decision the rest of this rests on. A
+// rule's identity is its file STEM and not its path (#873), and the load walks the whole stored set precisely so authored content
+// need not live under a directory named `imported`. Reading provenance off a prefix would contradict that AND be chosen by the
+// operator it describes: writing to `imported/mine.yml` would launder an authored rule into a vendored one, and with it a licence
+// attribution it was never under.
+type Source string
+
+const (
+	// SourceVendored marks content shipped with the product. It carries the upstream project's licence, and its attribution is
+	// how that licence is honoured.
+	SourceVendored Source = "vendored"
+	// SourceAuthored marks content an operator wrote. It is theirs, carries no upstream licence, and must not be credited to an
+	// upstream project.
+	SourceAuthored Source = "authored"
+)
+
+// Valid reports whether s is a source this system records. Anything else is a row written by a version that knew something this
+// one does not, which a reader must not silently treat as either known value.
+func (s Source) Valid() bool {
+	return s == SourceVendored || s == SourceAuthored
+}
+
+// ErrUnknownSource reports a provenance value this version does not recognise, on the way in or on the way out.
+//
+// Refusing is the only safe direction, and the asymmetry is why. An unrecognised value is not SourceAuthored, so attribution
+// treats it as vendored and credits the upstream project; it is also not SourceVendored, so the pack digest excludes it. One
+// unknown row would therefore be credited to SigmaHQ while being left out of the identity of the pack it is claimed to belong to.
+// The first half is a licence claim about content nobody here can vouch for, which is the failure this whole change exists to
+// prevent, so a corpus carrying one is refused rather than half-interpreted.
+var ErrUnknownSource = errors.New("rule content: unknown document source")

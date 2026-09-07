@@ -1,0 +1,12 @@
+# Tasks
+
+- [x] `rulecontent/api` publishes the authoring lifecycle as `Author`, so `rules` holds a port rather than reaching into another context's internals. The validator stays injected, so `rulecontent` still imports no other context's api and `arch-go.yml` is unchanged.
+- [x] Two new authorization actions, read and write, registered in the action list, the policy's action mirror, and the role grants. Read goes to admin and senior_analyst, write to admin, matching `detection_config`: authoring is a governed change to what the deployment detects, made by the same people from the same screen.
+- [x] Two new audit actions, one for a write and one for a deletion, recorded against the acting principal with the document and the operator's stated reason.
+- [x] A change with no stated reason is refused, so the audit trail cannot carry an empty governance field.
+- [x] Only a change that TOOK EFFECT is audited. A refused submission is not a mutation, and recording it as one would make the trail disagree with the corpus. Mutation-tested, since the absence of a row is exactly the assertion that passes by accident.
+- [x] A dry-run check reports what would be refused or warned about, changes nothing, and records no mutation.
+- [x] An unauthorized request is refused without disclosing whether the named document exists, since existence is itself information about what a deployment detects.
+- [x] The operator surface lives in the `rules` operator handler, which is the answer to the question ADR-0021 deferred to this issue. Reasoning in the proposal.
+- [x] Real-tool QA against the dev server, not a second Go assertion of the same thing. Verified: the corpus lists; a dry-run accepts a valid rule and refuses one claiming a shipped id, with the reason naming it; a reasonless write is refused; a write lands and reads back byte for byte; a non-`.yml` path is refused; a delete succeeds and a second returns not-found; both mutations carry actor, reason and corpus version in `audit_events` while refusals and dry-runs carry nothing; and the authored rule reached the RUNNING catalog about 18 seconds later.
+- [x] That QA found what no test did: an operator-authored rule is credited to SigmaHQ, because every stored document becomes an `importedRule` whose origin is hardcoded. Filed as #874. It matters beyond a wrong label, because the credit is the mechanism honouring the Detection Rule License, so attaching it to the operator's own work misstates that work's licensing through the surface built to get attribution right.
