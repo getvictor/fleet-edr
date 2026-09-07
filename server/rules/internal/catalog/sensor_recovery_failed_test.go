@@ -159,6 +159,7 @@ func TestSensorRecoveryFailed_IgnoresWhatIsNotItsEvent(t *testing.T) {
 // TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises guards the operator-facing surface against drifting from the
 // behaviour. /api/rules and docs/detection-rules.md are generated from Doc, so a severity or technique that disagrees
 // with the finding is a documented lie rather than a cosmetic slip.
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-that-cannot-attribute-what-it-reports-declares-no-technique
 func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 	t.Parallel()
 	r := &SensorRecoveryFailed{}
@@ -169,7 +170,17 @@ func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 
 	assert.Equal(t, doc.Severity, findings[0].Severity, "the documented severity must be the one actually raised")
 	assert.Equal(t, doc.Title, findings[0].Title)
-	assert.Equal(t, []string{"T1562.001"}, r.Techniques())
+	// No technique, and pinned deliberately rather than to follow the code (issue #754). The rule cannot attribute the stop to
+	// anyone: its own Limitations say it reports that recovery gave up and not why the provider stopped, and its Description
+	// sends an analyst to this product's own components. Both outcome values describe our repair mechanism failing.
+	//
+	// Asserted because Techniques() feeds the ATT&CK coverage export a customer reads during an evaluation, so a technique here
+	// puts our own faults into their coverage map. If a future revision earns one back, it has to be by attaching evidence that
+	// somebody acted, and changing this line is how that decision gets made rather than noticed.
+	assert.Empty(t, r.Techniques(),
+		"a rule that documents its own components as the likely cause must not claim an adversary technique")
+	assert.Empty(t, findings[0].Techniques,
+		"and the finding must carry none either, or the alert row gets one from somewhere the rule cannot see")
 	assert.Equal(t, []string{"sensor_recovery_failed"}, doc.EventTypes,
 		"the documented input event must be the one the rule reads, or an operator cannot tell what feeds it")
 	assert.NotEqual(t, (&SensorTamper{}).ID(), r.ID())

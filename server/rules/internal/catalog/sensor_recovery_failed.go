@@ -58,9 +58,28 @@ func (r *SensorRecoveryFailed) SupportedExclusionMatchTypes() []api.ExclusionMat
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding.
 func (r *SensorRecoveryFailed) DisplayName() string { return "EDR sensor could not be restored" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1562.001 (Impair Defenses: Disable or Modify Tools). Same
-// technique as the stop it follows, because it reports the same attack having succeeded.
-func (r *SensorRecoveryFailed) Techniques() []string { return []string{"T1562.001"} }
+// Techniques returns no MITRE ATT&CK IDs, and the absence is the mapping rather than an omission (issue #754).
+//
+// It used to claim T1562.001 (Impair Defenses: Disable or Modify Tools) on the grounds that it reported "the same attack having
+// succeeded". The rule contradicted itself: its own Limitations say it reports that recovery gave up and NOT why the provider
+// stopped, and its Description sends an analyst to look at the host application and the system configuration daemon, which are
+// ours. Both outcome values, enable_failed and enable_ineffective, describe this product's repair mechanism failing rather than
+// anyone acting against it.
+//
+// The observed base rate settles it. The 37.8-hour providerless episode on 2026-07-17 was the enable_ineffective shape, and its
+// cause was a Settings disable-then-enable leaving the network extension with no filter or DNS sessions: an OS-interaction bug.
+// That is the common cause of this alert in practice.
+//
+// Where the claim actually landed is worth stating, because the obvious answer is no longer the right one. Issue #754 was filed
+// about the ATT&CK coverage export, and this rule has since been classified a health signal, which already keeps it off that
+// export and off GET /api/rules and the generated reference. What the claim still reached is every ALERT this rule raises: the
+// finding declares no techniques of its own, so alert persistence falls back to this list and stamped T1562.001 onto the row an
+// analyst reads. That is the surface the removal fixes.
+//
+// The alert keeps its Critical severity and its text. Without an adversary attached it is a visibility and health statement, and
+// that needs no adversary label to earn its severity: a host that is not capturing needs an operator either way. Whether it
+// belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
+func (r *SensorRecoveryFailed) Techniques() []string { return nil }
 
 // Doc surfaces the operator-facing description in /api/rules and the generated docs/detection-rules.md.
 func (r *SensorRecoveryFailed) Doc() api.Documentation {

@@ -1,0 +1,31 @@
+# Recovery failing is not an adversary technique
+
+## Why
+
+`sensor_recovery_failed` declared T1562.001 (Impair Defenses: Disable or Modify Tools) on a condition it explicitly cannot attribute to anyone, and whose documented causes are this product's own software.
+
+The rule contradicted itself. Its `Limitations` say it reports that recovery gave up and NOT why the provider stopped. Its `Description` sends an analyst to look at the host application and the system configuration daemon, which are ours. Both outcome values, `enable_failed` and `enable_ineffective`, describe our repair mechanism failing rather than anyone acting against us.
+
+The observed base rate agrees. The 37.8-hour providerless episode on 2026-07-17 was the `enable_ineffective` shape, caused by a Settings disable-then-enable leaving the network extension with no filter or DNS sessions: an OS-interaction bug, and the common cause of this alert in practice.
+
+## Where the claim actually landed, which is not where the issue said
+
+The issue was filed about the ATT&CK coverage export a customer reads during an evaluation. That half is **already handled**: the rule has since been classified a health signal, which keeps it off the coverage export, off `GET /api/rules`, and out of the generated rule reference.
+
+What the claim still reached is every **alert** this rule raises. The finding declares no techniques of its own, so alert persistence falls back to the rule's declared list and stamped T1562.001 onto the row an analyst reads. That is the surface this fixes, and it is a narrower claim than the issue makes.
+
+## What changes
+
+- `sensor_recovery_failed` declares no technique.
+- The requirement says what a technique declaration means, so the next rule faces the question deliberately: declare one only for something observed, and declaring none is a complete mapping rather than a gap.
+
+## What does not change
+
+The alert keeps its Critical severity, its title and its text, and stays a separate rule from `sensor_tamper`. The measured case for the split is unaffected: on one host a stop was repaired 35.7s later and the host was fine while another exhausted every attempt and left the host blind, and both produced word-for-word identical `sensor_tamper` alerts.
+
+Whether this signal belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
+
+## Impact
+
+- Affected specs: `server-detection-rules-engine`
+- Affected code: `server/rules/internal/catalog/sensor_recovery_failed.go`
