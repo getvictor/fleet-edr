@@ -371,13 +371,23 @@ const MaxMarkerLineLen = 140
 // what makes the gate shippable rather than a wedge. There are several hundred over-long markers already on main, and failing the
 // build on all of them would block every pull request in the repository for a defect none of them introduced. Passing a nil map
 // reports every marker, which is what a deliberate sweep would want.
-func OverlongMarkers(markers []Marker, touched map[string][]lineRange) []Marker {
+//
+// canonical exempts a marker whose target is already in openspec/specs, because the only remedy this gate can ask for is a
+// shorter title and an archived title is not the author's to shorten. Renaming one would make the canonical spec disagree with
+// the archived delta that stated it, which archive-verify reports as a loss, so the gate would be asking for a defect. The
+// scenarios it can still act on are the in-flight ones, which is where a new long title is actually coined: a PR adding a
+// scenario marks it from its own delta in the same PR, before it is canonical, and that is where a rename costs nothing.
+// Passing a nil set exempts nothing.
+func OverlongMarkers(markers []Marker, touched map[string][]lineRange, canonical map[string]struct{}) []Marker {
 	var over []Marker
 	for _, m := range markers {
 		if m.LineLen <= MaxMarkerLineLen {
 			continue
 		}
 		if touched != nil && !lineTouched(touched[m.SourcePath], m.SourceLine) {
+			continue
+		}
+		if _, fixed := canonical[m.ID]; fixed {
 			continue
 		}
 		over = append(over, m)
