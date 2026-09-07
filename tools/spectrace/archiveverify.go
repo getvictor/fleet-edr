@@ -43,8 +43,17 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 			continue
 		}
 		winner := entries[len(entries)-1]
-		// A requirement a later change retired legitimately has nothing canonical left.
-		if by, ok := removedLater[requirement]; ok && by >= winner.change {
+		// A requirement a retirement reached legitimately has nothing canonical left, and this compares the archive DATES rather
+		// than the folder names.
+		//
+		// Comparing names was the bug review caught, and it was the same mistake this file's own comment warns about: within a
+		// batch every folder carries one date, so a name comparison degenerates to alphabetical order. The pending pair
+		// `latch-dns-proxy-bypass` (restates) and `dns-proxy-no-bypass` (retires) archive together, and the remover sorts first
+		// alphabetically, so a correct retirement would have been reported as a loss the moment they landed.
+		//
+		// Equal dates therefore mean "cannot tell", and cannot-tell is silence: a false positive here costs more than a missed
+		// one, because the whole procedure is a reader comparing two lists and noticing what is new.
+		if by, ok := removedLater[requirement]; ok && archiveDate(by) >= archiveDate(winner.change) {
 			continue
 		}
 		have := canonical[requirement]
@@ -156,6 +165,18 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 		fmt.Fprintf(w, "  %s\n", l)
 	}
 	return 0
+}
+
+// archiveDate is the YYYY-MM-DD an archive folder is prefixed with, or the whole name when it carries no date.
+//
+// Prefix rather than a parse, which also handles the malformed double-date folders that predate this (`2026-06-09-2026-06-09-x`):
+// their first ten characters are still the date, and a stricter reader would have to special-case them for no gain.
+func archiveDate(folder string) string {
+	const dateLen = len("2006-01-02")
+	if len(folder) < dateLen {
+		return folder
+	}
+	return folder[:dateLen]
 }
 
 // sortedKeysOfArchived returns the requirement keys in a stable order.

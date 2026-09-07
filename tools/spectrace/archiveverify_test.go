@@ -73,8 +73,8 @@ func TestVerifyArchive_ARetiredRequirementIsNotALoss(t *testing.T) {
 	))
 }
 
-// A retirement archived BEFORE the restatement does not excuse the loss: the restatement re-created the requirement, so its
-// scenarios should be canonical. This is the ordering hazard seen from the other end.
+// A retirement archived on an EARLIER date does not excuse the loss: the restatement came after and re-created the requirement,
+// so its scenarios should be canonical. This is the ordering hazard seen from the other end.
 func TestVerifyArchive_AnEarlierRetirementDoesNotExcuseIt(t *testing.T) {
 	t.Parallel()
 	findings := verifyArchive(
@@ -85,6 +85,40 @@ func TestVerifyArchive_AnEarlierRetirementDoesNotExcuseIt(t *testing.T) {
 		map[string]string{"cap/the-thing": "2026-06-02-retires-it"},
 	)
 	assert.Len(t, findings, 1)
+}
+
+// Within ONE batch the order is not recoverable, so a retirement and a restatement stamped the same date mean "cannot tell", and
+// cannot-tell has to be silence.
+//
+// This is the case review found, with the real pair that will hit it: `latch-dns-proxy-bypass` restates a requirement and
+// `dns-proxy-no-bypass` retires it, both pending, so both archive on the same day. Comparing folder NAMES put the remover first
+// alphabetically and reported a correct retirement as a loss. A false positive costs more than a missed one here, because the
+// whole procedure is a reader comparing two lists and noticing what is new.
+func TestVerifyArchive_SameBatchIsNotGuessedAt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, remover string }{
+		{"the remover sorts first", "2026-09-07-dns-proxy-no-bypass"},
+		{"the remover sorts last", "2026-09-07-zzz-retires-it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Empty(t, verifyArchive(
+				map[string][]archivedRestatement{
+					"cap/the-thing": {{change: "2026-09-07-latch-dns-proxy-bypass", scenarios: []string{"one"}}},
+				},
+				map[string]map[string]struct{}{},
+				map[string]string{"cap/the-thing": tc.remover},
+			), "same date means the order is unknown, and an unknown is not a finding")
+		})
+	}
+}
+
+func TestArchiveDate(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-some-change"))
+	// The malformed double-date folders that predate this still yield the date from their first ten characters.
+	assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-2026-06-09-dns-proxy-on-by-default"))
+	assert.Equal(t, "short", archiveDate("short"))
 }
 
 func TestPrintArchiveVerify(t *testing.T) {

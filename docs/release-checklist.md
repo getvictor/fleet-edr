@@ -10,7 +10,16 @@ OpenSpec deltas are NOT archived per-merge (see CLAUDE.md). They accumulate in `
 
 On a release-prep branch off `main`:
 
-1. Get the order: `go run ./tools/spectrace archive-order`. It lists the pending changes in an order that is safe to apply, and prints the constraints that shaped it.
+1. Capture the baseline, then get the order:
+
+   ```sh
+   go run ./tools/spectrace archive-verify > /tmp/archive-verify-before.txt
+   go run ./tools/spectrace archive-order
+   ```
+
+   The baseline has to be taken NOW, because step 2 archives and moves every pending change and there is no way back to this state afterwards. Step 4 compares against it.
+
+   `archive-order` lists the pending changes in an order that is safe to apply, and prints the constraints that shaped it.
 
    **Archive in that order, not alphabetically and not in whatever order `ls` prints.** `openspec archive` applies a `## MODIFIED Requirements` entry by replacing the canonical requirement WHOLE, so when one pending change adds a requirement and another modifies or retires it, applying them the wrong way round discards the later text with no error and nothing downstream notices: `openspec validate --strict` passes on a truncated requirement, and `spectrace check --strict` passes as long as the surviving scenarios still have markers. This is issue #901, and the v0.4.0 archive lost scenarios to the same class.
 
@@ -19,9 +28,20 @@ On a release-prep branch off `main`:
 2. For each completed change, in that order, run `openspec archive <name> -y` (NO `--skip-specs`). This merges the delta into `openspec/specs/**` and moves the folder to `openspec/changes/archive/<date>-<name>/`. Use `--skip-specs` ONLY for a tooling/doc-only change that shipped no spec delta.
 3. If a merged change is genuinely deferred to a later release (incomplete, intentionally held), it must not ship its delta into the canonical specs yet. Decide explicitly: either finish + archive it, or back its delta out of this release. The release gate (`openspec-archived` in `release.yml`) does not let an un-archived change ride silently into a release.
 4. Verify the canonical tree is well-formed and fully traced after archiving:
+
    - `openspec validate --all --strict`
    - `go run ./tools/spectrace check --strict`
-   - `go run ./tools/spectrace archive-verify`, compared against the same command's output from BEFORE step 2. Neither check above can see a requirement that lost half its text: `validate --strict` passes on a truncated one and `check --strict` passes as long as whatever survived still has markers. This one lists the scenarios an archived restatement named that the canonical spec does not have, and **a line that is new since before the archive is a scenario this archive discarded**. It reports rather than gates, and the comparison is the point: the tree already carries entries this pass cannot classify, because openspec stamps every folder in one batch with the same date and the order within a batch is therefore not recoverable, so an older loss and a scenario a later change deliberately retired look alike. A new line does not.
+   - The archive did not silently discard a restatement:
+
+     ```sh
+     go run ./tools/spectrace archive-verify > /tmp/archive-verify-after.txt
+     diff /tmp/archive-verify-before.txt /tmp/archive-verify-after.txt
+     ```
+
+     **Any line the diff adds is a scenario this archive discarded.** Neither check above can see one: `validate --strict` passes on a requirement that lost half its text, and `check --strict` passes as long as whatever survived still has markers.
+
+     The comparison rather than the raw output is the point. The tree already carries entries `archive-verify` cannot classify, because openspec stamps every folder in one batch with the same date, so the order within a batch is not recoverable and a scenario a later change deliberately retired looks like one that was discarded. That is why it reports rather than gates, and why a standing line is not actionable while a new one is. The standing set is tracked in #905.
+
 5. Confirm nothing un-archived remains: `ls -1 openspec/changes/ | grep -v '^archive$'` prints nothing.
 
 > Note on removed requirements: a change that retires a requirement (a `## REMOVED Requirements` delta) does not need to be archived early to keep CI green. `spectrace check --strict` exempts canonical scenarios whose requirement an in-flight delta marks `## REMOVED`, so the requirement's tests can be deleted on the merging PR and the gate stays honest until this archive step finalizes the removal.
