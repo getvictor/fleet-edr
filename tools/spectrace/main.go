@@ -102,11 +102,12 @@ Subcommands:
             retires it, or the later text is discarded with no error (issue #901).
             Exit code 0 when an order exists, 1 when two changes each have to precede the other.
   archive-verify
-            Run AFTER archiving. Checks that every scenario the last archived restatement of a
-            requirement listed is still in the canonical spec, which is what archiving in the
-            wrong order silently destroys. Findings do NOT gate: run it before archiving too and
-            compare the two, since a line that is new is one this archive lost. Exit code 2 on a
-            usage or write failure.
+            Run BEFORE archiving and again after, and diff the two. Checks that every scenario
+            the last archived restatement of a requirement listed is still in the canonical spec,
+            which is what archiving in the wrong order silently destroys. Findings do NOT gate:
+            the tree carries older ones this cannot classify, so a scenario line that is NEW in
+            the second report is the loss this archive caused. Exit code 2 on a usage or write
+            failure.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)

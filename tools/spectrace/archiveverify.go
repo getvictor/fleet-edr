@@ -34,7 +34,7 @@ type archivedRestatement struct {
 // that is new is a scenario this archive lost. That comparison needs no ordering and no baseline file, and it is the question a
 // release engineer actually has.
 func verifyArchive(archived map[string][]archivedRestatement, canonical map[string]map[string]struct{},
-	removedLater map[string]string,
+	retired map[string]struct{},
 ) []string {
 	var losses []string
 	for _, requirement := range sortedKeysOfArchived(archived) {
@@ -43,20 +43,23 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 			continue
 		}
 		winner := entries[len(entries)-1]
-		// A requirement a retirement reached legitimately has nothing canonical left, and this compares the archive DATES rather
-		// than the folder names.
+		have, stillCanonical := canonical[requirement]
+		// A retirement excuses a requirement that is GONE, and the canonical tree is what says whether it took effect.
 		//
-		// Comparing names was the bug review caught, and it was the same mistake this file's own comment warns about: within a
-		// batch every folder carries one date, so a name comparison degenerates to alphabetical order. The pending pair
-		// `latch-dns-proxy-bypass` (restates) and `dns-proxy-no-bypass` (retires) archive together, and the remover sorts first
-		// alphabetically, so a correct retirement would have been reported as a loss the moment they landed.
+		// Two earlier versions of this asked the archive folders instead, and both were wrong in the same way. Comparing folder
+		// names is alphabetical order, which review caught: within a batch every folder carries one date, so the pending pair
+		// `latch-dns-proxy-bypass` (restates) and `dns-proxy-no-bypass` (retires) would have read as a loss. Comparing DATES fixed
+		// that and left the opposite hole: a retirement the archive did not end up applying, because a later change re-created the
+		// requirement, still excused it, so a restatement's scenarios could go missing from a requirement that is right there in
+		// the tree.
 		//
-		// Equal dates therefore mean "cannot tell", and cannot-tell is silence: a false positive here costs more than a missed
-		// one, because the whole procedure is a reader comparing two lists and noticing what is new.
-		if by, ok := removedLater[requirement]; ok && archiveDate(by) >= archiveDate(winner.change) {
-			continue
+		// Neither question needed asking. The end state answers both: gone plus a recorded retirement is a retirement that
+		// happened, and present means it did not, whatever order the folders imply.
+		if !stillCanonical {
+			if _, ok := retired[requirement]; ok {
+				continue
+			}
 		}
-		have := canonical[requirement]
 		for _, scenario := range winner.scenarios {
 			if _, ok := have[scenario]; ok {
 				continue
@@ -69,9 +72,23 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 	return losses
 }
 
+// canonicalScenarios indexes the canonical tree the way the archived deltas are keyed, so the two sides of the comparison derive
+// their keys in one place rather than in two that agree until one is edited.
+func canonicalScenarios(scenarios []Scenario) map[string]map[string]struct{} {
+	out := make(map[string]map[string]struct{})
+	for _, s := range scenarios {
+		key := s.SpecDir + "/" + slugify(s.Requirement)
+		if out[key] == nil {
+			out[key] = make(map[string]struct{})
+		}
+		out[key][slugify(s.Title)] = struct{}{}
+	}
+	return out
+}
+
 // collectArchivedRestatements walks the archive subtree and returns each requirement's restatements in archive order, plus the
-// change that last retired a requirement.
-func collectArchivedRestatements(changesDir string) (map[string][]archivedRestatement, map[string]string, error) {
+// requirements some archived change retired.
+func collectArchivedRestatements(changesDir string) (map[string][]archivedRestatement, map[string]struct{}, error) {
 	archiveDir := filepath.Join(changesDir, archiveDirName)
 	entries, err := os.ReadDir(archiveDir)
 	if err != nil {
@@ -89,7 +106,7 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 	sort.Strings(names)
 
 	restatements := make(map[string][]archivedRestatement)
-	removedLater := make(map[string]string)
+	retired := make(map[string]struct{})
 	for _, name := range names {
 		one := &deltaSections{
 			removedRequirements:  make(map[string]struct{}),
@@ -107,10 +124,10 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 			}
 		}
 		for requirement := range one.removedRequirements {
-			removedLater[requirement] = name
+			retired[requirement] = struct{}{}
 		}
 	}
-	return restatements, removedLater, nil
+	return restatements, retired, nil
 }
 
 // runArchiveVerify is the post-archive half of the release checklist's step 1.
@@ -130,22 +147,15 @@ func runArchiveVerify(args []string) int {
 		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
 		return 2
 	}
-	canonical := make(map[string]map[string]struct{})
-	for _, s := range scenarios {
-		key := s.SpecDir + "/" + slugify(s.Requirement)
-		if canonical[key] == nil {
-			canonical[key] = make(map[string]struct{})
-		}
-		canonical[key][slugify(s.Title)] = struct{}{}
-	}
+	canonical := canonicalScenarios(scenarios)
 
-	archived, removedLater, err := collectArchivedRestatements(*changesDir)
+	archived, retired, err := collectArchivedRestatements(*changesDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
 		return 2
 	}
 
-	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, removedLater), len(archived))
+	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, retired), len(archived))
 }
 
 // printArchiveVerify renders the report. FINDINGS never gate: the tree carries pre-existing entries this pass cannot classify,
@@ -169,11 +179,10 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 		p("spectrace: %d archived requirement restatement(s) checked, every scenario still canonical\n", requirements)
 	} else {
 		p("spectrace: %d scenario(s) an archived restatement listed are not in the canonical spec.\n", len(findings))
-		p("%s\n%s\n%s\n%s\n",
+		p("%s\n%s\n%s\n",
 			"Compare this list with the one from before the archive. A line that is NEW is a scenario this archive",
-			"discarded, which is what archiving out of order does. A line that was already there is either an older",
-			"loss or a scenario a later change retired, which this cannot tell apart: openspec stamps one batch with",
-			"one date, so the order within it is not recoverable.")
+			"discarded, which is what archiving out of order does. A line that was already there is either an older loss,",
+			"or a scenario dropped from a requirement that is still in the tree for a reason older than this run.")
 		for _, l := range findings {
 			p("  %s\n", l)
 		}
@@ -184,18 +193,6 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 		return 2
 	}
 	return 0
-}
-
-// archiveDate is the YYYY-MM-DD an archive folder is prefixed with, or the whole name when it carries no date.
-//
-// Prefix rather than a parse, which also handles the malformed double-date folders that predate this (`2026-06-09-2026-06-09-x`):
-// their first ten characters are still the date, and a stricter reader would have to special-case them for no gain.
-func archiveDate(folder string) string {
-	const dateLen = len("2006-01-02")
-	if len(folder) < dateLen {
-		return folder
-	}
-	return folder[:dateLen]
 }
 
 // sortedKeysOfArchived returns the requirement keys in a stable order.

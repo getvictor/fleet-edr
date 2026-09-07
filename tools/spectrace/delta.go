@@ -118,11 +118,12 @@ func (d *deltaSections) collectChange(changeDir string) error {
 	})
 }
 
-// scan is the streaming parser behind both exemptions. It tracks the active `## ` section and, inside the two it recognises,
-// records a requirement key (REMOVED) or the scenario slugs listed beneath each requirement (MODIFIED).
+// scan is the streaming parser behind both exemptions and the archive ordering. It tracks the active `## ` section and, inside
+// the three it recognises, records a requirement key (ADDED and REMOVED) or the scenario slugs and verbatim lines listed beneath
+// each requirement (MODIFIED), noting in every case WHICH change said so.
 //
-// The section headings are matched exactly rather than by prefix, so a future `## REMOVED <other>` or `## MODIFIED <other>` section
-// carrying requirement headings cannot exempt canonical scenarios.
+// The section headings are matched exactly rather than by prefix, so a future `## ADDED <other>`, `## REMOVED <other>` or
+// `## MODIFIED <other>` section carrying requirement headings cannot exempt canonical scenarios or invent an ordering constraint.
 //
 // A MODIFIED requirement whose restatement lists NO scenarios is not recorded. `openspec validate --strict` rejects that shape, but
 // a delta being written has it for as long as the author has typed the heading and not yet the scenarios, and recording an empty
