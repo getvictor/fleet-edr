@@ -44,6 +44,17 @@
     }
   }
 
+  // The resolved mode's VALUE, which is what a reader scans this row for; the sentences after it explain and qualify it. The
+  // class was applied with exactly that intent and never given a rule, so the value rendered as plain text inside its own
+  // explanation and the row read as one run-on: "Monitor This rule records what it would have fired on and raises no alert...".
+  //
+  // Weight rather than a badge, because SeverityBadge sits one row above and a second pill in the same small table reads as a
+  // second severity.
+  &__mode {
+    font-weight: $bold;
+    color: $core-fleet-black;
+  }
+
   &__config th {
     text-align: left;
   }
