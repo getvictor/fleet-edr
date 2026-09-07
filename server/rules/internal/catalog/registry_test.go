@@ -316,6 +316,55 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 
 // spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-declares-the-sub-technique-it-can-identify
 //
+// detectionsClaimingAParentTechnique names the authored detections that declare a technique with no sub-technique, and it is
+// EMPTY, which is the assertion. Every authored mapping after the sweep is a sub-technique, because every one of these rules
+// matches something specific enough to identify one.
+//
+// A parent is not always wrong. ATT&CK has techniques with no sub-techniques at all, and a rule matching one of those has no
+// sub-technique to prefer. When that rule arrives it goes here with its reason, which is the point of an exception list over a
+// blanket ban: the entry is where somebody says why.
+var detectionsClaimingAParentTechnique = map[string]string{}
+
+// TestAll_AuthoredTechniquesAreNotParentOnly closes the hole the pair below leaves open, which review found: they catch a rule
+// that declares a parent ALONGSIDE its sub-technique, and they catch a rule whose mapping departs from the pinned table. What
+// neither catches is a rule regressing to the parent ALONE with the table edited to match, which is a coverage claim quietly
+// getting vaguer, and is exactly how T1059 was on two rules before this sweep.
+func TestAll_AuthoredTechniquesAreNotParentOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		for _, technique := range r.Techniques() {
+			if strings.Contains(technique, ".") {
+				continue
+			}
+			assert.Contains(t, detectionsClaimingAParentTechnique, r.ID(),
+				"%s declares the parent technique %s; either it matches something specific enough to name a sub-technique, "+
+					"or it is one of the rare techniques that has none, which belongs in the list above with its reason",
+				r.ID(), technique)
+		}
+	}
+	// And the other direction, so an exemption cannot outlive the mapping it excused.
+	parentsByRule := make(map[string]int)
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		for _, technique := range r.Techniques() {
+			if !strings.Contains(technique, ".") {
+				parentsByRule[r.ID()]++
+			}
+		}
+	}
+	for id := range detectionsClaimingAParentTechnique {
+		assert.Positive(t, parentsByRule[id],
+			"%s is exempted from the sub-technique preference but declares no parent technique, so the exemption is silencing "+
+				"the guard for a rule that no longer needs it", id)
+	}
+}
+
 // TestAll_AuthoredTechniquesAreNotParentsOfTheirOwnSubTechniques pins the precision half of the sweep, which the exact set above
 // cannot express on its own: it would pass just as happily on a table that had been edited the wrong way.
 //

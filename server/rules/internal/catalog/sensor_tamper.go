@@ -82,10 +82,12 @@ func (r *SensorTamper) DisplayName() string { return "EDR sensor disabled" }
 // Both review bots reached this independently, and they were right that keeping the mapping contradicted the requirement this
 // project shipped in #754: a rule that cannot attribute what it reports to anyone declares none.
 //
-// The ALERT is unchanged. It keeps its severity, its title and its text, it stays the EDR's own tamper signal, and an operator
-// still learns their sensor stopped. What changes is that the coverage export no longer claims we detect Impair Defenses, which
-// we were claiming on a signal that fires on crashes. This rule was the only one claiming it, so that claim leaves the export
-// entirely; that is the honest state rather than a gap that appeared.
+// The ALERT keeps its severity, its title and its operational sentence, it stays the EDR's own tamper signal, and an operator
+// still learns their sensor stopped. Its text does lose the trailing "(MITRE T1562.001)" it carried, because a description is
+// copied onto the alert verbatim and an identifier there is this same claim by another route (issue #754). What the product
+// loses is the coverage export claiming we detect Impair Defenses, which we were claiming on a signal that fires on crashes.
+// This rule was the only one claiming it, so that claim leaves the export entirely; that is the honest state rather than a gap
+// that appeared.
 //
 // Re-earning it is a change to the predicate, not to this list: observe the actor, either the process that stopped the provider
 // or a policy change that did, and the attribution follows.
