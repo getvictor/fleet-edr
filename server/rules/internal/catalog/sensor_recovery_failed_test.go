@@ -175,8 +175,10 @@ func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 	// sends an analyst to this product's own components. Both outcome values describe our repair mechanism failing.
 	//
 	// Where a technique here would surface is the ALERT ROW, not the coverage export: this rule is classified a health signal, so
-	// it is already off the export, off GET /api/rules and out of the generated reference. What remained is that the finding
-	// declares no techniques of its own, so persistence falls back to this list and stamps it on the row an analyst reads.
+	// it is already off the export, off GET /api/rules and out of the generated reference. What remained is that this rule's
+	// findings leave Techniques UNSET, and persistence substitutes the rule's list for a nil one, so whatever is declared here is
+	// what lands on the row an analyst reads. Nil is the trigger, not emptiness, which is the second reason the value below is an
+	// empty slice: it is what the rule DECLARES, and it is never the thing the fallback tests.
 	//
 	// Empty and NOT nil, which is the interface's stated contract for "no mapping" and what the other unmapped rule returns.
 	// If a future revision earns a technique back, it has to be by attaching evidence that somebody acted, and changing these

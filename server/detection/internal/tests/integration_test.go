@@ -1272,8 +1272,13 @@ func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
 //
 // TestEngine_ARuleWithNoTechniquesStampsNone covers the end of that scenario the catalog unit test cannot reach. The unit test
 // proves the RULE declares none; this proves what an analyst then sees, which is the alert ROW, and the two are not the same
-// claim: persistence falls back to the rule's declared list when a finding declares none of its own, so the row is where an
-// unearned technique would actually appear (issue #754).
+// claim: persistence substitutes the rule's declared list for a finding whose own Techniques is NIL, so the row is where an
+// unearned technique would actually appear (issue #754). The stub's findings leave it nil, which is the shape this rule and most
+// others have.
+//
+// The substitution itself is pinned in the other direction by the test above, which asserts a NON-empty declared list reaches the
+// row. That matters here, because this test alone could not tell a live substitution returning nothing from no substitution at
+// all. Together they bracket it: one fails if it stops carrying a list, the other if it starts carrying one it should not.
 //
 // Empty rather than non-nil-empty is the assertion, because the row is what an analyst reads and both representations render as
 // no techniques. The nil-versus-empty distinction belongs to the rule interface's contract and is pinned in the catalog test.
