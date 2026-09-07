@@ -81,13 +81,15 @@ export default defineConfig({
     // fleet-edr-migrate refuses a missing one outright ("Unknown database"), so a genuinely fresh lane B could not spawn a server
     // at all: this worked here only because that worktree's schema already existed from earlier by-hand setup. IF NOT EXISTS, so
     // lane A's existing data is never touched and a rerun is a no-op.
-    // The identifier is NOT backquoted, which is the opposite of the usual advice and is required here: Playwright runs this
-    // through a shell, where backticks inside double quotes are command substitution, so a quoted name is executed as a command
-    // and the CREATE arrives with an empty identifier. A bare name is safe because the schema is no longer arbitrary text: it
-    // comes from the closed lane set assertLaneEnv validates against.
-    command:
-      `mysql -uroot -h127.0.0.1 -P33306 -e ` +
-      `"CREATE DATABASE IF NOT EXISTS ${LANE_SCHEMA} CHARACTER SET utf8mb4" && cd ../.. && task dev:server:qa-oidc`,
+    // The lane's schemas are ensured first, because nothing else creates them for a second worktree and neither
+    // fleet-edr-migrate nor the server will: migrate stops at "Unknown database" and the server at "Database <name> does not
+    // exist". Both stores, not just MySQL: the ClickHouse database is equally absent on a fresh lane and equally fatal. The
+    // script is IF NOT EXISTS throughout, so on a lane that already has them it is a no-op.
+    //
+    // A script rather than a shell chain in this template. The first version inlined the SQL and backquoted the identifier,
+    // which is the usual advice and wrong through a shell, where backticks inside double quotes are command substitution: the
+    // CREATE arrived with an empty name and the spawn failed with "webServer was not able to start", saying nothing about why.
+    command: `cd ../.. && scripts/ensure-lane-schemas.sh ${LANE_SCHEMA} && task dev:server:qa-oidc`,
     // Every value the task hardcodes to lane A, restated for whichever lane the suite was pointed at. The migrate and seed
     // steps that run before the server read EDR_DSN too, so they land in the same schema the suite will reset.
     env: {

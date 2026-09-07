@@ -467,9 +467,15 @@ tasks:
       Pre-req: `task qa:up` (mysql + dex).
 
       From the second worktree, pass the lane: E2E_PORT=8089
-      E2E_DB=edr2 (together, they are validated as a pair). The spawn
-      is lane-aware, so a cold lane B boots its own server rather than
+      E2E_DB=edr2 (validated as a matching pair, since a crossed one
+      resets the other worktree's tables). The spawn is lane-aware and
+      creates that lane's MySQL schema and ClickHouse database if they
+      are absent, so a cold lane B boots its own server rather than
       requiring one already running (issue #826).
+
+      Running `task dev:server:qa-oidc` by hand on a lane whose schemas
+      do not exist yet still fails on them; `scripts/ensure-lane-schemas.sh
+      <schema>` is what the spawn calls and can be run directly.
     deps: [test:e2e:install]
     dir: test/e2e
     cmds:
