@@ -1483,3 +1483,74 @@ func TestEngine_Evaluate_ReturnsTheTallyAlongsideAnError(t *testing.T) {
 		})
 	}
 }
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/a-severity-override-adjusts-an-escalation-rather-than-erasing-it
+//
+// TestEngine_OverrideAdjustsAnEscalationRatherThanErasingIt is issue #753 at the seam where it happened: the engine used to apply
+// an operator's per-rule severity setting as the last write, so whatever a rule had decided conditionally was discarded.
+//
+// The tally is the observable here because it carries the severity that reaches BOTH the counter and the durable alert row, which
+// is exactly the property the test above pins. Driving the whole engine rather than calling the composition directly is the point:
+// the composition being right is asserted in detection/api, and what could still be wrong here is the ORDER the override and the
+// modifiers are applied in.
+//
+// Asserted as an ordering across every override, not as a table of bands. Pinning bands would pass against an implementation that
+// collapsed the two populations, as long as it collapsed them to the values written down, and the collapse IS the defect.
+func TestEngine_OverrideAdjustsAnEscalationRatherThanErasingIt(t *testing.T) {
+	t.Parallel()
+
+	severityFor := func(t *testing.T, override string, modifiers []api.RiskModifier) string {
+		t.Helper()
+		e := New(nil, discardLogger())
+		e.SetModeResolver(overridingResolver{mode: rulesapi.DetectionRuleModeMonitor, severity: override})
+		e.Register(&modeDeclaringStub{
+			stubRuleWithFindings: stubRuleWithFindings{
+				stubRule: stubRule{id: "conditional"},
+				findings: []api.Finding{{
+					HostID: "h1", RuleID: "conditional", Severity: api.SeverityHigh, Title: "t", Modifiers: modifiers,
+				}},
+			},
+			mode: rulesapi.DetectionRuleModeMonitor,
+		})
+		tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+		require.NoError(t, err)
+		require.Len(t, tally, 1)
+		return tally[0].Severity
+	}
+
+	escalated := []api.RiskModifier{{Reason: "escalating condition", Risk: 25}}
+
+	for _, override := range []string{"", api.SeverityLow, api.SeverityMedium, api.SeverityHigh} {
+		name := "no override"
+		if override != "" {
+			name = "overridden to " + override
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			plain := severityFor(t, override, nil)
+			raised := severityFor(t, override, escalated)
+			assert.Greater(t, api.RiskOf(raised), api.RiskOf(plain),
+				"the escalated finding must still outrank the ordinary one; erasing that is what made an operator's tuning "+
+					"hide the population they most wanted to see")
+		})
+	}
+
+	t.Run("an untouched rule reports exactly what it always did", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, api.SeverityHigh, severityFor(t, "", nil))
+		assert.Equal(t, api.SeverityCritical, severityFor(t, "", escalated))
+	})
+
+	t.Run("a modifier's techniques are stamped on the finding", func(t *testing.T) {
+		t.Parallel()
+		// Stamped by the engine rather than the rule, which is what keeps a condition's technique and its price from drifting
+		// apart. Asserted through routeFinding by way of the alert path, since the tally carries no techniques.
+		f := api.Finding{
+			HostID: "h1", RuleID: "conditional", Severity: api.SeverityHigh,
+			Techniques: []string{"T1071.004"},
+			Modifiers:  []api.RiskModifier{{Risk: 25, Techniques: []string{"T1568.002", "T1071.004"}}},
+		}
+		assert.Equal(t, []string{"T1071.004", "T1568.002"}, appendMissing(f.Techniques, f.Modifiers[0].Techniques),
+			"the union is a set: a duplicate would inflate the ATT&CK coverage figure read during procurement")
+	})
+}

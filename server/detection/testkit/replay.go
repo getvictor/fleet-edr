@@ -177,7 +177,11 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	for i, got := range findings {
 		want := c.ExpectedFindings[i]
 		assert.Equal(t, want.RuleID, got.RuleID, "finding[%d].rule_id", i)
-		assert.Equal(t, want.Severity, got.Severity, "finding[%d].severity", i)
+		// Composed, because the fixture describes what an operator SEES and a rule reports only its base. A rule with a
+		// conditional escalation attaches a modifier and the engine adds it to whatever base is in force (issue #753), so
+		// asserting the rule's raw severity here would pin a value nothing ever displays and would go quietly green if the
+		// composition were removed.
+		assert.Equal(t, want.Severity, detectionapi.ApplyModifiers(got.Severity, got.Modifiers), "finding[%d].severity", i)
 		// Issue #519: a DETECTION rule's alert title MUST be its one canonical DisplayName so the alert an operator triages names
 		// the rule they can look up in the docs and exclusions. Asserted here for every fixture-replayed rule with no per-fixture
 		// boilerplate.

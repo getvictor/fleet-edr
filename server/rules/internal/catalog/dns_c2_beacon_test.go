@@ -281,6 +281,11 @@ func TestDNSC2Beacon_OrphanedConnectDoesNotMaskResolvableBeacon(t *testing.T) {
 	require.Len(t, findings, 1, "the resolvable beacon later in the batch must still fire despite the earlier orphan")
 	assert.Equal(t, "dns_c2_beacon", findings[0].RuleID)
 	assert.Equal(t, int64(99), findings[0].ProcessID)
-	assert.Equal(t, api.SeverityCritical, findings[0].Severity, "a high-entropy domain escalates to Critical")
+	// The escalation is a MODIFIER now, so the rule reports its base and the engine composes (issue #753). Asserted here as the
+	// modifier the rule attached; that it composes to critical against an untouched base is asserted where the composing happens.
+	assert.Equal(t, api.SeverityHigh, findings[0].Severity, "the rule reports its base severity")
+	require.Len(t, findings[0].Modifiers, 1, "a high-entropy domain earns an escalation")
+	assert.Equal(t, api.SeverityCritical, api.ApplyModifiers(findings[0].Severity, findings[0].Modifiers),
+		"and against the rule's own base that escalation still lands on critical, as it always has")
 	assert.Equal(t, []string{"beacon-dns", "beacon-connect"}, findings[0].EventIDs)
 }
