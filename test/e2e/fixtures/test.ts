@@ -23,6 +23,8 @@ import { test as base, BrowserContext, Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { signInAsAdminViaBreakGlass, uninstallVirtualAuthenticator } from "./auth";
+import { openDB, resetDB } from "./db";
 
 const COVERAGE_DIR = join(__dirname, "..", "coverage-raw");
 
@@ -55,11 +57,36 @@ async function dumpCoverage(page: Page, testId: string): Promise<void> {
   await writeFile(join(COVERAGE_DIR, `${slug}.json`), JSON.stringify(entries));
 }
 
-export const test = base.extend<{ page: Page }>({
+export const test = base.extend<{ page: Page; signedInAdmin: Page }>({
   page: async ({ page }, use, testInfo) => {
     await startCoverage(page);
     await use(page);
     await dumpCoverage(page, testInfo.testId);
+  },
+
+  // signedInAdmin is "an admin looking at a page", which is the precondition of most specs in tests/qa and was being written out
+  // by hand in each of them: reset, sign in through break-glass, hold the virtual authenticator, uninstall it afterwards.
+  //
+  // A fixture rather than another exported helper, because the half that kept getting copied is the LIFECYCLE, not the sign-in.
+  // resetAndSignIn already covers the setup; what every spec then repeated was the beforeEach/afterEach pair around it, including
+  // the `let va` and the undefined-guard on teardown. Declaring the fixture is one word and Playwright owns the unwind.
+  //
+  // Specs that must seed data BEFORE sign-in cannot use this: take resetDB and signInAsAdminViaBreakGlass directly, as
+  // alert-attribution does, since the ordering is the point there.
+  //
+  // resetDB and NOT resetAndSignIn, which also wipes hosts, processes and alerts. A fixture called "an admin looking at a page"
+  // must not silently destroy the data the page is meant to show; a spec that wants an empty fleet says so by calling
+  // resetHostData itself, which is what makes that a stated precondition rather than a side effect of signing in.
+  signedInAdmin: async ({ page }, use) => {
+    const db = await openDB();
+    try {
+      await resetDB(db);
+    } finally {
+      await db.end();
+    }
+    const authenticator = await signInAsAdminViaBreakGlass(page);
+    await use(page);
+    await uninstallVirtualAuthenticator(authenticator);
   },
 });
 
@@ -70,10 +97,7 @@ export const test = base.extend<{ page: Page }>({
 // the LCOV. The returned cleanup function MUST be called before
 // `ctx.close()` so the coverage payload is flushed before the page
 // disappears.
-export async function createCoveredPage(
-  ctx: BrowserContext,
-  testId: string,
-): Promise<{ page: Page; flush: () => Promise<void> }> {
+export async function createCoveredPage(ctx: BrowserContext, testId: string): Promise<{ page: Page; flush: () => Promise<void> }> {
   const page = await ctx.newPage();
   await startCoverage(page);
   return {
