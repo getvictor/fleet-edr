@@ -84,6 +84,8 @@ Every role binding SHALL carry a `scope_type` from the set `{'global', 'host_gro
 
 The system SHALL evaluate the authorization chokepoint at p99 latency under 1 millisecond on the deployment's production hardware. The benchmark harness MUST run on every authorization-touching pull request, and a regression that pushes p99 above 1 ms SHALL fail the build. The benchmark MUST cover allow and deny paths and MUST use the seeded roles plus a representative role-binding fan-out.
 
+The benchmark SHALL read p99 in a way that is robust to contention on the machine it runs on, because it runs on shared continuous-integration hardware rather than the production hardware the budget is scoped to. A single reading of the tail on a busy machine measures that machine's contention as much as the code, and reporting it as a regression is indistinguishable from a real one.
+
 #### Scenario: Benchmark passes on the merge candidate
 
 - **GIVEN** a pull request that touches the authorization engine, the policy bundle, or the action registry
@@ -93,9 +95,15 @@ The system SHALL evaluate the authorization chokepoint at p99 latency under 1 mi
 
 #### Scenario: Benchmark regression blocks the build
 
-- **GIVEN** a pull request whose change pushes the benchmark p99 above 1 millisecond
-- **WHEN** continuous integration runs the benchmark
-- **THEN** the build fails and the PR cannot be merged until the regression is addressed
+- **GIVEN** a change that pushes authorization p99 latency above 1 millisecond
+- **WHEN** continuous integration runs the authorization benchmark
+- **THEN** the build fails
+
+#### Scenario: A busy machine does not report a regression
+
+- **GIVEN** a machine under load from unrelated work while the benchmark runs
+- **WHEN** the authorization code itself is within the budget
+- **THEN** the benchmark does not report a regression
 
 ### Requirement: Service-account management actions are registered and admin-scoped
 
@@ -309,4 +317,3 @@ The system SHALL resolve every authenticated request to an actor that carries a 
 
 - **GIVEN** a privileged handler that attributes a mutation
 - **WHEN** it records who acted
-- **THEN** it uses the actor's principal id, which is non-empty for both user and service-account actors

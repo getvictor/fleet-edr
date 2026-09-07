@@ -52,6 +52,8 @@ The UI SHALL expose a logout control that, when invoked, requests the server to 
 
 The UI SHALL render the process tree page for a host as a hierarchical visualization in which each node represents a process and edges represent parent-child fork/exec relationships. Activating a process node MUST open a side panel that displays the process's investigation detail. The page MUST support panning, zooming, and a search affordance that jumps the viewport to matching nodes. When the server collapses repeated identical-path siblings into an aggregated node, the UI MUST render that node as a group badge showing the member count (a "×N" affordance) rather than as a single process, and activating the aggregated node MUST expand it in place to reveal the sample of underlying members rather than opening the process detail panel; a member surfaced by that expansion behaves as an ordinary process node. Expanding an aggregated node in place is the affordance for inspecting its members; the page does not carry a separate global flatten control.
 
+When the server reports the read as truncated, the UI MUST display a notice stating how many processes are shown out of how many matched the window, so the analyst is never shown a partial tree that looks complete. The notice MUST name the ways to see the rest, namely narrowing the time range or using search. The UI MUST take both counts from the server's result metadata rather than inferring them from the requested limit or from the number of rendered nodes. When the server does not report the read as truncated, the UI MUST NOT display the notice.
+
 #### Scenario: Process tree renders for a host
 
 - **GIVEN** the operator opens a host's process tree page
@@ -70,6 +72,19 @@ The UI SHALL render the process tree page for a host as a hierarchical visualiza
 - **WHEN** the process tree renders
 - **THEN** that group appears as a single node with a "×N" count badge and its individual members are not shown
 - **AND** activating the aggregated node expands it in place to reveal the sample of underlying members
+
+#### Scenario: A truncated tree tells the analyst what is missing
+
+- **GIVEN** a host whose window matched more processes than the server returned
+- **WHEN** the process tree renders
+- **THEN** the UI shows a notice naming the number of processes shown and the number that matched
+- **AND** the notice names narrowing the time range or using search as the ways to see the rest
+
+#### Scenario: A complete tree shows no truncation notice
+
+- **GIVEN** a host whose window matched no more processes than the server returned
+- **WHEN** the process tree renders
+- **THEN** the UI shows no truncation notice
 
 ### Requirement: Process detail content
 
@@ -271,7 +286,11 @@ The UI SHALL present an authorization denial as a clear, human-readable no-acces
 
 ### Requirement: Detection configuration admin views
 
-The web UI SHALL provide an authenticated admin surface to view and edit detection configuration: per-rule mode (alert / disabled), an optional severity override, and false-positive exclusions. Monitor is NOT an operator-selectable mode; the detection engine still honors a legacy `monitor` value persisted on a rule setting, so the UI MUST display such a row (and let the operator migrate it to alert or disabled) but MUST NOT offer monitor as a new choice. The per-rule mode and severity controls MUST render uniformly for every registered rule (driven from the rule catalog), so a newly added rule appears without bespoke UI, and the table MUST show each rule's declared (default) severity alongside the optional override. The exclusion editor MUST let an operator create and delete global-scope exclusions with a typed match type, a value, a reason, and an optional expiration, and MUST surface the existing entries with their creation time and their author resolved to a display label: a human user's email, a service account's name, or "system" for the system principal, falling back to the raw principal identifier when the principal cannot be resolved. The match-type picker MUST offer only the match types the selected rule consults (sourced from the rule catalog's per-rule supported set), and MUST reset its selection when the rule changes, so an operator cannot submit an exclusion whose match type the rule would silently ignore. When an operator disables a rule, the UI MUST capture an operator-supplied reason before the change is submitted, because that reason is recorded in the audit trail; restoring a rule to alert and severity-only edits MAY use a system-generated reason. Mutations MUST go through the authenticated admin API and are subject to the same RBAC the API enforces. Per-rule schema-driven settings beyond mode + severity, exclusion editing, and host-group-scoped configuration are deferred to a later change (they land with the editable host groups and per-rule config-schema work).
+The web UI SHALL provide an authenticated admin surface to view and edit detection configuration: per-rule mode (alert / monitor / disabled), an optional severity override, and false-positive exclusions. All three modes MUST be operator-selectable. Monitor was previously excluded on the grounds that it was a legacy value with no review surface; it is now the mode most of the catalog runs in, and leaving it unselectable made promotion one-way, since a rule moved out of monitor could not be put back. The per-rule mode and severity controls MUST render uniformly for every registered rule (driven from the rule catalog), so a newly added rule appears without bespoke UI, and the table MUST show each rule's declared (default) severity alongside the optional override. The exclusion editor MUST let an operator create and delete global-scope exclusions with a typed match type, a value, a reason, and an optional expiration, and MUST surface the existing entries with their creation time and their author resolved to a display label: a human user's email, a service account's name, or "system" for the system principal, falling back to the raw principal identifier when the principal cannot be resolved. The match-type picker MUST offer only the match types the selected rule consults (sourced from the rule catalog's per-rule supported set), and MUST reset its selection when the rule changes, so an operator cannot submit an exclusion whose match type the rule would silently ignore.
+
+When an operator changes a rule's mode to one that makes the rule do LESS, the UI MUST capture an operator-supplied reason before the change is submitted, because that reason is recorded in the audit trail. Alert, monitor and disabled rank in that order by what the rule does: alert raises, monitor records, disabled produces nothing. A change that restores or increases what a rule does, and a severity-only edit, MAY use a system-generated reason. The prompt MUST describe the change being made rather than assuming it is a disable, since disabling is no longer the only reducing choice. Mutations MUST go through the authenticated admin API and are subject to the same RBAC the API enforces. Per-rule schema-driven settings beyond mode + severity, exclusion editing, and host-group-scoped configuration are deferred to a later change (they land with the editable host groups and per-rule config-schema work).
+
+The rule detail view SHALL report the mode a rule runs in and whether an operator setting or the rule's own declaration produced it, rather than reporting only the declaration. It SHALL show this beside the rule's severity whenever the rule does not alert, or alerts having been moved off the mode it declares, because a severity read alone is a promise a non-alerting rule does not make. A rule that alerts and declares alert needs no such row. The mode's VALUE SHALL be distinguishable from the sentences that explain and qualify it, since the value is what a reader scans the row for and the explanation runs to several sentences: presented as undifferentiated text the row reads as one sentence beginning with a word that happens to be the answer.
 
 #### Scenario: An operator adds an exclusion from the UI
 
@@ -294,12 +313,21 @@ The web UI SHALL provide an authenticated admin surface to view and edit detecti
 - **THEN** the UI captures an operator-supplied reason before submitting the change
 - **AND** restoring the rule to alert or editing only its severity override does not require an operator-supplied reason (a system-generated reason is recorded instead)
 
-#### Scenario: Monitor is not an operator-selectable mode
+#### Scenario: Monitor is an operator-selectable mode
 
 - **GIVEN** an authenticated operator viewing the rule-modes table
 - **WHEN** they open a rule's mode control
-- **THEN** a rule with no persisted monitor setting offers only alert and disabled
-- **AND** a rule with a legacy persisted monitor value still displays monitor so the operator can migrate it to alert or disabled
+- **THEN** alert, monitor and disabled are all offered, for every rule
+- **AND** moving an alerting rule to monitor captures an operator-supplied reason, with a prompt that describes moving to monitor rather than disabling
+- **AND** moving a disabled rule to monitor is applied with a system-generated reason, because the rule does more than it did
+
+#### Scenario: The rule detail view reports the mode a rule runs in
+
+- **GIVEN** a rule that declares `monitor` and an operator setting that puts it in `disabled`
+- **WHEN** an operator opens the rule's detail view
+- **THEN** the view reports the rule as disabled, not as monitor
+- **AND** it says an operator setting put it there
+- **AND** a rule with no setting is reported in its declared mode, attributed to the rule rather than to an operator
 
 #### Scenario: Exclusion author is shown as a resolved email
 
@@ -408,6 +436,8 @@ The web UI SHALL show each host's overall health status in the Hosts list as a b
 
 The web UI SHALL surface the host's agent-health rollup and per-component conditions inside the host header's Details popover rather than as a standalone panel. The Details trigger SHALL carry an attention marker (a coloured dot: amber when the rollup is degraded, red when it is unhealthy) only when the agent is not healthy, so a healthy or not-yet-reported host shows no health chrome in the always-visible header and a problem is visible at a glance without opening the popover. Opening the popover SHALL reveal the agent-health rollup as a single self-describing status pill (for example "Agent healthy" or "Agent needs attention") together with each component condition: the component, its status, a human-readable message, and how long it has been in its current state. When a required extension is not activated the message SHALL make the required action legible to an operator, for example that the security extension needs attention.
 
+Every component SHALL be laid out the same way as every other component in the same popover. The panel is read by scanning it for the provider that is broken, and a layout that depends on how long a provider's name happens to be gives that scan a shape change carrying no information: presented as one wrapping line, a short name such as "DNS proxy" leaves room for its message beside it while longer names push theirs onto the next line, so components in one popover render in two shapes at one width. A component with no message or no recorded transition SHALL NOT leave an empty line where they would have been.
+
 #### Scenario: The detail lists a component with its message and age
 
 - **GIVEN** a host whose security extension is unhealthy with a not-activated message
@@ -421,6 +451,13 @@ The web UI SHALL surface the host's agent-health rollup and per-component condit
 - **WHEN** the operator views the host header
 - **THEN** the Details trigger shows no attention dot
 - **AND** opening the popover reveals a single "Agent healthy" status pill and the per-component conditions
+
+#### Scenario: Every component is laid out the same way
+
+- **GIVEN** a host reporting several components whose names differ in length
+- **WHEN** an operator opens the host header's Details popover
+- **THEN** each component's message begins on its own line rather than beside the component's name
+- **AND** every component's message begins at the same horizontal position
 
 ### Requirement: Alert list is the home view
 
@@ -774,4 +811,3 @@ The page SHALL render an activity histogram of process starts over the active wi
 
 - **GIVEN** the operator pivots from an alert
 - **WHEN** the host page opens
-- **THEN** the active window is the wide default ending at the alert's time, as before

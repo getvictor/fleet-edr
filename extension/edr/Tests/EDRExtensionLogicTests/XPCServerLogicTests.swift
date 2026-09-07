@@ -68,13 +68,6 @@ final class XPCServerLogicTests: XCTestCase {
     }
 
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-by-its-signing-identifier
-    // Transitional second marker: covers the pre-rename canonical scenario (cdhash-matches-the-pinned-value) that stays
-    // in openspec/specs until issue #623's change is archived, when the MODIFIED requirement replaces it with the
-    // identifier scenario above. Drop this line at archive time (the canonical scenario it points at is gone by then).
-    // The canonical-ID slug lands on one line per the spectrace marker contract; this pre-rename slug exceeds the
-    // 150-char SwiftLint limit, so a per-line disable is the right exception until archive drops the line.
-    // swiftlint:disable:next line_length
-    // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-when-its-code-directory-hash-matches-the-pinned-value
     func testDebugRequirementPinsTheAgentIdentifierAndIncludesProductionClause() {
         // Debug requirement = production-style team-id clause OR the ad-hoc agent's fixed code-signing identifier. The
         // identifier is stable across rebuilds (task build:agent pins it with --identifier fleet-edr-agent), so the dev
