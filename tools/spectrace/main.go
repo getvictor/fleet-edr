@@ -77,7 +77,7 @@ Usage:
   spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code]
                      [--marker-line-length] [--gate-inflight] [--base-ref REF]
   spectrace list-ids [--specs-dir DIR] [--normative-only]
-  spectrace archive-order [--changes-dir DIR]
+  spectrace archive-order [--changes-dir DIR] [--specs-dir DIR]
   spectrace archive-verify [--specs-dir DIR] [--changes-dir DIR]
   spectrace report   [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
@@ -101,14 +101,17 @@ Subcommands:
             so a change that ADDS a requirement has to be applied before one that modifies or
             retires it, or the later text is discarded with no error (issue #901).
             Reads --specs-dir as well, to tell a requirement being created from one that already
-            exists; a pending ADDED for an existing requirement has no safe order and is reported.
+            exists: a pending ADDED for an existing requirement, beside a pending REMOVED of it,
+            is the one pair with no safe order, and is reported rather than sequenced. A lone
+            ADDED for an existing requirement is left to openspec validate.
             Exit code 0 when an order exists, 1 when two changes each have to precede the other,
             2 on a usage or write failure.
   archive-verify
-            Run BEFORE archiving and again after, and diff the two. Checks that every scenario
-            the last archived restatement of a requirement listed is still in the canonical spec,
-            which is what archiving in the wrong order silently destroys. Findings do NOT gate:
-            the tree carries older ones this cannot classify, so a scenario line that is NEW in
+            Run BEFORE archiving and again after, and diff the two. Checks that everything the
+            last archived restatement of a requirement said is still in the canonical spec,
+            which is what archiving in the wrong order silently destroys, along with normative
+            text the restatement carried and a retirement the archive did not apply. Findings do
+            NOT gate: the tree carries older ones this cannot classify, so a line that is NEW in
             the second report is the loss this archive caused. Exit code 2 on a usage or write
             failure.
 

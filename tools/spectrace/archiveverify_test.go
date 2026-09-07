@@ -29,6 +29,7 @@ func TestVerifyArchive_ReportsAScenarioTheCanonicalSpecLacks(t *testing.T) {
 		},
 		canonicalWith("cap/the-thing", "kept"),
 		nil,
+		nil,
 	)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0], "cap/the-thing/lost")
@@ -42,6 +43,7 @@ func TestVerifyArchive_SaysNothingWhenEveryScenarioSurvived(t *testing.T) {
 			"cap/the-thing": {{change: "2026-06-02-refines-it", scenarios: []string{"one", "two"}}},
 		},
 		canonicalWith("cap/the-thing", "one", "two"),
+		nil,
 		nil,
 	))
 }
@@ -59,6 +61,7 @@ func TestVerifyArchive_TheLastRestatementIsTheAuthority(t *testing.T) {
 			},
 		},
 		canonicalWith("cap/the-thing", "one"),
+		nil,
 		nil,
 	))
 }
@@ -87,6 +90,7 @@ func TestVerifyArchive_ARetiredRequirementIsNotALoss(t *testing.T) {
 		},
 		map[string]map[string]struct{}{},
 		retiredSet("cap/the-thing"),
+		nil,
 	))
 }
 
@@ -104,6 +108,7 @@ func TestVerifyArchive_ARetirementTheTreeContradictsIsAFinding(t *testing.T) {
 		},
 		canonicalWith("cap/the-thing", "kept"),
 		retiredSet("cap/the-thing"),
+		nil,
 	)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0], "cap/the-thing\n    retired by an archived change and still in the canonical spec")
@@ -113,7 +118,7 @@ func TestVerifyArchive_ARetirementTheTreeContradictsIsAFinding(t *testing.T) {
 // every one of these. All four on the real tree are that shape.
 func TestVerifyArchive_AnUndoneRetirementIsFoundWithoutARestatement(t *testing.T) {
 	t.Parallel()
-	findings := verifyArchive(nil, canonicalWith("cap/the-thing", "one"), retiredSet("cap/the-thing"))
+	findings := verifyArchive(nil, canonicalWith("cap/the-thing", "one"), retiredSet("cap/the-thing"), nil)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0], "cap/the-thing")
 }
@@ -126,6 +131,7 @@ func TestVerifyArchive_AVanishedRequirementWithNoRetirementIsALoss(t *testing.T)
 			"cap/the-thing": {{change: "2026-09-07-refines-it", scenarios: []string{"one", "two"}}},
 		},
 		map[string]map[string]struct{}{},
+		nil,
 		nil,
 	), 2)
 }
@@ -203,7 +209,13 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 		require.NoError(t, err)
 		scenarios, err := ParseAllSpecs(specsDir)
 		require.NoError(t, err)
-		return verifyArchive(restatements, canonicalScenarios(scenarios), retired)
+		bodies, err := ParseAllRequirementBodies(specsDir)
+		require.NoError(t, err)
+		prose := make(map[string][]string, len(bodies))
+		for requirement, lines := range bodies {
+			prose[requirement] = collapseProse(lines)
+		}
+		return verifyArchive(restatements, canonicalScenarios(scenarios), retired, prose)
 	}
 
 	// The later folder's restatement is the authority, so a scenario only the earlier one listed is a retirement and not a loss.
@@ -246,6 +258,21 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 		findings := verify(t, changes, specs)
 		require.Len(t, findings, 1)
 		assert.Contains(t, findings[0], "retired by an archived change and still in the canonical spec")
+	})
+
+	// The real shape of the two sides: the change delta is hard-wrapped by hand and the canonical tree is Prettier
+	// `proseWrap: never`, so the same requirement text reaches the two parsers looking completely different. If either side
+	// normalised differently from the other, every archived requirement would report its whole body as lost.
+	t.Run("wrapping alone is not a loss", func(t *testing.T) {
+		t.Parallel()
+		changes, specs := newTree(t)
+		archived(t, changes, "2026-06-02-refines-it", "cap", "# T\n\n## MODIFIED Requirements\n\n"+
+			"### Requirement: The thing\n\nThe system SHALL do the thing, and it SHALL do\nthe thing in the manner described\nhere."+
+			"\n\n#### Scenario: One\n\n- **THEN** it does\n")
+		writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n\n### Requirement: The thing\n\n"+
+			"The system SHALL do the thing, and it SHALL do the thing in the manner described here.\n\n"+
+			"#### Scenario: One\n\n- **THEN** it does\n")
+		assert.Empty(t, verify(t, changes, specs))
 	})
 
 	// An archive subtree that does not exist is a project that has never released, not an error.
@@ -344,7 +371,7 @@ func TestVerifyArchive_ARetirementALaterChangeUndidIsNotAFinding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Len(t, verifyArchive(nil, canonicalWith("cap/the-thing", "one"),
-				map[string]requirementLifecycle{"cap/the-thing": tc.life}), tc.findings)
+				map[string]requirementLifecycle{"cap/the-thing": tc.life}, nil), tc.findings)
 		})
 	}
 }
@@ -358,9 +385,15 @@ func TestArchiveCommands_RefuseAChangesDirThatIsNotThere(t *testing.T) {
 	notADir := filepath.Join(t.TempDir(), "a-file")
 	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
 
-	for _, dir := range []string{missing, notADir} {
-		assert.Equal(t, 2, runArchiveVerify([]string{"--changes-dir", dir}))
-		assert.Equal(t, 2, runArchiveOrder([]string{"--changes-dir", dir}))
+	for _, tc := range []struct{ name, dir string }{
+		{"a path that does not exist", missing},
+		{"a path that is a file", notADir},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, 2, runArchiveVerify([]string{"--changes-dir", tc.dir}))
+			assert.Equal(t, 2, runArchiveOrder([]string{"--changes-dir", tc.dir}))
+		})
 	}
 }
 
@@ -376,6 +409,7 @@ func TestVerifyArchive_ACanonicalScenarioNoRestatementKeptIsAFinding(t *testing.
 			"cap/the-thing": {{change: "2026-06-02-refines-it", scenarios: []string{"kept"}}},
 		},
 		canonicalWith("cap/the-thing", "kept", "dropped"),
+		nil,
 		nil,
 	)
 	require.Len(t, findings, 1)
@@ -397,5 +431,99 @@ func TestVerifyArchive_TheCanonicalSideIsCheckedAgainstTheWholeBatch(t *testing.
 		},
 		canonicalWith("cap/the-thing", "shared", "only-aaa"),
 		nil,
+		nil,
 	), "aaa may have won, so its scenario being canonical is not a retirement that failed")
+}
+
+// TestVerifyArchive_ARequirementAddedBackIsCheckedLikeAnyOther covers the other half of "a retirement is not the last word". A
+// requirement retired and then re-added is an ordinary requirement again, so its later restatements are verified like anything
+// else; skipping the checks on the mere existence of a retirement left those unverified forever.
+func TestVerifyArchive_ARequirementAddedBackIsCheckedLikeAnyOther(t *testing.T) {
+	t.Parallel()
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{change: "2026-06-16-refines-it", scenarios: []string{"kept", "lost"}}},
+		},
+		canonicalWith("cap/the-thing", "kept"),
+		map[string]requirementLifecycle{"cap/the-thing": {retired: "2026-06-02", added: "2026-06-09"}},
+		nil,
+	)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "cap/the-thing/lost")
+}
+
+// TestVerifyArchive_ProseTheRestatementCarriedAndCanonicalLacks covers the loss a scenario heading cannot speak for: a
+// restatement refines a requirement's normative wording while listing exactly the scenarios the body it replaces already had, and
+// archiving it before the ADDED it refines loses the wording with every heading still in place.
+func TestVerifyArchive_ProseTheRestatementCarriedAndCanonicalLacks(t *testing.T) {
+	t.Parallel()
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{
+				change:    "2026-06-02-refines-it",
+				scenarios: []string{"one"},
+				prose:     []string{"It SHALL do the thing.", "It SHALL also do the refined thing."},
+			}},
+		},
+		canonicalWith("cap/the-thing", "one"),
+		nil,
+		map[string][]string{"cap/the-thing": {"It SHALL do the thing."}},
+	)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "It SHALL also do the refined thing.")
+	assert.Contains(t, findings[0], "2026-06-02-refines-it")
+}
+
+// Prose is compared in the LOSS direction only. Canonical text no restatement carried is as often a legacy hand-edit of the
+// canonical tree as it is archive damage, and an ambiguous finding is worse than a missed one here.
+func TestVerifyArchive_CanonicalProseTheRestatementLacksIsNotAFinding(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{change: "2026-06-02-refines-it", scenarios: []string{"one"}, prose: []string{"It SHALL do the thing."}}},
+		},
+		canonicalWith("cap/the-thing", "one"),
+		nil,
+		map[string][]string{"cap/the-thing": {"It SHALL do the thing.", "An editor added this by hand."}},
+	))
+}
+
+// TestCollapseProse pins the one thing this normaliser exists to do, which a plain whitespace trim does not: absorb the LINE
+// WRAP. The canonical tree is Prettier `proseWrap: never` and the change deltas are hard-wrapped by hand, so without this,
+// comparing bodies reports reflow as loss. Measured across the archive before it existed: 17 requirements differing, 9 of them
+// only by reflow.
+func TestCollapseProse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a hard-wrapped paragraph equals the same text on one line", func(t *testing.T) {
+		t.Parallel()
+		wrapped := []string{
+			"The system SHALL do the thing, and it SHALL do the thing",
+			"in the manner described here.",
+		}
+		oneLine := []string{"The system SHALL do the thing, and it SHALL do the thing in the manner described here."}
+		assert.Equal(t, collapseProse(oneLine), collapseProse(wrapped))
+	})
+
+	t.Run("a blank line and a list marker each start their own logical line", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, []string{"First paragraph.", "Second paragraph.", "- a bullet", "- another bullet"},
+			collapseProse([]string{"First paragraph.", "", "Second", "paragraph.", "- a bullet", "- another bullet"}))
+	})
+
+	// A bullet that gained a clause is its own difference rather than being absorbed into the paragraph around it.
+	t.Run("a changed bullet does not swallow its neighbours", func(t *testing.T) {
+		t.Parallel()
+		before := collapseProse([]string{"Body.", "- one", "- two"})
+		after := collapseProse([]string{"Body.", "- one", "- two, refined"})
+		assert.Equal(t, []string{"Body.", "- one", "- two"}, before)
+		assert.Equal(t, []string{"Body.", "- one", "- two, refined"}, after)
+	})
+
+	// Everything from the first subheading on belongs to a scenario, which is compared by name elsewhere.
+	t.Run("stops at the first subheading", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, []string{"Body."},
+			collapseProse([]string{"### Requirement: The thing", "Body.", "", "#### Scenario: One", "- **THEN** it does"}))
+	})
 }

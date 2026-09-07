@@ -388,10 +388,7 @@ func runArchiveOrder(args []string) int {
 		fmt.Fprintf(os.Stderr, "spectrace archive-order: %v\n", specErr)
 		return 2
 	}
-	canonical := make(map[string]struct{})
-	for _, sc := range scenarios {
-		canonical[sc.SpecDir+"/"+slugify(sc.Requirement)] = struct{}{}
-	}
+	canonical := canonicalRequirements(scenarios)
 
 	sections, err := parseDeltaSections(*changesDir)
 	if err != nil {

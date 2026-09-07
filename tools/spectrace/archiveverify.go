@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -14,6 +15,9 @@ import (
 type archivedRestatement struct {
 	change    string
 	scenarios []string
+	// prose is the entry's text as comparable logical lines, which is what a scenario heading cannot tell you: a restatement can
+	// refine a requirement's normative wording while listing exactly the scenarios the body it replaces already had.
+	prose []string
 }
 
 // verifyArchive reports scenarios an archived restatement listed that the canonical tree no longer has.
@@ -35,7 +39,7 @@ type archivedRestatement struct {
 // that is new is a scenario this archive lost. That comparison needs no ordering and no baseline file, and it is the question a
 // release engineer actually has.
 func verifyArchive(archived map[string][]archivedRestatement, canonical map[string]map[string]struct{},
-	lifecycle map[string]requirementLifecycle,
+	lifecycle map[string]requirementLifecycle, prose map[string][]string,
 ) []string {
 	var losses []string
 	// Every requirement an archived delta said anything about, not only the ones it restated: a retirement that did not take
@@ -58,14 +62,16 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 		// by `2026-06-02-add-application-control`, and none of them was ever the subject of an ADDED delta.
 		//
 		// "And nothing re-added" is the part review caught missing. A retirement is not the last word on a requirement: a later
-		// change may add it back, legitimately, and then its presence is expected rather than damage. So the retirement has to be
-		// LATER than any addition to mean anything, and a retirement and an addition in the same batch mean nothing at all, which
-		// is silence for the reason everything ambiguous is silence here.
-		switch {
-		case life.retiredLast() && stillCanonical:
-			losses = append(losses, requirement+"\n    retired by an archived change and still in the canonical spec")
-			continue
-		case life.retired != "":
+		// change may add it back, legitimately, and then its presence is expected rather than damage.
+		//
+		// Which cuts both ways, and the second half is what review caught NEXT: a requirement retired and then re-added is an
+		// ordinary requirement again, so it goes through the scenario checks below like any other. Skipping those on the mere
+		// existence of a retirement, which is what this did, left a re-added requirement's later restatements unverified forever.
+		if life.retiredLast() {
+			// Gone as intended, or still here when it should not be. Either way the requirement's scenarios are not the question.
+			if stillCanonical {
+				losses = append(losses, requirement+"\n    retired by an archived change and still in the canonical spec")
+			}
 			continue
 		}
 
@@ -73,29 +79,63 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 			continue
 		}
 		winner := lastBatchRestatement(entries)
-		by := strings.Join(winner.changes, " and ")
-		for _, scenario := range winner.scenarios {
-			if _, ok := have[scenario]; ok {
-				continue
-			}
-			losses = append(losses, fmt.Sprintf("%s/%s\n    listed by %s, and not in the canonical spec", requirement, scenario, by))
-		}
-		// The same comparison the other way round, which review caught missing. A restatement replaces a requirement WHOLE, so a
-		// scenario it does NOT list is one it retires, and a canonical scenario no restatement in the last batch mentions is a
-		// retirement that did not take effect. Archiving a MODIFIED before the ADDED it refines lands exactly here: the ADDED body
-		// is re-applied last, every scenario the restatement kept is present, and only the ones it dropped give it away.
-		//
-		// The UNION across the batch, not the intersection the other direction uses: a scenario any restatement in the batch kept
-		// could be there because that one won.
-		for _, scenario := range sortedKeys(have) {
-			if _, ok := winner.everListed[scenario]; ok {
-				continue
-			}
-			losses = append(losses, fmt.Sprintf("%s/%s\n    in the canonical spec, and retired by %s", requirement, scenario, by))
-		}
+		losses = append(losses, missingScenarios(requirement, winner, have)...)
+		losses = append(losses, unretiredScenarios(requirement, winner, have)...)
+		losses = append(losses, missingProse(requirement, winner, prose[requirement])...)
 	}
 	sort.Strings(losses)
 	return losses
+}
+
+// missingScenarios reports a scenario the last batch's restatements all listed that the canonical spec does not have.
+func missingScenarios(requirement string, winner winningRestatement, have map[string]struct{}) []string {
+	var out []string
+	for _, scenario := range winner.scenarios {
+		if _, ok := have[scenario]; ok {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s/%s\n    listed by %s, and not in the canonical spec",
+			requirement, scenario, winner.by()))
+	}
+	return out
+}
+
+// unretiredScenarios is the same comparison the other way round, which review caught missing. A restatement replaces a
+// requirement WHOLE, so a scenario it does NOT list is one it retires, and a canonical scenario no restatement in the last batch
+// mentions is a retirement that did not take effect. Archiving a MODIFIED before the ADDED it refines lands exactly here: the
+// ADDED body is re-applied last, every scenario the restatement kept is present, and only the ones it dropped give it away.
+//
+// Checked against the batch's UNION, not the intersection the other direction uses: a scenario any restatement in the batch kept
+// could be there because that one won.
+func unretiredScenarios(requirement string, winner winningRestatement, have map[string]struct{}) []string {
+	var out []string
+	for _, scenario := range sortedKeys(have) {
+		if _, ok := winner.everListed[scenario]; ok {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s/%s\n    in the canonical spec, and retired by %s", requirement, scenario, winner.by()))
+	}
+	return out
+}
+
+// missingProse reports normative text the batch's restatements all carried that the canonical spec does not have.
+//
+// This is the loss a scenario heading cannot speak for: a restatement can refine a requirement's wording while listing exactly the
+// scenarios the body it replaces already had, and archiving it before the ADDED it refines loses that wording with every heading
+// still in place. Twenty-one lines across thirteen requirements on today's tree are in that state.
+//
+// Only in the loss direction. Canonical text no restatement carried is as often a legacy hand-edit of `openspec/specs/**` as it is
+// archive damage, and this file's rule is that an ambiguous finding is worse than a missed one.
+func missingProse(requirement string, winner winningRestatement, canonicalProse []string) []string {
+	var out []string
+	for _, line := range winner.prose {
+		if slices.Contains(canonicalProse, line) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s\n    text listed by %s, and not in the canonical spec:\n      %s",
+			requirement, winner.by(), line))
+	}
+	return out
 }
 
 // winningRestatement is what the last archive BATCH said about one requirement: the changes in it that restated the requirement,
@@ -106,7 +146,12 @@ type winningRestatement struct {
 	// everListed is every scenario ANY restatement in the batch named, which is what a canonical scenario is checked against: one
 	// that any of them kept could be there because that one won, and only one none of them kept is a retirement that did not land.
 	everListed map[string]struct{}
+	// prose is the text every restatement in the batch carried, for the same reason scenarios is their intersection.
+	prose []string
 }
+
+// by names the changes a finding is attributed to. Every change in the batch, since which of them won is not recoverable.
+func (w winningRestatement) by() string { return strings.Join(w.changes, " and ") }
 
 // lastBatchRestatement returns what the last archive batch to restate a requirement agreed on.
 //
@@ -127,6 +172,7 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 	}
 	out := winningRestatement{everListed: map[string]struct{}{}}
 	shared := map[string]int{}
+	sharedProse := map[string]int{}
 	batch := 0
 	for _, e := range entries {
 		if archiveDate(e.change) != last {
@@ -138,12 +184,21 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			shared[s]++
 			out.everListed[s] = struct{}{}
 		}
+		for _, line := range e.prose {
+			sharedProse[line]++
+		}
 	}
 	for s, n := range shared {
 		if n == batch {
 			out.scenarios = append(out.scenarios, s)
 		}
 	}
+	for line, n := range sharedProse {
+		if n == batch {
+			out.prose = append(out.prose, line)
+		}
+	}
+	sort.Strings(out.prose)
 	sort.Strings(out.changes)
 	sort.Strings(out.scenarios)
 	return out
@@ -166,6 +221,10 @@ func archiveDate(folder string) string {
 
 // canonicalScenarios indexes the canonical tree the way the archived deltas are keyed, so the two sides of the comparison derive
 // their keys in one place rather than in two that agree until one is edited.
+//
+// canonicalRequirements below is the third caller and the reason this is worth saying twice: archive-order asks the same question
+// of the same tree, and had its own copy of the key expression until review pointed out that the two commands would then classify
+// a requirement differently the moment either was edited.
 func canonicalScenarios(scenarios []Scenario) map[string]map[string]struct{} {
 	out := make(map[string]map[string]struct{})
 	for _, s := range scenarios {
@@ -197,6 +256,16 @@ type requirementLifecycle struct {
 // What makes that safe is the procedure rather than the rule: a historical pair reported on this basis appears in the BEFORE
 // report too, so it is not a new line and costs the release engineer nothing. No requirement is in that state today.
 func (l requirementLifecycle) retiredLast() bool { return l.retired != "" && l.retired >= l.added }
+
+// canonicalRequirements is the requirement keys of the canonical tree, for a caller that needs only the identities.
+func canonicalRequirements(scenarios []Scenario) map[string]struct{} {
+	byRequirement := canonicalScenarios(scenarios)
+	out := make(map[string]struct{}, len(byRequirement))
+	for requirement := range byRequirement {
+		out[requirement] = struct{}{}
+	}
+	return out
+}
 
 // collectArchivedRestatements walks the archive subtree and returns each requirement's restatements in archive order, plus when
 // each requirement was last added and last retired.
@@ -232,7 +301,7 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 		for requirement, byChange := range one.modifiedRestatements {
 			for _, r := range byChange {
 				restatements[requirement] = append(restatements[requirement],
-					archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios)})
+					archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios), prose: collapseProse(r.lines)})
 			}
 		}
 		for requirement := range one.removedRequirements {
@@ -272,13 +341,23 @@ func runArchiveVerify(args []string) int {
 	}
 	canonical := canonicalScenarios(scenarios)
 
+	bodies, err := ParseAllRequirementBodies(*specsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
+		return 2
+	}
+	prose := make(map[string][]string, len(bodies))
+	for requirement, lines := range bodies {
+		prose[requirement] = collapseProse(lines)
+	}
+
 	archived, lifecycle, err := collectArchivedRestatements(*changesDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
 		return 2
 	}
 
-	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, lifecycle), len(archived))
+	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, lifecycle, prose), len(archived))
 }
 
 // printArchiveVerify renders the report. FINDINGS never gate: the tree carries pre-existing entries this pass cannot classify,
