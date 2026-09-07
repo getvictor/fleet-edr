@@ -444,6 +444,13 @@ func SeverityOf(risk int) string {
 //
 // Clamped to the scale, so a stack of modifiers on an already-critical finding stays critical rather than running off the end.
 func ApplyModifiers(base string, modifiers []RiskModifier) string {
+	// Identity when there is nothing to compose, and review was right that this is not a formality. routeFinding calls this for
+	// every finding, so without it a severity this package does not recognise would be silently rewritten as medium on its way
+	// past: application_control_block copies a severity out of the agent's payload without validating it, and the alerts column's
+	// enum used to reject a bad one loudly. Rewriting it here would turn that refusal into a plausible-looking alert.
+	if len(modifiers) == 0 {
+		return base
+	}
 	risk := RiskOf(base)
 	for _, m := range modifiers {
 		risk += m.Risk

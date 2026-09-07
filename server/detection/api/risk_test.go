@@ -33,6 +33,9 @@ func TestApplyModifiers_OrderingSurvivesEveryOverride(t *testing.T) {
 				assert.Greater(t, RiskOf(raised), RiskOf(plain),
 					"and must rank strictly above it, or the operator's tuning has erased the distinction rather than moved it")
 			} else {
+				// The one setting where they rank equally, and it is a statement about the scale rather than a gap in the fix:
+				// an operator who set this rule to critical has said every finding from it is already as severe as the system
+				// can express, so there is nothing above for an escalation to reach. The requirement says so in as many words.
 				assert.Equal(t, SeverityCritical, raised, "there is nowhere above critical, so it stays there rather than overflowing")
 			}
 		})
@@ -53,6 +56,23 @@ func TestApplyModifiers_UntunedRuleIsUnchanged(t *testing.T) {
 	assert.Equal(t, SeverityLow, ApplyModifiers(SeverityLow, nil))
 	assert.Equal(t, SeverityMedium, ApplyModifiers(SeverityLow, dga),
 		"a rule an operator lowered still ranks its escalated findings above its ordinary ones")
+}
+
+// TestApplyModifiers_IsIdentityWithNoModifiers pins that a finding carrying no escalation passes through untouched.
+//
+// Most findings carry none, and the engine calls this for all of them, so this is the common path rather than an edge. Without
+// it a severity this package does not recognise would be quietly rewritten as medium: application_control_block copies a
+// severity out of the agent's payload without validating it, and the alerts column's enum refuses a bad one loudly. Rewriting it
+// here would turn that refusal into a plausible-looking alert, which is worse than the rejection it replaced.
+func TestApplyModifiers_IsIdentityWithNoModifiers(t *testing.T) {
+	t.Parallel()
+
+	for _, band := range []string{SeverityLow, SeverityMedium, SeverityHigh, SeverityCritical} {
+		assert.Equal(t, band, ApplyModifiers(band, nil))
+	}
+	assert.Equal(t, "not-a-severity", ApplyModifiers("not-a-severity", nil),
+		"an unrecognised severity must reach the store as it arrived, so the column can refuse it")
+	assert.Empty(t, ApplyModifiers("", nil), "and so must an empty one")
 }
 
 // TestApplyModifiers_Clamps pins both ends of the scale, since a modifier is a delta and nothing stops a rule stacking several or
