@@ -148,10 +148,27 @@
 
 .host-header__health-item {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.15rem;
   font-size: 0.8rem;
+}
+
+// The status badge and the component's name, always the first line.
+//
+// Its own class rather than reusing __health-head, which already wraps the "Agent health" label and the rollup pill higher up:
+// a second rule for that class applied to the rollup too and quietly moved it off `align-items: center`.
+.host-header__health-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+// The message and the instant it changed, always the second. Both are optional, and the row is not rendered when neither is
+// present, so a component with nothing to add does not leave an empty line behind.
+.host-header__health-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
 }
 
 .host-header__health-component {
@@ -165,6 +182,8 @@
 }
 
 .host-header__health-since {
+  // Pushed to the trailing edge of its own row, which is now the detail row rather than whichever line the wrap happened to
+  // leave it on.
   margin-left: auto;
   color: var(--color-text-tertiary, #8b8fa2);
   white-space: nowrap;

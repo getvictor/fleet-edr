@@ -114,9 +114,15 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
     /* eslint-enable react-hooks/set-state-in-effect */
     let cancelled = false;
     getHostHealth(detail.host_id)
-      .then((h) => { if (!cancelled) setHealth(h); })
-      .catch(() => { if (!cancelled) setHealth(null); });
-    return () => { cancelled = true; };
+      .then((h) => {
+        if (!cancelled) setHealth(h);
+      })
+      .catch(() => {
+        if (!cancelled) setHealth(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [detail.host_id]);
 
   const dotClass = healthDotClass(health?.overall_status);
@@ -132,7 +138,9 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         title={dotClass ? "Agent needs attention" : undefined}
-        onClick={() => { setOpen((v) => !v); }}
+        onClick={() => {
+          setOpen((v) => !v);
+        }}
       >
         Details
         {dotClass && <span className={`host-header__health-dot ${dotClass}`} aria-hidden="true" />}
@@ -150,13 +158,23 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
                 <ul className="host-header__health-list">
                   {components.map((c) => (
                     <li key={c.type} className="host-header__health-item">
-                      <HealthBadge status={c.status} />
-                      <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
-                      {c.message ? <span className="host-header__health-message">{c.message}</span> : null}
+                      {/* Two explicit rows rather than one wrapping row. As a single flex line that wraps on overflow, where the
+                          message landed depended on how long the component's NAME was: "DNS proxy" is short enough that its
+                          message fitted beside it while the three longer names pushed theirs onto the next line, so four
+                          components in one panel rendered in two different shapes at the same width. */}
+                      <div className="host-header__health-item-head">
+                        <HealthBadge status={c.status} />
+                        <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
+                      </div>
                       {/* Server-derived conditions carry no transition instant (see HostHealth.derived_components); rendering one
                           would date a possibly days-old fault to the moment the page loaded. */}
-                      {c.last_transition_ns > 0 && (
-                        <span className="host-header__health-since">{formatRelativeNs(c.last_transition_ns)}</span>
+                      {(c.message || c.last_transition_ns > 0) && (
+                        <div className="host-header__health-detail">
+                          {c.message ? <span className="host-header__health-message">{c.message}</span> : null}
+                          {c.last_transition_ns > 0 && (
+                            <span className="host-header__health-since">{formatRelativeNs(c.last_transition_ns)}</span>
+                          )}
+                        </div>
                       )}
                     </li>
                   ))}

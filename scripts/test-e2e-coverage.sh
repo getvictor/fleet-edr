@@ -177,7 +177,7 @@ go build -o "$REPO_ROOT/tmp/edr-demo-seed-e2e" ./server/cmd/fleet-edr-demo-seed
 echo "$END_GROUP"
 
 # --- phase 1: auth suite (default env) -----------------------------------
-echo "::group::Phase 1 - auth specs (break-glass setup, break-glass login, OIDC sign-in)"
+echo "::group::Phase 1: auth specs (break-glass setup, break-glass login, OIDC sign-in)"
 start_server "default-env-auth"
 seed_oidc 1
 (
@@ -191,7 +191,7 @@ echo "$END_GROUP"
 # Includes the M5 wire smoke (agent-events-flow.spec.ts) and M6 UI specs (host-list-and-process-tree.spec.ts); both consume the
 # break-glass setup endpoint, so they share this phase's 5/min token budget with reauth-modal-retry. The set is intentionally short
 # enough that the bucket doesn't overflow within the phase.
-echo "::group::Phase 2 - qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures, agent wire + UI)"
+echo "::group::Phase 2: qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures, agent wire + UI)"
 start_server "default-env-qa"
 seed_oidc 1
 (
@@ -208,7 +208,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 3: brute-force rate limit -------------------------------------
-echo "::group::Phase 3 - break-glass challenge rate limit (default env)"
+echo "::group::Phase 3: break-glass challenge rate limit (default env)"
 start_server "default-env-rate-limit"
 seed_oidc 1
 (
@@ -220,7 +220,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 4: env-specific combo (allowlist + JIT off) -------------------
-echo "::group::Phase 4 - break-glass IP allowlist + OIDC JIT off"
+echo "::group::Phase 4: break-glass IP allowlist + OIDC JIT off"
 start_server "envspec-allowlist-jit-off" \
   EDR_BREAKGLASS_IP_ALLOWLIST=10.99.99.0/24
 # Seed JIT=1: oidc-jit-disabled.spec.ts flips jit_enabled to 0 itself (beforeAll) and restores it (afterAll); it only needs the stored
@@ -237,7 +237,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 5: short session timeouts -------------------------------------
-echo "::group::Phase 5 - session lifecycle (short timeouts env)"
+echo "::group::Phase 5: session lifecycle (short timeouts env)"
 start_server "short-session-timeouts" \
   EDR_SESSION_IDLE_TIMEOUT=5s \
   EDR_SESSION_ABSOLUTE_TIMEOUT=20s \
@@ -254,6 +254,33 @@ seed_oidc 1
     E2E_OIDC_IDLE_WAIT_MS=7000 \
     E2E_BREAKGLASS_IDLE_WAIT_MS=5000 \
     ./node_modules/.bin/playwright test tests/qa/session-lifecycle.spec.ts --workers=1
+)
+stop_server
+echo "$END_GROUP"
+
+# --- phase 6: UI presentation regressions --------------------------------
+# Layout regressions found by a browser pass over the v0.5 surfaces: a header rendering in the wrong case, a value that read as
+# part of its own explanation, a component row whose shape depended on its label's length. All three are computed-style
+# assertions, so they cannot live in vitest: jsdom applies no user-agent stylesheet, and the value it would report is not the one
+# a user gets.
+#
+# The three share ONE break-glass ceremony, via the worker-scoped signedInAdminShared fixture, because they only navigate and
+# assert. That matters here: /admin/break-glass/setup allows 5 submissions per minute globally and a single sign-in spends two of
+# them (gateSetupRequest is shared by the begin and finish handlers), so three per-test ceremonies need six and the third fails
+# with a 429 that presents as a sign-in timeout. Measured: three specs per-test fail 2 of 3 together and pass individually; on the
+# shared fixture all three pass together in under a second.
+#
+# Grouped as their own phase for legibility rather than necessity, since two submissions would also fit inside phase 2.
+echo "::group::Phase 6: UI presentation regressions (detection tuning, rule detail, host health)"
+start_server "default-env-ui-regressions"
+seed_oidc 1
+(
+  cd "$REPO_ROOT/test/e2e"
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
+    tests/qa/detection-tuning-cost-column.spec.ts \
+    tests/qa/rule-detail-mode-row.spec.ts \
+    tests/qa/host-health-components.spec.ts \
+    --workers=1
 )
 stop_server
 echo "$END_GROUP"

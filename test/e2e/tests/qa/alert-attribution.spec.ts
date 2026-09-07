@@ -14,6 +14,8 @@ import { test, expect } from "../../fixtures/agent";
 import { signInAsAdminViaBreakGlass, uninstallVirtualAuthenticator } from "../../fixtures/auth";
 import type { VirtualAuthenticator } from "../../fixtures/webauthn";
 import { openDB, resetDB } from "../../fixtures/db";
+import type { GlobalRuleSetting } from "../../fixtures/detection-config";
+import { restoreGlobalRuleSetting, setGlobalRuleMode, takeGlobalRuleSetting, waitForRuleMode } from "../../fixtures/detection-config";
 
 // The upstream rule the osascript scenario matches, and the author its file credits. Pinned as literals because they are the
 // artifact the licence is about: a rename upstream should surface here as a failing assertion, not as a silently changed credit.
@@ -22,6 +24,9 @@ const UPSTREAM_AUTHOR = "SigmaHQ, by Alejandro Ortuno, oscd.community";
 
 test.describe("alert attribution", () => {
   let va: VirtualAuthenticator | undefined;
+  // undefined means the snapshot never ran, which is NOT the same as running and finding no row. Sharing one
+  // sentinel for both would make a failed setup delete an operator's setting on the way out.
+  let previousSetting: GlobalRuleSetting | null | undefined;
 
   // Above the default 30s. The journey is deliberately the long one: enrol, post, ingest, build the graph, evaluate, then poll the
   // rendered page. The default leaves no headroom over the poll budget itself, so a slow-but-working run fails as a timeout.
@@ -31,36 +36,24 @@ test.describe("alert attribution", () => {
     const db = await openDB();
     try {
       await resetDB(db);
-      // Promote the vendored rule out of monitor. Written directly rather than through the detection-config API because the
-      // promotion is this test's PRECONDITION, not its subject: routing it through the UI would make an attribution failure
-      // indistinguishable from a promotion failure.
-      await db.query(
-        `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, updated_by)
-         VALUES (?, 0, 'alert', 'e2e-alert-attribution')
-         ON DUPLICATE KEY UPDATE mode = VALUES(mode)`,
-        [RULE_ID],
-      );
-      // Bumping the version counter is not optional bookkeeping: it IS the cache-invalidation signal. A replica's refresh loop
-      // polls this counter and reloads its config snapshot only when it moves, so a settings row written without it is invisible
-      // to the running server forever, not merely until the next tick.
-      await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
     } finally {
       await db.end();
     }
+    previousSetting = await takeGlobalRuleSetting(RULE_ID);
+    // Promote the vendored rule out of monitor. Written directly rather than through the detection-config API because the
+    // promotion is this test's PRECONDITION, not its subject: routing it through the UI would make an attribution failure
+    // indistinguishable from a promotion failure. The helper carries the version bump, which is the cache-invalidation signal
+    // rather than bookkeeping: a replica reloads its config snapshot only when that counter moves.
+    await setGlobalRuleMode(RULE_ID, "alert", "e2e-alert-attribution");
     va = await signInAsAdminViaBreakGlass(page);
   });
 
   test.afterEach(async () => {
     if (va) await uninstallVirtualAuthenticator(va);
-    const db = await openDB();
-    try {
-      await db.query("DELETE FROM detection_rule_settings WHERE rule_id = ?", [RULE_ID]);
-      // Same reason as the insert: without the bump the server keeps serving this rule as promoted after the test that promoted
-      // it has finished, and a later spec inherits an alerting rule it never asked for.
-      await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
-    } finally {
-      await db.end();
-    }
+    // Put back exactly what was there, which on a long-lived dev database may be an operator's own tuning rather than nothing.
+    // The helper carries the version bump either way: without it the server keeps serving this rule as promoted after the test
+    // that promoted it has finished, and a later spec inherits an alerting rule it never asked for.
+    if (previousSetting !== undefined) await restoreGlobalRuleSetting(RULE_ID, previousSetting);
   });
 
   // Both surfaces in one test, following this suite's convention: each break-glass ceremony burns two tokens out of a global
@@ -71,7 +64,7 @@ test.describe("alert attribution", () => {
     // the REST surface does; the replica picks it up on its 5s refresh tick instead. Posting the scenario before that lands
     // evaluates the rule while it is still in monitor, and the alert is never raised. Wait for the precondition to actually be in
     // force rather than assuming the insert took effect.
-    await waitForPromotion(page);
+    await waitForRuleMode(page, RULE_ID, "alert");
 
     const hostId = crypto.randomUUID();
     await agent.runScenario("osascript-oneliner.yaml", { hostIdOverride: hostId });
@@ -119,19 +112,4 @@ async function waitForAlert(page: import("@playwright/test").Page, hostId: strin
     )
     .toBe(1);
   return alertId;
-}
-
-/** waitForPromotion blocks until the server reports the vendored rule as actually running in alert mode. */
-async function waitForPromotion(page: import("@playwright/test").Page): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const res = await page.request.get("/api/rules");
-        if (!res.ok()) return "";
-        const body = (await res.json()) as { rules?: { id: string; mode?: string }[] };
-        return body.rules?.find((r) => r.id === RULE_ID)?.mode ?? "";
-      },
-      { timeout: 20_000, message: "the seeded promotion never reached the server's config snapshot" },
-    )
-    .toBe("alert");
 }
