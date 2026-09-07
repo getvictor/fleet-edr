@@ -23,7 +23,12 @@ if [[ ! -f "$COVERAGE_SCRIPT" ]]; then
   exit 2
 fi
 
-# Specs in the tree, as the paths the coverage script writes them ("tests/qa/<name>.spec.ts").
+# Both halves have to speak the SAME path language or the check reports a disagreement that is its own. The ways they can drift
+# are enumerable, so they are enumerated: the tree scan recurses and the extraction accepts `/`, so a spec organised into a
+# subdirectory is matched by both; the extraction strips comments, so prose cannot stand in for an invocation; duplicates are
+# reported rather than collapsed; both halves anchor on the literal `tests/qa/` prefix and the `.spec.ts` suffix; and the
+# character class covers every name the suite uses. A change to either half without the other shows up as an orphan or a
+# not-in-tree entry, both of which fail loudly rather than passing quietly.
 in_tree="$(find "$SPEC_DIR" -name '*.spec.ts' -type f | sed "s|$SPEC_DIR/|tests/qa/|" | sort)"
 if [[ -z "$in_tree" ]]; then
   echo "check-e2e-spec-coverage: no specs found under $SPEC_DIR, which cannot be right" >&2
@@ -36,7 +41,7 @@ fi
 #
 # Anchored on the same literal path form as the tree scan above, so a rename in either place shows up rather than silently
 # matching nothing.
-named_raw="$(sed 's/#.*//' "$COVERAGE_SCRIPT" | grep -oE 'tests/qa/[A-Za-z0-9._-]+\.spec\.ts' | sort)"
+named_raw="$(sed 's/#.*//' "$COVERAGE_SCRIPT" | grep -oE 'tests/qa/[A-Za-z0-9._/-]+\.spec\.ts' | sort)"
 named="$(echo "$named_raw" | uniq)"
 # A spec in two phases runs twice, against two different servers, which costs CI time and can make one phase's leftovers another
 # phase's precondition. The header of the coverage script says every spec belongs to exactly ONE phase; deduplicating without
