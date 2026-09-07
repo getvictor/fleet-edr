@@ -57,7 +57,7 @@ async function dumpCoverage(page: Page, testId: string): Promise<void> {
   await writeFile(join(COVERAGE_DIR, `${slug}.json`), JSON.stringify(entries));
 }
 
-export const test = base.extend<{ page: Page }, { signedInAdminShared: Page }>({
+export const test = base.extend<{ page: Page; signedInAdminShared: Page }, { sharedAdminPage: Page }>({
   page: async ({ page }, use, testInfo) => {
     await startCoverage(page);
     await use(page);
@@ -76,8 +76,13 @@ export const test = base.extend<{ page: Page }, { signedInAdminShared: Page }>({
   // behind. Use it only for tests that navigate and assert. A test that mutates page state, or that needs a reset between cases,
   // signs in for itself with resetDB + signInAsAdminViaBreakGlass, as alert-attribution does, and pays the two submissions.
   //
+  // It also assumes nothing ELSE deletes the session underneath it, which holds because the specs using it run as their own
+  // phase in scripts/test-e2e-coverage.sh and no other spec shares that worker. It does NOT hold for a local
+  // `playwright test tests/qa`: any spec calling resetDB in the same worker empties `sessions`, and this page's cookie then
+  // points at a row that is gone. That is why the check below exists rather than a comment asking people to remember.
+  //
   // Coverage is dumped once per worker rather than once per test, since the page outlives the test.
-  signedInAdminShared: [
+  sharedAdminPage: [
     async ({ browser }, use, workerInfo) => {
       const db = await openDB();
       try {
@@ -94,20 +99,24 @@ export const test = base.extend<{ page: Page }, { signedInAdminShared: Page }>({
         baseURL: workerInfo.project.use.baseURL,
         ignoreHTTPSErrors: true,
       });
-      const page = await context.newPage();
-      await startCoverage(page);
-      const authenticator = await signInAsAdminViaBreakGlass(page);
+      // Everything after the context exists is inside the unwind, so a sign-in that throws still closes the context. Before this,
+      // a failed ceremony leaked one context per worker and the browser stayed alive holding it.
+      let authenticator: Awaited<ReturnType<typeof signInAsAdminViaBreakGlass>> | undefined;
       try {
+        const page = await context.newPage();
+        await startCoverage(page);
+        authenticator = await signInAsAdminViaBreakGlass(page);
         await use(page);
       } finally {
         // Each step of the unwind runs even when an earlier one throws. Sequentially, a rejected coverage dump would leave the
         // authenticator installed and the context open, and the teardown error would be reported instead of whatever the tests
         // actually found.
         try {
-          await dumpCoverage(page, `worker-${String(workerInfo.workerIndex)}`);
+          const [open] = context.pages();
+          if (open) await dumpCoverage(open, `worker-${String(workerInfo.workerIndex)}`);
         } finally {
           try {
-            await uninstallVirtualAuthenticator(authenticator);
+            if (authenticator) await uninstallVirtualAuthenticator(authenticator);
           } finally {
             await context.close();
           }
@@ -116,6 +125,23 @@ export const test = base.extend<{ page: Page }, { signedInAdminShared: Page }>({
     },
     { scope: "worker" },
   ],
+
+  // The test-scoped half: hand over the shared page only once its session is confirmed alive.
+  //
+  // Without this the failure from a session another spec deleted is a redirect to /ui/login and then an assertion about a missing
+  // element, which reads as the page being broken. The check turns it into one sentence naming the cause, and costs one request
+  // per test.
+  signedInAdminShared: async ({ sharedAdminPage }, use) => {
+    const res = await sharedAdminPage.request.get("/api/session");
+    if (!res.ok()) {
+      throw new Error(
+        `signedInAdminShared: the shared admin session is gone (/api/session returned ${String(res.status())}). ` +
+          "Another spec in this worker reset the auth tables. These specs run as their own phase in CI; running them beside " +
+          "specs that call resetDB needs a separate worker or a per-test sign-in.",
+      );
+    }
+    await use(sharedAdminPage);
+  },
 });
 
 // createCoveredPage spawns a page off the given BrowserContext with
