@@ -764,11 +764,11 @@ describe("DetectionConfig observed column", () => {
 
     // Shown only when there are any: a "0 retried" on every row spends the column's width saying nothing, and the number matters
     // precisely when it is not zero.
-    it("annotates retried evaluations, and only when there are some", async () => {
+    it("annotates undecided evaluations, and only when there are some", async () => {
       stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 12 })] });
       const { unmount } = renderPage();
       await waitFor(() => {
-        expect(screen.getByText(/12 retried/)).toBeVisible();
+        expect(screen.getByText(/12 undecided/)).toBeVisible();
       });
       unmount();
 
@@ -778,7 +778,7 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByText("1.5ms")).toBeVisible();
       });
-      expect(screen.queryByText(/retried/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/undecided/)).not.toBeInTheDocument();
     });
 
     // The same distinction the Observed column draws, and for the same reason pointed the other way: a failed read rendered as

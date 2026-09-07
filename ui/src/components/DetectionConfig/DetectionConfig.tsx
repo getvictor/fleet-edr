@@ -137,8 +137,9 @@ const MODE_COLUMN_TOOLTIP =
 // COST_COLUMN_TOOLTIP explains what the mean is over, because "1.2ms" beside a promote control invites being read as the cost of
 // one alert rather than of one evaluation attempt.
 const COST_COLUMN_TOOLTIP =
-  "Mean wall time per evaluation attempt, with the worst case and the retry count in each cell. A replayed batch really does " +
-  "evaluate again and counts as another attempt, so this is what the rule costs the server rather than how much work it did.";
+  "Mean wall time per evaluation attempt, with the worst case and the undecided count in each cell. A replayed batch really " +
+  "does evaluate again and counts as another attempt, so this is what the rule costs the server rather than how much work it " +
+  "did. An undecided attempt is one that could not reach a verdict; most are retried, but one whose batch is set aside is not.";
 
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
@@ -247,10 +248,14 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
     );
   }
   const evaluations = `${stat.evaluations.toLocaleString()} evaluation${stat.evaluations === 1 ? "" : "s"}`;
+  // "could not decide", not "were retried", and the difference is real rather than pedantic: the counter increments the moment an
+  // attempt returns a retryable outcome, before anything knows whether another attempt follows. A batch that is eventually set
+  // aside has its last miss counted with no retry after it, so labelling the figure as completed retries overstates it for exactly
+  // the rules an operator is chasing.
   const misses =
     stat.retryable_misses === 0
       ? ""
-      : `, ${stat.retryable_misses.toLocaleString()} of which could not decide and were retried`;
+      : `, ${stat.retryable_misses.toLocaleString()} of which could not decide`;
   const title =
     `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst, ` +
     `across ${evaluations} in the last ${String(days)} days${misses}`;
@@ -259,7 +264,7 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
       {formatDuration(stat.mean_eval_ns)}
       <span className="detection-config__observed-hosts"> avg</span>
       {stat.retryable_misses === 0 ? null : (
-        <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} retried</span>
+        <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} undecided</span>
       )}
     </span>
   );

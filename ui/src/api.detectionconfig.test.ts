@@ -197,6 +197,21 @@ describe("detection-config API client", () => {
 
   // Each row is malformed in exactly ONE way, with every other field valid, so a mutant that breaks one guard is caught by the
   // case for that guard rather than by a fixture that was already failing for a different reason.
+  //
+  // Built from a valid row rather than written out, which is what keeps that property true as fields are added: a hand-written
+  // fixture set drifts the moment one field changes and starts failing for reasons the case name does not claim.
+  const validEvalRow = {
+    rule_id: "r", evaluations: 1, retryable_misses: 0,
+    mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS,
+  };
+  const rowWith = (over: Record<string, unknown>) => ({ eval_stats: [{ ...validEvalRow, ...over }], days: 7 });
+  // Built by filtering rather than by deleting a computed key, which is the same result without the dynamic-index sink eslint
+  // flags: the key is a literal from the table below, but a rule that cannot see that is right to be suspicious of the shape.
+  const rowWithout = (field: string) => ({
+    eval_stats: [Object.fromEntries(Object.entries(validEvalRow).filter(([k]) => k !== field))],
+    days: 7,
+  });
+
   for (const [name, envelope] of [
     ["null eval_stats", { eval_stats: null, days: 7 }],
     ["omitted eval_stats", { days: 7 }],
@@ -205,18 +220,18 @@ describe("detection-config API client", () => {
     ["days is not a number", { eval_stats: [], days: "7" }],
     ["days is zero", { eval_stats: [], days: 0 }],
     ["days is fractional", { eval_stats: [], days: 1.5 }],
-    ["a row with no rule_id", { eval_stats: [{ evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row with an empty rule_id", { eval_stats: [{ rule_id: "", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row with an empty rule_id", rowWith({ rule_id: "" })],
+    ["a row with no rule_id", rowWithout("rule_id")],
     // The floor. Without it a zero row divides by zero somewhere upstream and reads here as a rule that ran for free.
-    ["a row with zero evaluations", { eval_stats: [{ rule_id: "r", evaluations: 0, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row missing evaluations", { eval_stats: [{ rule_id: "r", retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row missing retryable_misses", { eval_stats: [{ rule_id: "r", evaluations: 1, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row missing mean_eval_ns", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row missing max_eval_ns", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row missing last_seen", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1 }], days: 7 }],
-    ["a row whose last_seen is unparseable", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: "not-a-date" }], days: 7 }],
-    ["a row with a negative timing", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: -1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
-    ["a row with a fractional timing", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1.5, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row with zero evaluations", rowWith({ evaluations: 0 })],
+    ["a row missing evaluations", rowWithout("evaluations")],
+    ["a row missing retryable_misses", rowWithout("retryable_misses")],
+    ["a row missing mean_eval_ns", rowWithout("mean_eval_ns")],
+    ["a row missing max_eval_ns", rowWithout("max_eval_ns")],
+    ["a row missing last_seen", rowWithout("last_seen")],
+    ["a row whose last_seen is unparseable", rowWith({ last_seen: "not-a-date" })],
+    ["a row with a negative timing", rowWith({ mean_eval_ns: -1 })],
+    ["a row with a fractional timing", rowWith({ mean_eval_ns: 1.5 })],
     ["a row that is null", { eval_stats: [null], days: 7 }],
     ["an empty row", { eval_stats: [{}], days: 7 }],
   ] as [string, unknown][]) {

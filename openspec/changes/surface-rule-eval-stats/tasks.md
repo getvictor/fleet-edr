@@ -21,3 +21,5 @@
 - [x] 3.3 Component: the unit follows the magnitude, retries are annotated only when there are some, and both unavailable states render as unavailable rather than as absence.
 - [x] 3.4 Component: BOTH directions of the independence claim, since only-Cost-fails passes against a shared flag and only-Observed-fails is what catches it.
 - [x] 3.5 Derive the authorization-deny table from the routes actually registered, so a route added without a row fails instead of going silently untested. That is how this route's own gate went uncovered.
+- [x] 3.6 Fuzz both `days` parsers together as an equivalence, since they are one policy stated twice and the risk is drift rather than either mishandling a number.
+- [x] 3.7 Label the undecided count for what the engine records: the counter increments at the miss, before anything knows a retry follows, so a batch that is set aside has its last miss counted with no retry after it.
