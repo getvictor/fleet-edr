@@ -85,14 +85,34 @@ export const test = base.extend<{ page: Page }, { signedInAdminShared: Page }>({
       } finally {
         await db.end();
       }
-      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      // baseURL is passed explicitly, from the project rather than from the `baseURL` fixture, which is test-scoped and so not
+      // available to a worker fixture. @playwright/test does apply the project's context options to a context made from the
+      // `browser` fixture, which is why the root-relative navigations here already worked, but that is the framework patching
+      // newContext rather than anything visible at this call site: two reviewers read it as a bug. Stating it makes the
+      // dependency legible and does not depend on that patching continuing.
+      const context = await browser.newContext({
+        baseURL: workerInfo.project.use.baseURL,
+        ignoreHTTPSErrors: true,
+      });
       const page = await context.newPage();
       await startCoverage(page);
       const authenticator = await signInAsAdminViaBreakGlass(page);
-      await use(page);
-      await dumpCoverage(page, `worker-${String(workerInfo.workerIndex)}`);
-      await uninstallVirtualAuthenticator(authenticator);
-      await context.close();
+      try {
+        await use(page);
+      } finally {
+        // Each step of the unwind runs even when an earlier one throws. Sequentially, a rejected coverage dump would leave the
+        // authenticator installed and the context open, and the teardown error would be reported instead of whatever the tests
+        // actually found.
+        try {
+          await dumpCoverage(page, `worker-${String(workerInfo.workerIndex)}`);
+        } finally {
+          try {
+            await uninstallVirtualAuthenticator(authenticator);
+          } finally {
+            await context.close();
+          }
+        }
+      }
     },
     { scope: "worker" },
   ],
