@@ -491,3 +491,4 @@ Both implementations of this lookup, the stored query and the in-batch overlay, 
 - **GIVEN** two records of one PID sharing a fork timestamp, one that never exec'd and one whose exec landed at that same instant
 - **WHEN** a child's inherited parent path is resolved at a later instant
 - **THEN** the record that never exec'd does not win on the strength of having no exec
+- **AND** the stored query and the in-batch overlay return the same record

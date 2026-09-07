@@ -392,3 +392,4 @@ Events set aside SHALL age out under the deployment's retention window rather th
 
 - **GIVEN** an entry whose batch first failed longer ago than the retention window but which was set aside only moments ago
 - **WHEN** the queue's retention sweep runs
+- **THEN** the entry is kept, because the window measures how long it has been available to inspect
