@@ -302,7 +302,7 @@ jobs:
 
   # End-to-end Playwright coverage. Boots an instrumented (`go build
   # -cover`) server binary against mysql + dex, runs the full
-  # Playwright suite across five phases (each with its own env so
+  # Playwright suite across six phases (each with its own env so
   # the env-specific QA sections [A.6 allowlist, A.7 rate limit,
   # B.3 JIT off, E.1+E.4+E.5 session lifecycle] actually exercise
   # their server-side gates), drains GOCOVERDIR via `go tool covdata
@@ -388,15 +388,17 @@ jobs:
           npm ci --ignore-scripts
           ./node_modules/.bin/playwright install --with-deps chromium
 
-      - name: Run E2E coverage pipeline (5 phases)
+      - name: Run E2E coverage pipeline (6 phases)
         # task test:e2e:coverage delegates to scripts/test-e2e-coverage.sh,
-        # which builds the `-cover` binary once, then walks five phases:
+        # which builds the `-cover` binary once, then walks six phases:
         #   1. default-env-auth        (auth specs)
         #   2. default-env-qa          (A.5 + C/D/F.4)
         #   3. default-env-a7          (A.7 rate-limit; isolated so its
         #                               per-IP bucket burn doesn't bleed)
         #   4. envspec-allowlist-jit-off (A.6 + B.3 in one server boot)
         #   5. short-session-timeouts  (E.1+E.4+E.5 with idle=5s/3s)
+        #   6. default-env-ui-regressions (browser-level presentation
+        #                               regressions; one shared sign-in)
         # All phases share GOCOVERDIR; covdata textfmt merges + the
         # monocart converter aggregates V8 payloads from coverage-raw/.
         run: task test:e2e:coverage

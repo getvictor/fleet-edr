@@ -106,6 +106,7 @@ export const test = base.extend<{ page: Page; signedInAdminShared: Page }, { sha
         const page = await context.newPage();
         await startCoverage(page);
         authenticator = await signInAsAdminViaBreakGlass(page);
+        sharedAuthenticators.set(page, authenticator);
         await use(page);
       } finally {
         // Each step of the unwind runs even when an earlier one throws. Sequentially, a rejected coverage dump would leave the
@@ -116,7 +117,11 @@ export const test = base.extend<{ page: Page; signedInAdminShared: Page }, { sha
           if (open) await dumpCoverage(open, `worker-${String(workerInfo.workerIndex)}`);
         } finally {
           try {
-            if (authenticator) await uninstallVirtualAuthenticator(authenticator);
+            // Whatever is installed NOW, which a re-authentication may have replaced since sign-in.
+            const [open] = context.pages();
+            const current = open ? sharedAuthenticators.get(open) : undefined;
+            if (open) sharedAuthenticators.delete(open);
+            if (current ?? authenticator) await uninstallVirtualAuthenticator((current ?? authenticator)!);
           } finally {
             await context.close();
           }
@@ -132,17 +137,28 @@ export const test = base.extend<{ page: Page; signedInAdminShared: Page }, { sha
   // element, which reads as the page being broken. The check turns it into one sentence naming the cause, and costs one request
   // per test.
   signedInAdminShared: async ({ sharedAdminPage }, use) => {
-    const res = await sharedAdminPage.request.get("/api/session");
-    if (!res.ok()) {
-      throw new Error(
-        `signedInAdminShared: the shared admin session is gone (/api/session returned ${String(res.status())}). ` +
-          "Another spec in this worker reset the auth tables. These specs run as their own phase in CI; running them beside " +
-          "specs that call resetDB needs a separate worker or a per-test sign-in.",
-      );
+    if (!(await sharedAdminPage.request.get("/api/session")).ok()) {
+      // Signed in again rather than failed. Reporting the cause was better than an assertion about a missing element, but it
+      // still made the suite order-dependent by design: any spec calling resetDB in this worker empties `sessions`, and the next
+      // user of this page would then fail through no fault of its own. Recovering costs two setup submissions, and only in the
+      // runs where something actually invalidated the session; in CI these specs are their own phase and this never fires.
+      await reauthenticateShared(sharedAdminPage);
     }
     await use(sharedAdminPage);
   },
 });
+
+// sharedAuthenticators holds the virtual authenticator currently installed for a shared page, so a re-authentication can remove
+// the one it replaces. Keyed by page because a worker has at most one shared page but the map keeps the association explicit.
+const sharedAuthenticators = new Map<Page, Awaited<ReturnType<typeof signInAsAdminViaBreakGlass>>>();
+
+// reauthenticateShared restores a shared page's session after something else deleted it, and keeps the authenticator bookkeeping
+// straight so worker teardown still uninstalls exactly what is installed.
+async function reauthenticateShared(page: Page): Promise<void> {
+  const previous = sharedAuthenticators.get(page);
+  if (previous) await uninstallVirtualAuthenticator(previous);
+  sharedAuthenticators.set(page, await signInAsAdminViaBreakGlass(page));
+}
 
 // createCoveredPage spawns a page off the given BrowserContext with
 // V8 coverage capture wired up the same way the default `page`
