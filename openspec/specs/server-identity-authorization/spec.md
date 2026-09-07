@@ -317,3 +317,4 @@ The system SHALL resolve every authenticated request to an actor that carries a 
 
 - **GIVEN** a privileged handler that attributes a mutation
 - **WHEN** it records who acted
+- **THEN** it uses the actor's principal id, which is non-empty for both user and service-account actors

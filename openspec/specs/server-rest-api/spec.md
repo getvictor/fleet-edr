@@ -441,3 +441,4 @@ The system SHALL expose `GET /api/hosts/{host_id}/activity-histogram` accepting 
 
 - **GIVEN** a request whose `from` is not before its `to`
 - **WHEN** the client calls the endpoint
+- **THEN** the response status is 400

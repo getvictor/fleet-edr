@@ -224,3 +224,4 @@ Where the command records cannot be read, the system SHALL omit the condition an
 
 - **GIVEN** a host with commands queued but none yet aged out
 - **WHEN** its health is read
+- **THEN** no such condition is reported, because an offline host with queued work is the ordinary case

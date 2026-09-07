@@ -2038,3 +2038,4 @@ The chain is DROPPED, not retried. This is the skip semantics the "Retryable eva
 
 - **GIVEN** a chain whose shell generation claims a parent that has no record in the graph, and whose parent is not the init process
 - **WHEN** the batch is evaluated
+- **THEN** no finding is produced, rather than one naming an unresolved parent, and the batch is acknowledged rather than retried

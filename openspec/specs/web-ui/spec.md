@@ -811,3 +811,4 @@ The page SHALL render an activity histogram of process starts over the active wi
 
 - **GIVEN** the operator pivots from an alert
 - **WHEN** the host page opens
+- **THEN** the active window is the wide default ending at the alert's time, as before
