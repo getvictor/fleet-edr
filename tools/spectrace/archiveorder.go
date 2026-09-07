@@ -34,6 +34,21 @@ type archiveConstraint struct {
 // Reported rather than forbidden. Two changes legitimately touching one requirement is ordinary in a batched-archive model, which
 // is the same reasoning findRestatementConflicts gives for not banning concurrent restatements.
 func archiveConstraints(d *deltaSections) []archiveConstraint {
+	out := append(adderBeforeTheRest(d), modifierBeforeRemover(d)...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].before != out[j].before {
+			return out[i].before < out[j].before
+		}
+		if out[i].after != out[j].after {
+			return out[i].after < out[j].after
+		}
+		return out[i].requirement < out[j].requirement
+	})
+	return out
+}
+
+// adderBeforeTheRest sequences the change that CREATES a requirement ahead of every change that replaces or retires it.
+func adderBeforeTheRest(d *deltaSections) []archiveConstraint {
 	var out []archiveConstraint
 	for requirement, adders := range d.addedBy {
 		var laters []string
@@ -45,41 +60,35 @@ func archiveConstraints(d *deltaSections) []archiveConstraint {
 		}
 		for _, adder := range sortedKeys(adders) {
 			for _, later := range sortedUnique(laters) {
-				if adder == later {
-					// One change that both adds and modifies the same requirement is not an ordering problem: openspec applies
-					// its sections in file order, and there is nothing to sequence against.
-					continue
+				// One change that both adds and modifies the same requirement is not an ordering problem: openspec applies its
+				// sections in file order, and there is nothing to sequence against.
+				if adder != later {
+					out = append(out, archiveConstraint{before: adder, after: later, requirement: requirement})
 				}
-				out = append(out, archiveConstraint{before: adder, after: later, requirement: requirement})
 			}
 		}
 	}
-	// A REMOVED after a MODIFIED, always. The restatement re-creates the requirement it replaces, so a retirement applied before it
-	// is undone by it.
-	//
-	// This edge is emitted whether or not an ADDED is also pending, and skipping it when one was is the bug review found: with an
-	// add, a remove and a modify in three separate changes, the adder-first edges alone leave add-remove-modify a legal order, and
-	// the modify then recreates the requirement the remove had retired. Constraining the pair directly is what closes it, because
-	// the ordering is transitive only if every edge is present.
+	return out
+}
+
+// modifierBeforeRemover sequences a restatement ahead of the retirement of the same requirement, always.
+//
+// The restatement re-creates the requirement it replaces, so a retirement applied before it is undone by it. This edge is emitted
+// whether or not an ADDED is also pending, and skipping it when one was is the bug review found: with an add, a remove and a
+// modify in three separate changes, the adder-first edges alone leave add-remove-modify a legal order, and the modify then
+// recreates the requirement the remove had retired. Constraining the pair directly is what closes it, because the ordering is
+// transitive only if every edge is present.
+func modifierBeforeRemover(d *deltaSections) []archiveConstraint {
+	var out []archiveConstraint
 	for requirement, removers := range d.removedBy {
 		for _, remover := range sortedKeys(removers) {
 			for _, modifier := range sortedKeysOfRestatements(d.modifiedRestatements[requirement]) {
-				if remover == modifier {
-					continue
+				if remover != modifier {
+					out = append(out, archiveConstraint{before: modifier, after: remover, requirement: requirement})
 				}
-				out = append(out, archiveConstraint{before: modifier, after: remover, requirement: requirement})
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].before != out[j].before {
-			return out[i].before < out[j].before
-		}
-		if out[i].after != out[j].after {
-			return out[i].after < out[j].after
-		}
-		return out[i].requirement < out[j].requirement
-	})
 	return out
 }
 
@@ -148,80 +157,90 @@ func archiveOrder(changes []string, constraints []archiveConstraint) (order []st
 // node c has both a prerequisite and a dependent and survives the peel, while being on no cycle at all. Having an edge in each
 // direction is not the same as being able to get back.
 func onlyCycles(stalled []string, blockers map[string]map[string]struct{}) []string {
-	inSet := make(map[string]struct{}, len(stalled))
+	t := &tarjan{
+		inSet:    make(map[string]struct{}, len(stalled)),
+		blockers: blockers,
+		index:    make(map[string]int, len(stalled)),
+		low:      make(map[string]int, len(stalled)),
+		onStack:  make(map[string]bool, len(stalled)),
+		cyclic:   make(map[string]struct{}),
+	}
 	for _, c := range stalled {
-		inSet[c] = struct{}{}
+		t.inSet[c] = struct{}{}
 	}
-	// Edges point from a change to the ones that must precede it, which is the direction blockers already holds. Tarjan does not
-	// care which way round they are: a component that is strongly connected one way is strongly connected the other.
-	edges := func(c string) []string {
-		var out []string
-		for b := range blockers[c] {
-			if _, ok := inSet[b]; ok {
-				out = append(out, b)
-			}
+	for _, c := range sortedKeys(t.inSet) {
+		if _, seen := t.index[c]; !seen {
+			t.visit(c)
 		}
-		sort.Strings(out)
-		return out
 	}
+	return sortedKeys(t.cyclic)
+}
 
-	index := make(map[string]int, len(inSet))
-	low := make(map[string]int, len(inSet))
-	onStack := make(map[string]bool, len(inSet))
-	var stack []string
-	next := 0
-	cyclic := make(map[string]struct{})
+// tarjan is one run of the strongly-connected-components search over the stalled set.
+type tarjan struct {
+	inSet    map[string]struct{}
+	blockers map[string]map[string]struct{}
+	index    map[string]int
+	low      map[string]int
+	onStack  map[string]bool
+	stack    []string
+	next     int
+	cyclic   map[string]struct{}
+}
 
-	var strongConnect func(v string)
-	strongConnect = func(v string) {
-		index[v] = next
-		low[v] = next
-		next++
-		stack = append(stack, v)
-		onStack[v] = true
-		for _, w := range edges(v) {
-			switch {
-			case func() bool { _, seen := index[w]; return !seen }():
-				strongConnect(w)
-				low[v] = min(low[v], low[w])
-			case onStack[w]:
-				low[v] = min(low[v], index[w])
-			}
-		}
-		if low[v] != index[v] {
-			return
-		}
-		var component []string
-		for {
-			w := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			onStack[w] = false
-			component = append(component, w)
-			if w == v {
-				break
-			}
-		}
-		// A component of one is only a cycle if it points at itself, which a constraint from a change to itself would be. Those
-		// are dropped upstream, so this is belt and braces rather than a reachable case.
-		if len(component) > 1 {
-			for _, c := range component {
-				cyclic[c] = struct{}{}
-			}
-			return
-		}
-		for _, w := range edges(v) {
-			if w == v {
-				cyclic[v] = struct{}{}
-			}
+// edges point from a change to the ones that must precede it, which is the direction blockers already holds. Tarjan does not care
+// which way round they are: a component that is strongly connected one way is strongly connected the other.
+func (t *tarjan) edges(c string) []string {
+	var out []string
+	for b := range t.blockers[c] {
+		if _, ok := t.inSet[b]; ok {
+			out = append(out, b)
 		}
 	}
+	sort.Strings(out)
+	return out
+}
 
-	for _, c := range sortedKeys(inSet) {
-		if _, seen := index[c]; !seen {
-			strongConnect(c)
+func (t *tarjan) visit(v string) {
+	t.index[v] = t.next
+	t.low[v] = t.next
+	t.next++
+	t.stack = append(t.stack, v)
+	t.onStack[v] = true
+	for _, w := range t.edges(v) {
+		if _, seen := t.index[w]; !seen {
+			t.visit(w)
+			t.low[v] = min(t.low[v], t.low[w])
+			continue
+		}
+		if t.onStack[w] {
+			t.low[v] = min(t.low[v], t.index[w])
 		}
 	}
-	return sortedKeys(cyclic)
+	if t.low[v] == t.index[v] {
+		t.closeComponent(v)
+	}
+}
+
+// closeComponent pops the component rooted at v. A component of one is not a cycle: the only way it could be is a change
+// constrained against itself, and both constraint passes skip that pair before it reaches the graph.
+func (t *tarjan) closeComponent(v string) {
+	var component []string
+	for {
+		w := t.stack[len(t.stack)-1]
+		t.stack = t.stack[:len(t.stack)-1]
+		t.onStack[w] = false
+		component = append(component, w)
+		if w == v {
+			break
+		}
+	}
+	if len(component) == 1 {
+		return
+	}
+	for _, c := range component {
+		t.cyclic[c] = struct{}{}
+	}
 }
 
 // printArchiveOrder renders the order and the constraints that shaped it.

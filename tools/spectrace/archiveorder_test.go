@@ -16,7 +16,7 @@ import (
 func writeChange(t *testing.T, changesDir, change, capability, body string) {
 	t.Helper()
 	dir := filepath.Join(changesDir, change, "specs", capability)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.md"), []byte(body), 0o600))
 }
 

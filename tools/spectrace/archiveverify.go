@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // archivedRestatement is one archived change's MODIFIED entry for one requirement, with the folder it came from.
@@ -37,39 +38,108 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 	retired map[string]struct{},
 ) []string {
 	var losses []string
-	for _, requirement := range sortedKeysOfArchived(archived) {
+	// Every requirement an archived delta said anything about, not only the ones it restated: a retirement that did not take
+	// effect is a finding, and the change that retired a requirement usually did not also restate it.
+	for _, requirement := range requirementsTouched(archived, retired) {
 		entries := archived[requirement]
-		if len(entries) == 0 {
-			continue
-		}
-		winner := entries[len(entries)-1]
 		have, stillCanonical := canonical[requirement]
+		_, wasRetired := retired[requirement]
+
 		// A retirement excuses a requirement that is GONE, and the canonical tree is what says whether it took effect.
 		//
 		// Two earlier versions of this asked the archive folders instead, and both were wrong in the same way. Comparing folder
 		// names is alphabetical order, which review caught: within a batch every folder carries one date, so the pending pair
 		// `latch-dns-proxy-bypass` (restates) and `dns-proxy-no-bypass` (retires) would have read as a loss. Comparing DATES fixed
-		// that and left the opposite hole: a retirement the archive did not end up applying, because a later change re-created the
-		// requirement, still excused it, so a restatement's scenarios could go missing from a requirement that is right there in
-		// the tree.
+		// that and left the opposite hole: a retirement the archive did not end up applying still excused the requirement.
 		//
-		// Neither question needed asking. The end state answers both: gone plus a recorded retirement is a retirement that
-		// happened, and present means it did not, whatever order the folders imply.
-		if !stillCanonical {
-			if _, ok := retired[requirement]; ok {
-				continue
-			}
+		// Neither question needed asking. The end state answers both, and it answers a third the folders could not: a requirement
+		// still in the tree that a change retired and nothing re-added is a retirement the archive dropped, which is as much a
+		// silent archive defect as a lost scenario and is reported as one. Four requirements are in that state today, all retired
+		// by `2026-06-02-add-application-control`.
+		switch {
+		case wasRetired && stillCanonical:
+			losses = append(losses, requirement+"\n    retired by an archived change and still in the canonical spec")
+			continue
+		case wasRetired:
+			continue
 		}
+
+		if len(entries) == 0 {
+			continue
+		}
+		winner := lastBatchRestatement(entries)
 		for _, scenario := range winner.scenarios {
 			if _, ok := have[scenario]; ok {
 				continue
 			}
-			losses = append(losses, fmt.Sprintf("%s/%s\n    listed by %s, the last change archived that restated it, and not in the canonical spec",
-				requirement, scenario, winner.change))
+			losses = append(losses, fmt.Sprintf("%s/%s\n    listed by %s, and not in the canonical spec",
+				requirement, scenario, strings.Join(winner.changes, " and ")))
 		}
 	}
 	sort.Strings(losses)
 	return losses
+}
+
+// winningRestatement is what the last archive BATCH said about one requirement: the changes in it that restated the requirement,
+// and the scenarios all of them listed.
+type winningRestatement struct {
+	changes   []string
+	scenarios []string
+}
+
+// lastBatchRestatement returns what the last archive batch to restate a requirement agreed on.
+//
+// Not the last FOLDER, which is what this did until review pointed out that folders in one batch share a date and so sort
+// alphabetically: eight of the sixty-seven archived requirements have more than one restatement in their last batch, and seven of
+// those eight restate different scenario sets, so picking the alphabetically last one is a guess that is doing real work.
+//
+// The intersection is what survives the guess. `openspec archive` replaces a requirement WHOLE, so exactly one of a batch's
+// restatements wins and the others are discarded by design; a scenario EVERY one of them listed is therefore in the canonical spec
+// whichever won, and its absence is a real loss. A scenario only some listed is unrecoverable, and unrecoverable is silence here,
+// for the reason the whole command reports rather than gates. That drops the count on today's tree from 34 to 31.
+func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
+	last := ""
+	for _, e := range entries {
+		if d := archiveDate(e.change); d > last {
+			last = d
+		}
+	}
+	var out winningRestatement
+	shared := map[string]int{}
+	batch := 0
+	for _, e := range entries {
+		if archiveDate(e.change) != last {
+			continue
+		}
+		batch++
+		out.changes = append(out.changes, e.change)
+		for _, s := range e.scenarios {
+			shared[s]++
+		}
+	}
+	for s, n := range shared {
+		if n == batch {
+			out.scenarios = append(out.scenarios, s)
+		}
+	}
+	sort.Strings(out.changes)
+	sort.Strings(out.scenarios)
+	return out
+}
+
+// archiveDate is the YYYY-MM-DD an archive folder is prefixed with, or the whole name when it carries no date. It identifies the
+// BATCH a change was archived in, which is all a folder name can honestly say: openspec stamps one date on every folder in a
+// batch, so the order WITHIN one is not recoverable and nothing here tries to recover it.
+//
+// Prefix rather than a parse, which also handles the malformed double-date folders that predate this
+// (`2026-06-09-2026-06-09-x`): their first ten characters are still the date, and a stricter reader would have to special-case
+// them for no gain.
+func archiveDate(folder string) string {
+	const dateLen = len("2006-01-02")
+	if len(folder) < dateLen {
+		return folder
+	}
+	return folder[:dateLen]
 }
 
 // canonicalScenarios indexes the canonical tree the way the archived deltas are keyed, so the two sides of the comparison derive
@@ -178,7 +248,7 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 	if len(findings) == 0 {
 		p("spectrace: %d archived requirement restatement(s) checked, every scenario still canonical\n", requirements)
 	} else {
-		p("spectrace: %d scenario(s) an archived restatement listed are not in the canonical spec.\n", len(findings))
+		p("spectrace: %d finding(s) against what the archived deltas say the canonical spec should hold.\n", len(findings))
 		p("%s\n%s\n%s\n",
 			"Compare this list with the one from before the archive. A line that is NEW is a scenario this archive",
 			"discarded, which is what archiving out of order does. A line that was already there is either an older loss,",
@@ -195,10 +265,17 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 	return 0
 }
 
-// sortedKeysOfArchived returns the requirement keys in a stable order.
-func sortedKeysOfArchived(m map[string][]archivedRestatement) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
+// requirementsTouched returns every requirement an archived delta restated or retired, in a stable order.
+func requirementsTouched(archived map[string][]archivedRestatement, retired map[string]struct{}) []string {
+	seen := make(map[string]struct{}, len(archived)+len(retired))
+	for k := range archived {
+		seen[k] = struct{}{}
+	}
+	for k := range retired {
+		seen[k] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
 		out = append(out, k)
 	}
 	sort.Strings(out)

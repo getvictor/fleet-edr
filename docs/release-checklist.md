@@ -38,11 +38,11 @@ On a release-prep branch off `main`:
      diff /tmp/archive-verify-before.txt /tmp/archive-verify-after.txt
      ```
 
-     **A scenario line the diff adds is a scenario this archive discarded.** Neither check above can see one: `validate --strict` passes on a requirement that lost half its text, and `check --strict` passes as long as whatever survived still has markers.
+     **A finding the diff adds is something this archive broke.** Neither check above can see one: `validate --strict` passes on a requirement that lost half its text, and `check --strict` passes as long as whatever survived still has markers. Two shapes appear: a scenario the archived deltas say should be canonical and is not, and a requirement an archived change retired that is still in the tree.
 
-     Read the indented `<capability>/<requirement>/<scenario>` blocks, not the first line. The count in the header moves on every release whether or not anything was lost, because archiving adds restatements to the set being checked, so `diff` reports a change even on a clean archive.
+     Read the indented blocks, not the first line. The count in the header moves on every release whether or not anything was lost, because archiving adds restatements to the set being checked, so `diff` reports a change even on a clean archive.
 
-     The comparison rather than the raw output is the point. The tree already carries entries `archive-verify` cannot classify: a requirement some change retired is recognised as retired, but a scenario dropped from a requirement that is still in the tree looks the same whether an out-of-order archive discarded it or an author trimmed it deliberately in a release nobody is auditing now. That is why it reports rather than gates, and why a standing line is not actionable while a new one is. The standing set is tracked in #905.
+     The comparison rather than the raw output is the point. The tree already carries entries `archive-verify` cannot classify: a requirement that was retired and really is gone is recognised and not reported, but a scenario dropped from a requirement that is still in the tree looks the same whether an out-of-order archive discarded it or an author trimmed it deliberately in a release nobody is auditing now. That is why it reports rather than gates, and why a standing line is not actionable while a new one is. The standing set is 35 findings, tracked in #905.
 
 5. Confirm nothing un-archived remains: `ls -1 openspec/changes/ | grep -v '^archive$'` prints nothing.
 

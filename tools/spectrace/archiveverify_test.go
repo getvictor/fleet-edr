@@ -90,12 +90,13 @@ func TestVerifyArchive_ARetiredRequirementIsNotALoss(t *testing.T) {
 	))
 }
 
-// A retirement that did not take effect excuses nothing, and this is the hole the date comparison left: a later change re-created
-// the requirement, so it is right there in the canonical tree, and a restatement's scenarios can be missing from it.
+// A retirement that did not take effect is itself the finding, and this is the hole the date comparison left: a later change
+// re-created the requirement, or the retirement was never applied, so it is right there in the canonical tree.
 //
-// Reported rather than exempted, because a requirement that exists while a change claims to have retired it is a state the release
-// engineer has to look at either way.
-func TestVerifyArchive_ARetirementThatDidNotTakeEffectExcusesNothing(t *testing.T) {
+// Reported instead of, not as well as, its missing scenarios. The requirement should not exist at all, so counting which of its
+// scenarios survived is accounting for a thing that has to be resolved first. Four requirements are in this state on the real tree,
+// all retired by `2026-06-02-add-application-control` and none of them re-added since.
+func TestVerifyArchive_ARetirementTheTreeContradictsIsAFinding(t *testing.T) {
 	t.Parallel()
 	findings := verifyArchive(
 		map[string][]archivedRestatement{
@@ -105,7 +106,16 @@ func TestVerifyArchive_ARetirementThatDidNotTakeEffectExcusesNothing(t *testing.
 		retiredSet("cap/the-thing"),
 	)
 	require.Len(t, findings, 1)
-	assert.Contains(t, findings[0], "cap/the-thing/lost")
+	assert.Contains(t, findings[0], "cap/the-thing\n    retired by an archived change and still in the canonical spec")
+}
+
+// The change that retires a requirement usually does not also restate it, so a report built only from the restatements would miss
+// every one of these. All four on the real tree are that shape.
+func TestVerifyArchive_AnUndoneRetirementIsFoundWithoutARestatement(t *testing.T) {
+	t.Parallel()
+	findings := verifyArchive(nil, canonicalWith("cap/the-thing", "one"), retiredSet("cap/the-thing"))
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "cap/the-thing")
 }
 
 // A requirement that vanished with NOTHING retiring it is the whole requirement lost, and every scenario it listed is reported.
@@ -166,7 +176,7 @@ func removedDelta(name string) string {
 func writeCanonical(t *testing.T, specsDir, capability, body string) {
 	t.Helper()
 	dir := filepath.Join(specsDir, capability)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.md"), []byte(body), 0o600))
 }
 
@@ -180,7 +190,7 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 	newTree := func(t *testing.T) (string, string) {
 		t.Helper()
 		changes, specs := t.TempDir(), t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(changes, archiveDirName), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(changes, archiveDirName), 0o750))
 		return changes, specs
 	}
 	archived := func(t *testing.T, changesDir, folder, capability, body string) {
@@ -222,9 +232,9 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 		assert.Empty(t, verify(t, changes, specs))
 	})
 
-	// The same retirement excuses NOTHING once the requirement is back in the tree, which is the case the date comparison missed:
-	// a later change re-created it, with fewer scenarios than the restatement listed.
-	t.Run("a retirement the tree contradicts excuses nothing", func(t *testing.T) {
+	// The same retirement is a FINDING once the requirement is back in the tree, which is the case the date comparison missed:
+	// a later change re-created it, so the retirement the archive recorded never took effect.
+	t.Run("a retirement the tree contradicts is itself a finding", func(t *testing.T) {
 		t.Parallel()
 		changes, specs := newTree(t)
 		archived(t, changes, "2026-09-07-latch-dns-proxy-bypass", "cap", "# T\n\n## MODIFIED Requirements\n\n"+
@@ -235,7 +245,7 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 			"#### Scenario: Kept\n\n- **THEN** it does\n")
 		findings := verify(t, changes, specs)
 		require.Len(t, findings, 1)
-		assert.Contains(t, findings[0], "cap/the-thing/lost")
+		assert.Contains(t, findings[0], "retired by an archived change and still in the canonical spec")
 	})
 
 	// An archive subtree that does not exist is a project that has never released, not an error.
@@ -251,12 +261,60 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 // TestRunArchiveVerify_ReportsWithoutGating drives the command path itself, since the exit code is what the release checklist and
 // any wrapper script read.
 func TestRunArchiveVerify_ReportsWithoutGating(t *testing.T) {
+	t.Parallel()
 	changes, specs := t.TempDir(), t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(changes, archiveDirName), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(changes, archiveDirName), 0o750))
 	writeChange(t, filepath.Join(changes, archiveDirName), "2026-06-02-refines-it", "cap", modified("The thing"))
 	writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n")
 
 	// A finding is present (the requirement is absent with nothing retiring it) and the command still succeeds.
 	assert.Equal(t, 0, runArchiveVerify([]string{"--specs-dir", specs, "--changes-dir", changes}))
 	assert.Equal(t, 2, runArchiveVerify([]string{"--specs-dir", filepath.Join(specs, "nope")}))
+}
+
+// TestLastBatchRestatement pins what the check compares against when a requirement was restated more than once, which review
+// caught it getting wrong: it took the last FOLDER, and folders in one batch share a date and so sort alphabetically.
+func TestLastBatchRestatement(t *testing.T) {
+	t.Parallel()
+
+	// A later batch replaces an earlier one outright, which is the ordinary case and the one folder order does answer.
+	t.Run("a later batch wins", func(t *testing.T) {
+		t.Parallel()
+		got := lastBatchRestatement([]archivedRestatement{
+			{change: "2026-06-02-first", scenarios: []string{"one", "dropped-later"}},
+			{change: "2026-06-09-second", scenarios: []string{"one"}},
+		})
+		assert.Equal(t, []string{"one"}, got.scenarios)
+		assert.Equal(t, []string{"2026-06-09-second"}, got.changes)
+	})
+
+	// Within ONE batch exactly one restatement wins and the rest are discarded by design, and which one is not recoverable. A
+	// scenario every restatement in the batch listed is canonical whichever won; one only some listed is unrecoverable, and
+	// unrecoverable is silence here. Eight of the sixty-seven archived requirements have a batch like this, and seven of those
+	// eight disagree, so the alphabetical pick was doing real work.
+	t.Run("a scenario only one restatement in the batch listed is not claimed", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct{ name, first, second string }{
+			{"the fuller one sorts first", "2026-09-07-aaa", "2026-09-07-zzz"},
+			{"the fuller one sorts last", "2026-09-07-zzz", "2026-09-07-aaa"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				got := lastBatchRestatement([]archivedRestatement{
+					{change: tc.first, scenarios: []string{"shared", "only-here"}},
+					{change: tc.second, scenarios: []string{"shared"}},
+				})
+				assert.Equal(t, []string{"shared"}, got.scenarios)
+				assert.Len(t, got.changes, 2, "both changes in the batch are named, since either could have won")
+			})
+		}
+	})
+
+	// The malformed double-date folders that predate this still group by their first ten characters.
+	t.Run("a malformed double-date folder still carries its date", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-2026-06-09-dns-proxy-on-by-default"))
+		assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-some-change"))
+		assert.Equal(t, "short", archiveDate("short"))
+	})
 }
