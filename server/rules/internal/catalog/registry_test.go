@@ -227,6 +227,96 @@ func TestAll_DetectionsClaimTechniques(t *testing.T) {
 	}
 }
 
+// TestAll_AuthoredTechniquesArePinned holds the whole first-party ATT&CK mapping as one exact set, so changing any of it is a
+// deliberate edit to this table rather than a line nobody reviews.
+//
+// It exists because of what the #755 sweep found. Five of eleven mappings were wrong in the same way: they described what a rule
+// was ABOUT rather than what it OBSERVED. Nothing failed when they were corrected, because the per-rule tests that pin a mapping
+// only existed for the rules whose mapping happened to be right. A wrong mapping is not a cosmetic slip either, since
+// Techniques() feeds GET /api/attack-coverage and the Navigator layer, which are read during procurement.
+//
+// The justification for each mapping lives in the rule's own Techniques() comment, next to the code that has to keep being true.
+// What lives here is the SET, and the one-line note saying which observation earns it, so the next audit can read the whole
+// claim in one place instead of eleven.
+//
+// Scoped to authored rules: an imported rule's techniques come from its upstream file, and pinning those would fail on every
+// corpus re-sync. TestImported_RulesOutsideTheHouseStyleArePinned covers that side.
+func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		// Matches `security dump-keychain` by path and argument: the technique IS the command.
+		"credential_keychain_dump": {"T1555.001"},
+		// Observes a DYLD_INSERT_LIBRARIES assignment, which is literally the technique.
+		"dyld_insert": {"T1574.006"},
+		// The one rule that narrows per finding, so this list is the union it CAN claim rather than what every alert carries:
+		// T1071.004 is the beaconing pattern it always observes, and T1568.002 rides on the findings whose domain looks
+		// algorithmic. A rule that declares a union must narrow, or every finding claims the whole of it.
+		"dns_c2_beacon": {"T1071.004", "T1568.002"},
+		// Observes osascript by path, and a curl or wget among its descendants. The download is required to reach a finding at
+		// all, so both are earned on every one.
+		"osascript_network_exec": {"T1059.002", "T1105"},
+		// Observes a LaunchAgent plist being written.
+		"persistence_launchagent": {"T1543.001"},
+		// Observes a BTM daemon registration, which is exactly the sub-technique.
+		"privilege_launchd_plist_write": {"T1543.004"},
+		// Observes a capture provider stopping and not returning, separated from an upgrade cutover by how fast capture resumes.
+		// Kept by the sweep, and the rule's comment records that the separation is what earns it.
+		"sensor_tamper": {"T1562.001"},
+		// Observes a shell, by path, spawned from an Office process. It does NOT observe an email or an attachment, which is why
+		// T1566.001 came off.
+		"shell_from_office": {"T1059.004"},
+		// Observes a shell, by path, that then connects out. A connection is not a transfer and names no protocol, so neither
+		// T1105 nor T1071 is earned.
+		"shell_network_connect": {"T1059.004"},
+		// Observes a shell, by path, followed by an exec from a world-writable directory. Nothing arriving is observed, so T1105
+		// came off; the shell is known to be a Unix shell, so the parent T1059 became the sub-technique.
+		"suspicious_exec": {"T1059.004"},
+		// Observes sudoers being modified.
+		"sudoers_tamper": {"T1548.003"},
+	}
+
+	got := make(map[string][]string)
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		got[r.ID()] = r.Techniques()
+	}
+
+	assert.Equal(t, want, got,
+		"the first-party ATT&CK mapping changed; every entry must name something the rule OBSERVES, not what it is about")
+}
+
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-declares-the-sub-technique-it-can-identify
+//
+// TestAll_AuthoredTechniquesAreNotParentsOfTheirOwnSubTechniques pins the precision half of the sweep, which the exact set above
+// cannot express on its own: it would pass just as happily on a table that had been edited the wrong way.
+//
+// Declaring T1059 where the rule matches /bin/bash by path is not wrong so much as vague, and Navigator renders a parent hit
+// differently from a sub-technique one, so it UNDERSTATES coverage that is actually precise. That was the failure on
+// suspicious_exec and shell_network_connect, and the shape recurs whenever a rule matches something specific.
+func TestAll_AuthoredTechniquesAreNotParentsOfTheirOwnSubTechniques(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		techniques := r.Techniques()
+		for _, parent := range techniques {
+			if strings.Contains(parent, ".") {
+				continue
+			}
+			for _, other := range techniques {
+				assert.False(t, strings.HasPrefix(other, parent+"."),
+					"%s declares both %s and its own sub-technique %s; the sub-technique alone is the precise claim",
+					r.ID(), parent, other)
+			}
+		}
+	}
+}
+
 // TestAll_DetectionsSayWhatDecidesThem pins that every detection declares the evaluator that decides it (issue #757).
 //
 // A Go-implemented rule is only inspectable if its file says which procedure runs it; without that, the exported file documents

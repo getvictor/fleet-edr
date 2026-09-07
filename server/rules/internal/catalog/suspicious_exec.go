@@ -38,7 +38,10 @@ var suspiciousPrefixes = sync.OnceValue(func() []string { return sharedList("wor
 // (the shell, the non-shell that spawned it) has already been ingested
 // and materialised by an earlier batch.
 //
-// MITRE ATT&CK: T1059 (Command and Scripting Interpreter), T1204 (User Execution).
+// MITRE ATT&CK: T1059.004 (Command and Scripting Interpreter: Unix Shell). This comment used to name T1204 (User Execution)
+// while Techniques() returned T1105, so one of the two had always been stale and it was not clear which was intended.
+// Resolved by dropping both rather than picking the survivor: T1204 needs a user to be observed opening something, and the
+// rule sees a process tree; T1105 needs a transfer, and the rule sees an execution. See Techniques below (issue #755).
 type SuspiciousExec struct {
 	// Exclusions is the per-host false-positive resolver. The rule consults it (match type parent_path_glob, value = the non-shell
 	// parent path) before firing on EITHER arm, so a trusted parent like `/usr/libexec/sshd-session` or a version-stamped developer
@@ -78,10 +81,19 @@ func (r *SuspiciousExec) exclusionResolver() api.ExclusionResolver { return r.Ex
 
 func (r *SuspiciousExec) window() int64 { return suspiciousExecWindow() }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1059
-// (Command and Scripting Interpreter) + T1105 (Ingress Tool Transfer).
+// Techniques returns T1059.004 (Command and Scripting Interpreter: Unix Shell), and only that.
+//
+// Two changes, both from the sweep in issue #755.
+//
+// T1105 (Ingress Tool Transfer) is dropped. The rule observes a binary EXECUTING from a world-writable directory; it observes
+// nothing arriving. Where the binary came from is an inference, and a common one, but the network arm that could have supported
+// it is a separate rule since #776 and never observed a transfer either.
+//
+// T1059 becomes T1059.004 because the sub-technique is known rather than guessed: the middle link is matched against shellPaths,
+// which is /bin/sh, /bin/bash, /bin/zsh, /bin/dash and their /usr/bin twins. Navigator renders a parent-technique hit differently
+// from a sub-technique one, so the parent understated coverage that is actually precise.
 func (r *SuspiciousExec) Techniques() []string {
-	return []string{"T1059", "T1105"}
+	return []string{"T1059.004"}
 }
 
 // Doc surfaces the operator-facing description in /api/rules and

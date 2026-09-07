@@ -3,7 +3,7 @@
 # the L6 runner polls). severity: pinned so a rule downgrade is visible.
 # within_seconds: per-rule SLA budget from POST to alert visibility.
 scenario_id: T1059.004-shell-from-office
-mitre: T1566.001 + T1059.004
+mitre: T1059.004
 within_seconds: 30
 rules:
   - rule_id: shell_from_office

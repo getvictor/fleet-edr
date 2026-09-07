@@ -65,7 +65,19 @@ func (r *SensorTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding.
 func (r *SensorTamper) DisplayName() string { return "EDR sensor disabled" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1562.001 (Impair Defenses: Disable or Modify Tools).
+// Techniques returns T1562.001 (Impair Defenses: Disable or Modify Tools), and the sweep in issue #755 kept it deliberately
+// rather than by leaving it alone.
+//
+// The case against was that the rule cannot tell an attacker from a crash. True, and not the test: what it must attribute is
+// what it REPORTS, which is a capture provider that stopped and did not come back. It separates the one benign cause it knows
+// about, an upgrade replacing the system extension, by how fast capture resumes: a cutover measured on a live host was back in
+// about 1.1 seconds, while stops that needed the automatic repair took 32.2 and 37.9. That separation is the observation, and it
+// is what makes this different from sensor_recovery_failed, whose own documentation sends an analyst to this product's
+// components as the likely cause and which therefore declares nothing (issue #754).
+//
+// Not airtight, and recorded as such so the next audit does not re-litigate it from scratch. A hard crash of a provider still
+// looks like this. What would change the answer is evidence of an actor: a process that stopped it, or a policy change that did.
+// Until the rule observes one of those, T1562.001 rests on the timing separation alone.
 func (r *SensorTamper) Techniques() []string { return []string{"T1562.001"} }
 
 // Doc surfaces the operator-facing description in /api/rules and the generated docs/detection-rules.md.

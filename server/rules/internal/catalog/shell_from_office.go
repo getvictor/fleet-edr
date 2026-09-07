@@ -26,9 +26,19 @@ func (r *ShellFromOffice) SupportedExclusionMatchTypes() []api.ExclusionMatchTyp
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *ShellFromOffice) DisplayName() string { return "Shell spawned by Microsoft Office" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1566.001 (Phishing → Spearphishing Attachment) + T1059.004 (Command and
-// Scripting Interpreter → Unix Shell). The chain "Office app → shell" is a textbook post-phish execution step.
-func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
+// Techniques returns T1059.004 (Command and Scripting Interpreter: Unix Shell), and only that.
+//
+// It used to also declare T1566.001 (Phishing: Spearphishing Attachment) on the grounds that "Office app spawns shell" is a
+// textbook post-phish execution step. Textbook, and assumed: the rule observes a process tree and never observes an email, an
+// attachment, or any delivery at all. The document could have arrived on a share, a USB stick, or been written by the user. A
+// technique is a claim about evidence, and there is none for the delivery half (issue #755).
+//
+// The phishing context is not lost, it moves to where it costs nothing: Doc().Description already explains why this chain is
+// worth an analyst's time, and prose can say "usually" where a coverage claim cannot.
+//
+// T1059.004 is kept because it is exactly what the rule sees. The child is matched against the shell path set, so a firing rule
+// has observed a Unix shell being executed.
+func (r *ShellFromOffice) Techniques() []string { return []string{"T1059.004"} }
 
 // Doc surfaces the operator-facing description in /api/rules and
 // the generated docs/detection-rules.md.

@@ -1,4 +1,4 @@
-# Server detection rules engine: a technique is a claim about what was observed
+# Server detection rules engine: every technique names something observed
 
 ## MODIFIED Requirements
 

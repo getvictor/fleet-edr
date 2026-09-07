@@ -47,9 +47,16 @@ func (r *OsascriptNetworkExec) SupportedExclusionMatchTypes() []api.ExclusionMat
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *OsascriptNetworkExec) DisplayName() string { return "AppleScript dropper" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1059.002 (Command and Scripting Interpreter → AppleScript) + T1105
-// (Ingress Tool Transfer). The rule specifically flags osascript invoking a curl/wget that stages an executable to /tmp, which is the
-// exact shape of a T1105 dropper.
+// Techniques returns T1059.002 (Command and Scripting Interpreter: AppleScript) + T1105 (Ingress Tool Transfer), and the sweep in
+// issue #755 kept both.
+//
+// The sweep expected to narrow T1105 per finding, on the grounds that the shebang-script arm fires with no download involved.
+// That is not what the code does. There is one place a finding is constructed, and reaching it requires a curl or wget among the
+// osascript's descendants: with no downloader the rule returns nothing. The shebang shape is how the temp-exec is RECOGNISED, not
+// a second arm that skips the download. So every finding this rule raises has an observed fetch behind it, and T1105 is earned on
+// all of them rather than on some.
+//
+// T1059.002 is likewise observed: the ancestor walk matches osascript by path.
 func (r *OsascriptNetworkExec) Techniques() []string {
 	return []string{"T1059.002", "T1105"}
 }
