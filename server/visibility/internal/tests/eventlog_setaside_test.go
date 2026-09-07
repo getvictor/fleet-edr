@@ -53,7 +53,7 @@ func nackUntilBound(t *testing.T, log visibilityapi.EventLog, db *sqlx.DB, hostI
 		for _, e := range claimed {
 			ids = append(ids, e.EventID)
 		}
-		setAside, err := log.Nack(t.Context(), ids, stamp)
+		setAside, _, err := log.Nack(t.Context(), ids, stamp)
 		require.NoError(t, err)
 		require.Zero(t, setAside, "nothing should be set aside before both bounds are passed")
 	}
@@ -94,7 +94,7 @@ func TestSetAside_UnblocksTheHost(t *testing.T) {
 	for _, e := range claimed {
 		again = append(again, e.EventID)
 	}
-	setAside, err := log.Nack(t.Context(), again, stamp)
+	setAside, _, err := log.Nack(t.Context(), again, stamp)
 	require.NoError(t, err)
 	// EXACTLY the batch, not merely positive. A caller decides whether a whole batch was withdrawn by comparing this against the
 	// number of events it handed over (#843), so an under-count here reads as a partial withdrawal and silently discards what
@@ -163,7 +163,7 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 	claimed, stamp, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	setAside, err := log.Nack(t.Context(), []string{"quiet-1"}, stamp)
+	setAside, _, err := log.Nack(t.Context(), []string{"quiet-1"}, stamp)
 	require.NoError(t, err)
 	require.Zero(t, setAside)
 
@@ -173,7 +173,7 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 	claimed, stamp, err = log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1, "the event is still claimable, since one failure is not a deterministic failure")
-	setAside, err = log.Nack(t.Context(), []string{"quiet-1"}, stamp)
+	setAside, _, err = log.Nack(t.Context(), []string{"quiet-1"}, stamp)
 	require.NoError(t, err)
 	assert.Zero(t, setAside,
 		"two attempts is not enough to call this deterministic, however long ago the first one was: the duration bound alone "+
@@ -202,7 +202,7 @@ func TestSetAside_RetainsTheEntry(t *testing.T) {
 	claimed, stamp, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
-	setAside, err := log.Nack(t.Context(), []string{"retained-1"}, stamp)
+	setAside, _, err := log.Nack(t.Context(), []string{"retained-1"}, stamp)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), setAside)
 
@@ -347,9 +347,12 @@ func TestNackRequiresStillHoldingTheClaim(t *testing.T) {
 	require.NotEqual(t, firstStamp, secondStamp, "the re-claim must stamp its own identity, or nothing can tell them apart")
 
 	// The stale attempt nacks the row it no longer owns.
-	setAside, err := log.Nack(t.Context(), []string{"e-840"}, firstStamp)
+	setAside, held, err := log.Nack(t.Context(), []string{"e-840"}, firstStamp)
 	require.NoError(t, err)
 	assert.Zero(t, setAside, "it withdrew nothing, because it owned nothing")
+	assert.False(t, held,
+		"and it must be TOLD so: zero is also what a held batch gets when no event reached its bounds, so without this the "+
+			"only silent way to lose a claim would be the one this change created")
 
 	var state struct {
 		Processed int   `db:"processed"`
@@ -366,12 +369,12 @@ func TestNackRequiresStillHoldingTheClaim(t *testing.T) {
 
 	// The replacement still owns the row, so its own transitions still work. Without this the test would pass against a Nack that
 	// refused everything.
-	held, err := log.Ack(t.Context(), []string{"e-840"}, secondStamp)
+	acked, err := log.Ack(t.Context(), []string{"e-840"}, secondStamp)
 	require.NoError(t, err)
-	assert.True(t, held, "the claim the stale nack did not disturb must still be able to acknowledge")
+	assert.True(t, acked, "the claim the stale nack did not disturb must still be able to acknowledge")
 }
 
-// spec:server-event-ingestion/acknowledgement-requires-still-holding-the-claim/a-nack-from-a-lost-claim-withdraws-nothing
+// spec:server-event-ingestion/acknowledgement-requires-still-holding-the-claim/a-nack-acts-only-on-the-events-its-claim-holds
 //
 // TestNackTouchesOnlyTheEventsTheClaimHolds is the half of issue #840 that ownership on the lookup alone does not give you.
 //
@@ -407,9 +410,10 @@ func TestNackTouchesOnlyTheEventsTheClaimHolds(t *testing.T) {
 	ageFirstFailure(t, db, []string{"e-pending"}, time.Hour)
 
 	// One nack naming all three, from the claim that holds only the first.
-	setAside, err := log.Nack(t.Context(), []string{"e-mine", "e-theirs", "e-pending"}, myStamp)
+	setAside, held, err := log.Nack(t.Context(), []string{"e-mine", "e-theirs", "e-pending"}, myStamp)
 	require.NoError(t, err)
 	assert.Zero(t, setAside, "only e-mine was withdrawn-eligible, and it is nowhere near its bounds")
+	assert.True(t, held, "it held one of them, so it did not lose its claim and must not be warned about")
 
 	var theirState struct {
 		Processed int   `db:"processed"`
@@ -457,7 +461,8 @@ func TestNackOwnershipReadFailureIsReturned(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), "DROP TABLE event_queue")
 	require.NoError(t, err)
 
-	setAside, err := log.Nack(t.Context(), []string{"e-read-fail"}, stamp)
+	setAside, held, err := log.Nack(t.Context(), []string{"e-read-fail"}, stamp)
 	require.Error(t, err, "a failed read must not be reported as an ordinary superseded attempt")
 	assert.Zero(t, setAside)
+	assert.False(t, held, "and must not claim the attempt held a claim it could not check")
 }

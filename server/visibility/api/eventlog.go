@@ -62,7 +62,10 @@ type EventLog interface {
 	// attempt against a claim a replacement now owns, which pushes that batch toward its retry bounds on failures it did not have,
 	// and leaves the replacement's own acknowledgement to be refused so its work is redone (issue #840).
 	//
-	// A caller that owns none of the events SHALL be told nothing was set aside, which is true: it withdrew nothing.
+	// A caller SHALL be told whether it still held the claim, as Ack tells it. Without that, "withdrew nothing" is the same
+	// answer for a superseded attempt and for a held batch that simply had no event reach its bounds, so an attempt whose
+	// processing outran its lease would leave no trace: the ack path reports that at WARN and is the only signal anyone gets
+	// that leases are being exceeded, and this path would have been the one way to lose a claim silently.
 	//
 	// The count is the point of the return value. A batch that fails the same way every time is otherwise retried forever, and
 	// because the claim takes a host's oldest work first, nothing newer for that host is ever claimed: the host stops
@@ -71,7 +74,7 @@ type EventLog interface {
 	//
 	// The count SHALL be exact rather than merely non-zero. A caller decides whether a WHOLE batch was withdrawn by comparing it
 	// against the events it handed over, so an under-count reads as a partial withdrawal.
-	Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, err error)
+	Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, held bool, err error)
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)

@@ -384,13 +384,14 @@ const (
 // stamp since issue #817, so the replacement's acknowledgement was REJECTED and its work redone by whoever claimed the rows next.
 // It also counted a failure the replacement had not had against a bound that lives on the ROW and ends in the row being withdrawn,
 // so it needed no repetition: ordinary failures can leave a row one attempt short, and a stale nack supplied the last one.
-func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, err error) {
+func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, held bool, err error) {
 	if len(eventIDs) == 0 {
-		return 0, nil
+		// Vacuously held, matching Ack: there was nothing to hold and nothing to lose.
+		return 0, true, nil
 	}
 	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return 0, fmt.Errorf("begin tx for nack: %w", err)
+		return 0, false, fmt.Errorf("begin tx for nack: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -406,11 +407,11 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 		WHERE processed = 2 AND event_id IN (?) AND claimed_at_ns = ?
 		FOR UPDATE`, eventIDs, claimStampNs)
 	if err != nil {
-		return 0, fmt.Errorf("nack build ownership query: %w", err)
+		return 0, false, fmt.Errorf("nack build ownership query: %w", err)
 	}
 	var owned []string
 	if err := tx.SelectContext(ctx, &owned, ownedQuery, ownedArgs...); err != nil {
-		return 0, fmt.Errorf("nack ownership: %w", err)
+		return 0, false, fmt.Errorf("nack ownership: %w", err)
 	}
 	if len(owned) == 0 {
 		// This attempt no longer owns any of these rows: its claim lease expired and a replacement took them, or they have
@@ -418,7 +419,7 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 		// alone, so a superseded worker reset a claim it did not hold, counted an attempt against it, and could push the batch
 		// past its retry bounds; the replacement's own acknowledgement then failed, because Ack has been conditional on the
 		// stamp since issue #817, and its work was redone by whoever claimed the rows next.
-		return 0, nil
+		return 0, false, nil
 	}
 
 	now := time.Now().UnixNano()
@@ -430,10 +431,10 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 		    claimed_at_ns = 0
 		WHERE processed = 2 AND event_id IN (?)`, now, owned)
 	if err != nil {
-		return 0, fmt.Errorf("nack build query: %w", err)
+		return 0, false, fmt.Errorf("nack build query: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		return 0, fmt.Errorf("nack: %w", err)
+		return 0, false, fmt.Errorf("nack: %w", err)
 	}
 
 	// The processed = 0 guard keeps a row that is not PENDING out of state 3: an event id in this batch that another worker already
@@ -460,20 +461,20 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
 		now, owned, setAsideAttempts, failingSince)
 	if err != nil {
-		return 0, fmt.Errorf("nack set-aside build query: %w", err)
+		return 0, false, fmt.Errorf("nack set-aside build query: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, fmt.Errorf("nack set aside: %w", err)
+		return 0, false, fmt.Errorf("nack set aside: %w", err)
 	}
 	setAside, err = res.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("nack set-aside rows: %w", err)
+		return 0, false, fmt.Errorf("nack set-aside rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit nack: %w", err)
+		return 0, false, fmt.Errorf("commit nack: %w", err)
 	}
-	return setAside, nil
+	return setAside, true, nil
 }
 
 // CountPending counts events still waiting to be processed or in flight (processed 0 or 2). Backs the processor-backlog gauge.

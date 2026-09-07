@@ -6,7 +6,7 @@
 
 The system SHALL acknowledge a claimed batch only while the acknowledging attempt still holds the claim it was given, and SHALL report to that attempt whether it did.
 
-Returning a batch to the queue SHALL require the same. An attempt that no longer holds a claim SHALL NOT return its events, count an attempt against them, or withdraw them from processing, and SHALL be told it withdrew nothing, which is true. Identifying a claim by an event's STATE rather than by the claim it was issued for is not the same question: a superseded attempt then resets a claim the replacement holds, which makes the replacement's own acknowledgement fail so its work is redone, and counts a failure the replacement did not have against a bound that lives on the event and ends in the event being withdrawn.
+Returning a batch to the queue SHALL require the same. An attempt that no longer holds a claim SHALL NOT return its events, count an attempt against them, or withdraw them from processing, and SHALL be told that it no longer held the claim, as an acknowledging attempt is told. Reporting only that nothing was withdrawn would not distinguish it from a held batch in which no event reached the bounds that withdraw it, which would make this the one way to lose a claim without anyone being able to see it; losing a claim is the only signal that leases are being exceeded at all. Identifying a claim by an event's STATE rather than by the claim it was issued for is not the same question: a superseded attempt then resets a claim the replacement holds, which makes the replacement's own acknowledgement fail so its work is redone, and counts a failure the replacement did not have against a bound that lives on the event and ends in the event being withdrawn.
 
 Where an attempt names events it holds ALONGSIDE events it does not, every effect SHALL be confined to the events it holds. Checking ownership and then acting on what was asked for leaves the same defect in a narrower window, which is what a batch looks like after a lease expires under part of it.
 
@@ -38,7 +38,8 @@ Losing a claim SHALL be reported to the operator, because it is the only signal 
 - **WHEN** the original attempt returns it to the queue
 - **THEN** the event is left claimed by the attempt that holds it
 - **AND** no attempt is counted against it
-- **AND** the original attempt is told nothing was withdrawn, without an error
+- **AND** the original attempt is told it no longer held the claim, without an error
+- **AND** that is reported, since it is the only sign that a lease was exceeded
 - **AND** the holding attempt can still acknowledge it
 
 #### Scenario: A nack acts only on the events its claim holds

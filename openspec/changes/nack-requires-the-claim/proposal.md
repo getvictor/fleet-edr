@@ -17,7 +17,7 @@ The window is narrow by construction, since reaching it needs processing slower 
 - Ownership is established by reading the held events under lock before anything is written, rather than by a predicate on the writes. The writes cannot express it: the reset clears the stamp, so it cannot both check it and report which events it checked, and the withdrawal runs on events in the pending state, which is where an event another attempt returned also sits.
 - Every statement then keys on that set. Checking ownership and then acting on the events that were ASKED for would leave the same defect in a narrower window, which is exactly the shape a batch takes when a lease expires under part of it.
 
-An attempt that holds none of the events is told nothing was withdrawn. That is not a failure and is not reported as one: it withdrew nothing.
+An attempt that holds none of the events is told it no longer held the claim, as an acknowledging attempt is, and that is logged. Reporting only that nothing was withdrawn would be the same answer a held batch gets when no event reached its bounds, which would have made returning a batch the one way to lose a claim silently. It is still not an error: losing a claim is a normal outcome of a lease being exceeded, and the attempt that holds it carries on.
 
 ## Impact
 

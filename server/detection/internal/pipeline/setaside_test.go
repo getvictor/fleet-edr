@@ -207,12 +207,12 @@ func (l *replayingEventLog) ClaimForHost(context.Context, string, int) ([]visibi
 	return l.batch, scriptedClaimStamp, nil
 }
 func (l *replayingEventLog) Ack(context.Context, []string, int64) (bool, error) { return true, nil }
-func (l *replayingEventLog) Nack(context.Context, []string, int64) (int64, error) {
+func (l *replayingEventLog) Nack(context.Context, []string, int64) (int64, bool, error) {
 	l.nacks++
 	if l.nacks < l.withdrawOn {
-		return 0, nil
+		return 0, true, nil
 	}
-	return int64(len(l.batch)), nil
+	return int64(len(l.batch)), true, nil
 }
 func (l *replayingEventLog) CountPending(context.Context) (int64, error)            { return 0, nil }
 func (l *replayingEventLog) PruneProcessed(context.Context, int) (int64, error)     { return 0, nil }
@@ -407,5 +407,43 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 		assert.Equal(t, tally, rec.calls[0])
 		assert.Equal(t, 2, metrics.total)
 		assert.Equal(t, []string{"evt-2"}, survivor.acked)
+	})
+}
+
+// spec:server-event-ingestion/acknowledgement-requires-still-holding-the-claim/a-nack-from-a-lost-claim-withdraws-nothing
+//
+// TestReportLostClaimOnTheNackPath covers the operator-facing half of #840, which review found missing.
+//
+// The queue now refuses a return from an attempt that no longer holds the claim, and tells it so. Without reporting that, the
+// refusal would be invisible: a superseded attempt is told nothing was withdrawn, which is the same answer a held batch gets when
+// no event reached its bounds. The acknowledgement path has warned about a lost claim since #817 and its own comment calls that
+// the first visibility anyone has that leases are being exceeded, so leaving this one silent would have created a second way to
+// lose a claim and only reported the first.
+func TestReportLostClaimOnTheNackPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a superseded attempt is reported", func(t *testing.T) {
+		t.Parallel()
+		h := &capturingLogHandler{}
+		log := &scriptedEventLog{batch: oneEventBatch(), nackLostClaim: true}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: errors.New("detection down")}, singleCycleOpts(h))
+		p.ProcessOnce(t.Context())
+
+		level, found := h.levelOf("lost the claim before returning the batch")
+		require.True(t, found, "a lease overrun on this path must be visible, as it is on the acknowledgement path")
+		assert.Equal(t, slog.LevelWarn, level,
+			"WARN, matching the ack path: nothing is lost, since the attempt that holds the claim carries on")
+	})
+
+	t.Run("an attempt that still holds its claim is not reported", func(t *testing.T) {
+		t.Parallel()
+		h := &capturingLogHandler{}
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: errors.New("detection down")}, singleCycleOpts(h))
+		p.ProcessOnce(t.Context())
+
+		_, found := h.levelOf("lost the claim before returning the batch")
+		assert.False(t, found,
+			"an ordinary nack must stay quiet, or the signal is buried under every retryable failure in the fleet")
 	})
 }

@@ -357,10 +357,11 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			// host first would let the next claimer take this host's LATER events and fold them ahead of these, so the retry would
 			// arrive behind generations it precedes. The claim's in-flight bound makes that window harmless even if this Nack
 			// fails, but closing the window is cheaper than relying on the bound to cover it.
-			setAside, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed), stamp)
+			setAside, held, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed), stamp)
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
+			p.reportLostClaim(lockedCtx, held, host, len(claimed))
 			p.reportSetAside(lockedCtx, host, setAside, stageBuilder)
 		}
 		return nil
@@ -418,10 +419,11 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		tally, err = p.detection.Evaluate(ctx, events)
 		if err != nil {
 			p.logDetectionRetry(ctx, err)
-			setAside, nackErr := p.eventLog.Nack(ctx, eventIDs, claimStamp)
+			setAside, held, nackErr := p.eventLog.Nack(ctx, eventIDs, claimStamp)
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
+			p.reportLostClaim(ctx, held, hostOf(events), len(eventIDs))
 			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
 			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
 			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
@@ -575,6 +577,23 @@ func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside 
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}
+}
+
+// reportLostClaim says when a batch was returned to the queue by an attempt that no longer owned it.
+//
+// The ack path has reported this since issue #817 and its own comment calls it the first visibility anyone has that leases are
+// being exceeded at all. Making the nack conditional on the claim too (issue #840) created a second way to lose one, and without
+// this it would be the silent way: a superseded attempt withdraws nothing, which is the same count a held batch gets when no
+// event reached its bounds.
+//
+// WARN rather than ERROR, matching the ack path. Nothing is lost when this happens: the attempt that holds the claim carries on,
+// and everything this attempt did before here is idempotent.
+func (p *Processor) reportLostClaim(ctx context.Context, held bool, hostID string, events int) {
+	if held {
+		return
+	}
+	p.logger.WarnContext(ctx, "lost the claim before returning the batch; another attempt owns it",
+		"host_id", hostID, "events", events)
 }
 
 // setAsideStage is the pipeline stage a withdrawal happened at, together with what it cost an operator.

@@ -36,6 +36,9 @@ type scriptedEventLog struct {
 	// ackStamps records the claim stamp each Ack was given, so a test can assert the processor passes back what it was handed
 	// rather than a zero or a fresh value.
 	ackStamps []int64
+	// nackLostClaim makes Nack report that this attempt no longer held the claim (issue #840), which is how the lost-claim
+	// warning is reached without waiting out a real lease.
+	nackLostClaim bool
 	// nackStamps records the same for Nack, which has taken the stamp since issue #840. Recorded rather than ignored because a
 	// fake that drops it cannot tell a processor threading the claim through from one passing a zero, and threading it through is
 	// the entire fix.
@@ -74,10 +77,10 @@ func (s *scriptedEventLog) Ack(_ context.Context, ids []string, stamp int64) (bo
 	s.acked = append(s.acked, ids...)
 	return true, nil
 }
-func (s *scriptedEventLog) Nack(_ context.Context, ids []string, stamp int64) (int64, error) {
+func (s *scriptedEventLog) Nack(_ context.Context, ids []string, stamp int64) (int64, bool, error) {
 	s.nacked = append(s.nacked, ids...)
 	s.nackStamps = append(s.nackStamps, stamp)
-	return s.setAside, nil
+	return s.setAside, !s.nackLostClaim, nil
 }
 func (s *scriptedEventLog) CountPending(context.Context) (int64, error)        { return 0, nil }
 func (s *scriptedEventLog) PruneProcessed(context.Context, int) (int64, error) { return 0, nil }
