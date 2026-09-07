@@ -39,6 +39,18 @@ test.describe("host health components", () => {
     }
   });
 
+  // Seeded rows are removed again. resetHostData would take the host with it, but only for a spec that calls it, and leaving a
+  // host and a health report behind means the next reader of this database finds a fleet member nobody enrolled.
+  test.afterEach(async () => {
+    const db = await openDB();
+    try {
+      await db.query("DELETE FROM host_health WHERE host_id = ?", [HOST_ID]);
+      await db.query("DELETE FROM hosts WHERE host_id = ?", [HOST_ID]);
+    } finally {
+      await db.end();
+    }
+  });
+
   // spec:web-ui/the-host-detail-surfaces-the-health-conditions/every-component-is-laid-out-the-same-way
   test("every component renders in the same shape", async ({ signedInAdminShared: page }) => {
     await page.goto(`/ui/hosts/${HOST_ID}`);
