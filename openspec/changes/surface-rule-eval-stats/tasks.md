@@ -36,3 +36,4 @@
 - [x] 2.8 Treat an EMPTY successful read as unsortable too, not just a failed one. It is a different state to report and equally nothing to sort by, and it is what a fresh deployment shows.
 - [x] 3.15 Reach that state with the sort ALREADY on. Asserting it from a cold start cannot fail: aria-sort is "none" and the control disabled for the ordinary reason, whatever the condition says.
 - [x] 3.16 Put the cost caveat in a visible note beside the Observed one, since a `title` on a non-focusable header only reaches a pointer.
+- [x] 3.17 Extend the server-level wiring test to the second read, since one setter now narrows both caps and the operator-package tests set them directly: a cap nothing ever narrowed would report 30 days over 7 and every one of those tests would still pass.
