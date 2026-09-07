@@ -26,6 +26,10 @@ The alert keeps its Critical severity, its title and its operational explanation
 
 Whether this signal belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
 
+## What this does not do
+
+It does not sweep the other rules. `shell_from_office` and `suspicious_exec` both declare a technique the requirement this delta states would not allow, and both are #755, which audits every mapping at once and reviews the coverage change as one diff. The requirement lands here rather than there so that sweep is a correction to a stated rule rather than a matter of taste, and the spec names the two outstanding rules so nobody reads the merged spec as a claim that the tree already conforms.
+
 ## Impact
 
 - Affected specs: `server-detection-rules-engine`
