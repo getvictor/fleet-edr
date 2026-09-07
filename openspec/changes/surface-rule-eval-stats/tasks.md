@@ -31,3 +31,5 @@
 - [x] 3.11 Bound the published numbers at the largest integer a JSON parser round-trips, since `int64` promises a range the wire format cannot carry and the client is right to refuse it.
 - [x] 2.7 Turn the sort OFF when there is nothing to sort by, not merely clear the data. A sort left switched on announces an order it is no longer producing, which is untrue rather than stale.
 - [x] 3.12 Carry the undecided count in the label even at zero, since that is where the figure is promised; only the visible annotation is suppressed, for width.
+- [x] 3.13 Collapse the two `days` parsers onto one core with thin typed wrappers, following `parsePositiveInt64Path` and its two wrappers in the same package. The typed wrappers are what keep the window types from being interchangeable; a shared implementation never was in tension with that, and the fuzz test now guards a seam rather than a duplicate.
+- [x] 3.14 Hoist the wire-validation primitives both row validators build on, so a change to what counts as an acceptable number or timestamp cannot land on one adjacent endpoint and not the other.

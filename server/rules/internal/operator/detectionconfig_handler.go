@@ -267,18 +267,33 @@ func (h *DetectionConfigHandler) handleListEvalStats(w http.ResponseWriter, r *h
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"eval_stats": stats, "days": days})
 }
 
-// evalStatsWindow parses the `days` query parameter for the evaluation-statistics route. Same policy as matchCountWindow, and a
-// separate function because the window types are separate: sharing one would need a conversion at every call site, which is the
-// place the two would eventually be mixed up.
-func evalStatsWindow(present bool, raw string) (api.EvalStatsWindow, bool) {
+// positiveWindow parses a `days` query parameter, in days, returning the supplied default when the parameter is ABSENT.
+//
+// The policy lives here once and the two routes wrap it, following parsePositiveInt64Path and its parseRuleID / parsePolicyID
+// wrappers in this package: the call site still reads as the window it is asking for, and a change to what counts as a valid
+// window lands in one place. The typed wrappers are what keep the two window types from being interchangeable, which is the
+// separation worth having; a single shared implementation was never in tension with that.
+//
+// Only an ABSENT parameter is the default. Anything supplied that is not a positive whole number is rejected rather than silently
+// defaulted, since a typo that reads as "the last week" when the operator meant ninety days is a wrong number presented as a right
+// one. `?days=` is supplied-and-empty, which is a malformed value rather than an omission, so `present` is threaded through
+// instead of inferring omission from the empty string.
+func positiveWindow(present bool, raw string, fallback int) (int, bool) {
 	if !present {
-		return api.DefaultEvalStatsWindow, true
+		return fallback, true
 	}
 	days, err := strconv.Atoi(raw)
 	if err != nil || days <= 0 {
 		return 0, false
 	}
-	return api.EvalStatsWindow(days), true
+	return days, true
+}
+
+// evalStatsWindow parses the `days` query parameter for the evaluation-statistics route. Wrapper around positiveWindow; see
+// matchCountWindow for the rationale.
+func evalStatsWindow(present bool, raw string) (api.EvalStatsWindow, bool) {
+	days, ok := positiveWindow(present, raw, int(api.DefaultEvalStatsWindow))
+	return api.EvalStatsWindow(days), ok
 }
 
 // matchCountWindow parses the `days` query parameter. Only an ABSENT parameter is the default window; anything supplied that is
@@ -289,14 +304,8 @@ func evalStatsWindow(present bool, raw string) (api.EvalStatsWindow, bool) {
 // Values above the cap are clamped by the caller, not refused, because asking for more history than retention keeps is a
 // reasonable request with a truthful answer.
 func matchCountWindow(present bool, raw string) (api.MatchCountWindow, bool) {
-	if !present {
-		return api.DefaultMatchCountWindow, true
-	}
-	days, err := strconv.Atoi(raw)
-	if err != nil || days <= 0 {
-		return 0, false
-	}
-	return api.MatchCountWindow(days), true
+	days, ok := positiveWindow(present, raw, int(api.DefaultMatchCountWindow))
+	return api.MatchCountWindow(days), ok
 }
 
 // createExclusionRequest is the POST wire shape. host_group_id defaults to 0 (global). created_by + the audit actor come from the

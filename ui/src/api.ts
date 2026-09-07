@@ -1170,12 +1170,26 @@ export interface RuleMatchCount {
 //
 // Date.parse rather than an RFC 3339 regex: Go marshals time.Time with nanosecond precision and a Z offset, which Date.parse
 // handles, and a hand-rolled pattern here would more likely reject valid server output than catch a real fault.
+// wholeCount and parseableTime are the wire-validation primitives both per-rule row validators are built from. One definition
+// rather than one per validator, so a change to what counts as an acceptable number or timestamp cannot land on one adjacent
+// endpoint and not the other.
+//
+// A number is required to be a SAFE integer, not merely an integer. A JSON number is an IEEE 754 double, so a value above 2^53-1
+// has already lost precision by the time it reaches here and cannot be trusted as the count the server sent; the published schema
+// states the same bound rather than promising an int64 range the wire cannot carry.
+const wholeCount = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+// Checked for PARSEABILITY, not merely for being a string. Date.parse rather than an RFC 3339 regex: Go marshals time.Time with
+// nanosecond precision and a Z offset, which Date.parse handles, and a hand-rolled pattern here would more likely reject valid
+// server output than catch a real fault.
+const parseableTime = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+
 function isRuleMatchCount(row: unknown): row is RuleMatchCount {
   if (typeof row !== "object" || row === null) return false;
   const r = row as Record<string, unknown>;
-  const whole = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
-  const when = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
-  return typeof r.rule_id === "string" && r.rule_id !== "" && whole(r.matches) && whole(r.hosts) && when(r.last_seen);
+  return (
+    typeof r.rule_id === "string" && r.rule_id !== "" && wholeCount(r.matches) && wholeCount(r.hosts) && parseableTime(r.last_seen)
+  );
 }
 
 // listDetectionRuleMatchCounts reads the per-rule monitor-match counts. The response states the window it actually covers, which
@@ -1230,24 +1244,23 @@ export interface RuleEvalSummary {
 function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
   if (typeof row !== "object" || row === null) return false;
   const r = row as Record<string, unknown>;
-  const whole = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
-  // atLeastOne rather than `whole(x) && x >= 1`, because the second half of that reads r.evaluations as unknown: a type predicate
-  // on a helper does not narrow the caller's value.
-  const atLeastOne = (v: unknown): boolean => whole(v) && (v as number) >= 1;
-  const when = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+  // atLeastOne rather than `wholeCount(x) && x >= 1` at each call site, because the second half of that reads the field as
+  // unknown: a type predicate on a helper does not narrow the caller's value.
+  const atLeastOne = (v: unknown): boolean => wholeCount(v) && (v as number) >= 1;
   // The two RELATIONS are checked as well as the fields, because a row can be well-typed and still impossible: more undecided
   // attempts than attempts, or a mean above the maximum it is drawn from. Neither can come from the store, which derives both from
   // the same rows, so either means the response is not what it claims. Rendering it anyway would put a contradictory number in
   // front of an operator as plausible evidence, which is worse than the unavailable path a rejection takes.
-  const withinAttempts = whole(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
-  const meanWithinMax = whole(r.mean_eval_ns) && whole(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
+  const withinAttempts = wholeCount(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
+  const meanWithinMax =
+    wholeCount(r.mean_eval_ns) && wholeCount(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
   return (
     typeof r.rule_id === "string" &&
     r.rule_id !== "" &&
     atLeastOne(r.evaluations) &&
     withinAttempts &&
     meanWithinMax &&
-    when(r.last_seen)
+    parseableTime(r.last_seen)
   );
 }
 
