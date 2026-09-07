@@ -552,8 +552,6 @@ func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 	d.operatorH.RegisterRoutes(mux)
 }
 
-// connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the
-// intake-only modes and tests that wire no DB), which skips the clamp.
 // reservedLeaderConns is how many pooled connections the leader-gated sweeps hold for the lifetime of the process, so the processor
 // can size its worker fleet against what is actually obtainable (issue #722).
 //
