@@ -16,4 +16,6 @@
 - [x] 3.1 Pin the empty mapping deliberately, saying what would have to be true to earn one back, rather than editing the old assertion to match the code.
 - [x] 3.2 Assert the FINDING carries none either, so nothing downstream can stamp one from a source the rule does not control.
 - [x] 3.4 Assert the description names none, and assert the empty slice as EQUAL to `[]string{}` rather than merely empty, so nil cannot pass.
+- [x] 3.5 Assert the technique-id SHAPE in the prose rather than the one that was removed, so a later edit cannot add a different one and stay green.
+- [x] 3.6 Cover the persisted ALERT ROW end to end, not just the rule: a unit test on the rule cannot reach the fallback that stamps the row.
 - [x] 3.3 Mutation-test: restoring the technique fails.

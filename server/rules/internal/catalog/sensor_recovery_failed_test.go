@@ -185,7 +185,9 @@ func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 		"a rule that documents its own components as the likely cause must not claim an adversary technique")
 	assert.Empty(t, findings[0].Techniques,
 		"and the finding must carry none either, or the alert row gets one from somewhere the rule cannot see")
-	assert.NotContains(t, findings[0].Description, "T1562",
+	// The SHAPE of a technique id rather than the one that was removed, because rejecting only T1562 would let a later edit put
+	// T1059.004 in the same sentence and leave this test green.
+	assert.NotRegexp(t, `\bT\d{4}(\.\d{3})?\b`, findings[0].Description,
 		"nor in the prose: the description is copied onto the alert verbatim, so a technique there is read by the same analyst")
 	assert.Equal(t, []string{"sensor_recovery_failed"}, doc.EventTypes,
 		"the documented input event must be the one the rule reads, or an operator cannot tell what feeds it")

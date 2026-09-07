@@ -1268,6 +1268,42 @@ func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
 		"historical alert's technique stamp must not change when the rule's mapping is later refined")
 }
 
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-that-cannot-attribute-what-it-reports-declares-no-technique
+//
+// TestEngine_ARuleWithNoTechniquesStampsNone covers the end of that scenario the catalog unit test cannot reach. The unit test
+// proves the RULE declares none; this proves what an analyst then sees, which is the alert ROW, and the two are not the same
+// claim: persistence falls back to the rule's declared list when a finding declares none of its own, so the row is where an
+// unearned technique would actually appear (issue #754).
+//
+// Empty rather than non-nil-empty is the assertion, because the row is what an analyst reads and both representations render as
+// no techniques. The nil-versus-empty distinction belongs to the rule interface's contract and is pinned in the catalog test.
+func TestEngine_ARuleWithNoTechniquesStampsNone(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-unattributed", techniques: []string{}}}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+	assert.Empty(t, alerts[0].Techniques,
+		"a rule that declares no technique must leave the alert row carrying none, since the row is what an analyst reads")
+	assert.NotRegexp(t, `\bT\d{4}(\.\d{3})?\b`, alerts[0].Description,
+		"and none in the persisted text either, which is copied from the finding verbatim")
+}
+
 // spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-from-a-vendored-rule-credits-its-author
 // spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-from-a-rule-this-project-wrote-credits-this-project
 // spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/attribution-recorded-on-an-alert-survives-the-rule-being-re-credited

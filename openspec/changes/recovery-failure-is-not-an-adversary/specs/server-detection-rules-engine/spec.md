@@ -6,7 +6,9 @@
 
 The system SHALL stamp each persisted alert with the MITRE ATT&CK technique identifiers declared by the firing rule. The stamped list MUST be preserved on the alert row even if the rule's technique mapping is later refined.
 
-A rule SHALL declare a technique only for something it OBSERVED, not for the subject it is about. A technique names adversary behaviour, so declaring one asserts that an adversary did something; a rule that cannot attribute what it reports to anyone SHALL declare none, and a rule whose own documentation names this product's components among the likely causes cannot attribute it.
+A rule SHALL declare a technique only for something it OBSERVED, not for the subject it is about. A technique names adversary behaviour, so declaring one asserts that an adversary did something, and a rule that cannot attribute what it reports to anyone SHALL declare none.
+
+Naming this product's own components in a rule's documentation is NOT by itself that condition, and the distinction is the whole test. A rule that names a product-caused explanation as a known false positive AND separates it from the behaviour it reports still attributes what it does report: the separation is the observation. A rule that names this product's components among the likely causes of the very thing it reports, and offers nothing that tells those causes apart from an adversary, does not, and SHALL declare no technique.
 
 Declaring none is a complete mapping rather than a gap. A signal that a host has stopped capturing is an operational statement, and it earns its severity from the consequence rather than from an attribution: a host that is not capturing needs an operator whatever caused it. An unearned technique is not a harmless overstatement either, because it reaches the alert row an analyst reads and, for a rule that appears on the operator-facing catalog, the coverage export a customer reads.
 
