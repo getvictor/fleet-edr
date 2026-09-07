@@ -39,6 +39,11 @@ tags:
     description: Command queue (UI + Agent)
   - name: Admin
     description: Enrollment + policy management (UI, admin-only)
+  - name: Rule authoring
+    description: |
+      The rule documents a deployment loads, as opposed to the per-rule
+      tuning under Detection tuning. Read is held by admin and
+      senior_analyst; changing content is held by admin.
   - name: Detection tuning
     description: |
       Detection-rule tuning the engine consults at evaluation time:
@@ -650,21 +655,35 @@ paths:
       tags: [Admin]
       summary: Export a detection rule as a declarative rule file
       description: |
-        Returns one registered detection rendered as a declarative rule file:
-        standard Sigma metadata plus a namespaced `x-engine` key carrying our
-        rule id, kind, portability, event types, the evaluator that decides
-        the rule, the exclusion dimensions it honours, and its known
-        limitations.
+        Returns the rule file for one registered detection, taken from the
+        rule set the deployment currently has in force rather than from the
+        content built into the release.
 
-        The response body IS the artifact rather than a description of one, so
-        it is served as YAML. It is the same document as the corresponding
-        file in the rule pack at `server/rules/internal/catalog/pack/`,
-        without that file's generated-file header.
+        A rule that was LOADED FROM A DOCUMENT is returned as that document,
+        byte for byte. For a rule that shipped with the product that is the
+        upstream file, which is what you diff against the upstream project;
+        for one you wrote yourself it is what you wrote. A rule written in
+        code was never a document, so one is rendered for it: standard Sigma
+        metadata plus a namespaced `x-engine` key carrying our rule id, kind,
+        portability, event types, the evaluator that decides the rule, the
+        exclusion dimensions it honours, and its known limitations. A rendered
+        rule is the same document as the corresponding file in the rule pack
+        at `server/rules/internal/catalog/pack/`, without that file's
+        generated-file header.
+
+        Exporting a rule YOU wrote additionally requires `rule_content.read`,
+        which is the authorization that reading rule content requires
+        elsewhere; without it the request returns 403. Exporting a rule that
+        shipped with the product does not, since it is the product's own
+        content and is already described on `GET /api/rules`.
 
         Only detections are exportable. A registered rule that is not a
         detection (a projection of a decision the agent already made, or a
         health signal about the agent itself) returns 404, the same answer as
         a rule id that names nothing.
+
+        The response is `no-store`: it answers what is running, and that
+        answer changes when rule content is reloaded.
       security:
         - SessionCookie: []
       parameters:
@@ -683,6 +702,10 @@ paths:
                 type: string
         "401":
           description: No authenticated session
+        "403":
+          description: >-
+            The rule was written on this deployment and the caller does not
+            hold `rule_content.read`
         "404":
           description: No such detection, or the rule is not a detection
         "500":
@@ -937,6 +960,528 @@ paths:
               schema:
                 $ref: "#/components/schemas/DetectionConfigError"
 
+  /api/v1/detection-config/rule-eval-stats:
+    get:
+      tags: [Detection tuning]
+      summary: List per-rule evaluation statistics
+      description: |
+        Returns what each rule's evaluation work cost over a window: how many
+        attempts it made, how many of those could not reach a verdict, and
+        the mean and worst-case wall time. This is how a slow rule, or the
+        one driving retry churn, is found without querying a metrics
+        backend.
+
+        An undecided attempt is counted the moment it ends without a verdict,
+        before anything knows whether another attempt follows. Most are
+        retried; one whose batch is eventually set aside is not. Reading the
+        figure as completed retries overstates it.
+
+        A rule that never evaluated in the window is ABSENT rather than
+        present with zeros, for the same reason a rule that never matched is
+        absent from the match-count route: absence and zero are different
+        claims, and a rule may have been registered after the window opened.
+
+        Attempts are counted, not logical batches. A batch that is replayed
+        really does evaluate again, and counts again with its own duration.
+        The mean therefore stays a mean per ATTEMPT rather than per batch,
+        and a replay moves it in whichever direction that attempt was faster
+        or slower than the others. A reader comparing attempt counts between
+        rules should also know that a rule whose misses cause replays is
+        counted more often as a result.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: |
+            Window in whole days. Defaults to 7. Capped at the deployment's
+            own counter retention (`EDR_RETENTION_DAYS`), and never more than
+            30 days even where retention is longer or disabled. The default
+            is capped by the same bound. A request above the cap is served at
+            the cap, and the `days` field in the response reports the window
+            actually covered, which may be narrower than the one requested.
+            `?days=` (supplied but empty) is rejected, like any other value
+            that is not a positive whole number.
+          schema:
+            type: integer
+            minimum: 1
+            default: 7
+      responses:
+        "200":
+          description: Per-rule evaluation statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [eval_stats, days]
+                properties:
+                  eval_stats:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleEvalSummary"
+                  days:
+                    type: integer
+                    description: The window actually covered, after the cap is applied.
+                    example: 7
+        "400":
+          description: "`days` is not a positive whole number"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
+  /api/v1/rule-content/pack:
+    get:
+      tags: [Rule authoring]
+      summary: Report which generation of shipped rules this deployment runs
+      description: |
+        Returns the identity of the shipped rule content installed, the
+        identity of the content the running build carries, and which rules
+        differ between them.
+
+        Differences are named by rule identity rather than by the path a
+        document is stored under, because identity is what per-rule tuning
+        is keyed on and what an operator recognises. A rule that moved
+        between directories upstream is the same rule, and reporting it as
+        one removed plus one added would be noise dressed as a change.
+
+        Rules you wrote are excluded from the comparison, so adding one
+        does not make a deployment appear out of date.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Pack status
+          content:
+            application/json:
+              schema:
+                type: object
+                # Every field is always emitted, and the difference lists are normalised to arrays rather than null, so a
+                # generated client should model them as guaranteed rather than optional.
+                required:
+                  [
+                    installed,
+                    available,
+                    previous,
+                    declined,
+                    current,
+                    can_roll_back,
+                    added,
+                    removed,
+                    changed,
+                  ]
+                properties:
+                  installed:
+                    type: string
+                    description: Identity of the shipped content stored now. Empty on a corpus that predates this being recorded.
+                  available:
+                    type: string
+                    description: Identity of the shipped content the running build carries.
+                  previous:
+                    type: string
+                    description: Identity of the generation a rollback would restore. Empty when there is none.
+                  declined:
+                    type: string
+                    description: Identity of content rolled back from, which this deployment will not reinstall. Empty when none.
+                  current:
+                    type: boolean
+                    description: Whether the deployment is running the shipped content this build carries.
+                  can_roll_back:
+                    type: boolean
+                    description: >-
+                      Whether a previous generation is retained. Stated rather than left to be derived from `previous`, because
+                      it is the question being asked.
+                  added:
+                    type: array
+                    items: { type: string }
+                    description: Rules the build's content has that the installed content does not.
+                  removed:
+                    type: array
+                    items: { type: string }
+                    description: Rules the installed content has that the build's content does not.
+                  changed:
+                    type: array
+                    items: { type: string }
+                    description: Rules present in both whose content differs.
+        "403":
+          description: The caller may not read rule content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/rule-content/pack:rollback:
+    post:
+      tags: [Rule authoring]
+      summary: Restore the generation of shipped rules the last install replaced
+      description: |
+        Installing the rules a build ships replaces the previous set. This
+        restores that set, for when one of the new rules turns out to be
+        noisy or wrong.
+
+        The rollback holds: this deployment will not reinstall the content
+        you rejected, including on the next restart. Content from a later
+        build installs normally, so there is nothing to turn back on.
+
+        Rules you wrote are untouched, including ones written after the
+        install being rolled back. A shipped rule whose identity you have
+        taken over is not restored over yours, and is reported in
+        `withheld`.
+
+        One previous generation is retained, so a second rollback reports
+        that there is nothing further back rather than appearing to work.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: >-
+                    Why the content is being rolled back. Required, and recorded in the audit log: this replaces every shipped
+                    rule at once.
+      responses:
+        "200":
+          description: Rolled back
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restored, version, withheld]
+                properties:
+                  restored:
+                    type: string
+                    description: Identity of the generation now installed.
+                  version:
+                    type: integer
+                    format: int64
+                    description: Corpus version after the rollback, which replicas poll to notice the change.
+                  withheld:
+                    type: array
+                    items: { type: string }
+                    description: Shipped rules not restored because you have taken over that rule.
+        "400":
+          description: >-
+            The request was rejected: no reason was given, or the body was not readable JSON.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: The caller may not change rule content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: No previous generation is retained, so there is nothing to roll back to
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/rule-content/documents:
+    get:
+      tags: [Rule authoring]
+      summary: List the rule documents this deployment loads
+      description: |
+        Returns a summary of every document in the stored corpus, plus the
+        corpus version a replica polls to notice a change.
+
+        Summaries rather than content: the corpus is every rule the
+        deployment runs, and returning all of it to draw a table of names
+        would send megabytes. Fetch one document to read its content.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Corpus listing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corpus_version, documents]
+                properties:
+                  corpus_version:
+                    type: integer
+                    format: int64
+                    description: |
+                      Changes whenever the corpus changes. A write reports the
+                      version it produced, so a caller can tell whether the
+                      corpus it is looking at is still current.
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleContentDocumentSummary"
+        "403":
+          description: Caller lacks rule_content.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+
+  /api/v1/rule-content/documents:check:
+    post:
+      tags: [Rule authoring]
+      summary: Check a change without applying it
+      description: |
+        Reports what submitting a document would do. Nothing is stored and
+        no mutation is audited, because nothing happened to the corpus.
+
+        A refusal comes back as `200` with `would_apply: false`, NOT as a
+        4xx. The check succeeded: a question was asked and correctly
+        answered. A 4xx would say the request was wrong, which it was not,
+        and would force a caller to treat "your rule has a problem" and
+        "your request was malformed" through the same branch.
+
+        Gated on `rule_content.read`, since it changes nothing.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  description: The path the document would be stored under.
+                  example: authored/my_rule.yml
+                content:
+                  type: string
+                  description: The rule file, verbatim.
+      responses:
+        "200":
+          description: |
+            The check completed. `would_apply` says whether submitting it
+            would be accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [would_apply, warnings]
+                properties:
+                  would_apply:
+                    type: boolean
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: |
+                      Advisory. A rule this deployment cannot run is still a
+                      rule an operator may store, so it is reported rather
+                      than refused.
+                  refusal:
+                    type: string
+                    description: Present only when `would_apply` is false.
+        "400":
+          description: Malformed JSON, or a missing `path`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "403":
+          description: Caller lacks rule_content.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+
+  /api/v1/rule-content/documents/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        description: |
+          The document's path within the corpus, including directories, so
+          it contains slashes (`authored/my_rule.yml`).
+        schema:
+          type: string
+        example: authored/my_rule.yml
+    get:
+      tags: [Rule authoring]
+      summary: Read one rule document
+      description: |
+        Returns the rule file itself rather than a JSON envelope, because
+        the response IS the artifact an operator edits and hands to another
+        tool. A caller who must unwrap it first is worse off.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: The rule file, verbatim.
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "403":
+          description: |
+            Caller lacks rule_content.read. Returned before the document is
+            looked up, so the answer does not disclose whether it exists:
+            existence is itself information about what a deployment detects.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "404":
+          description: No such rule document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+    put:
+      tags: [Rule authoring]
+      summary: Create or replace a rule document
+      description: |
+        Validates the corpus the write would produce, then stores the
+        document if that corpus loads. `reason` is required and recorded on
+        the audit row.
+
+        Validation runs the same loader the deployment loads its corpus
+        with, so acceptance means "this deployment will load this".
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutRuleContentDocumentRequest"
+      responses:
+        "200":
+          description: The document was stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentChangeResult"
+        "400":
+          description: Malformed JSON, or a blank `reason`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "403":
+          description: Caller lacks rule_content.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "409":
+          description: |
+            The corpus changed between being validated and being written.
+            Re-read it and retry; the same change against the current
+            corpus will usually succeed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "422":
+          description: |
+            The request was well formed and the CONTENT was not. The message
+            carries the loader's own reason, naming what to fix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+    delete:
+      tags: [Rule authoring]
+      summary: Delete a rule document
+      description: |
+        Removes the document, so the rule it defined stops being evaluated
+        once replicas converge. `reason` is required and recorded.
+
+        The corpus that would REMAIN is validated first: removing a rule can
+        be the change that breaks a corpus, because what is left still has
+        to load.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: Recorded on the audit row.
+      responses:
+        "200":
+          description: The document was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentChangeResult"
+        "400":
+          description: Malformed JSON or a blank `reason`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "403":
+          description: Caller lacks rule_content.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "404":
+          description: |
+            No such rule document. Reported rather than treated as success,
+            so an operator who mistyped a path learns they removed nothing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "409":
+          description: The corpus changed between validation and the write.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "422":
+          description: |
+            The corpus that would remain does not load. The message carries
+            the reason.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+
 components:
   securitySchemes:
     HostToken:
@@ -1146,7 +1691,7 @@ components:
           type: string
           description: >-
             Who wrote the rule that fired, captured when the alert was raised. `Fleet EDR` for a rule this project authored,
-            `SigmaHQ, by <author>` for one from the imported corpus. Distinct from `source`, which names the subsystem that
+            `Locally authored` for one written on this deployment, and `SigmaHQ, by <author>` for one from the imported corpus. Distinct from `source`, which names the subsystem that
             raised the alert rather than the rule's author. Empty in two cases: an alert raised before the field existed, and an
             application-control block, whose rule id is the operator's own policy rather than a detection with an author.
           example: SigmaHQ, by Alejandro Ortuno, oscd.community
@@ -1343,10 +1888,11 @@ components:
         origin:
           type: string
           description: |
-            Where the rule came from. `Fleet EDR` for a rule written for this engine; for a rule vendored from an
-            upstream corpus, that project and the rule's own author, which is the attribution the corpus licence
-            carries (those rules are shipped and exported unmodified). Always present on this endpoint, so a
-            reader tells the two apart by the value rather than by its absence.
+            Where the rule came from. `Fleet EDR` for a rule written for this engine, `Locally authored` for one
+            written on this deployment; for a rule vendored from an upstream corpus, that project and the rule's own
+            author, which is the attribution the corpus licence carries (those rules are shipped and exported
+            unmodified). Always present on this endpoint, so a
+            reader tells them apart by the value rather than by its absence.
           example: "SigmaHQ, by Daniil Yugoslavskiy, oscd.community"
         techniques:
           type: array
@@ -1466,6 +2012,12 @@ components:
         matches:
           type: integer
           format: int64
+          minimum: 0
+          # Same bound and same reason as RuleEvalSummary's counters: a JSON
+          # number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a parser, and the client refuses one. Stated
+          # here so the contract matches what both readers accept.
+          maximum: 9007199254740991
           description: |
             Total monitor-mode matches in the window. Approximate: it counts
             matches, not the alerts a promotion would raise.
@@ -1473,11 +2025,79 @@ components:
         hosts:
           type: integer
           format: int64
+          minimum: 0
+          maximum: 9007199254740991
           description: |
             Distinct hosts that contributed. The same total means opposite
             things at one host (an exclusion candidate) and at many (the rule
             is too broad).
           example: 3
+        last_seen: {type: string, format: date-time}
+
+    RuleEvalSummary:
+      type: object
+      required: [rule_id, evaluations, retryable_misses, mean_eval_ns, max_eval_ns, last_seen]
+      properties:
+        rule_id: {type: string, example: proc_creation_macos_applescript}
+        evaluations:
+          type: integer
+          format: int64
+          minimum: 1
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
+          description: |
+            Evaluation attempts in the window. At least 1, because a rule with
+            no attempts has no row, and because the mean below is derived by
+            dividing by this. A replayed batch counts again, since it really
+            did evaluate again.
+          example: 400
+        retryable_misses:
+          type: integer
+          format: int64
+          minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
+          description: |
+            Attempts that ended without reaching a verdict. NOT a subset that
+            reduces `evaluations`: such an attempt still cost its time and
+            still counts as an attempt. Counted at the miss, before anything
+            knows whether another attempt follows, so most but not all are
+            retried. This is what names the rule driving retry churn.
+          example: 12
+        mean_eval_ns:
+          type: integer
+          format: int64
+          minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
+          description: |
+            Mean wall time per attempt, in nanoseconds. Computed from the
+            stored sum and count rather than stored, so it stays correct as
+            the window widens and as retention prunes days out of it.
+          example: 1500000
+        max_eval_ns:
+          type: integer
+          format: int64
+          minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
+          description: |
+            Worst single attempt in the window, in nanoseconds. The maximum of
+            the daily maxima, so it is a real observed attempt rather than an
+            estimate, and it is what the mean hides.
+          example: 90000000
         last_seen: {type: string, format: date-time}
 
     CreateDetectionExclusionRequest:
@@ -1524,6 +2144,80 @@ components:
           format: int64
           default: 0
           description: Optional; defaults to 0 (global). A non-global scope is rejected with a 400 until editable host groups land.
+
+    RuleContentDocumentSummary:
+      type: object
+      required: [path, bytes]
+      properties:
+        path:
+          type: string
+          description: |
+            The document's path within the corpus. The rule's IDENTITY is the
+            file stem, so `authored/keychain_extra.yml` defines the rule
+            `keychain_extra`, and renaming the file renames the rule.
+          example: authored/keychain_extra.yml
+        bytes:
+          type: integer
+          description: Size of the stored document.
+
+    PutRuleContentDocumentRequest:
+      type: object
+      required: [content, reason]
+      properties:
+        content:
+          type: string
+          description: The rule file, verbatim.
+        reason:
+          type: string
+          description: |
+            Why the change is being made. Required, and recorded on the audit
+            row: it is the only field that says why, so a blank one would
+            leave a trail that records who and what and is silent on the
+            question a reviewer is asking.
+
+    RuleContentChangeResult:
+      type: object
+      required: [path, corpus_version, warnings]
+      properties:
+        path:
+          type: string
+        corpus_version:
+          type: integer
+          format: int64
+          description: |
+            The version the change produced. A replica has to reach this
+            before the change is in force.
+        warnings:
+          type: array
+          items:
+            type: string
+          description: |
+            Advisory, and always an array so a caller need not null-check.
+            A rule this deployment cannot run is still stored: the message
+            says so, naming the file and the reason, rather than the change
+            being refused.
+
+    RuleContentError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable code the UI switches on.
+          enum:
+            - rule_content.invalid_json
+            - rule_content.read_body
+            - rule_content.body_too_large
+            - rule_content.invalid_input
+            - rule_content.refused
+            - rule_content.not_found
+            - rule_content.conflict
+            - internal
+        message:
+          type: string
+          description: |
+            Human-readable detail. For a refusal this carries the loader's
+            own reason, naming what to fix, rather than a rephrasing of it.
 
     DetectionConfigError:
       type: object

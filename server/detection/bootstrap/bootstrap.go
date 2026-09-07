@@ -382,9 +382,9 @@ func (d *Detection) SetMonitorMatchRecorder(r rulesapi.MonitorMatchRecorder) {
 // SetModeResolver. cmd/main passes the rules context's store once both contexts are built. No-op in ModeIntake, where there is no
 // engine and so nothing evaluates.
 //
-// On the ENGINE and not the pipeline, unlike SetMonitorMatchRecorder: the statistics must be written on the nack path too, and the
-// pipeline's recording step runs only after a successful acknowledgement. Putting it there would silently lose exactly the
-// retryable-miss counter that half of issue #774 exists to provide.
+// On the ENGINE and not the pipeline, unlike SetMonitorMatchRecorder: the statistics must be written on the nack path too, and
+// the pipeline's recording step runs only once a batch will not be processed again, which an ordinary nack is not. Putting it
+// there would silently lose exactly the retryable-miss counter that half of issue #774 exists to provide.
 func (d *Detection) SetRuleEvalStatsRecorder(r rulesapi.RuleEvalStatsRecorder) {
 	if d.engine != nil {
 		d.engine.SetRuleEvalStatsRecorder(r)
@@ -416,6 +416,112 @@ func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 	d.engine.LoadActive(rp)
 }
 
+// BackfillAlertOrigins credits alerts raised by a vendored rule before attribution was recorded (issue #827).
+//
+// A boot-time one-shot rather than a gated loop, which is what DoOnceIfLeader exists for: the work is finite, it is finished after
+// one pass, and a replica that loses the race has nothing to wait for. Adding a fourth RunIfLeader loop would also have made this
+// hold a pooled connection for the process lifetime, which the sizing in LeaderGatedConns accounts for and which a one-shot has no
+// business claiming.
+//
+// Scope is decided HERE rather than in the store, because it is a question about rules and the store knows only alerts. Two
+// exclusions, both of which would be worse than skipping the backfill entirely if got wrong:
+//
+//   - AlertOriginOf returns "" for a projection, whose rule_id is the operator's own policy entry rather than a detection we
+//     wrote, so crediting this project for it would be the bug review caught in #824.
+//   - A rule whose origin is this project is skipped, because filling those rows would erase the distinction migration 00012
+//     preserves between an alert raised before attribution existed and one raised by us.
+//
+// Runs at most once per deployment, not once per boot, and the durable marker rather than the lock is what makes that true
+// (#872). A leader lock excludes callers that OVERLAP: DoOnceIfLeader releases it when the callback returns, so replicas in a
+// rolling restart each acquire it in turn and each ran the whole pass. The pass is an unindexed scan of alerts, so that was a
+// scan per replica, plus one on every boot forever after the work was already done.
+//
+// Recording completion is sound because the population is closed. Every alert written since attribution shipped carries an
+// origin, so no new uncredited row can appear behind a finished pass. The rows that stay uncredited are the ones this pass could
+// not see in the first place: alerts from a rule no longer in the corpus (#871), and, for the same reason, alerts under a stem an
+// operator has taken over with a rule of their own, which are excluded deliberately and would not be credited by a re-run either.
+//
+// The marker is checked TWICE and the difference between the two is worth stating. The first check is the point of the change: it
+// answers from a primary-key lookup and skips the lock and the scan entirely. The second is inside the lock, where it is the
+// authoritative one, and it closes the window where two replicas both read "not done" before either finished.
+//
+// Reports how many rows it credited, so an operator upgrading can see whether the obligation was outstanding at all.
+//
+// The returned bool is whether this replica took the LOCK, which this change is what makes distinct from whether the pass ran. It
+// is false when another replica holds the lock and when the completion was already recorded before the lock was sought, neither of
+// which is a failure. It is TRUE when this replica took the lock and then found a peer's record inside it, because the lock was
+// genuinely held; the caller uses it to log, and there is nothing there for it to decide differently about.
+func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coordinator, rules []rulesapi.Rule) (bool, error) {
+	if d.store == nil || coord == nil {
+		return false, nil
+	}
+	origins := vendoredOrigins(rules)
+	if len(origins) == 0 {
+		return false, nil
+	}
+	done, err := d.store.BackfillCompleted(ctx, backfillAlertOrigins)
+	if err != nil {
+		return false, err
+	}
+	if done {
+		return false, nil
+	}
+	return coord.DoOnceIfLeader(ctx, lockAlertOriginBackfill, func(ctx context.Context) error {
+		done, err := d.store.BackfillCompleted(ctx, backfillAlertOrigins)
+		if err != nil || done {
+			return err
+		}
+		updated, err := d.store.BackfillAlertOrigins(ctx, origins)
+		if err != nil {
+			return err
+		}
+		// Marked only after the pass returned, so a failed or cut-short walk leaves nothing recorded and the next boot retries.
+		// A marker written before the work would turn one transient error into a permanently unmet licence obligation, silently.
+		if err := d.store.MarkBackfillCompleted(ctx, backfillAlertOrigins); err != nil {
+			return err
+		}
+		if updated > 0 {
+			d.logger.InfoContext(ctx, "credited alerts raised before rule attribution was recorded",
+				"alerts", updated, "rules", len(origins))
+		}
+		return nil
+	})
+}
+
+// vendoredOrigins picks the rules whose historical alerts may be credited, and it is a named function rather than a loop inside
+// the caller because the three rules it applies are the whole risk of this feature: getting any of them wrong writes something
+// irreversible into an operator's alert history, and none of them is visible in the SQL.
+//
+// AlertOriginOf returns "" for a projection, whose rule_id is the operator's own policy entry rather than a detection anyone here
+// wrote. The project's own origin is skipped because migration 00012 deliberately distinguishes an alert raised BEFORE
+// attribution existed from one raised by us, and filling those rows destroys that distinction with no way back.
+//
+// LocalOrigin is skipped for a sharper reason than either, and it is the reason this is a deny-list of the origins we must not
+// write rather than an allow-list of upstream ones. The rule id is the file STEM (#873), so an operator who writes their own
+// version of a shipped detection keeps its id: the LIVE rule is then theirs, while the historical alerts under that id were
+// raised by the shipped rule that used to hold it. Crediting those old alerts to the operator would state, permanently, that
+// they wrote a detection they did not, which is this feature's own failure mode pointed the other way. Their alerts stay blank,
+// which keeps blank meaning "raised before attribution was recorded" rather than becoming a claim about authorship.
+func vendoredOrigins(rules []rulesapi.Rule) map[string]string {
+	origins := make(map[string]string, len(rules))
+	for _, r := range rules {
+		origin := rulesapi.AlertOriginOf(r)
+		if origin == "" || origin == rulesapi.ProjectOrigin || origin == rulesapi.LocalOrigin {
+			continue
+		}
+		origins[r.ID()] = origin
+	}
+	return origins
+}
+
+// backfillAlertOrigins names the pass in detection_backfills, and it is a DIFFERENT namespace from the lock below rather than a
+// duplicated constant: this one is a row in this deployment's own schema, while a GET_LOCK name is global to the MySQL instance.
+const backfillAlertOrigins = "alert_origins"
+
+// lockAlertOriginBackfill names the one-shot above. MySQL GET_LOCK names are server-global, so this identifies the task across
+// every replica of one deployment, like the periodic tasks' locks.
+const lockAlertOriginBackfill = "edr_alert_origin_backfill"
+
 // Run launches the processor + processttl + retention goroutines.
 // Returns when ctx is cancelled. ModeIntake is a no-op.
 func (d *Detection) Run(ctx context.Context) error {
@@ -446,8 +552,6 @@ func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 	d.operatorH.RegisterRoutes(mux)
 }
 
-// connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the
-// intake-only modes and tests that wire no DB), which skips the clamp.
 // reservedLeaderConns is how many pooled connections the leader-gated sweeps hold for the lifetime of the process, so the processor
 // can size its worker fleet against what is actually obtainable (issue #722).
 //

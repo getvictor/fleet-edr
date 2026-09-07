@@ -115,11 +115,14 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 // Where a vendored rule falls outside a house rule, the exception is pinned by name in its own test, so the gap is visible and a
 // re-sync that changes it fails rather than passing quietly.
 func authored(r api.Rule) bool {
-	// Delegates to the classifier production uses (the exported pack skips these, the export endpoint serves their bytes) rather
-	// than re-deriving it from the concrete type. A second definition would drift the moment an imported rule is wrapped or its
-	// type changes, and it would drift silently, because both answers look plausible.
-	_, vendored := VendoredSource(r.ID())
-	return !vendored
+	// Delegates to the classifier production uses (the exported pack skips anything not ours) rather than re-deriving it from the
+	// concrete type. A second definition would drift the moment an imported rule is wrapped or its type changes, and it would
+	// drift silently, because both answers look plausible.
+	//
+	// Attribution rather than "does it carry a document", which the two callers of the deleted VendoredSource had conflated. This
+	// test applies THIS PROJECT'S style rules, so the question is whose rule it is; a rule an operator wrote on their deployment
+	// carries a document and is still not ours to hold to our house style.
+	return api.OriginOf(r) == api.ProjectOrigin
 }
 
 // spec:server-detection-rules-engine/canonical-rule-naming/a-rule-names-itself-the-same-way-everywhere
@@ -209,18 +212,183 @@ func TestAll_NonDetectionClassification(t *testing.T) {
 		"the set of non-detections changed; every rule here is absent from /api/rules, /api/attack-coverage and docs/detection-rules.md")
 }
 
-// TestAll_DetectionsClaimTechniques asserts every DETECTION maps to at least one ATT&CK technique, which is what makes the
-// coverage export meaningful. It is scoped to detections deliberately: application_control_block returns an empty set on purpose
-// (a successful block is the absence of adversary activity, not an instance of it), and before the split that correct behaviour
-// had to be special-cased out of any such check.
+// detectionsThatClaimNoTechnique names the detections that deliberately map to nothing, and it is an exact set rather than a
+// skip-list so adding to it is a decision somebody makes here.
+//
+// Declaring none is a real answer, not a gap: it says the rule reports something it cannot attribute to an actor. What it must
+// not be is an accident, because a rule that quietly stops claiming coverage looks identical in the export to one that never
+// had any. Each entry names the audit that decided it (issue #755).
+var detectionsThatClaimNoTechnique = map[string]string{
+	// Reports a capture provider that stopped and stayed stopped. A crash produces that exactly, and Impair Defenses names
+	// somebody impairing defenses, so the rule reports a state it cannot attribute to anyone.
+	"sensor_tamper": "issue #755: the signal is a state, and the technique names an actor's action",
+}
+
+// TestAll_DetectionsClaimTechniques asserts every DETECTION maps to at least one ATT&CK technique unless it is on the audited list
+// above, which is what makes the coverage export meaningful.
+//
+// It is scoped to authored detections deliberately: application_control_block returns an empty set on purpose (a successful block
+// is the absence of adversary activity, not an instance of it) and is a non-detection, and an imported rule's mapping comes from
+// upstream.
+//
+// The list is checked for staleness too. An entry for a rule that now claims a technique means somebody re-earned one and left
+// the exemption behind, which would silence this guard for that rule from then on.
 func TestAll_DetectionsClaimTechniques(t *testing.T) {
 	t.Parallel()
 
+	claimNone := make(map[string]bool)
 	for _, r := range New(nil) {
 		if !api.IsDetection(r) || !authored(r) {
 			continue
 		}
-		assert.NotEmpty(t, r.Techniques(), "detection %s must map to at least one ATT&CK technique", r.ID())
+		if len(r.Techniques()) == 0 {
+			claimNone[r.ID()] = true
+			assert.Contains(t, detectionsThatClaimNoTechnique, r.ID(),
+				"detection %s maps to no ATT&CK technique; that is allowed but must be a recorded decision, not a silent one", r.ID())
+		}
+	}
+	for id := range detectionsThatClaimNoTechnique {
+		assert.True(t, claimNone[id],
+			"%s is exempted from claiming a technique but now claims one; remove the exemption or the guard stays off for it", id)
+	}
+}
+
+// TestAll_AuthoredTechniquesArePinned holds the whole first-party ATT&CK mapping as one exact set, so changing any of it is a
+// deliberate edit to this table rather than a line nobody reviews.
+//
+// It exists because of what the #755 sweep found. Five of eleven mappings were wrong in the same way: they described what a rule
+// was ABOUT rather than what it OBSERVED. Nothing failed when they were corrected, because the per-rule tests that pin a mapping
+// only existed for the rules whose mapping happened to be right. A wrong mapping is not a cosmetic slip either, since
+// Techniques() feeds GET /api/attack-coverage and the Navigator layer, which are read during procurement.
+//
+// The justification for each mapping lives in the rule's own Techniques() comment, next to the code that has to keep being true.
+// What lives here is the SET, and the one-line note saying which observation earns it, so the next audit can read the whole
+// claim in one place instead of eleven.
+//
+// Scoped to authored rules: an imported rule's techniques come from its upstream file, and pinning those would fail on every
+// corpus re-sync. TestImported_RulesOutsideTheHouseStyleArePinned covers that side.
+func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		// Matches `security dump-keychain` by path and argument: the technique IS the command.
+		"credential_keychain_dump": {"T1555.001"},
+		// Observes a DYLD_INSERT_LIBRARIES assignment, which is literally the technique.
+		"dyld_insert": {"T1574.006"},
+		// The one rule that narrows per finding, so this list is the union it CAN claim rather than what every alert carries:
+		// T1071.004 is the beaconing pattern it always observes, and T1568.002 rides on the findings whose domain looks
+		// algorithmic. A rule that declares a union must narrow, or every finding claims the whole of it.
+		"dns_c2_beacon": {"T1071.004", "T1568.002"},
+		// Observes osascript by path. NOT a transfer: the descendant check matches curl or wget by path and inspects nothing
+		// about what it did, so `curl --help` beside an unrelated temp exec reaches the same finding.
+		"osascript_network_exec": {"T1059.002"},
+		// Observes a LaunchAgent plist being written.
+		"persistence_launchagent": {"T1543.001"},
+		// Observes a BTM daemon registration, which is exactly the sub-technique.
+		"privilege_launchd_plist_write": {"T1543.004"},
+		// Observes a capture provider stopping and not returning. That is a state, not an actor: a crash produces it exactly,
+		// and Impair Defenses names somebody doing something. The empty entry is the decision #755 asked for, not an omission.
+		"sensor_tamper": {},
+		// Observes a shell, by path, spawned from an Office process. It does NOT observe an email or an attachment, which is why
+		// T1566.001 came off.
+		"shell_from_office": {"T1059.004"},
+		// Observes a shell, by path, that then connects out. A connection is not a transfer and names no protocol, so neither
+		// T1105 nor T1071 is earned.
+		"shell_network_connect": {"T1059.004"},
+		// Observes a shell, by path, followed by an exec from a world-writable directory. Nothing arriving is observed, so T1105
+		// came off; the shell is known to be a Unix shell, so the parent T1059 became the sub-technique.
+		"suspicious_exec": {"T1059.004"},
+		// Observes sudoers being modified.
+		"sudoers_tamper": {"T1548.003"},
+	}
+
+	got := make(map[string][]string)
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		got[r.ID()] = r.Techniques()
+	}
+
+	assert.Equal(t, want, got,
+		"the first-party ATT&CK mapping changed; every entry must name something the rule OBSERVES, not what it is about")
+}
+
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-declares-the-sub-technique-it-can-identify
+//
+// detectionsClaimingAParentTechnique names the authored detections that declare a technique with no sub-technique, and it is
+// EMPTY, which is the assertion. Every authored mapping after the sweep is a sub-technique, because every one of these rules
+// matches something specific enough to identify one.
+//
+// A parent is not always wrong. ATT&CK has techniques with no sub-techniques at all, and a rule matching one of those has no
+// sub-technique to prefer. When that rule arrives it goes here with its reason, which is the point of an exception list over a
+// blanket ban: the entry is where somebody says why.
+var detectionsClaimingAParentTechnique = map[string]string{}
+
+// TestAll_AuthoredTechniquesAreNotParentOnly closes the hole the pair below leaves open, which review found: they catch a rule
+// that declares a parent ALONGSIDE its sub-technique, and they catch a rule whose mapping departs from the pinned table. What
+// neither catches is a rule regressing to the parent ALONE with the table edited to match, which is a coverage claim quietly
+// getting vaguer, and is exactly how T1059 was on two rules before this sweep.
+func TestAll_AuthoredTechniquesAreNotParentOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		for _, technique := range r.Techniques() {
+			if strings.Contains(technique, ".") {
+				continue
+			}
+			assert.Contains(t, detectionsClaimingAParentTechnique, r.ID(),
+				"%s declares the parent technique %s; either it matches something specific enough to name a sub-technique, "+
+					"or it is one of the rare techniques that has none, which belongs in the list above with its reason",
+				r.ID(), technique)
+		}
+	}
+	// And the other direction, so an exemption cannot outlive the mapping it excused.
+	parentsByRule := make(map[string]int)
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		for _, technique := range r.Techniques() {
+			if !strings.Contains(technique, ".") {
+				parentsByRule[r.ID()]++
+			}
+		}
+	}
+	for id := range detectionsClaimingAParentTechnique {
+		assert.Positive(t, parentsByRule[id],
+			"%s is exempted from the sub-technique preference but declares no parent technique, so the exemption is silencing "+
+				"the guard for a rule that no longer needs it", id)
+	}
+}
+
+// TestAll_AuthoredTechniquesAreNotParentsOfTheirOwnSubTechniques pins the precision half of the sweep, which the exact set above
+// cannot express on its own: it would pass just as happily on a table that had been edited the wrong way.
+//
+// Declaring T1059 where the rule matches /bin/bash by path is not wrong so much as vague, and Navigator renders a parent hit
+// differently from a sub-technique one, so it UNDERSTATES coverage that is actually precise. That was the failure on
+// suspicious_exec and shell_network_connect, and the shape recurs whenever a rule matches something specific.
+func TestAll_AuthoredTechniquesAreNotParentsOfTheirOwnSubTechniques(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range New(nil) {
+		if !authored(r) || !api.IsDetection(r) {
+			continue
+		}
+		techniques := r.Techniques()
+		for _, parent := range techniques {
+			if strings.Contains(parent, ".") {
+				continue
+			}
+			for _, other := range techniques {
+				assert.False(t, strings.HasPrefix(other, parent+"."),
+					"%s declares both %s and its own sub-technique %s; the sub-technique alone is the precise claim",
+					r.ID(), parent, other)
+			}
+		}
 	}
 }
 

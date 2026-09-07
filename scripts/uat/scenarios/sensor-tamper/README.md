@@ -1,6 +1,6 @@
 # sensor-tamper scenario
 
-L5 system test. Switches off the EDR's own content filter on a live VM and asserts the `sensor_tamper` alert (T1562.001, issue #684).
+L5 system test. Switches off the EDR's own content filter on a live VM and asserts the `sensor_tamper` alert (issue #684). The scenario performs T1562.001; the rule claims no technique, because it cannot tell that from a crash (issue #755).
 
 ## What this covers that L6 cannot
 

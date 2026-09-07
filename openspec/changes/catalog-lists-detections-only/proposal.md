@@ -20,7 +20,7 @@ The declaration is opt-in and absent from the `Rule` interface: a detection is t
 
 ## Impact
 
-- ATT&CK coverage is unchanged in extent. `T1562.001` was claimed by both `sensor_recovery_failed` and `sensor_tamper`, and remains covered by the latter, so the layer keeps all 13 techniques and only its attribution comment changes.
+- ATT&CK coverage is unchanged in extent BY THIS CHANGE. `T1562.001` was claimed by both `sensor_recovery_failed` and `sensor_tamper`, and after this one only the latter claims it, so the layer keeps all 13 techniques and only its attribution comment changes. The attribution sweep later removes that last claim as well, on the grounds that a crash produces the same state; the extent this change preserves is therefore not the extent that ships.
 - `docs/detection-rules.md` loses two entries.
 - An operator loses the `/api/rules` path for setting mode or severity on these two. The app-control policy UI already owns the first; the health signal's own surface is tracked separately.
 - The `Finding.Title == DisplayName` invariant no longer needs a by-name exemption for `application_control_block`: the exemption now follows from its classification.

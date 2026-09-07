@@ -63,8 +63,15 @@ type Service interface {
 // The canonical definition lives here; rules/internal/catalog imports
 // it directly via detection.api.
 type GraphReader interface {
-	// GetProcessByPID returns the row whose (host, pid) bracket atTimeNs (i.e. fork_time_ns <= atTimeNs <= exit_time_ns or exit_time_ns IS
-	// NULL).
+	// GetProcessByPID returns the generation of (host, pid) whose IMAGE was running at atTimeNs.
+	//
+	// The lifetime bracket selects the candidates (fork_time_ns <= atTimeNs, and either no exit or an exit at or after it); which
+	// candidate is returned is decided by the image's own start instant, not by the fork (issue #799). Every generation of a
+	// re-exec chain carries the same fork time, so ordering on the fork returns whichever generation was recorded last, which for
+	// a parent asked about at its child's fork is an image that had not run yet.
+	//
+	// A generation between its fork and its first exec is still returned. Its image start lies in the future, and excluding it
+	// would answer "no such process" for a parent that forked a child before executing anything itself.
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error)
 
 	// GetProcessByPIDVersion returns the process generation matching the exact (host, pid, pidversion) identity at the event time
@@ -106,7 +113,10 @@ type GraphReader interface {
 type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
 	// EventsSetAside counts events the queue withdrew from processing after a batch failed repeatedly. Per host, because the
-	// question is which host has a gap in its process graph (issue #836).
+	// question is which host lost something (issue #836). WHAT it lost depends on the stage the withdrawal happened at, which
+	// the accompanying log line carries on a consequence attribute: at the detection stage an intact graph with detection
+	// unfinished, so alerts those events would have raised may be missing, and at the graph-building stage a POSSIBLE gap in that
+	// graph, since an earlier attempt may have folded the batch before a later one failed.
 	EventsSetAside(ctx context.Context, hostID string, n int64)
 	// EventsHeartbeatDropped is called per-batch by the ingest handler with the number of snapshot_heartbeat events that were
 	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
@@ -119,17 +129,40 @@ type MetricsRecorder interface {
 	// decide whether promoting a rule is worth it.
 	//
 	// It takes a count rather than being called per match because the caller aggregates a whole batch before recording it, and it
-	// does that because of WHEN it records: after the batch is acknowledged, not while evaluating. A nacked batch is replayed
-	// whole, so a counter incremented during evaluation counts a retried batch twice. Called after the acknowledgement, a replayed
-	// batch is counted once.
+	// does that because of WHEN it records: on the transition that ends the batch's life, not while evaluating. A nacked batch is
+	// replayed whole, so a counter incremented during evaluation counts a retried batch twice.
 	//
-	// Three inaccuracies remain and a consumer has to know all of them. A crash between the acknowledgement and the durable record
-	// loses those counts, and so does a failure of that record, which is logged and dropped rather than allowed to fail a batch
-	// that is already acknowledged. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing
-	// counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is gets
-	// promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. Third, an evaluation that outlives its
-	// claim lease can be re-offered to another worker while the first is still running; Ack does not verify claim ownership, so
-	// both attempts can succeed and both can record.
+	// Two transitions end a batch. Usually the acknowledgement, after which a replayed batch is counted once. The other is the
+	// batch being withdrawn from processing for good once its retry bounds are passed: there is no later attempt to count it, so
+	// the withdrawn attempt's matches are recorded then instead (#843). Recorded only when the WHOLE batch was withdrawn, since a
+	// partial withdrawal leaves rows that are re-claimed and evaluated again.
+	//
+	// Four inaccuracies remain and a consumer has to know all of them, because every one of them loses counts and none inflates.
+	// A fifth stood here until #840 made returning a batch conditional on the claim it was issued for: a stale attempt could
+	// withdraw events a replacement owned, and neither attempt would then record.
+	//
+	// A crash between the transition and the record loses those counts, and so does a failure of the durable write, which is
+	// logged and dropped rather than allowed to fail a batch that is already finished with the queue.
+	//
+	// Which sink is left ahead depends on WHERE in that window it happens, and an earlier version of this comment got it wrong by
+	// claiming this counter always survives. The increment happens after the queue transition and before the durable write, so a
+	// crash before the increment loses both; only a crash after it, or a failure of the write itself, leaves this counter ahead.
+	//
+	// A batch withdrawn on an attempt that had not evaluated it records nothing: that attempt resolved no matches, and an earlier
+	// attempt's were discarded when it was retried rather than carried forward (#893).
+	//
+	// A batch only PARTLY withdrawn drops the whole attempt's matches. The survivors are evaluated again and counted then, but
+	// whatever the withdrawn events alone had matched has no later attempt to produce it. Recording the survivors' share instead
+	// would need this figure to say which event each match came from, and it is aggregated per rule and host for the batch.
+	//
+	//
+	// Losing counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
+	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. It is accepted only because every
+	// alternative here over-counts systematically rather than losing rarely.
+	//
+	// A third once stood here and is gone: an evaluation outliving its claim lease could be re-offered while the first was still
+	// running, and Ack ignored claim ownership so both attempts recorded. Issue #817 made Ack conditional on still holding the
+	// claim and the caller skips this write when it has lost.
 	//
 	// Most importantly this counts MATCHES, not would-be alerts. AlertCreated fires only for a newly INSERTED alert, and alerts
 	// deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments this series every
@@ -157,4 +190,22 @@ type MetricsRecorder interface {
 	// warn-logging every retry: the processor logs the retry at DEBUG and increments this counter, so a sustained materialization-miss
 	// backlog stays detectable without flooding the logs or the OTLP export.
 	DetectionMaterializationRetry(ctx context.Context)
+	// RuleEvaluationSkipped is called ONCE, when a rule exceeds its evaluation budget often enough that this replica stops
+	// evaluating it (issue #767). Not per skipped batch: the condition is a transition, and counting it per batch afterwards
+	// would report a rule that costs nothing as the busiest thing in the fleet.
+	//
+	// A skipped rule raises no alerts, which looks exactly like a rule that matches nothing, so this counter is the only thing
+	// that separates the two. Per rule, because the answer an operator needs is which rule to fix.
+	RuleEvaluationSkipped(ctx context.Context, ruleID string)
+	// RuleEvaluationDuration is called once per rule per batch with how long that rule's evaluation took, and is where "which
+	// rule is slow" is properly answered (issue #837).
+	//
+	// A histogram rather than the durable per-rule table alone, because the two answer different questions and only one of them
+	// belongs on the drain path. The table exists so a noisy rule is identifiable from the UI without querying a metrics
+	// backend, which is #774's acceptance criterion, and it now writes on a periodic flush. This gives real percentiles, at the
+	// cost of an in-process aggregation the OTel SDK exports on its own interval, which is the standard mechanism for hot-path
+	// telemetry and what the per-batch write bypassed.
+	//
+	// Cardinality is rule count times buckets: bounded and low-thousands with today's corpus, and worth watching as it grows.
+	RuleEvaluationDuration(ctx context.Context, ruleID string, d time.Duration)
 }

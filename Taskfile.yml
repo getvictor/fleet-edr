@@ -164,6 +164,18 @@ tasks:
     cmds:
       - go run ./tools/gen-rule-pack
 
+  sync:openapi-embed:
+    desc: |
+      Copy docs/api/openapi.yaml into server/apidocs/embed/, which is the spec the
+      server actually serves at /api/openapi.yaml. The canonical file is the one
+      under docs/; this copy exists only because a go:embed pattern cannot reach
+      outside its own package directory.
+
+      Run this after editing the canonical spec. TestEmbeddedSpecMatchesCanonical
+      fails the build if you forget, so this is the fix rather than the reminder.
+    cmds:
+      - go generate ./server/apidocs/...
+
   docs:attack-layer:
     desc: Regenerate docs/attack-navigator-layer.json from the registered rule catalogue.
     cmds:

@@ -136,6 +136,15 @@ func TestSensorTamper_DiscriminatesUpgradeFromTamper(t *testing.T) {
 			assert.Equal(t, tamperHost, findings[0].HostID)
 			assert.Equal(t, []string{"stop-1"}, findings[0].EventIDs, "the alert must cite the stop it fired on")
 			assert.Contains(t, findings[0].Description, "content_filter")
+			// And no ATT&CK identifier in it. The description is copied onto the alert verbatim, so an identifier here is the
+			// same claim the rule declines to make in its technique list, by another route (issue #754's finding, applied to
+			// this rule by #755). Asserted on the FINDING rather than on the helper that builds the string, because the finding
+			// is what persistence carries and a helper test would pass while a caller stamped something else.
+			//
+			// The SHAPE rather than the identifier that was removed, so a later edit cannot put a different one in the same
+			// sentence and leave this green.
+			assert.NotRegexp(t, `\bT\d{4}(\.\d{3})?\b`, findings[0].Description,
+				"the alert text must not name a technique the rule declines to declare")
 			assert.Contains(t, findings[0].Description, "stop reason 1",
 				"the platform reason belongs in the alert even though the rule does not judge on it")
 		})
@@ -355,9 +364,14 @@ func TestSensorTamper_Doc(t *testing.T) {
 	t.Parallel()
 	r := &SensorTamper{}
 	doc := r.Doc()
-	assert.Equal(t, []string{"T1562.001"}, r.Techniques())
+	// No technique, decided in the sweep for issue #755 rather than left out. The rule reports a capture provider that stopped
+	// and stayed stopped, and a crash produces that exactly; Impair Defenses names somebody impairing defenses, which the rule
+	// sees nothing of. Empty and not nil, per the Rule interface's contract for "no mapping".
+	//
+	// The ALERT is untouched by that: same severity, same title, same text. Only the coverage claim goes.
+	assert.Equal(t, []string{}, r.Techniques())
 	assert.Equal(t, []api.Platform{api.PlatformDarwin}, r.Platforms())
-	assert.Equal(t, api.SeverityHigh, doc.Severity)
+	assert.Equal(t, api.SeverityHigh, doc.Severity, "the alert is unchanged; only the attribution went")
 	assert.Equal(t, []string{"sensor_provider_transition"}, doc.EventTypes)
 	assert.Equal(t, doc.Title, r.DisplayName())
 	assert.NotEmpty(t, doc.Limitations, "the alert reports the stop, not the repair; that has to be stated")

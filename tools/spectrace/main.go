@@ -56,6 +56,10 @@ func main() {
 		os.Exit(runListIDs(rest))
 	case "report":
 		os.Exit(runReport(rest))
+	case "archive-order":
+		os.Exit(runArchiveOrder(rest))
+	case "archive-verify":
+		os.Exit(runArchiveVerify(rest))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -70,21 +74,46 @@ func usage() {
 	fmt.Fprint(os.Stderr, `spectrace: openspec spec-to-test traceability linter
 
 Usage:
-  spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code] [--base-ref REF]
+  spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code]
+                     [--marker-line-length] [--gate-inflight] [--base-ref REF]
   spectrace list-ids [--specs-dir DIR] [--normative-only]
+  spectrace archive-order [--changes-dir DIR] [--specs-dir DIR]
+  spectrace archive-verify [--specs-dir DIR] [--changes-dir DIR]
   spectrace report   [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
 Subcommands:
   check     Walk specs and codebase; report uncovered scenarios and invalid references.
             Exit code 0 unless --strict is set or invalid references are present.
             --changes-dir  openspec/changes tree; scenarios in in-flight proposals are valid
-                           marker targets (not yet gated for coverage). Default openspec/changes.
+                           marker targets. Default openspec/changes.
             --by-layer  Annotate the gap report with per-layer coverage (L0..L6).
             --new-code  Gate only on scenarios added or modified in the current PR (diff against --base-ref).
+            --marker-line-length  Fail a marker this branch added whose source line exceeds the limit.
+            --gate-inflight  Require a marker for scenarios this branch adds to an in-flight change delta.
+                           Both of these need a merge base; a git failure while either is set is fatal.
             --base-ref  Git revision the merge base is computed against (default: origin/main).
   list-ids  Print canonical scenario IDs, one per line.
   report    Render the Markdown coverage matrix (one row per scenario, one column per layer).
             Exit code 0 on a clean render; the subcommand never gates.
+  archive-order
+            Print the order the release archive must apply the pending changes in, and the
+            constraints that shaped it. openspec archive replaces a MODIFIED requirement WHOLE,
+            so a change that ADDS a requirement has to be applied before one that modifies or
+            retires it, or the later text is discarded with no error (issue #901).
+            Reads --specs-dir as well, to tell a requirement being created from one that already
+            exists: a pending ADDED for an existing requirement, beside a pending REMOVED of it,
+            is the one pair with no safe order, and is reported rather than sequenced. A lone
+            ADDED for an existing requirement is left to openspec validate.
+            Exit code 0 when an order exists, 1 when two changes each have to precede the other,
+            2 on a usage or write failure.
+  archive-verify
+            Run BEFORE archiving and again after, and diff the two. Checks that everything the
+            last archived restatement of a requirement said is still in the canonical spec,
+            which is what archiving in the wrong order silently destroys, along with normative
+            text the restatement carried and a retirement the archive did not apply. Findings do
+            NOT gate: the tree carries older ones this cannot classify, so a line that is NEW in
+            the second report is the loss this archive caused. Exit code 2 on a usage or write
+            failure.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)
@@ -111,9 +140,13 @@ func runCheck(args []string) int {
 	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree; in-flight proposal scenarios are valid marker targets")
 	rootDir := fs.String("root", defaultRootDir, "root of the source tree to scan for markers")
 	strict := fs.Bool("strict", false, "exit non-zero if any SHALL/MUST scenario is uncovered")
+	markerLineLength := fs.Bool("marker-line-length", false,
+		"exit non-zero if a marker added or modified in this branch sits on a source line over the limit (needs a merge base)")
 	byLayer := fs.Bool("by-layer", false, "annotate the gap report with per-layer coverage (L0..L6)")
 	newCode := fs.Bool("new-code", false, "gate only on scenarios added or modified in the current branch")
 	baseRef := fs.String("base-ref", defaultBaseRef, "git revision the merge base is computed against (for --new-code)")
+	gateInFlight := fs.Bool("gate-inflight", false,
+		"require a marker for scenarios this branch adds to an in-flight change delta (needs a merge base)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -201,7 +234,50 @@ func runCheck(args []string) int {
 			len(newCodeIDs), *baseRef)
 	}
 
-	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid)
+	// Reported and gated regardless of --strict, like an invalid reference: an over-long marker is something already wrong in
+	// the tree rather than a coverage judgement, and it is mechanical to fix.
+	//
+	// Scoped to lines this branch touched. Several hundred over-long markers already exist on main, so gating on all of them
+	// would fail every pull request in the repository for a defect none of them introduced, which is the shape of wedge this
+	// repository has been bitten by before.
+	//
+	// Opt-in, and CI opts in. The scoping needs a merge base, which an ordinary local check or a release-checklist run may not
+	// have, and review caught both halves of getting that wrong: an earlier revision swallowed the git failure, which would let
+	// the required check pass enforcing nothing, and the revision after it failed unconditionally, which broke the documented
+	// local invocations. A flag separates the two. When it is set a git failure is fatal, because the caller asked for the gate
+	// and silently not running it is the outcome this whole change exists to prevent.
+	var overlong []Marker
+	if *markerLineLength {
+		touchedLines, terr := ChangedMarkerLines(*baseRef, *rootDir)
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "spectrace: cannot scope the marker line-length gate: %v\n", terr)
+			fmt.Fprintf(os.Stderr, "spectrace: pass --base-ref for a ref this checkout has, or fetch history for a merge base\n")
+			return 2
+		}
+		overlong = OverlongMarkers(markers, touchedLines)
+	}
+
+	// The in-flight gate, which closes the other half of referenceValid (issue #841). A delta-declared ID is a valid marker
+	// target so a test can point at a scenario before it is canonical; without this, a delta-declared scenario with NO marker
+	// was indistinguishable from one that never needed one, and nothing failed until the release archive made it canonical.
+	//
+	// Scoped and opt-in for exactly the reasons the line-length gate is, and the scoping matters more here: in-flight holds every
+	// change merged since the last release, so gating all of it would fail every pull request on scenarios somebody else wrote.
+	// A git failure is fatal when the flag is set, because a gate that silently does not run is the outcome being prevented.
+	var ungatedInFlight []Scenario
+	if *gateInFlight {
+		ungatedInFlight, err = UngatedInFlight(context.Background(), *changesDir, *baseRef, canonicalIDs(scenarios), covered)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "spectrace: cannot scope the in-flight scenario gate: %v\n", err)
+			fmt.Fprintf(os.Stderr, "spectrace: pass --base-ref for a ref this checkout has, or fetch history for a merge base\n")
+			return 2
+		}
+	}
+
+	printReport(scenarios, uncoveredNormative, uncoveredAdvisory, invalid, overlong, *markerLineLength)
+	if len(ungatedInFlight) > 0 {
+		printUngatedInFlight(ungatedInFlight)
+	}
 	if *byLayer {
 		printByLayer(scenarios, covered)
 	}
@@ -210,6 +286,10 @@ func runCheck(args []string) int {
 	case len(restatementConflicts) > 0:
 		return 1
 	case len(invalid) > 0:
+		return 1
+	case len(overlong) > 0:
+		return 1
+	case len(ungatedInFlight) > 0:
 		return 1
 	case *strict && len(gatedNormative) > 0:
 		return 1
@@ -298,7 +378,9 @@ func splitUncovered(scenarios []Scenario, covered map[string][]Marker) ([]Scenar
 	return normative, advisory
 }
 
-func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []Scenario, invalid []Marker) {
+func printReport(
+	scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []Scenario, invalid, overlong []Marker, lineLengthGated bool,
+) {
 	totalNormative := 0
 	for _, s := range scenarios {
 		if s.Normative {
@@ -312,11 +394,25 @@ func printReport(scenarios []Scenario, uncoveredNormative, uncoveredAdvisory []S
 	fmt.Printf("spectrace: %d advisory scenarios uncovered (requirement body has no SHALL/MUST)\n",
 		len(uncoveredAdvisory))
 	fmt.Printf("spectrace: %d invalid references in tests (ID does not exist in any spec)\n", len(invalid))
+	// Says "not checked" rather than "0" when the gate is off, because a zero someone did not measure is worse than no number:
+	// it reads as a clean result on a run that never looked.
+	if lineLengthGated {
+		fmt.Printf("spectrace: %d markers on a source line over %d characters\n", len(overlong), MaxMarkerLineLen)
+	} else {
+		fmt.Printf("spectrace: marker line lengths not checked (pass --marker-line-length)\n")
+	}
 
 	if len(invalid) > 0 {
 		fmt.Fprintln(os.Stderr, "\nInvalid references:")
 		for _, m := range invalid {
 			fmt.Fprintf(os.Stderr, "  %s:%d  spec:%s\n", m.SourcePath, m.SourceLine, m.ID)
+		}
+	}
+	if len(overlong) > 0 {
+		fmt.Fprintln(os.Stderr, "\nMarkers over the source line limit. A marker cannot be wrapped without breaking the")
+		fmt.Fprintln(os.Stderr, "reference, so shorten the requirement or scenario title it names:")
+		for _, m := range overlong {
+			fmt.Fprintf(os.Stderr, "  %s:%d  %d chars  spec:%s\n", m.SourcePath, m.SourceLine, m.LineLen, m.ID)
 		}
 	}
 	if len(uncoveredNormative) > 0 {

@@ -9,13 +9,15 @@ import (
 //
 // Separate from MonitorTally because it answers a different question and, crucially, obeys the OPPOSITE recording rule. A monitor
 // match is a fact about the world (this rule matched this host on this day) so a replayed batch must not count it twice, which is
-// why the tally is handed back to be written only after the acknowledgement. An evaluation is a fact about work the server
-// performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
+// why the tally is handed back to be written only once the batch will not be processed again. An evaluation is a fact about work
+// the server performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
 //
 // That is not the retry-inflation mistake MonitorTally's doc warns about, and the difference is worth being able to state: the
-// figures a reader derives are unaffected by replay, because Evaluations and EvalNs inflate by the same factor and the mean they
-// produce together does not move. Recording only on acknowledgement would additionally make RetryableMisses unreachable, since a
-// batch that ends in a retryable miss is never acknowledged. That counter is the whole point of the type: it names the rule whose
+// figure a reader derives stays honest under replay, because Evaluations and EvalNs grow together, so the mean remains a mean per
+// ATTEMPT rather than being inflated the way a per-batch figure would be. Not invariant: a replay that ran faster or slower than
+// the others moves it. Recording only on a batch's terminal transition would additionally make RetryableMisses nearly
+// unreachable, since a batch ending in a retryable miss is nacked rather than acknowledged and reaches one only if it is later
+// withdrawn. That counter is the whole point of the type: it names the rule whose
 // misses are driving the churn, which the fleet-wide edr.detection.materialization_retries counter cannot.
 type RuleEvalStat struct {
 	RuleID string
@@ -48,6 +50,12 @@ type RuleEvalStatsRecorder interface {
 	// Called on the evaluation path rather than after an acknowledgement, and called on the failure path too, so it MUST NOT be
 	// able to fail the batch: the caller logs an error and moves on. The batch's real work is the detection, and replaying it to
 	// save a counter would cost more than the counter is worth.
+	//
+	// Nor may an implementation of this perform a DATABASE WRITE, which is a stronger requirement than the one above and is the
+	// one issue #837 added. The implementation the engine is given accumulates in memory and a flush writes; the per-batch write
+	// this used to be capped ingest for the whole deployment, because every replica contended on the same instance. A future
+	// implementation that writes here would reintroduce that, and no test of the buffer in isolation would notice, so the
+	// wiring is asserted against a real database in server/rules/internal/tests.
 	RecordRuleEvalStats(ctx context.Context, stats RuleEvalStats) error
 }
 
