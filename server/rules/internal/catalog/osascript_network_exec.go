@@ -32,7 +32,8 @@ import (
 // temp-exec) to be present, so download-only or temp-exec-only flows do not
 // fire: those overlap with other rules (suspicious_exec, network_exec_*).
 //
-// MITRE ATT&CK: T1059.002 (AppleScript) + T1105 (Ingress Tool Transfer).
+// MITRE ATT&CK: T1059.002 (Command and Scripting Interpreter: AppleScript). See Techniques below for why the transfer
+// sub-technique came off (issue #755).
 type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }

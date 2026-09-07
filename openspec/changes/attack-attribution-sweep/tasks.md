@@ -9,8 +9,9 @@
 
 ## 2. Decide the arguable ones explicitly
 
-- [x] 2.1 Keep the sensor-tamper mapping, recording that the timing separation is the observation and what would change the answer.
-- [x] 2.2 Keep the AppleScript dropper's mapping, recording that the download is required to reach a finding at all, which is what the issue assumed was optional.
+- [x] 2.1 Drop the sensor-tamper mapping. A technique names either a behaviour or an actor's action, and Impair Defenses is the second; the rule observes a state a crash produces identically. Record what would re-earn it.
+- [x] 2.2 Drop the AppleScript dropper's transfer mapping. The descendant check matches a downloader by path and inspects nothing else, so a downloader running is what is observed and the transfer is inferred.
+- [x] 2.3 Keep severity and title identical throughout, and take the attribution out of the two alert TEXTS that carried one in prose.
 
 ## 3. Make the mapping hard to change by accident
 
@@ -21,3 +22,5 @@
 - [x] 3.5 Restate the requirement identically in the in-flight delta that also modifies it, since `openspec archive` replaces a requirement whole and the last to archive would otherwise discard the other's text (#815).
 - [x] 3.7 Take the technique out of the tamper rule's alert TEXT too, and assert it on the FINDING rather than on the helper that builds the string, since the finding is what persistence carries.
 - [x] 3.8 State the behaviour-versus-actor test in the requirement itself, so a reader can tell why one rule keeps a technique it cannot prove intent for and another loses one it can.
+- [x] 3.9 Reconcile the two pending requirements that still mandated the tamper technique, since they archive alongside the one forbidding it and would leave the canonical spec contradicting itself.
+- [x] 3.10 Sweep every surviving mention of the removed identifiers, not only the ones a reviewer named: the release note, the UAT scenario README, the testing-strategy rule list and a second type-level comment were all still claiming them.

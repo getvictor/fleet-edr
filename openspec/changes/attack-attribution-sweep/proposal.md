@@ -23,7 +23,7 @@ Two more are corrected, and they are the two the issue called arguable and asked
 
 Per-finding narrowing needs no further work. `dns_c2_beacon` is the one rule with a union to narrow and it already does.
 
-The alerts are unchanged throughout. Severity, title and text are untouched on every rule here; only the coverage claim moves.
+Severity and title are untouched on every rule here. Two alert TEXTS change, and only by losing an attribution they carried in prose: `sensor_recovery_failed`'s trailing `(MITRE T1562.001)` came off in #754, and `sensor_tamper`'s comes off here. A description is copied onto the alert verbatim, so an identifier there is the same claim the technique list drops, made by another route; the operational sentence either alert carries is unchanged.
 
 ## Impact
 
@@ -40,6 +40,6 @@ The alerts are unchanged throughout. Severity, title and text are untouched on e
 | T1562.001 | covered, by `sensor_tamper` alone                 | **absent from the layer**                                       |
 | T1059.004 | `shell_from_office`                               | `shell_from_office`, `shell_network_connect`, `suspicious_exec` |
 
-That is a genuine reduction in claimed coverage and it is the point: we were reporting that we alert on Spearphishing Attachment because a rule fires on a shape phishing often produces, and on Impair Defenses because a capture provider went quiet.
+Three techniques drop from covered to monitor-only, and a fourth leaves the layer. That is a genuine reduction in claimed coverage and it is the point: we were reporting that we alert on Spearphishing Attachment because a rule fires on a shape phishing often produces, and on Impair Defenses because a capture provider went quiet.
 
-**T1562.001 leaves the export entirely**, since `sensor_tamper` was the only rule claiming it once #754 landed. Worth seeing before merge rather than after: the tamper ALERT is untouched and an operator still learns their sensor stopped, but the Navigator layer a customer reads no longer says we detect Impair Defenses. Re-earning it is a change to the rule's predicate rather than to its technique list, by observing the actor: the process that stopped the provider, or a policy change that did.
+**T1562.001 leaves the export entirely**, since `sensor_tamper` was the only rule claiming it once #754 landed. Worth seeing before merge rather than after. The tamper alert keeps its High severity, its title and its operational sentence, and an operator still learns their sensor stopped; what it loses is the `(MITRE T1562.001)` its text carried, and what the product loses is the Navigator layer telling a customer we detect Impair Defenses. Re-earning it is a change to the rule's predicate rather than to its technique list, by observing the actor: the process that stopped the provider, or a policy change that did.
