@@ -101,6 +101,12 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 
 // textKeys is a restatement's prose as a SET of (scenario, line) pairs, where an empty scenario means the requirement's own body.
 // A set rather than a list because the counting below is "how many restatements carried this", not "how many times it appears".
+//
+// Which drops multiplicity, and review is right that a span repeating one logical line twice would then survive losing one copy:
+// every distinct line is still present, and the order check is skipped because the lengths differ. Not fixed, because it is not
+// reachable. Zero of the 1464 spans in the canonical tree and the whole archive repeat a logical line, and comparing multisets
+// instead would mean count-aware comparison in both directions of textDiff, in code the strict linter has already pushed past its
+// complexity limit twice. If a requirement ever does repeat a line verbatim, one lost copy of it goes unreported.
 func textKeys(t requirementText) map[[2]string]struct{} {
 	out := make(map[[2]string]struct{}, len(t.body))
 	for _, line := range t.body {
