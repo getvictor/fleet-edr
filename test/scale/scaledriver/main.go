@@ -156,7 +156,7 @@ func parseFlags() flagSet {
 	flag.StringVar(&fs.quietScenario, "quiet-scenario", "test/fakeagent/scenarios/quiet-host.yaml",
 		"path to quiet-host scenario")
 	flag.StringVar(&fs.activeScenarios, "active-scenarios", strings.Join([]string{
-		"test/efficacy/corpus/T1059-suspicious-exec/scenario.yaml",
+		"test/efficacy/corpus/T1059.004-suspicious-exec/scenario.yaml",
 		"test/efficacy/corpus/T1543.001-launchagent-persistence/scenario.yaml",
 		"test/efficacy/corpus/T1548.003-sudoers-tamper/scenario.yaml",
 		"test/efficacy/corpus/T1555.001-keychain-dump/scenario.yaml",

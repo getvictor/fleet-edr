@@ -27,17 +27,17 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 
 | Rule ID | Title | Severity | Default mode | ATT&CK |
 | --- | --- | --- | --- | --- |
-| [`suspicious_exec`](#suspicious_exec) | Suspicious exec chain | high | alert | T1059, T1105 |
-| [`shell_network_connect`](#shell_network_connect) | Shell outbound connection | high | monitor | T1059, T1105 |
+| [`suspicious_exec`](#suspicious_exec) | Suspicious exec chain | high | alert | T1059.004 |
+| [`shell_network_connect`](#shell_network_connect) | Shell outbound connection | high | monitor | T1059.004 |
 | [`persistence_launchagent`](#persistence_launchagent) | LaunchAgent persistence | high | alert | T1543.001 |
 | [`dyld_insert`](#dyld_insert) | DYLD injection on exec | high | alert | T1574.006 |
-| [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | alert | T1566.001, T1059.004 |
-| [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002, T1105 |
+| [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | alert | T1059.004 |
+| [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002 |
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | alert | T1548.003 |
 | [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon | high | alert | T1071.004, T1568.002 |
-| [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | alert | T1562.001 |
+| [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | alert |  |
 | [`proc_creation_macos_applescript`](#proc_creation_macos_applescript) | MacOS Scripting Interpreter AppleScript | medium | monitor | T1059.002 |
 | [`proc_creation_macos_base64_decode`](#proc_creation_macos_base64_decode) | Decode Base64 Encoded Text -MacOs | low | monitor | T1027 |
 | [`proc_creation_macos_binary_padding`](#proc_creation_macos_binary_padding) | Binary Padding - MacOS | high | monitor | T1027.001 |
@@ -116,7 +116,7 @@ Flags a non-shell process that spawns a shell which, within 30 seconds, execs a 
 | Severity | `high` |
 | Default mode | `alert` |
 | Source | Fleet EDR |
-| ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
+| ATT&CK | [`T1059.004`](https://attack.mitre.org/techniques/T1059/004/) |
 | Event types | `exec` |
 
 ### Description
@@ -153,7 +153,7 @@ Flags a non-shell process that spawns a shell which, within 30 seconds, makes an
 | Default mode | `monitor` |
 | Source | Fleet EDR |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
-| ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
+| ATT&CK | [`T1059.004`](https://attack.mitre.org/techniques/T1059/004/) |
 | Event types | `network_connect` |
 
 ### Description
@@ -249,7 +249,7 @@ Flags any /bin/sh, /bin/bash, /bin/zsh (etc.) whose parent is Word, Excel, Power
 | Severity | `high` |
 | Default mode | `alert` |
 | Source | Fleet EDR |
-| ATT&CK | [`T1566.001`](https://attack.mitre.org/techniques/T1566/001/), [`T1059.004`](https://attack.mitre.org/techniques/T1059/004/) |
+| ATT&CK | [`T1059.004`](https://attack.mitre.org/techniques/T1059/004/) |
 | Event types | `exec` |
 
 ### Description
@@ -279,7 +279,7 @@ Critical-severity catch on the canonical macOS commodity-dropper chain: osascrip
 | Severity | `critical` |
 | Default mode | `alert` |
 | Source | Fleet EDR |
-| ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
+| ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/) |
 | Event types | `exec` |
 
 ### Description
@@ -435,7 +435,6 @@ Flags one of the EDR's own capture providers stopping without coming back within
 | Severity | `high` |
 | Default mode | `alert` |
 | Source | Fleet EDR |
-| ATT&CK | [`T1562.001`](https://attack.mitre.org/techniques/T1562/001/) |
 | Event types | `sensor_provider_transition` |
 
 ### Description

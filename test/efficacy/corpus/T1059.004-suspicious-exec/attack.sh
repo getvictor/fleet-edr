@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# L5 VM-driver placeholder for T1059 (T1059-suspicious-exec).
+# L5 VM-driver placeholder for T1059.004 (T1059.004-suspicious-exec).
 #
 # Detection target: catalog rule suspicious_exec.
 #
@@ -14,6 +14,6 @@
 
 set -eEuo pipefail
 
-echo "[T1059-suspicious-exec] L5 driver not wired yet; this is a placeholder."
-echo "[T1059-suspicious-exec] See scripts/qa/attack-runbook.sh for the closest existing real-VM equivalent."
+echo "[T1059.004-suspicious-exec] L5 driver not wired yet; this is a placeholder."
+echo "[T1059.004-suspicious-exec] See scripts/qa/attack-runbook.sh for the closest existing real-VM equivalent."
 exit 0
