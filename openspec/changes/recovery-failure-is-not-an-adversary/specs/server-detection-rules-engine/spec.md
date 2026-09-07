@@ -4,7 +4,9 @@
 
 ### Requirement: MITRE ATT&CK technique stamping
 
-The system SHALL stamp each persisted alert with the MITRE ATT&CK technique identifiers declared by the firing rule. The stamped list MUST be preserved on the alert row even if the rule's technique mapping is later refined.
+The system SHALL stamp each persisted alert with MITRE ATT&CK technique identifiers, taken from the finding first and the rule second. A finding that states a list of its own is stamped with that list, which is how a rule covering several techniques claims only the ones that applied to the finding at hand rather than its whole union. A finding that states none inherits the list its rule declares. A technique carried by a conditional escalation that applied is added to whichever of those was used, and a technique already present is not repeated.
+
+The stamped list MUST be preserved on the alert row even if the rule's technique mapping is later refined.
 
 A rule SHALL declare a technique only for something it OBSERVED, not for the subject it is about. A technique names adversary behaviour, so declaring one asserts that an adversary did something, and a rule that cannot attribute what it reports to anyone SHALL declare none.
 
