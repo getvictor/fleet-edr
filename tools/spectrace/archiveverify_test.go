@@ -209,13 +209,9 @@ func TestArchiveVerify_OverARealTree(t *testing.T) {
 		require.NoError(t, err)
 		scenarios, err := ParseAllSpecs(specsDir)
 		require.NoError(t, err)
-		bodies, err := ParseAllRequirementBodies(specsDir)
+		text, err := ParseAllRequirementText(specsDir)
 		require.NoError(t, err)
-		prose := make(map[string][]string, len(bodies))
-		for requirement, lines := range bodies {
-			prose[requirement] = collapseProse(lines)
-		}
-		return verifyArchive(restatements, canonicalScenarios(scenarios), retired, prose)
+		return verifyArchive(restatements, canonicalScenarios(scenarios), retired, text)
 	}
 
 	// The later folder's restatement is the authority, so a scenario only the earlier one listed is a retirement and not a loss.
@@ -385,14 +381,19 @@ func TestArchiveCommands_RefuseAChangesDirThatIsNotThere(t *testing.T) {
 	notADir := filepath.Join(t.TempDir(), "a-file")
 	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
 
-	for _, tc := range []struct{ name, dir string }{
-		{"a path that does not exist", missing},
-		{"a path that is a file", notADir},
+	// --specs-dir as well as --changes-dir. A specs path that is not a directory yields an EMPTY canonical set rather than an
+	// error, and an empty one classifies every pending ADDED as creating a new requirement, so a pair with no safe order gets
+	// printed as a safe one.
+	for _, tc := range []struct{ name, flag, dir string }{
+		{"a changes path that does not exist", "--changes-dir", missing},
+		{"a changes path that is a file", "--changes-dir", notADir},
+		{"a specs path that does not exist", "--specs-dir", missing},
+		{"a specs path that is a file", "--specs-dir", notADir},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, 2, runArchiveVerify([]string{"--changes-dir", tc.dir}))
-			assert.Equal(t, 2, runArchiveOrder([]string{"--changes-dir", tc.dir}))
+			assert.Equal(t, 2, runArchiveVerify([]string{tc.flag, tc.dir}))
+			assert.Equal(t, 2, runArchiveOrder([]string{tc.flag, tc.dir}))
 		})
 	}
 }
@@ -462,37 +463,41 @@ func TestVerifyArchive_ProseTheRestatementCarriedAndCanonicalLacks(t *testing.T)
 			"cap/the-thing": {{
 				change:    "2026-06-02-refines-it",
 				scenarios: []string{"one"},
-				prose:     []string{"It SHALL do the thing.", "It SHALL also do the refined thing."},
+				text:      requirementText{body: []string{"It SHALL do the thing.", "It SHALL also do the refined thing."}},
 			}},
 		},
 		canonicalWith("cap/the-thing", "one"),
 		nil,
-		map[string][]string{"cap/the-thing": {"It SHALL do the thing."}},
+		map[string]requirementText{"cap/the-thing": {body: []string{"It SHALL do the thing."}}},
 	)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0], "It SHALL also do the refined thing.")
 	assert.Contains(t, findings[0], "2026-06-02-refines-it")
 }
 
-// Prose is compared in the LOSS direction only. Canonical text no restatement carried is as often a legacy hand-edit of the
-// canonical tree as it is archive damage, and an ambiguous finding is worse than a missed one here.
-func TestVerifyArchive_CanonicalProseTheRestatementLacksIsNotAFinding(t *testing.T) {
+// Prose is compared in BOTH directions, and this is the one review had to ask for twice. A restatement whose whole change is a
+// DELETION carries no line the canonical spec lacks, so the loss direction alone reports nothing when it is archived out of order
+// and the deleted clause survives. Measured before adding it: 14 lines across 12 requirements, not the flood I assumed.
+func TestVerifyArchive_CanonicalProseNoRestatementCarriedIsAFinding(t *testing.T) {
 	t.Parallel()
-	assert.Empty(t, verifyArchive(
+	assert.Len(t, verifyArchive(
 		map[string][]archivedRestatement{
-			"cap/the-thing": {{change: "2026-06-02-refines-it", scenarios: []string{"one"}, prose: []string{"It SHALL do the thing."}}},
+			"cap/the-thing": {{change: "2026-06-02-refines-it", scenarios: []string{"one"},
+				text: requirementText{body: []string{"It SHALL do the thing."}}}},
 		},
 		canonicalWith("cap/the-thing", "one"),
 		nil,
-		map[string][]string{"cap/the-thing": {"It SHALL do the thing.", "An editor added this by hand."}},
-	))
+		map[string]requirementText{"cap/the-thing": {body: []string{"It SHALL do the thing.", "An editor added this by hand."}}},
+	), 1, "the clause the restatement dropped is still canonical, so its retirement did not take effect")
 }
 
-// TestCollapseProse pins the one thing this normaliser exists to do, which a plain whitespace trim does not: absorb the LINE
-// WRAP. The canonical tree is Prettier `proseWrap: never` and the change deltas are hard-wrapped by hand, so without this,
-// comparing bodies reports reflow as loss. Measured across the archive before it existed: 17 requirements differing, 9 of them
-// only by reflow.
-func TestCollapseProse(t *testing.T) {
+// TestSplitRequirementText pins the two things this normaliser exists to do, which a plain whitespace trim does not: absorb the
+// LINE WRAP, and keep each scenario's text under its own name.
+//
+// The wrap first. The canonical tree is Prettier `proseWrap: never` and the change deltas are hard-wrapped by hand, so without
+// this, comparing bodies reports reflow as loss: measured across the archive before it existed, 17 requirements differing and 9
+// of them only by reflow.
+func TestSplitRequirementText(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a hard-wrapped paragraph equals the same text on one line", func(t *testing.T) {
@@ -502,28 +507,102 @@ func TestCollapseProse(t *testing.T) {
 			"in the manner described here.",
 		}
 		oneLine := []string{"The system SHALL do the thing, and it SHALL do the thing in the manner described here."}
-		assert.Equal(t, collapseProse(oneLine), collapseProse(wrapped))
+		assert.Equal(t, splitRequirementText(oneLine).body, splitRequirementText(wrapped).body)
 	})
 
 	t.Run("a blank line and a list marker each start their own logical line", func(t *testing.T) {
 		t.Parallel()
 		assert.Equal(t, []string{"First paragraph.", "Second paragraph.", "- a bullet", "- another bullet"},
-			collapseProse([]string{"First paragraph.", "", "Second", "paragraph.", "- a bullet", "- another bullet"}))
+			splitRequirementText([]string{"First paragraph.", "", "Second", "paragraph.", "- a bullet", "- another bullet"}).body)
 	})
 
 	// A bullet that gained a clause is its own difference rather than being absorbed into the paragraph around it.
 	t.Run("a changed bullet does not swallow its neighbours", func(t *testing.T) {
 		t.Parallel()
-		before := collapseProse([]string{"Body.", "- one", "- two"})
-		after := collapseProse([]string{"Body.", "- one", "- two, refined"})
-		assert.Equal(t, []string{"Body.", "- one", "- two"}, before)
-		assert.Equal(t, []string{"Body.", "- one", "- two, refined"}, after)
+		assert.Equal(t, []string{"Body.", "- one", "- two"}, splitRequirementText([]string{"Body.", "- one", "- two"}).body)
+		assert.Equal(t, []string{"Body.", "- one", "- two, refined"},
+			splitRequirementText([]string{"Body.", "- one", "- two, refined"}).body)
 	})
 
-	// Everything from the first subheading on belongs to a scenario, which is compared by name elsewhere.
-	t.Run("stops at the first subheading", func(t *testing.T) {
+	// A scenario's text goes under the scenario's slug, not into the requirement's own body. A scenario that goes missing is
+	// reported once by name, and counting its bullets as body text too turned one lost scenario into seven findings.
+	t.Run("scenario text is keyed by the scenario", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, []string{"Body."},
-			collapseProse([]string{"### Requirement: The thing", "Body.", "", "#### Scenario: One", "- **THEN** it does"}))
+		got := splitRequirementText([]string{
+			"### Requirement: The thing", "Body.", "",
+			"#### Scenario: One", "- **THEN** it does", "",
+			"#### Scenario: Two", "- **THEN** it also does",
+		})
+		assert.Equal(t, []string{"Body."}, got.body)
+		assert.Equal(t, map[string][]string{"one": {"- **THEN** it does"}, "two": {"- **THEN** it also does"}}, got.scenarios)
 	})
+
+	// A non-Scenario subheading closes whatever was open without opening a scenario, so its text stays comparable as body while
+	// the heading itself, being structure rather than prose, is not compared.
+	t.Run("another subheading does not open a scenario", func(t *testing.T) {
+		t.Parallel()
+		got := splitRequirementText([]string{"Body.", "", "#### Notes", "An aside."})
+		assert.Equal(t, []string{"Body.", "An aside."}, got.body)
+		assert.Empty(t, got.scenarios)
+	})
+}
+
+// TestVerifyArchive_ScenarioBodyIsComparedUnderItsName covers the gap review found in excluding scenario text: a MODIFIED delta
+// that only changes a THEN clause, archived before its ADDED, has that change reverted while the scenario NAME and the
+// requirement's own prose both survive, so nothing else in the report notices.
+func TestVerifyArchive_ScenarioBodyIsComparedUnderItsName(t *testing.T) {
+	t.Parallel()
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{
+				change:    "2026-06-02-refines-it",
+				scenarios: []string{"one"},
+				text:      requirementText{scenarios: map[string][]string{"one": {"- **THEN** it does the refined thing"}}},
+			}},
+		},
+		canonicalWith("cap/the-thing", "one"),
+		nil,
+		map[string]requirementText{"cap/the-thing": {scenarios: map[string][]string{"one": {"- **THEN** it does the old thing"}}}},
+	)
+	// Both directions fire: the refined clause is missing, and the old one it replaced is still there.
+	require.Len(t, findings, 2)
+	assert.Contains(t, findings[0], "cap/the-thing/one")
+	assert.Contains(t, findings[1], "cap/the-thing/one")
+}
+
+// A scenario the canonical spec has and the restatement did not mention at all is reported once, by name, and its body is left
+// alone. Comparing the body too turned one lost scenario into seven findings.
+func TestVerifyArchive_AMissingScenarioIsNotAlsoReportedLineByLine(t *testing.T) {
+	t.Parallel()
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{
+				change:    "2026-06-02-refines-it",
+				scenarios: []string{"kept"},
+				text:      requirementText{scenarios: map[string][]string{"kept": {"- **THEN** it does"}}},
+			}},
+		},
+		canonicalWith("cap/the-thing", "kept", "dropped"),
+		nil,
+		map[string]requirementText{"cap/the-thing": {scenarios: map[string][]string{
+			"kept":    {"- **THEN** it does"},
+			"dropped": {"- **GIVEN** something", "- **THEN** something else"},
+		}}},
+	)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "cap/the-thing/dropped")
+	assert.Contains(t, findings[0], "retired by 2026-06-02-refines-it")
+}
+
+// TestLastBatchRestatement_ARepeatedLineStillCounts covers the counting bug review found: the shared count is per RESTATEMENT,
+// not per occurrence, so a restatement that repeats an identical bullet does not push its own count past the batch size and drop
+// the line out of the intersection.
+func TestLastBatchRestatement_ARepeatedLineStillCounts(t *testing.T) {
+	t.Parallel()
+	got := lastBatchRestatement([]archivedRestatement{
+		{change: "2026-09-07-aaa", text: requirementText{body: []string{"- the same bullet", "- the same bullet"}}},
+		{change: "2026-09-07-zzz", text: requirementText{body: []string{"- the same bullet"}}},
+	})
+	assert.Equal(t, []string{"- the same bullet"}, got.kept.body,
+		"both restatements carried it, so losing every copy has to be reportable")
 }

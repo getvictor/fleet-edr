@@ -73,7 +73,19 @@ func adderBeforeTheRest(d *deltaSections, canonical map[string]struct{}) []archi
 			modifiers = append(modifiers, change)
 		}
 		_, alreadyExists := canonical[requirement]
-		for _, adder := range sortedKeys(adders) {
+		// Two changes ADDING the same requirement have no order either, and each delta validates on its own. Whichever is
+		// applied second replaces the other's body outright, so one author's text is discarded with no error: the same loss
+		// #815's identical-restatement rule exists to prevent, in the section that rule does not read. Reported rather than
+		// sequenced, for the reason the pair below is. No pending pair is in this state today.
+		sortedAdders := sortedKeys(adders)
+		for i, adder := range sortedAdders {
+			for _, other := range sortedAdders[i+1:] {
+				out = append(out,
+					archiveConstraint{before: adder, after: other, requirement: requirement},
+					archiveConstraint{before: other, after: adder, requirement: requirement})
+			}
+		}
+		for _, adder := range sortedAdders {
 			// One change that both adds and modifies the same requirement is not an ordering problem: openspec applies its
 			// sections in file order, and there is nothing to sequence against.
 			for _, modifier := range sortedUnique(modifiers) {
@@ -379,9 +391,14 @@ func runArchiveOrder(args []string) int {
 	setFlags := userSetFlagNames(fs)
 	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
 	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
-	if err := requireDir(*changesDir); err != nil {
-		fmt.Fprintf(os.Stderr, "spectrace archive-order: %v\n", err)
-		return 2
+	// Both roots, because a --specs-dir that is not a directory yields an EMPTY canonical set rather than an error, and an empty
+	// one classifies every pending ADDED as creating a new requirement. Review caught it: that is how a pair with no safe order
+	// gets printed as a safe one.
+	for _, dir := range []string{*changesDir, *specsDir} {
+		if err := requireDir(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "spectrace archive-order: %v\n", err)
+			return 2
+		}
 	}
 	scenarios, specErr := ParseAllSpecs(*specsDir)
 	if specErr != nil {

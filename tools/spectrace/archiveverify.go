@@ -15,9 +15,10 @@ import (
 type archivedRestatement struct {
 	change    string
 	scenarios []string
-	// prose is the entry's text as comparable logical lines, which is what a scenario heading cannot tell you: a restatement can
-	// refine a requirement's normative wording while listing exactly the scenarios the body it replaces already had.
-	prose []string
+	// text is the entry's prose as comparable logical lines, which is what a scenario heading cannot tell you: a restatement can
+	// refine a requirement's normative wording, or one scenario's THEN clause, while listing exactly the scenario names the body
+	// it replaces already had.
+	text requirementText
 }
 
 // verifyArchive reports scenarios an archived restatement listed that the canonical tree no longer has.
@@ -39,7 +40,7 @@ type archivedRestatement struct {
 // that is new is a scenario this archive lost. That comparison needs no ordering and no baseline file, and it is the question a
 // release engineer actually has.
 func verifyArchive(archived map[string][]archivedRestatement, canonical map[string]map[string]struct{},
-	lifecycle map[string]requirementLifecycle, prose map[string][]string,
+	lifecycle map[string]requirementLifecycle, text map[string]requirementText,
 ) []string {
 	var losses []string
 	// Every requirement an archived delta said anything about, not only the ones it restated: a retirement that did not take
@@ -81,10 +82,40 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 		winner := lastBatchRestatement(entries)
 		losses = append(losses, missingScenarios(requirement, winner, have)...)
 		losses = append(losses, unretiredScenarios(requirement, winner, have)...)
-		losses = append(losses, missingProse(requirement, winner, prose[requirement])...)
+		losses = append(losses, missingText(requirement, winner, text[requirement])...)
 	}
 	sort.Strings(losses)
 	return losses
+}
+
+// textKeys is a restatement's prose as a SET of (scenario, line) pairs, where an empty scenario means the requirement's own body.
+// A set rather than a list because the counting below is "how many restatements carried this", not "how many times it appears".
+func textKeys(t requirementText) map[[2]string]struct{} {
+	out := make(map[[2]string]struct{}, len(t.body))
+	for _, line := range t.body {
+		out[[2]string{"", line}] = struct{}{}
+	}
+	for scenario, lines := range t.scenarios {
+		for _, line := range lines {
+			out[[2]string{scenario, line}] = struct{}{}
+		}
+	}
+	return out
+}
+
+func appendText(t *requirementText, key [2]string) {
+	if key[0] == "" {
+		t.body = append(t.body, key[1])
+		return
+	}
+	t.scenarios[key[0]] = append(t.scenarios[key[0]], key[1])
+}
+
+func sortText(t *requirementText) {
+	sort.Strings(t.body)
+	for scenario := range t.scenarios {
+		sort.Strings(t.scenarios[scenario])
+	}
 }
 
 // missingScenarios reports a scenario the last batch's restatements all listed that the canonical spec does not have.
@@ -118,22 +149,52 @@ func unretiredScenarios(requirement string, winner winningRestatement, have map[
 	return out
 }
 
-// missingProse reports normative text the batch's restatements all carried that the canonical spec does not have.
+// missingText reports prose the batch's restatements all carried that the canonical spec does not have, and canonical prose none
+// of them carried.
 //
-// This is the loss a scenario heading cannot speak for: a restatement can refine a requirement's wording while listing exactly the
-// scenarios the body it replaces already had, and archiving it before the ADDED it refines loses that wording with every heading
-// still in place. Twenty-one lines across thirteen requirements on today's tree are in that state.
+// The first is the loss a scenario heading cannot speak for: a restatement can refine a requirement's wording, or one scenario's
+// THEN clause, while listing exactly the scenario names the body it replaces already had, and archiving it before the ADDED it
+// refines loses that wording with every name still in place.
 //
-// Only in the loss direction. Canonical text no restatement carried is as often a legacy hand-edit of `openspec/specs/**` as it is
-// archive damage, and this file's rule is that an ambiguous finding is worse than a missed one.
-func missingProse(requirement string, winner winningRestatement, canonicalProse []string) []string {
-	var out []string
-	for _, line := range winner.prose {
-		if slices.Contains(canonicalProse, line) {
+// The second is that comparison the other way round, and it is the one review had to ask for twice. A restatement whose whole
+// change is a DELETION carries no line the canonical spec lacks, so the loss direction alone reports nothing when it is archived
+// out of order and the deleted clause survives. I left it out on the assumption that canonical text no restatement carried would
+// mostly be legacy hand-edits of `openspec/specs/**` and would drown the report. Measured, it is 14 lines across 12 requirements.
+//
+// Scenario bodies are compared under their scenario NAME, and only for scenarios both sides have. A scenario that went missing is
+// reported once by name; counting its bullets too turned one lost scenario into seven findings, 127 lines across the archive.
+func missingText(requirement string, winner winningRestatement, canonical requirementText) []string {
+	out := textDiff(requirement, "", winner.by(), winner.kept.body, canonical.body, winner.everKept.body)
+	// Scenario text under the scenario's NAME, and only for scenarios both sides have. A scenario that went missing is reported
+	// once by name; counting its bullets too turned one lost scenario into seven findings.
+	for _, scenario := range sortedKeys(winner.kept.scenarios) {
+		canonicalLines, both := canonical.scenarios[scenario]
+		if !both {
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s\n    text listed by %s, and not in the canonical spec:\n      %s",
-			requirement, winner.by(), line))
+		out = append(out, textDiff(requirement, scenario, winner.by(),
+			winner.kept.scenarios[scenario], canonicalLines, winner.everKept.scenarios[scenario])...)
+	}
+	return out
+}
+
+// textDiff reports one span of prose in both directions: lines every restatement carried that the canonical spec lacks, and
+// canonical lines none of them carried.
+func textDiff(requirement, scenario, by string, kept, canonical, everKept []string) []string {
+	where := requirement
+	if scenario != "" {
+		where = requirement + "/" + scenario
+	}
+	var out []string
+	for _, line := range kept {
+		if !slices.Contains(canonical, line) {
+			out = append(out, fmt.Sprintf("%s\n    text listed by %s, and not in the canonical spec:\n      %s", where, by, line))
+		}
+	}
+	for _, line := range canonical {
+		if !slices.Contains(everKept, line) {
+			out = append(out, fmt.Sprintf("%s\n    in the canonical spec, and retired by %s:\n      %s", where, by, line))
+		}
 	}
 	return out
 }
@@ -146,8 +207,10 @@ type winningRestatement struct {
 	// everListed is every scenario ANY restatement in the batch named, which is what a canonical scenario is checked against: one
 	// that any of them kept could be there because that one won, and only one none of them kept is a retirement that did not land.
 	everListed map[string]struct{}
-	// prose is the text every restatement in the batch carried, for the same reason scenarios is their intersection.
-	prose []string
+	// kept is the text every restatement in the batch carried, and everKept the text ANY of them did, for the same reason
+	// scenarios is an intersection and everListed a union.
+	kept     requirementText
+	everKept requirementText
 }
 
 // by names the changes a finding is attributed to. Every change in the batch, since which of them won is not recoverable.
@@ -170,9 +233,13 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			last = d
 		}
 	}
-	out := winningRestatement{everListed: map[string]struct{}{}}
+	out := winningRestatement{
+		everListed: map[string]struct{}{},
+		kept:       requirementText{scenarios: map[string][]string{}},
+		everKept:   requirementText{scenarios: map[string][]string{}},
+	}
 	shared := map[string]int{}
-	sharedProse := map[string]int{}
+	sharedText := map[[2]string]int{}
 	batch := 0
 	for _, e := range entries {
 		if archiveDate(e.change) != last {
@@ -184,8 +251,11 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			shared[s]++
 			out.everListed[s] = struct{}{}
 		}
-		for _, line := range e.prose {
-			sharedProse[line]++
+		// Counted per ENTRY, not per occurrence, which review caught: a restatement repeating an identical bullet would push its
+		// count past the batch size and drop the line out of the intersection, so losing every copy would go unreported.
+		for key := range textKeys(e.text) {
+			sharedText[key]++
+			appendText(&out.everKept, key)
 		}
 	}
 	for s, n := range shared {
@@ -193,12 +263,13 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			out.scenarios = append(out.scenarios, s)
 		}
 	}
-	for line, n := range sharedProse {
+	for key, n := range sharedText {
 		if n == batch {
-			out.prose = append(out.prose, line)
+			appendText(&out.kept, key)
 		}
 	}
-	sort.Strings(out.prose)
+	sortText(&out.kept)
+	sortText(&out.everKept)
 	sort.Strings(out.changes)
 	sort.Strings(out.scenarios)
 	return out
@@ -301,7 +372,7 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 		for requirement, byChange := range one.modifiedRestatements {
 			for _, r := range byChange {
 				restatements[requirement] = append(restatements[requirement],
-					archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios), prose: collapseProse(r.lines)})
+					archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios), text: splitRequirementText(r.lines)})
 			}
 		}
 		for requirement := range one.removedRequirements {
@@ -329,9 +400,11 @@ func runArchiveVerify(args []string) int {
 	setFlags := userSetFlagNames(fs)
 	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
 	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
-	if err := requireDir(*changesDir); err != nil {
-		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
-		return 2
+	for _, dir := range []string{*changesDir, *specsDir} {
+		if err := requireDir(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
+			return 2
+		}
 	}
 
 	scenarios, err := ParseAllSpecs(*specsDir)
@@ -341,14 +414,10 @@ func runArchiveVerify(args []string) int {
 	}
 	canonical := canonicalScenarios(scenarios)
 
-	bodies, err := ParseAllRequirementBodies(*specsDir)
+	text, err := ParseAllRequirementText(*specsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
 		return 2
-	}
-	prose := make(map[string][]string, len(bodies))
-	for requirement, lines := range bodies {
-		prose[requirement] = collapseProse(lines)
 	}
 
 	archived, lifecycle, err := collectArchivedRestatements(*changesDir)
@@ -357,7 +426,7 @@ func runArchiveVerify(args []string) int {
 		return 2
 	}
 
-	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, lifecycle, prose), len(archived))
+	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, lifecycle, text), len(archived))
 }
 
 // printArchiveVerify renders the report. FINDINGS never gate: the tree carries pre-existing entries this pass cannot classify,

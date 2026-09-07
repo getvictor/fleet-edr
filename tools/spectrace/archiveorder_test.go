@@ -311,3 +311,19 @@ func TestArchiveConstraints_AddingWhatAlreadyExistsIsNotOrderable(t *testing.T) 
 	_, cycle = archiveOrder([]string{"reintroduces-it", "retires-it"}, archiveConstraints(sections, existing))
 	assert.Equal(t, []string{"reintroduces-it", "retires-it"}, cycle)
 }
+
+// TestArchiveConstraints_TwoChangesAddingTheSameRequirement pins the pair review found last: each delta validates on its own, and
+// whichever is applied second replaces the other's body outright, so one author's text is discarded with no error. That is the
+// loss #815's identical-restatement rule exists to prevent, in the section that rule does not read.
+func TestArchiveConstraints_TwoChangesAddingTheSameRequirement(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeChange(t, dir, "adds-it", "cap", added("The thing"))
+	writeChange(t, dir, "also-adds-it", "cap", added("The thing"))
+	sections, err := parseDeltaSections(dir)
+	require.NoError(t, err)
+
+	_, cycle := archiveOrder([]string{"adds-it", "also-adds-it"}, archiveConstraints(sections, nil))
+	assert.Equal(t, []string{"adds-it", "also-adds-it"}, cycle,
+		"no order saves both bodies, so the pair is reported rather than sequenced")
+}

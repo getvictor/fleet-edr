@@ -98,9 +98,11 @@ func parseSpec(r io.Reader, specDir, sourcePath string) ([]Scenario, map[string]
 	)
 
 	keepBodyLine := func(line string) {
-		// Everything under the active requirement, verbatim. Where a requirement's OWN text ends is collapseProse's rule, not
-		// this one's, because the archived-delta side reaches it as verbatim lines too and one boundary applied to both sides is
-		// the only way the two can be compared. A copy of that rule here passed every test while doing nothing.
+		// EVERY line under the active requirement, headings included, verbatim. Which lines are body, which belong to a scenario,
+		// and where a requirement's own text ends are splitRequirementText's rules, not this one's, because the archived-delta
+		// side reaches that function as verbatim lines too and one set of rules applied to both sides is the only way the two can
+		// be compared. Filtering the scenario headings out here, which this did, put every scenario bullet in the canonical
+		// requirement's BODY and under a scenario key on the delta side, and reported 648 identical lines as retired.
 		bodies[currentReqSlug] = append(bodies[currentReqSlug], line)
 	}
 
@@ -140,6 +142,7 @@ func parseSpec(r io.Reader, specDir, sourcePath string) ([]Scenario, map[string]
 				Normative:   reqIsNormative,
 			})
 			seenSubheading = true
+			keepBodyLine(line)
 		case strings.HasPrefix(line, "### ") || strings.HasPrefix(line, "## "):
 			// A new top-level or sibling heading closes the active requirement. Subsequent body text until the next
 			// `### Requirement:` is irrelevant to the scenario list.
@@ -151,6 +154,7 @@ func parseSpec(r io.Reader, specDir, sourcePath string) ([]Scenario, map[string]
 			// Non-Scenario subheading under a requirement (e.g. `#### Notes`). Closes the requirement-body inspection so
 			// later body text under that subheading does not change the normative classification.
 			seenSubheading = true
+			keepBodyLine(line)
 		default:
 			if currentReq != "" {
 				flushReqBodyLine(line)
@@ -216,14 +220,14 @@ func slugify(s string) string {
 	return strings.Trim(out, "-")
 }
 
-// ParseAllRequirementBodies returns every canonical requirement's body lines, keyed the way scenario IDs are prefixed
+// ParseAllRequirementText returns every canonical requirement's prose, keyed the way scenario IDs are prefixed
 // (`<specDir>/<requirement-slug>`).
 //
 // A second walk rather than a second parser, and a second entry point rather than a wider ParseAllSpecs: the archive verifier is
 // the only caller that needs bodies, and every other caller would have to thread a return value it ignores. What must not happen
 // is a second implementation of the heading rules, which is why this goes through parseSpec.
-func ParseAllRequirementBodies(specsDir string) (map[string][]string, error) {
-	out := make(map[string][]string)
+func ParseAllRequirementText(specsDir string) (map[string]requirementText, error) {
+	out := make(map[string]requirementText)
 	err := filepath.WalkDir(specsDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -242,7 +246,7 @@ func ParseAllRequirementBodies(specsDir string) (map[string][]string, error) {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
 		for requirement, lines := range bodies {
-			out[specDir+"/"+requirement] = lines
+			out[specDir+"/"+requirement] = splitRequirementText(lines)
 		}
 		return nil
 	})
@@ -252,24 +256,46 @@ func ParseAllRequirementBodies(specsDir string) (map[string][]string, error) {
 	return out, nil
 }
 
-// collapseProse reduces requirement text to comparable logical lines: whitespace-only differences and LINE WRAPPING are absorbed,
-// nothing else.
+// requirementText is a requirement's prose split the way it is compared: its own normative body, and each scenario's body under
+// the scenario's slug.
 //
-// The wrapping is the whole reason this exists rather than reusing normaliseRestatement. Measured across the archive, comparing
-// bodies with trailing-whitespace normalisation alone reports 17 requirements as differing and 9 of those differ ONLY by reflow:
-// the canonical tree is Prettier `proseWrap: never` and the change deltas are hard-wrapped by hand. A check whose output is nine
-// parts reflow is one a reader learns to ignore, which is worse than not having it.
+// Split rather than one flat list because a scenario that goes missing takes its GIVEN/WHEN/THEN bullets with it. Comparing the
+// text flat reported one lost scenario as seven findings, measured at 127 lines across the archive; keyed by scenario, a missing
+// scenario is reported once by name and only the bodies of scenarios that exist on BOTH sides are compared.
+type requirementText struct {
+	body      []string
+	scenarios map[string][]string
+}
+
+// splitRequirementText turns a requirement's verbatim lines into comparable logical lines. Whitespace differences and LINE
+// WRAPPING are absorbed, nothing else.
 //
-// A blank line, a list marker and a heading each start a new logical line, so a bullet that gained or lost a clause is still its
-// own difference rather than being absorbed into the paragraph around it.
-func collapseProse(lines []string) []string {
-	var out []string
+// The wrapping is the whole reason this exists rather than a plain trim. Measured across the archive, comparing bodies with
+// trailing-whitespace normalisation alone reports 17 requirements as differing and 9 of those differ ONLY by reflow: the canonical
+// tree is Prettier `proseWrap: never` and the change deltas are hard-wrapped by hand. A check whose output is nine parts reflow is
+// one a reader learns to ignore, which is worse than not having it.
+//
+// A blank line, a list marker and a heading each start a new logical line, so a bullet that gained or lost a clause is its own
+// difference rather than being absorbed into the paragraph around it.
+//
+// One function for both sides of the comparison, deliberately: it takes the verbatim lines a canonical spec.md yields and the
+// verbatim lines an archived delta's MODIFIED entry yields, and a second implementation of these rules is how the two sides would
+// come to disagree about where a requirement's own text ends.
+func splitRequirementText(lines []string) requirementText {
+	out := requirementText{scenarios: map[string][]string{}}
 	var buf []string
+	scenario := ""
 	flush := func() {
-		if len(buf) > 0 {
-			out = append(out, strings.Join(buf, " "))
-			buf = nil
+		if len(buf) == 0 {
+			return
 		}
+		joined := strings.Join(buf, " ")
+		if scenario == "" {
+			out.body = append(out.body, joined)
+		} else {
+			out.scenarios[scenario] = append(out.scenarios[scenario], joined)
+		}
+		buf = nil
 	}
 	for _, line := range lines {
 		trimmed := strings.Join(strings.Fields(line), " ")
@@ -279,14 +305,17 @@ func collapseProse(lines []string) []string {
 		case strings.HasPrefix(trimmed, "### Requirement:"):
 			// The heading is the key, not body text, and the two sides carry it differently.
 			flush()
-		case strings.HasPrefix(trimmed, "#### "):
-			// A subheading ends the requirement's own text, and everything past it belongs to a scenario.
-			//
-			// Scenario bodies are deliberately outside the comparison. They are covered by comparing scenario NAMES, and a
-			// scenario that goes missing takes its GIVEN/WHEN/THEN bullets with it: counting those as prose losses too reported
-			// one lost scenario as seven findings, measured at 127 lines across the archive against 21 for requirement text.
+		case strings.HasPrefix(trimmed, "#### Scenario:"):
+			// Compared by NAME elsewhere, so the heading itself is not text; what follows belongs to this scenario.
 			flush()
-			return out
+			scenario = slugify(strings.TrimSpace(strings.TrimPrefix(trimmed, "#### Scenario:")))
+			if _, ok := out.scenarios[scenario]; !ok {
+				out.scenarios[scenario] = nil
+			}
+		case strings.HasPrefix(trimmed, "#### "):
+			// Any other subheading ends the requirement's own text without belonging to a scenario.
+			flush()
+			scenario = ""
 		case strings.HasPrefix(trimmed, "#"), strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
 			flush()
 			buf = append(buf, trimmed)
