@@ -174,13 +174,19 @@ func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 	// anyone: its own Limitations say it reports that recovery gave up and not why the provider stopped, and its Description
 	// sends an analyst to this product's own components. Both outcome values describe our repair mechanism failing.
 	//
-	// Asserted because Techniques() feeds the ATT&CK coverage export a customer reads during an evaluation, so a technique here
-	// puts our own faults into their coverage map. If a future revision earns one back, it has to be by attaching evidence that
-	// somebody acted, and changing this line is how that decision gets made rather than noticed.
-	assert.Empty(t, r.Techniques(),
+	// Where a technique here would surface is the ALERT ROW, not the coverage export: this rule is classified a health signal, so
+	// it is already off the export, off GET /api/rules and out of the generated reference. What remained is that the finding
+	// declares no techniques of its own, so persistence falls back to this list and stamps it on the row an analyst reads.
+	//
+	// Empty and NOT nil, which is the interface's stated contract for "no mapping" and what the other unmapped rule returns.
+	// If a future revision earns a technique back, it has to be by attaching evidence that somebody acted, and changing these
+	// lines is how that decision gets made rather than noticed.
+	assert.Equal(t, []string{}, r.Techniques(),
 		"a rule that documents its own components as the likely cause must not claim an adversary technique")
 	assert.Empty(t, findings[0].Techniques,
 		"and the finding must carry none either, or the alert row gets one from somewhere the rule cannot see")
+	assert.NotContains(t, findings[0].Description, "T1562",
+		"nor in the prose: the description is copied onto the alert verbatim, so a technique there is read by the same analyst")
 	assert.Equal(t, []string{"sensor_recovery_failed"}, doc.EventTypes,
 		"the documented input event must be the one the rule reads, or an operator cannot tell what feeds it")
 	assert.NotEqual(t, (&SensorTamper{}).ID(), r.ID())

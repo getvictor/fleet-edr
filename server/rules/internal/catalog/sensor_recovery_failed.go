@@ -9,7 +9,7 @@ import (
 )
 
 // SensorRecoveryFailed fires when the agent's automatic repair of a stopped capture provider gives up, leaving the host
-// not capturing until a human intervenes (T1562.001, issue #691).
+// not capturing until a human intervenes (issue #691). It claims no ATT&CK technique; see Techniques below for why.
 //
 // # Why this is separate from sensor_tamper rather than folded into it
 //
@@ -76,10 +76,14 @@ func (r *SensorRecoveryFailed) DisplayName() string { return "EDR sensor could n
 // finding declares no techniques of its own, so alert persistence falls back to this list and stamped T1562.001 onto the row an
 // analyst reads. That is the surface the removal fixes.
 //
-// The alert keeps its Critical severity and its text. Without an adversary attached it is a visibility and health statement, and
-// that needs no adversary label to earn its severity: a host that is not capturing needs an operator either way. Whether it
-// belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
-func (r *SensorRecoveryFailed) Techniques() []string { return nil }
+// The alert keeps its Critical severity and its operational explanation. Removing an attribution is not a downgrade: without an
+// adversary attached this is a visibility and health statement, and that needs no adversary label to earn its severity, since a
+// host that is not capturing needs an operator either way. What the removal does take out of the text is the attribution itself,
+// which the description used to carry as a trailing "(MITRE T1562.001)" and which is the same claim by another route. Whether
+// this belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
+//
+// Empty and not nil, which is what the interface asks for (see api.Rule) and what the other unmapped rule returns.
+func (r *SensorRecoveryFailed) Techniques() []string { return []string{} }
 
 // Doc surfaces the operator-facing description in /api/rules and the generated docs/detection-rules.md.
 func (r *SensorRecoveryFailed) Doc() api.Documentation {
@@ -183,9 +187,12 @@ func sensorRecoveryFailedDescription(p sensorRecoveryFailedPayload) string {
 	case outcomeEnableIneffective:
 		diagnosis = "every attempt to re-enable it reported success and it stayed stopped"
 	}
+	// No technique in the prose either, and review was right that removing it from the structured list alone was half a fix: the
+	// description is copied verbatim onto the alert, so an analyst went on reading "(MITRE T1562.001)" on a condition this rule
+	// cannot attribute to anyone (issue #754). The operational sentence is what was worth keeping and is untouched.
 	return fmt.Sprintf(
 		"EDR capture provider %s is still stopped after %d automatic repair attempts (%s): this host is not reporting "+
-			"that telemetry and will not until it is restored by hand (MITRE T1562.001)",
+			"that telemetry and will not until it is restored by hand",
 		p.Provider, p.Attempts, diagnosis,
 	)
 }

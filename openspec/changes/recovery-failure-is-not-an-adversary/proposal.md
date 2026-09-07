@@ -16,12 +16,13 @@ What the claim still reached is every **alert** this rule raises. The finding de
 
 ## What changes
 
-- `sensor_recovery_failed` declares no technique.
+- `sensor_recovery_failed` declares no technique, as an empty slice rather than nil, which is the interface's stated contract for "no mapping".
+- Its alert TEXT no longer names one either. The description is copied onto the alert verbatim, so removing the structured mapping alone would have left `(MITRE T1562.001)` in the sentence the analyst actually reads. The operational explanation is untouched.
 - The requirement says what a technique declaration means, so the next rule faces the question deliberately: declare one only for something observed, and declaring none is a complete mapping rather than a gap.
 
 ## What does not change
 
-The alert keeps its Critical severity, its title and its text, and stays a separate rule from `sensor_tamper`. The measured case for the split is unaffected: on one host a stop was repaired 35.7s later and the host was fine while another exhausted every attempt and left the host blind, and both produced word-for-word identical `sensor_tamper` alerts.
+The alert keeps its Critical severity, its title and its operational explanation, and stays a separate rule from `sensor_tamper`. The issue asks for the text to be unchanged and for only the attribution to change; those read together mean the attribution comes out of the text too, since it was inside it. The measured case for the split is unaffected: on one host a stop was repaired 35.7s later and the host was fine while another exhausted every attempt and left the host blind, and both produced word-for-word identical `sensor_tamper` alerts.
 
 Whether this signal belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
 

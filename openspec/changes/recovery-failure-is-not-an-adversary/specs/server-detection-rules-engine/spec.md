@@ -10,6 +10,8 @@ A rule SHALL declare a technique only for something it OBSERVED, not for the sub
 
 Declaring none is a complete mapping rather than a gap. A signal that a host has stopped capturing is an operational statement, and it earns its severity from the consequence rather than from an attribution: a host that is not capturing needs an operator whatever caused it. An unearned technique is not a harmless overstatement either, because it reaches the alert row an analyst reads and, for a rule that appears on the operator-facing catalog, the coverage export a customer reads.
 
+A rule that declares no technique SHALL NOT name one in its alert text either. The text is carried onto the alert verbatim and read by the same analyst, so an attribution in prose is the same claim by another route, and removing it from the structured mapping alone leaves the claim standing where it is actually read.
+
 #### Scenario: A rule advertises ATT&CK techniques
 
 - **GIVEN** a rule that declares technique identifiers such as `T1059.002` and `T1105`
@@ -23,5 +25,6 @@ Declaring none is a complete mapping rather than a gap. A signal that a host has
 - **AND** that rule documents this product's own components among the likely causes
 - **WHEN** it fires and an alert is persisted
 - **THEN** the alert row carries no ATT&CK technique
-- **AND** the alert keeps its severity and its text, because the host still needs an operator
+- **AND** its text names none either
+- **AND** the alert keeps its severity and its operational explanation, because the host still needs an operator
 
