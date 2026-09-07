@@ -54,12 +54,14 @@ func archiveConstraints(d *deltaSections) []archiveConstraint {
 			}
 		}
 	}
-	// A REMOVED beside a MODIFIED, with no ADDED among the pending changes, still has to be sequenced: the requirement is already
-	// canonical, so the restatement must land before the retirement or the retirement is undone.
+	// A REMOVED after a MODIFIED, always. The restatement re-creates the requirement it replaces, so a retirement applied before it
+	// is undone by it.
+	//
+	// This edge is emitted whether or not an ADDED is also pending, and skipping it when one was is the bug review found: with an
+	// add, a remove and a modify in three separate changes, the adder-first edges alone leave add-remove-modify a legal order, and
+	// the modify then recreates the requirement the remove had retired. Constraining the pair directly is what closes it, because
+	// the ordering is transitive only if every edge is present.
 	for requirement, removers := range d.removedBy {
-		if len(d.addedBy[requirement]) > 0 {
-			continue
-		}
 		for _, remover := range sortedKeys(removers) {
 			for _, modifier := range sortedKeysOfRestatements(d.modifiedRestatements[requirement]) {
 				if remover == modifier {
@@ -119,8 +121,9 @@ func archiveOrder(changes []string, constraints []archiveConstraint) (order []st
 			}
 		}
 		if next == -1 {
-			// Everything left is blocked by something else left.
-			return order, remaining
+			// Everything left is blocked by something else left, but that set is wider than the cycle: a change that merely
+			// depends on a cycle member is stuck too, and naming it would send someone to split a delta that is not the problem.
+			return order, onlyCycles(remaining, blockers)
 		}
 		picked := remaining[next]
 		order = append(order, picked)
@@ -132,6 +135,42 @@ func archiveOrder(changes []string, constraints []archiveConstraint) (order []st
 	return order, nil
 }
 
+// onlyCycles narrows a stalled set to the changes actually ON a cycle.
+//
+// Kahn's algorithm stalls with everything that still has a prerequisite, which includes the descendants of a cycle as well as its
+// members. Those descendants are stuck but blameless, and reporting them invites reconciling the wrong delta.
+//
+// A change is on a cycle exactly when it can reach itself, and in the residual graph that is the same as surviving the mirror of
+// Kahn's peel: repeatedly drop whatever nothing left still depends on. A descendant has no dependents inside the set and goes; a
+// cycle member always has one, its predecessor around the loop, and stays.
+func onlyCycles(stalled []string, blockers map[string]map[string]struct{}) []string {
+	inSet := make(map[string]struct{}, len(stalled))
+	for _, c := range stalled {
+		inSet[c] = struct{}{}
+	}
+	for {
+		dependents := make(map[string]int, len(inSet))
+		for c := range inSet {
+			for b := range blockers[c] {
+				if _, ok := inSet[b]; ok {
+					dependents[b]++
+				}
+			}
+		}
+		dropped := false
+		for c := range inSet {
+			if dependents[c] == 0 {
+				delete(inSet, c)
+				dropped = true
+			}
+		}
+		if !dropped {
+			break
+		}
+	}
+	return sortedKeys(inSet)
+}
+
 // printArchiveOrder renders the order and the constraints that shaped it.
 //
 // The constraints are printed as well as the order because the order alone is not checkable: a reader following it has no way to
@@ -140,34 +179,48 @@ func archiveOrder(changes []string, constraints []archiveConstraint) (order []st
 func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConstraint) bool {
 	order, cycle := archiveOrder(changes, constraints)
 
-	if len(constraints) == 0 {
-		fmt.Fprintf(w, "spectrace: %d pending change(s), no ordering constraints between them\n", len(changes))
-		fmt.Fprintln(w, "Any order archives correctly; alphabetical is fine.")
-		return true
+	// Every write is checked, and a failed one fails the command. The caller is a release engineer following this list to archive
+	// 88 things; a plan truncated by a broken pipe while the exit status says it succeeded is the one way this tool could cause the
+	// loss it exists to prevent.
+	var werr error
+	p := func(format string, args ...any) {
+		if werr != nil {
+			return
+		}
+		_, werr = fmt.Fprintf(w, format, args...)
 	}
 
-	fmt.Fprintf(w, "spectrace: %d pending change(s), %d ordering constraint(s)\n\n", len(changes), len(constraints))
-	fmt.Fprintln(w, "Constraints. The first change creates or restates a requirement the second replaces or retires, so applying")
-	fmt.Fprintln(w, "them the other way round discards the second's text without an error:")
-	for _, c := range constraints {
-		fmt.Fprintf(w, "  %s\n    must be archived before %s\n    because both touch %s\n", c.before, c.after, c.requirement)
+	if len(constraints) == 0 {
+		p("spectrace: %d pending change(s), no ordering constraints between them\n", len(changes))
+		p("Any order archives correctly. This one is alphabetical:\n\n")
+	} else {
+		p("spectrace: %d pending change(s), %d ordering constraint(s)\n\n", len(changes), len(constraints))
+		p("%s\n%s\n", "Constraints. The first change creates or restates a requirement the second replaces or retires, so applying",
+			"them the other way round discards the second's text without an error:")
+		for _, c := range constraints {
+			p("  %s\n    must be archived before %s\n    because both touch %s\n", c.before, c.after, c.requirement)
+		}
 	}
 
 	if cycle != nil {
 		sort.Strings(cycle)
-		fmt.Fprintln(w, "\nNo order satisfies all of them. These changes each have to precede another in the set:")
+		p("\nNo order satisfies all of them. These changes each have to precede another in the set:\n")
 		for _, c := range cycle {
-			fmt.Fprintf(w, "  %s\n", c)
+			p("  %s\n", c)
 		}
-		fmt.Fprintln(w, "\nSplit one of them, or reconcile the requirements they contend over, before archiving.")
+		p("\nSplit one of them, or reconcile the requirements they contend over, before archiving.\n")
 		return false
 	}
 
-	fmt.Fprintln(w, "\nArchive in this order:")
-	for i, c := range order {
-		fmt.Fprintf(w, "  %3d. %s\n", i+1, c)
+	// Printed even when nothing is constrained, because the checklist tells the operator to archive in the order this prints and
+	// there is no other listing step left to fall back on.
+	if len(constraints) > 0 {
+		p("\nArchive in this order:\n")
 	}
-	return true
+	for i, c := range order {
+		p("  %3d. %s\n", i+1, c)
+	}
+	return werr == nil
 }
 
 // sortedKeys returns a set's keys in a stable order.

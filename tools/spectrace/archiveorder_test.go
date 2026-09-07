@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,39 +54,64 @@ func TestArchiveConstraints_AddedBeforeModified(t *testing.T) {
 }
 
 // A retirement is constrained for a sharper reason than a refinement: applied first, the requirement is deleted and then
-// re-created by the other change, so the retirement silently does not happen.
+// re-created by the other change, so the retirement silently does not happen. Either kind of predecessor pins it.
 func TestArchiveConstraints_RemovalIsSequencedToo(t *testing.T) {
 	t.Parallel()
 
-	t.Run("an ADDED still comes first", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		writeChange(t, dir, "introduces-it", "cap", added("The thing"))
-		writeChange(t, dir, "retires-it", "cap", removed("The thing"))
+	for _, tc := range []struct {
+		name  string
+		other string
+		delta string
+		why   string
+	}{
+		{"an ADDED comes first", "introduces-it", added("The thing"),
+			"the requirement has to exist before it can be retired"},
+		{"a MODIFIED comes first", "refines-it", modified("The thing"),
+			"the restatement re-creates the requirement, so a retirement before it is undone by it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeChange(t, dir, tc.other, "cap", tc.delta)
+			writeChange(t, dir, "retires-it", "cap", removed("The thing"))
 
-		sections, err := parseDeltaSections(dir)
-		require.NoError(t, err)
-		constraints := archiveConstraints(sections)
-		require.Len(t, constraints, 1)
-		assert.Equal(t, "introduces-it", constraints[0].before)
-		assert.Equal(t, "retires-it", constraints[0].after)
-	})
+			sections, err := parseDeltaSections(dir)
+			require.NoError(t, err)
+			constraints := archiveConstraints(sections)
+			require.Len(t, constraints, 1)
+			assert.Equal(t, tc.other, constraints[0].before, tc.why)
+			assert.Equal(t, "retires-it", constraints[0].after)
+		})
+	}
+}
 
-	// No ADDED among the pending changes: the requirement is already canonical, so the restatement has to land before the
-	// retirement or the retirement is undone by it.
-	t.Run("a MODIFIED comes before a REMOVED of an already-canonical requirement", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		writeChange(t, dir, "refines-it", "cap", modified("The thing"))
-		writeChange(t, dir, "retires-it", "cap", removed("The thing"))
+// The three-way case, and the one review found: an ADDED, a REMOVED and a MODIFIED of one requirement in three separate changes.
+// The retirement still has to come after the restatement, and the presence of an adder does not change that. Skipping the
+// modifier-before-remover edge whenever any adder existed made add-remove-modify a legal order, which recreates the requirement
+// after retiring it, which is the exact loss this tool exists to prevent.
+func TestArchiveConstraints_AddRemoveAndModifyAreAllSequenced(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeChange(t, dir, "introduces-it", "cap", added("The thing"))
+	writeChange(t, dir, "refines-it", "cap", modified("The thing"))
+	writeChange(t, dir, "retires-it", "cap", removed("The thing"))
 
-		sections, err := parseDeltaSections(dir)
-		require.NoError(t, err)
-		constraints := archiveConstraints(sections)
-		require.Len(t, constraints, 1)
-		assert.Equal(t, "refines-it", constraints[0].before)
-		assert.Equal(t, "retires-it", constraints[0].after)
-	})
+	sections, err := parseDeltaSections(dir)
+	require.NoError(t, err)
+	constraints := archiveConstraints(sections)
+
+	pairs := make(map[string]bool, len(constraints))
+	for _, c := range constraints {
+		pairs[c.before+" -> "+c.after] = true
+	}
+	assert.True(t, pairs["introduces-it -> refines-it"], "the requirement must exist before it is refined")
+	assert.True(t, pairs["introduces-it -> retires-it"], "and before it is retired")
+	assert.True(t, pairs["refines-it -> retires-it"],
+		"and the retirement must come last, or the restatement recreates what the retirement removed")
+
+	order, cycle := archiveOrder([]string{"introduces-it", "refines-it", "retires-it"}, constraints)
+	require.Nil(t, cycle)
+	assert.Equal(t, []string{"introduces-it", "refines-it", "retires-it"}, order)
 }
 
 // Two MODIFIEDs of one requirement are NOT sequenced here, and that is the division of labour rather than an omission:
@@ -153,14 +179,55 @@ func TestArchiveOrder_IgnoresConstraintsOnChangesThatAreNotPending(t *testing.T)
 	assert.Equal(t, []string{"here"}, order)
 }
 
+// A change that merely DEPENDS on a cycle is stuck too, and naming it sends someone to reconcile a delta that is not the problem.
+func TestArchiveOrder_BlamesOnlyTheCycle(t *testing.T) {
+	t.Parallel()
+	// a and b are the cycle; c depends on a and is blameless; d is free.
+	order, cycle := archiveOrder([]string{"a", "b", "c", "d"}, []archiveConstraint{
+		{before: "a", after: "b", requirement: "cap/one"},
+		{before: "b", after: "a", requirement: "cap/two"},
+		{before: "a", after: "c", requirement: "cap/three"},
+	})
+	assert.Equal(t, []string{"d"}, order)
+	assert.Equal(t, []string{"a", "b"}, cycle, "c is stuck behind the cycle but is not part of it")
+}
+
+// stubbornWriter fails after n successful writes, which is what a broken pipe partway through the plan looks like.
+type stubbornWriter struct {
+	ok  int
+	err error
+}
+
+func (w *stubbornWriter) Write(p []byte) (int, error) {
+	if w.ok == 0 {
+		return 0, w.err
+	}
+	w.ok--
+	return len(p), nil
+}
+
 func TestPrintArchiveOrder(t *testing.T) {
 	t.Parallel()
 
-	t.Run("says so plainly when nothing is constrained", func(t *testing.T) {
+	// The list is printed even with nothing to sequence, because the checklist directs the operator to archive in the order this
+	// prints and there is no other listing step left to fall back on.
+	t.Run("still prints the list when nothing is constrained", func(t *testing.T) {
 		t.Parallel()
 		var buf bytes.Buffer
-		assert.True(t, printArchiveOrder(&buf, []string{"a", "b"}, nil))
-		assert.Contains(t, buf.String(), "no ordering constraints")
+		assert.True(t, printArchiveOrder(&buf, []string{"b", "a"}, nil))
+		out := buf.String()
+		assert.Contains(t, out, "no ordering constraints")
+		assert.Contains(t, out, "1. a")
+		assert.Contains(t, out, "2. b")
+	})
+
+	// A plan truncated by a broken pipe, reported as success, is the one way this tool could cause the loss it exists to prevent.
+	t.Run("a truncated plan is a failure, not a success", func(t *testing.T) {
+		t.Parallel()
+		w := &stubbornWriter{ok: 1, err: errors.New("pipe closed")}
+		assert.False(t, printArchiveOrder(w, []string{"a", "b"}, []archiveConstraint{
+			{before: "a", after: "b", requirement: "cap/r"},
+		}))
 	})
 
 	// The constraints are printed as well as the order because the order alone is not checkable: a reader has no way to tell a
