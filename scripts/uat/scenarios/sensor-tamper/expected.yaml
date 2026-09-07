@@ -13,7 +13,8 @@
 
 scenario_id: sensor-tamper
 description: >-
-  Switches off the EDR's own content filter on a live VM (MITRE T1562.001) and
+  Switches off the EDR's own content filter on a live VM, which performs MITRE
+  T1562.001 even though the rule it exercises claims no technique (issue #755), and
   asserts a sensor_tamper alert reaches the server, then confirms the agent's
   self-heal restored capture so the host is left healthy and the alert is shown
   to survive the repair.
