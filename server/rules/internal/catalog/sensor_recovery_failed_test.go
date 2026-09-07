@@ -159,6 +159,7 @@ func TestSensorRecoveryFailed_IgnoresWhatIsNotItsEvent(t *testing.T) {
 // TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises guards the operator-facing surface against drifting from the
 // behaviour. /api/rules and docs/detection-rules.md are generated from Doc, so a severity or technique that disagrees
 // with the finding is a documented lie rather than a cosmetic slip.
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-that-cannot-attribute-what-it-reports-declares-no-technique
 func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 	t.Parallel()
 	r := &SensorRecoveryFailed{}
@@ -169,7 +170,27 @@ func TestSensorRecoveryFailed_DocIsConsistentWithWhatItRaises(t *testing.T) {
 
 	assert.Equal(t, doc.Severity, findings[0].Severity, "the documented severity must be the one actually raised")
 	assert.Equal(t, doc.Title, findings[0].Title)
-	assert.Equal(t, []string{"T1562.001"}, r.Techniques())
+	// No technique, and pinned deliberately rather than to follow the code (issue #754). The rule cannot attribute the stop to
+	// anyone: its own Limitations say it reports that recovery gave up and not why the provider stopped, and its Description
+	// sends an analyst to this product's own components. Both outcome values describe our repair mechanism failing.
+	//
+	// Where a technique here would surface is the ALERT ROW, not the coverage export: this rule is classified a health signal, so
+	// it is already off the export, off GET /api/rules and out of the generated reference. What remained is that this rule's
+	// findings leave Techniques UNSET, and persistence substitutes the rule's list for a nil one, so whatever is declared here is
+	// what lands on the row an analyst reads. Nil is the trigger, not emptiness, which is the second reason the value below is an
+	// empty slice: it is what the rule DECLARES, and it is never the thing the fallback tests.
+	//
+	// Empty and NOT nil, which is the interface's stated contract for "no mapping" and what the other unmapped rule returns.
+	// If a future revision earns a technique back, it has to be by attaching evidence that somebody acted, and changing these
+	// lines is how that decision gets made rather than noticed.
+	assert.Equal(t, []string{}, r.Techniques(),
+		"a rule that documents its own components as the likely cause must not claim an adversary technique")
+	assert.Empty(t, findings[0].Techniques,
+		"and the finding must carry none either, or the alert row gets one from somewhere the rule cannot see")
+	// The SHAPE of a technique id rather than the one that was removed, because rejecting only T1562 would let a later edit put
+	// T1059.004 in the same sentence and leave this test green.
+	assert.NotRegexp(t, `\bT\d{4}(\.\d{3})?\b`, findings[0].Description,
+		"nor in the prose: the description is copied onto the alert verbatim, so a technique there is read by the same analyst")
 	assert.Equal(t, []string{"sensor_recovery_failed"}, doc.EventTypes,
 		"the documented input event must be the one the rule reads, or an operator cannot tell what feeds it")
 	assert.NotEqual(t, (&SensorTamper{}).ID(), r.ID())
