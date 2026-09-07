@@ -361,7 +361,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportLostClaim(lockedCtx, held, host, len(claimed))
+			p.reportLostClaim(lockedCtx, nackErr, held, host, len(claimed))
 			p.reportSetAside(lockedCtx, host, setAside, stageBuilder)
 		}
 		return nil
@@ -423,7 +423,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportLostClaim(ctx, held, hostOf(events), len(eventIDs))
+			p.reportLostClaim(ctx, nackErr, held, hostOf(events), len(eventIDs))
 			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
 			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
 			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
@@ -588,8 +588,11 @@ func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside 
 //
 // WARN rather than ERROR, matching the ack path. Nothing is lost when this happens: the attempt that holds the claim carries on,
 // and everything this attempt did before here is idempotent.
-func (p *Processor) reportLostClaim(ctx context.Context, held bool, hostID string, events int) {
-	if held {
+func (p *Processor) reportLostClaim(ctx context.Context, nackErr error, held bool, hostID string, events int) {
+	// A failed nack reports held=false because it never got as far as establishing ownership, so it is not evidence that this
+	// attempt lost its claim. Warning on it would put "another attempt owns this batch" beside a queue outage that has already
+	// been logged, and send an operator looking for a lease overrun that did not happen (review caught it).
+	if nackErr != nil || held {
 		return
 	}
 	p.logger.WarnContext(ctx, "lost the claim before returning the batch; another attempt owns it",

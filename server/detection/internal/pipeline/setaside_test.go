@@ -435,6 +435,21 @@ func TestReportLostClaimOnTheNackPath(t *testing.T) {
 			"WARN, matching the ack path: nothing is lost, since the attempt that holds the claim carries on")
 	})
 
+	t.Run("a failed nack is not reported as a lost claim", func(t *testing.T) {
+		t.Parallel()
+		h := &capturingLogHandler{}
+		log := &scriptedEventLog{batch: oneEventBatch(), nackErr: errors.New("queue unavailable")}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: errors.New("detection down")}, singleCycleOpts(h))
+		p.ProcessOnce(t.Context())
+
+		_, found := h.levelOf("lost the claim before returning the batch")
+		assert.False(t, found,
+			"a failed nack never established ownership, so it is not evidence of a lease overrun; warning here would put a "+
+				"false claim beside the outage that was already logged")
+		_, logged := h.levelOf("nack events after detection failure")
+		assert.True(t, logged, "and the real failure is still reported, so this is not silence")
+	})
+
 	t.Run("an attempt that still holds its claim is not reported", func(t *testing.T) {
 		t.Parallel()
 		h := &capturingLogHandler{}
