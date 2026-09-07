@@ -166,6 +166,12 @@ async function writeCleared(ruleId: string): Promise<void> {
 export async function setGlobalRuleMode(ruleId: string, mode: string, updatedBy: string): Promise<void> {
   const db = await openDB();
   try {
+    // Write and read back in ONE transaction. The readback is not decoration: this insert leaves severity_override and settings
+    // at whatever the row already held on the conflict path, so what the write LEFT is not what it asked for, and the restore
+    // compares against what is there. Reading on a second connection after the write committed would let an operator edit in
+    // that gap become the recorded snapshot, and teardown would then treat their values as fixture-owned and overwrite them,
+    // which is the race this whole mechanism exists to prevent, reintroduced one function along.
+    await db.beginTransaction();
     await db.query(
       `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, updated_by)
        VALUES (?, 0, ?, ?)
@@ -173,12 +179,15 @@ export async function setGlobalRuleMode(ruleId: string, mode: string, updatedBy:
       [ruleId, mode, updatedBy],
     );
     await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
+    const written = await readLocked(db, ruleId);
+    await db.commit();
+    lastWritten.set(ruleId, written);
+  } catch (err) {
+    await db.rollback();
+    throw err;
   } finally {
     await db.end();
   }
-  // Read back rather than assume: the insert leaves severity_override and settings at whatever the row already held on the
-  // conflict path, so what this write LEFT is not what it asked for, and the restore compares against what is there.
-  lastWritten.set(ruleId, await takeGlobalRuleSetting(ruleId));
 }
 
 /**

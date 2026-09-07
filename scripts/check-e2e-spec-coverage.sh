@@ -36,7 +36,12 @@ fi
 #
 # Anchored on the same literal path form as the tree scan above, so a rename in either place shows up rather than silently
 # matching nothing.
-named="$(sed 's/#.*//' "$COVERAGE_SCRIPT" | grep -oE 'tests/qa/[A-Za-z0-9._-]+\.spec\.ts' | sort -u)"
+named_raw="$(sed 's/#.*//' "$COVERAGE_SCRIPT" | grep -oE 'tests/qa/[A-Za-z0-9._-]+\.spec\.ts' | sort)"
+named="$(echo "$named_raw" | uniq)"
+# A spec in two phases runs twice, against two different servers, which costs CI time and can make one phase's leftovers another
+# phase's precondition. The header of the coverage script says every spec belongs to exactly ONE phase; deduplicating without
+# checking would leave that sentence true only by convention.
+duplicated="$(echo "$named_raw" | uniq -d)"
 
 orphans="$(comm -23 <(echo "$in_tree") <(echo "$named"))"
 missing="$(comm -13 <(echo "$in_tree") <(echo "$named"))"
@@ -51,6 +56,15 @@ if [[ -n "$orphans" ]]; then
     echo "Add each to a phase in $COVERAGE_SCRIPT. Pick the phase whose server env the spec needs; the"
     echo "default-env phases are the usual home. A phase starts a fresh server, so its own break-glass"
     echo "setup budget resets, which is the reason to open a new phase rather than grow one indefinitely."
+  } >&2
+fi
+
+if [[ -n "$duplicated" ]]; then
+  status=1
+  {
+    echo
+    echo "Specs named by more than one phase, which would run them twice:"
+    echo "$duplicated" | sed 's/^/  /'
   } >&2
 fi
 

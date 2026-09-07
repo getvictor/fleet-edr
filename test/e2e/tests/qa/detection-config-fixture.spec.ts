@@ -18,14 +18,18 @@ import {
 // A rule id no catalog rule uses, so the row this spec writes is its own and a failure cannot leave an operator's tuning behind.
 const RULE_ID = "e2e_detection_config_fixture_probe";
 
+// settings is seeded NON-NULL on purpose. With it null, a restore that dropped the column entirely would still put the row back
+// looking correct, so the test would pass while covering three of the four columns it claims. A real JSON value makes the column
+// carry information the restore has to preserve, including through the projection's own serialisation.
 async function seedOperatorRow(): Promise<void> {
   const db = await openDB();
   try {
     await db.query(
-      `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, severity_override, updated_by)
-       VALUES (?, 0, 'alert', 'critical', 'a-real-operator')
-       ON DUPLICATE KEY UPDATE mode = VALUES(mode), severity_override = VALUES(severity_override), updated_by = VALUES(updated_by)`,
-      [RULE_ID],
+      `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, severity_override, settings, updated_by)
+       VALUES (?, 0, 'alert', 'critical', CAST(? AS JSON), 'a-real-operator')
+       ON DUPLICATE KEY UPDATE mode = VALUES(mode), severity_override = VALUES(severity_override),
+                               settings = VALUES(settings), updated_by = VALUES(updated_by)`,
+      [RULE_ID, JSON.stringify({ window_seconds: 45, pad_ns: 250 })],
     );
   } finally {
     await db.end();
@@ -66,7 +70,11 @@ test.describe("detection-config fixture preserves operator state", () => {
     expect(await takeGlobalRuleSetting(RULE_ID)).toBeNull();
 
     await restoreGlobalRuleSetting(RULE_ID, previous);
-    expect(await takeGlobalRuleSetting(RULE_ID)).toEqual(previous);
+    const after = await takeGlobalRuleSetting(RULE_ID);
+    expect(after).toEqual(previous);
+    // Named explicitly, so a restore that dropped this column fails on the column rather than on a whole-object comparison whose
+    // message would not say which one went missing.
+    expect(after?.settings).toContain("window_seconds");
   });
 
   test("a row someone else changed is left as it stands rather than reverted", async () => {
