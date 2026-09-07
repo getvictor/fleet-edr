@@ -312,8 +312,8 @@ func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConst
 		p("Any order archives correctly. This one is alphabetical:\n\n")
 	} else {
 		p("spectrace: %d pending change(s), %d ordering constraint(s)\n\n", len(changes), len(constraints))
-		p("%s\n%s\n", "Constraints. The first change creates or restates a requirement the second replaces or retires, so applying",
-			"them the other way round discards the second's text without an error:")
+		p("%s\n%s\n", "Constraints. Applying the pair the other way round loses what one of the two changes says about the",
+			"requirement they share, with no error:")
 		for _, c := range constraints {
 			p("  %s\n    must be archived before %s\n    because both touch %s\n", c.before, c.after, c.requirement)
 		}

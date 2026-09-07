@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"errors"
 	"strings"
 	"testing"
 
@@ -60,7 +62,12 @@ func FuzzParseSpec(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, doc string) {
 		scenarios, bodies, err := parseSpec(strings.NewReader(doc), "cap", "cap/spec.md")
-		require.NoError(t, err, "a string reader cannot fail, so an error here is a parser fault")
+		if errors.Is(err, bufio.ErrTooLong) {
+			// The scanner caps a line at 1MB, so a generated line longer than that is the cap doing its job rather than a fault.
+			// Asserting no error at all was wrong: review pointed out that the reader cannot fail but the scanner over it can.
+			t.Skip()
+		}
+		require.NoError(t, err, "the reader cannot fail, so anything but the scanner's line cap is a parser fault")
 		for _, s := range scenarios {
 			require.Equal(t, "cap/"+slugify(s.Requirement)+"/"+slugify(s.Title), s.ID)
 			require.Contains(t, bodies, slugify(s.Requirement), "a scenario's requirement must have collected its own lines")

@@ -42,7 +42,7 @@ On a release-prep branch off `main`:
 
      Read the indented blocks, not the first line. The count in the header moves on every release whether or not anything was lost, because archiving adds restatements to the set being checked, so `diff` reports a change even on a clean archive.
 
-     The comparison rather than the raw output is the point. The tree already carries entries `archive-verify` cannot classify: a requirement that was retired and really is gone is recognised and not reported, but a scenario dropped from a requirement that is still in the tree looks the same whether an out-of-order archive discarded it or an author trimmed it deliberately in a release nobody is auditing now. That is why it reports rather than gates, and why a standing line is not actionable while a new one is. The standing set is 88 findings, tracked in #905.
+     The comparison rather than the raw output is the point. The tree already carries entries `archive-verify` cannot classify: a requirement that was retired and really is gone is recognised and not reported, but a scenario dropped from a requirement that is still in the tree looks the same whether an out-of-order archive discarded it or an author trimmed it deliberately in a release nobody is auditing now. That is why it reports rather than gates, and why a standing line is not actionable while a new one is. The standing set is 89 findings, tracked in #905.
 
 5. Confirm nothing un-archived remains: `ls -1 openspec/changes/ | grep -v '^archive$'` prints nothing.
 

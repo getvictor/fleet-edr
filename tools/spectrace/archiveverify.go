@@ -84,10 +84,13 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 			continue
 		}
 
-		if len(entries) == 0 {
+		winner := lastBatchRestatement(entries, life.added)
+		// Nothing from the requirement's CURRENT lifetime, so there is no claim to check it against. Review caught what the
+		// obvious guard missed: testing `entries` here tests the list before the lifetime filter empties it, and an empty winner
+		// then reports every scenario and every line of a correctly re-added requirement as retired.
+		if len(winner.changes) == 0 {
 			continue
 		}
-		winner := lastBatchRestatement(entries, life.added)
 		losses = append(losses, missingScenarios(requirement, winner, have)...)
 		losses = append(losses, unretiredScenarios(requirement, winner, have)...)
 		losses = append(losses, missingText(requirement, winner, text[requirement])...)

@@ -516,6 +516,22 @@ func TestSplitRequirementText(t *testing.T) {
 			splitRequirementText([]string{"First paragraph.", "", "Second", "paragraph.", "- a bullet", "- another bullet"}).body)
 	})
 
+	// NUMBERED items too, which review caught the comment promising and the code not doing. `ui-authentication-session` numbers
+	// the two entry points of its login requirement, and without this those items merge into the paragraph above them: the
+	// finding stops naming which entry point changed, and a list-versus-prose restructuring can compare equal.
+	t.Run("a numbered item starts its own logical line", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, []string{"The surface is split in two:", "1. **One** does this.", "2. **Two** does that."},
+			splitRequirementText([]string{"The surface is split in two:", "1. **One** does this.", "2. **Two** does that."}).body)
+	})
+
+	// A number that is not a list marker stays in the paragraph, so a sentence opening with a year is not split off.
+	t.Run("a bare number is not a list marker", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, []string{"Body. 2026 was the year. 12.5 percent."},
+			splitRequirementText([]string{"Body.", "2026 was the year.", "12.5 percent."}).body)
+	})
+
 	// A bullet that gained a clause is its own difference rather than being absorbed into the paragraph around it.
 	t.Run("a changed bullet does not swallow its neighbours", func(t *testing.T) {
 		t.Parallel()
@@ -698,4 +714,23 @@ func TestVerifyArchive_AScenarioWhoseBodiesShareNothingIsStillChecked(t *testing
 	)
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0], "neither of them carried this")
+}
+
+// TestVerifyArchive_ARequirementReAddedWithNoLaterRestatementIsLeftAlone covers what testing the entry list before the lifetime
+// filter missed: a requirement re-added with no restatement since has restatements only from its PREVIOUS lifetime, the filter
+// empties the list, and an empty winner then reports every scenario and every line of its valid new body as retired.
+func TestVerifyArchive_ARequirementReAddedWithNoLaterRestatementIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{
+				change:    "2026-06-02-first-lifetime",
+				scenarios: []string{"an-old-scenario"},
+				text:      requirementText{body: []string{"The old body."}},
+			}},
+		},
+		canonicalWith("cap/the-thing", "a-new-scenario"),
+		map[string]requirementLifecycle{"cap/the-thing": {retired: "2026-06-09", added: "2026-06-16"}},
+		map[string]requirementText{"cap/the-thing": {body: []string{"The new body."}}},
+	), "nothing from the current lifetime is no claim to check against, not a claim that everything is missing")
 }

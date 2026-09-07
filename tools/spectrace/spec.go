@@ -275,8 +275,8 @@ type requirementText struct {
 // tree is Prettier `proseWrap: never` and the change deltas are hard-wrapped by hand. A check whose output is nine parts reflow is
 // one a reader learns to ignore, which is worse than not having it.
 //
-// A blank line, a list marker and a heading each start a new logical line, so a bullet that gained or lost a clause is its own
-// difference rather than being absorbed into the paragraph around it.
+// A blank line, a list marker (bulleted or numbered) and a heading each start a new logical line, so an item that gained or lost
+// a clause is its own difference rather than being absorbed into the paragraph around it.
 //
 // One function for both sides of the comparison, deliberately: it takes the verbatim lines a canonical spec.md yields and the
 // verbatim lines an archived delta's MODIFIED entry yields, and a second implementation of these rules is how the two sides would
@@ -316,7 +316,7 @@ func splitRequirementText(lines []string) requirementText {
 			// Any other subheading ends the requirement's own text without belonging to a scenario.
 			flush()
 			scenario = ""
-		case strings.HasPrefix(trimmed, "#"), strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
+		case strings.HasPrefix(trimmed, "#"), isListItem(trimmed):
 			flush()
 			buf = append(buf, trimmed)
 		default:
@@ -325,4 +325,20 @@ func splitRequirementText(lines []string) requirementText {
 	}
 	flush()
 	return out
+}
+
+// isListItem reports a Markdown list marker, ORDERED as well as bulleted.
+//
+// The ordered form is not decoration: `openspec/specs/ui-authentication-session/spec.md` numbers the steps of a requirement, and
+// without this those items merge into the paragraph above them, which both blurs a finding and lets a list-versus-prose
+// restructuring compare equal. Review caught the comment above promising every list marker while the code recognised two of them.
+func isListItem(trimmed string) bool {
+	if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+		return true
+	}
+	digits := 0
+	for digits < len(trimmed) && trimmed[digits] >= '0' && trimmed[digits] <= '9' {
+		digits++
+	}
+	return digits > 0 && strings.HasPrefix(trimmed[digits:], ". ")
 }
