@@ -19,7 +19,9 @@ test.describe("rule detail mode row", () => {
   // remove the row this spec is about and it would fail on a correct page. Restored because those rows are persistent shared
   // state: against a long-lived dev database, deleting one destroys an operator's actual tuning for good. oidc-jit-disabled
   // already preserves and restores the SSO flag for the same reason.
-  let previous: GlobalRuleSetting | null = null;
+  // undefined means the snapshot never ran, which is NOT the same as running and finding no row. Sharing one
+  // sentinel for both would make a failed setup delete an operator's setting on the way out.
+  let previous: GlobalRuleSetting | null | undefined;
 
   test.beforeEach(async () => {
     previous = await takeGlobalRuleSetting(RULE_ID);
@@ -27,7 +29,7 @@ test.describe("rule detail mode row", () => {
   });
 
   test.afterEach(async () => {
-    await restoreGlobalRuleSetting(RULE_ID, previous);
+    if (previous !== undefined) await restoreGlobalRuleSetting(RULE_ID, previous);
   });
 
   // spec:web-ui/detection-configuration-admin-views/the-rule-detail-view-reports-the-mode-a-rule-runs-in

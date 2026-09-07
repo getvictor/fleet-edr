@@ -155,7 +155,10 @@ const sharedAuthenticators = new Map<Page, Awaited<ReturnType<typeof signInAsAdm
 // reauthenticateShared restores a shared page's session after something else deleted it, and keeps the authenticator bookkeeping
 // straight so worker teardown still uninstalls exactly what is installed.
 async function reauthenticateShared(page: Page): Promise<void> {
+  // Deregistered BEFORE it is uninstalled. If the sign-in below throws, worker teardown must not find this entry and uninstall a
+  // detached session a second time: that error would replace the sign-in or rate-limit failure this path exists to surface.
   const previous = sharedAuthenticators.get(page);
+  sharedAuthenticators.delete(page);
   if (previous) await uninstallVirtualAuthenticator(previous);
   sharedAuthenticators.set(page, await signInAsAdminViaBreakGlass(page));
 }

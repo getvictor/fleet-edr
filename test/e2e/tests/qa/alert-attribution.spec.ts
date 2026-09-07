@@ -24,7 +24,9 @@ const UPSTREAM_AUTHOR = "SigmaHQ, by Alejandro Ortuno, oscd.community";
 
 test.describe("alert attribution", () => {
   let va: VirtualAuthenticator | undefined;
-  let previousSetting: GlobalRuleSetting | null = null;
+  // undefined means the snapshot never ran, which is NOT the same as running and finding no row. Sharing one
+  // sentinel for both would make a failed setup delete an operator's setting on the way out.
+  let previousSetting: GlobalRuleSetting | null | undefined;
 
   // Above the default 30s. The journey is deliberately the long one: enrol, post, ingest, build the graph, evaluate, then poll the
   // rendered page. The default leaves no headroom over the poll budget itself, so a slow-but-working run fails as a timeout.
@@ -51,7 +53,7 @@ test.describe("alert attribution", () => {
     // Put back exactly what was there, which on a long-lived dev database may be an operator's own tuning rather than nothing.
     // The helper carries the version bump either way: without it the server keeps serving this rule as promoted after the test
     // that promoted it has finished, and a later spec inherits an alerting rule it never asked for.
-    await restoreGlobalRuleSetting(RULE_ID, previousSetting);
+    if (previousSetting !== undefined) await restoreGlobalRuleSetting(RULE_ID, previousSetting);
   });
 
   // Both surfaces in one test, following this suite's convention: each break-glass ceremony burns two tokens out of a global
