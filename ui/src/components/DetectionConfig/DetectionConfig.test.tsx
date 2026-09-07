@@ -779,7 +779,8 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByText("1.5ms")).toBeVisible();
       });
-      expect(screen.queryByText(/undecided/)).not.toBeInTheDocument();
+      // Scoped to the row for the same reason as above: the column note mentions undecided attempts by design.
+      expect(within(screen.getByRole("row", { name: /suspicious_exec/ })).queryByText(/undecided/)).not.toBeInTheDocument();
     });
 
     // The same distinction the Observed column draws, and for the same reason pointed the other way: a failed read rendered as
@@ -895,7 +896,10 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByTitle(/0 of which could not decide/)).toBeVisible();
       });
-      expect(screen.queryByText(/undecided/)).not.toBeInTheDocument();
+      // Scoped to the ROW, because the column's explanatory note above the table also says "undecided". A document-wide query
+      // would pass or fail on that sentence rather than on the cell, which is the thing being asserted.
+      const row = screen.getByRole("row", { name: /suspicious_exec/ });
+      expect(within(row).queryByText(/undecided/)).not.toBeInTheDocument();
     });
 
     // Clearing the statistics was not enough on its own: a sort left switched on announces "slowest first" over rows it is no
@@ -921,6 +925,74 @@ describe("DetectionConfig observed column", () => {
       expect(header).toHaveAttribute("aria-sort", "none");
       expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
       expect(header.textContent).not.toContain("slowest first");
+    });
+
+    // An empty SUCCESSFUL read is a different state from a failed one, and just as unsortable. A fresh deployment where nothing
+    // has evaluated yet reaches it, and without this the sort switches on over a table of ties: the rows keep severity order
+    // while the header announces slowest first, which is the same untrue claim as the outage case by a route with no outage.
+    it("does not offer a cost order when the read succeeded with nothing in it", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+      expect(screen.getByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "none");
+      // And it is NOT the unavailable state: the read worked, so the cells say "not recorded" rather than "unavailable".
+      expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // The case above cannot fail on its own, which is why this one exists: with the sort never switched on, a wrong condition
+    // still yields aria-sort="none" and a disabled button, because both are already false for the ordinary reason. Reaching the
+    // state with the sort ALREADY on is what separates "there is nothing to sort by" from "nobody asked to sort".
+    //
+    // The sequence is a real one: statistics are there, an operator sorts by them, and the next read comes back empty because
+    // retention pruned the window out from under them.
+    it("drops a live cost order when the next read comes back empty", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^Cost/ })).toBeEnabled();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(screen.getByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "descending");
+
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockResolvedValue({ stats: [], days: 7 });
+      vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+      fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      const header = screen.getByRole("columnheader", { name: /^Cost/ });
+      expect(header).toHaveAttribute("aria-sort", "none");
+      expect(header.textContent).not.toContain("slowest first");
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+    });
+
+    // The caveat has to reach a reader who never hovers. It had been left in the header's `title`, which a non-focusable th only
+    // surfaces to a pointer, so the sentence that stops the number reading as a per-alert cost was the one keyboard and touch
+    // users did not get. The Observed column already solved this with a visible note.
+    it("explains the cost figure visibly rather than only on hover", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText(/Mean wall time per evaluation attempt/)).toBeVisible();
+      });
+      expect(screen.getByText(/most are retried, but one whose batch is set aside is not/)).toBeVisible();
+    });
+
+    it("says visibly that the cost figures are unavailable, not only on hover", async () => {
+      stubReads({ rules: [makeRuleEntry()] });
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText(/Reload before reading a rule as cheap/)).toBeVisible();
+      });
     });
 
     // A refresh that fails must not leave the sort ordering by what the previous one returned. The cells short-circuit to

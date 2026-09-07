@@ -383,7 +383,13 @@ export function DetectionConfig() {
   // sortActive, not sortByCost, everywhere the order is produced OR described. With no statistics there is nothing to sort by, so
   // a sort that stays "on" announces an order it is not producing: the rows come out in severity order while the header says
   // slowest first. Clearing the data was not enough on its own; the CLAIM had to go with it.
-  const sortActive = sortByCost && !costUnavailable;
+  //
+  // An EMPTY result counts as nothing to sort by too, and it is a different state from a failed read: the response was fine, no
+  // rule has evaluated in the window yet. A fresh deployment is exactly that. Without this the sort switches on over a table where
+  // every comparison is a tie, so the rows keep severity order while the header announces slowest first, which is the same untrue
+  // claim by a route that does not involve an outage.
+  const haveCost = Object.keys(cost).length > 0;
+  const sortActive = sortByCost && haveCost;
 
   const rulesForTable = useMemo(() => {
     if (!sortActive) return rulesBySeverity;
@@ -743,6 +749,15 @@ export function DetectionConfig() {
                   "indication of volume, not of how many alerts promoting the rule would raise: repeated matches on the same " +
                   "process collapse into a single alert once a rule alerts."}
             </p>
+            {/*
+              The Cost caveat gets the same treatment for the same reason. It had been left in the header's `title`, which a
+              non-focusable th only surfaces on pointer hover, so the sentence that stops the number reading as a per-alert cost
+              was the one keyboard and touch users did not get.
+            */}
+            <p className="detection-config__note">
+              {costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
+            </p>
+
             <Table>
               <thead>
                 <tr>
@@ -764,7 +779,7 @@ export function DetectionConfig() {
                       type="button"
                       className="detection-config__sort-button"
                       aria-pressed={sortActive}
-                      disabled={costUnavailable}
+                      disabled={!haveCost}
                       onClick={() => {
                         setSortByCost((on) => !on);
                       }}

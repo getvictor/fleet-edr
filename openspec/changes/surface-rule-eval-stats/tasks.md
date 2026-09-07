@@ -33,3 +33,6 @@
 - [x] 3.12 Carry the undecided count in the label even at zero, since that is where the figure is promised; only the visible annotation is suppressed, for width.
 - [x] 3.13 Collapse the two `days` parsers onto one core with thin typed wrappers, following `parsePositiveInt64Path` and its two wrappers in the same package. The typed wrappers are what keep the window types from being interchangeable; a shared implementation never was in tension with that, and the fuzz test now guards a seam rather than a duplicate.
 - [x] 3.14 Hoist the wire-validation primitives both row validators build on, so a change to what counts as an acceptable number or timestamp cannot land on one adjacent endpoint and not the other.
+- [x] 2.8 Treat an EMPTY successful read as unsortable too, not just a failed one. It is a different state to report and equally nothing to sort by, and it is what a fresh deployment shows.
+- [x] 3.15 Reach that state with the sort ALREADY on. Asserting it from a cold start cannot fail: aria-sort is "none" and the control disabled for the ordinary reason, whatever the condition says.
+- [x] 3.16 Put the cost caveat in a visible note beside the Observed one, since a `title` on a non-focusable header only reaches a pointer.
