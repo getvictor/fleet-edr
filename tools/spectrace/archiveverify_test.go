@@ -153,7 +153,7 @@ func TestPrintArchiveVerify(t *testing.T) {
 		var buf bytes.Buffer
 		assert.Equal(t, 0, printArchiveVerify(&buf, []string{"cap/r/s\n    listed by x"}, 3))
 		out := buf.String()
-		assert.Contains(t, out, "A line that is NEW is a scenario this archive")
+		assert.Contains(t, out, "A line that is NEW is damage this archive did")
 		assert.Contains(t, out, "cap/r/s")
 	})
 

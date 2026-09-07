@@ -21,23 +21,31 @@ type archivedRestatement struct {
 	text requirementText
 }
 
-// verifyArchive reports scenarios an archived restatement listed that the canonical tree no longer has.
+// verifyArchive reports where the canonical tree disagrees with what the archived deltas say it should hold.
 //
 // This is the detection half of issue #901, and it exists because the prevention half is advice. `archive-order` prints an order,
 // and an operator who archives in a different one gets no error from anything: `openspec validate --strict` passes on a
 // requirement that lost half its text, and `check --strict` passes as long as whatever survived still has markers.
 //
-// The check is on SCENARIOS rather than on prose, deliberately. Archiving merges rather than copies, so comparing wording would
-// report formatting as loss and train a reader to ignore the output. A scenario heading is stable through the merge, is what the
-// v0.4.0 archive dropped, and is what the traceability gate keys on, so a missing one is both detectable and material.
+// Four shapes, each with its own function below: a scenario the last batch's restatements all listed that is not canonical, a
+// canonical scenario none of them listed, prose in either of those directions, and a requirement an archived change retired that
+// is still there. Prose was left out at first on the grounds that comparing wording would report formatting as loss, which was
+// true of the obvious implementation and not of the one splitRequirementText does: see its comment for the measurements.
 //
 // What this CANNOT do is tell a loss from a legitimate retirement, and the reason is worth stating because it bounds the whole
 // design: openspec stamps every folder in one batch with the same date, so within a batch the archive order is not recoverable
 // from the tree, and "the last restatement wins" cannot be evaluated. A scenario a later change deliberately retired therefore
 // looks the same here as one an out-of-order archive discarded.
 //
+// It also cannot tell two archive passes made on the SAME DAY apart, which review raised and which is the same limit seen from a
+// different angle. Both passes' folders carry one date, so both are read as one batch and their restatements intersected; if the
+// second pass restated a requirement more fully than the first, the part only it carried is not claimed and its loss would go
+// unreported. That is a missed finding rather than a false one, which is the direction this file errs in everywhere, and the
+// release checklist archives every pending change in a single pass (step 2), so the case needs a deliberate departure from the
+// documented process to arise. The tree carries no finer signal than the date, so detecting it would mean passing the batch in.
+//
 // So this REPORTS and does not gate, and the checklist uses it as a before-and-after: run it, archive, run it again, and any line
-// that is new is a scenario this archive lost. That comparison needs no ordering and no baseline file, and it is the question a
+// that is new is damage this archive did. That comparison needs no ordering and no baseline file, and it is the question a
 // release engineer actually has.
 func verifyArchive(archived map[string][]archivedRestatement, canonical map[string]map[string]struct{},
 	lifecycle map[string]requirementLifecycle, text map[string]requirementText,
@@ -450,10 +458,11 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 		p("spectrace: %d archived requirement restatement(s) checked, every scenario still canonical\n", requirements)
 	} else {
 		p("spectrace: %d finding(s) against what the archived deltas say the canonical spec should hold.\n", len(findings))
-		p("%s\n%s\n%s\n",
-			"Compare this list with the one from before the archive. A line that is NEW is a scenario this archive",
-			"discarded, which is what archiving out of order does. A line that was already there is either an older loss,",
-			"or a scenario dropped from a requirement that is still in the tree for a reason older than this run.")
+		p("%s\n%s\n%s\n%s\n",
+			"Compare this list with the one from before the archive. A line that is NEW is damage this archive did, which is",
+			"what archiving out of order causes: a scenario or a line of normative text that the deltas say should be canonical",
+			"and is not, one they retired that is still there, or a requirement whose retirement did not apply. A line that was",
+			"already there is older, and this cannot tell an older loss from something retired before this run.")
 		for _, l := range findings {
 			p("  %s\n", l)
 		}
