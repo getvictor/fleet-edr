@@ -966,10 +966,15 @@ paths:
       summary: List per-rule evaluation statistics
       description: |
         Returns what each rule's evaluation work cost over a window: how many
-        attempts it made, how many of those could not decide and were
-        retried, and the mean and worst-case wall time. This is how a slow
-        rule, or the one driving retry churn, is found without querying a
-        metrics backend.
+        attempts it made, how many of those could not reach a verdict, and
+        the mean and worst-case wall time. This is how a slow rule, or the
+        one driving retry churn, is found without querying a metrics
+        backend.
+
+        An undecided attempt is counted the moment it ends without a verdict,
+        before anything knows whether another attempt follows. Most are
+        retried; one whose batch is eventually set aside is not. Reading the
+        figure as completed retries overstates it.
 
         A rule that never evaluated in the window is ABSENT rather than
         present with zeros, for the same reason a rule that never matched is
@@ -2036,10 +2041,11 @@ components:
           type: integer
           format: int64
           description: |
-            Attempts that ended without a decision and were retried. NOT a
-            subset that reduces `evaluations`: a miss still cost its time and
-            still counts as an attempt. This is what names the rule driving
-            retry churn.
+            Attempts that ended without reaching a verdict. NOT a subset that
+            reduces `evaluations`: such an attempt still cost its time and
+            still counts as an attempt. Counted at the miss, before anything
+            knows whether another attempt follows, so most but not all are
+            retried. This is what names the rule driving retry churn.
           example: 12
         mean_eval_ns:
           type: integer

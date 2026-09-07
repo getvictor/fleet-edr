@@ -232,6 +232,10 @@ describe("detection-config API client", () => {
     ["a row whose last_seen is unparseable", rowWith({ last_seen: "not-a-date" })],
     ["a row with a negative timing", rowWith({ mean_eval_ns: -1 })],
     ["a row with a fractional timing", rowWith({ mean_eval_ns: 1.5 })],
+    // The two relations. Well-typed and still impossible: the store derives both sides of each from the same rows, so a row
+    // breaking one is a response that is not what it claims rather than a rule with unusual numbers.
+    ["a row with more undecided attempts than attempts", rowWith({ evaluations: 2, retryable_misses: 3 })],
+    ["a row whose mean exceeds its maximum", rowWith({ mean_eval_ns: 900, max_eval_ns: 100 })],
     ["a row that is null", { eval_stats: [null], days: 7 }],
     ["an empty row", { eval_stats: [{}], days: 7 }],
   ] as [string, unknown][]) {

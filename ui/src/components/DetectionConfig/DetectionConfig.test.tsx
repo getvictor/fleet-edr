@@ -762,8 +762,9 @@ describe("DetectionConfig observed column", () => {
       });
     });
 
-    // Shown only when there are any: a "0 retried" on every row spends the column's width saying nothing, and the number matters
-    // precisely when it is not zero.
+    // Shown only when there are any: a "0 undecided" on every row spends the column's width saying nothing, and the number
+    // matters precisely when it is not zero. Undecided rather than retried, because a set-aside batch's last miss is counted here
+    // with no retry after it.
     it("annotates undecided evaluations, and only when there are some", async () => {
       stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 12 })] });
       const { unmount } = renderPage();

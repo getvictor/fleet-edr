@@ -1235,13 +1235,18 @@ function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
   // on a helper does not narrow the caller's value.
   const atLeastOne = (v: unknown): boolean => whole(v) && (v as number) >= 1;
   const when = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+  // The two RELATIONS are checked as well as the fields, because a row can be well-typed and still impossible: more undecided
+  // attempts than attempts, or a mean above the maximum it is drawn from. Neither can come from the store, which derives both from
+  // the same rows, so either means the response is not what it claims. Rendering it anyway would put a contradictory number in
+  // front of an operator as plausible evidence, which is worse than the unavailable path a rejection takes.
+  const withinAttempts = whole(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
+  const meanWithinMax = whole(r.mean_eval_ns) && whole(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
   return (
     typeof r.rule_id === "string" &&
     r.rule_id !== "" &&
     atLeastOne(r.evaluations) &&
-    whole(r.retryable_misses) &&
-    whole(r.mean_eval_ns) &&
-    whole(r.max_eval_ns) &&
+    withinAttempts &&
+    meanWithinMax &&
     when(r.last_seen)
   );
 }

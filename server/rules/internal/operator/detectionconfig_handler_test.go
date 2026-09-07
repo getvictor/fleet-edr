@@ -19,6 +19,8 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
+
+	"github.com/fleetdm/edr/server/httpserver"
 )
 
 // denyAllAuthZ forces the HTTPGate deny branch so the per-handler 403 path is covered.
@@ -397,30 +399,18 @@ func TestDetectionConfigHandler_MissingActorIs500(t *testing.T) {
 	resp.Body.Close()
 }
 
-// recordingRouter captures the patterns RegisterRoutes registers, so a test can ask the handler what its surface IS rather than
-// keeping a second copy of the answer.
-type recordingRouter struct {
-	patterns []string
-	mux      *http.ServeMux
-}
-
-func (r *recordingRouter) HandleFunc(pattern string, fn func(http.ResponseWriter, *http.Request)) {
-	r.patterns = append(r.patterns, pattern)
-	r.mux.HandleFunc(pattern, fn)
-}
-
-func (r *recordingRouter) Handle(pattern string, h http.Handler) {
-	r.patterns = append(r.patterns, pattern)
-	r.mux.Handle(pattern, h)
-}
-
 func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 	t.Parallel()
 	h := NewDetectionConfig(&fakeDCService{}, denyAllAuthZ{}, slog.Default())
-	router := &recordingRouter{mux: http.NewServeMux()}
+	// httpserver.RecordingRouter, not a local one: it already forwards and records patterns for the composition-time mount check,
+	// and a second copy would mean fixes to route recording maintained twice. Asking the handler what its surface IS, rather than
+	// keeping a second copy of the answer, is the same idea this type exists for.
+	mux := http.NewServeMux()
+	router := httpserver.NewRecordingRouter(mux)
 	h.RegisterRoutes(router)
-	srv := httptest.NewServer(router.mux)
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	patterns := router.Patterns()
 
 	// Keyed by the registered PATTERN rather than listed alongside it, which is what stops this table doing the thing its previous
 	// comment warned about and could not prevent: a route added without a row here left the gate untested, silently, for exactly
@@ -440,8 +430,8 @@ func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 		"PUT /api/v1/detection-config/rule-settings":      {"/api/v1/detection-config/rule-settings", `{}`},
 	}
 
-	require.NotEmpty(t, router.patterns, "RegisterRoutes registered nothing, so the loop below would assert nothing")
-	for _, pattern := range router.patterns {
+	require.NotEmpty(t, patterns, "RegisterRoutes registered nothing, so the loop below would assert nothing")
+	for _, pattern := range patterns {
 		req, ok := requests[pattern]
 		if !assert.True(t, ok, "%s is registered but has no row here, so its authorization gate is untested", pattern) {
 			continue
@@ -453,7 +443,7 @@ func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 	}
 	// And the other direction: a row for a route that no longer exists is a test asserting nothing, which reads as coverage.
 	for pattern := range requests {
-		assert.Contains(t, router.patterns, pattern, "%s has a row here but is not registered", pattern)
+		assert.Contains(t, patterns, pattern, "%s has a row here but is not registered", pattern)
 	}
 }
 
@@ -548,9 +538,9 @@ func TestHandler_ListEvalStats(t *testing.T) {
 				t.Parallel()
 				svc := &fakeDCService{}
 				srv, h := newSrvWithHandler(t, svc)
-				// The SAME setter as the match-count cap, which is the wiring worth asserting: both counter tables are pruned
+				// The SAME setter the match-count cap uses, which is the wiring worth asserting: both counter tables are pruned
 				// by one retention knob, so a second setter nobody called would leave this route reporting 30 days over 7.
-				h.SetMatchCountCap(tc.retention)
+				h.SetCounterRetentionCap(tc.retention)
 				resp := get(t, srv, tc.query)
 				defer resp.Body.Close()
 				require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -677,7 +667,7 @@ func TestHandler_ListMatchCounts(t *testing.T) {
 				t.Parallel()
 				svc := &fakeDCService{}
 				srv, h := newSrvWithHandler(t, svc)
-				h.SetMatchCountCap(tc.retention)
+				h.SetCounterRetentionCap(tc.retention)
 				resp := get(t, srv, tc.query)
 				defer resp.Body.Close()
 				require.Equal(t, http.StatusOK, resp.StatusCode)

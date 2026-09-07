@@ -62,7 +62,7 @@ type DetectionConfigHandler struct {
 	principalLabel principalLabelResolver
 	logger         *slog.Logger
 	// matchCountCap is the furthest back a match-count read may reach. Seeded with the constant maximum at construction and
-	// narrowed by SetMatchCountCap once the deployment's retention is known, so there is exactly ONE place that decides what an
+	// narrowed by SetCounterRetentionCap once the deployment's retention is known, so there is exactly ONE place that decides what an
 	// unconfigured or disabled retention means (api.EffectiveMatchCountCap) rather than a second fallback here that agrees with
 	// it by coincidence. Atomic because it is written during wiring and read by every request goroutine; a plain field would
 	// rest on a happens-before that is real today but invisible to the race detector.
@@ -91,13 +91,14 @@ func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, log
 	return h
 }
 
-// SetMatchCountCap records how many days of monitor-match counters the deployment retains, which bounds how far back a
+// SetCounterRetentionCap records how many days of per-rule counters the deployment retains, which bounds how far back a
 // rule-match-count read can honestly reach. cmd/main wires it from EDR_RETENTION_DAYS alongside the prune that enforces it.
 // Unset (or zero) leaves the constant cap in force.
-func (h *DetectionConfigHandler) SetMatchCountCap(retentionDays int) {
+func (h *DetectionConfigHandler) SetCounterRetentionCap(retentionDays int) {
 	h.matchCountCap.Store(int64(api.EffectiveMatchCountCap(retentionDays)))
-	// Both counter tables are pruned by the same retention sweep, so one setter narrows both. They stay separate values because
-	// nothing guarantees that stays true, and a reader told "30 days" over 7 days of data is the failure this cap exists for.
+	// Both counter tables are pruned by the same retention sweep, so one setter narrows both, which is why this is named for the
+	// retention rather than for either read. They stay separate values because nothing guarantees the two windows stay equal,
+	// and a reader told "30 days" over 7 days of data is the failure this cap exists for.
 	h.evalStatsCap.Store(int64(api.EffectiveEvalStatsCap(retentionDays)))
 }
 

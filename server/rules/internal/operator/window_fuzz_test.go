@@ -34,8 +34,10 @@ func FuzzWindowParsers(f *testing.F) {
 		if matchOK && matchDays < 1 {
 			t.Fatalf("accepted %q as a window of %d; a non-positive window would produce a cutoff nobody asked for", raw, matchDays)
 		}
-		if !matchOK && matchDays != 0 {
-			t.Fatalf("rejected %q but returned %d rather than the zero value", raw, matchDays)
+		// BOTH, because the equivalence above only compares values on acceptance: a parser drifting to return (42, false) would
+		// otherwise satisfy every check here while handing a caller a window it also said was invalid.
+		if !matchOK && (matchDays != 0 || evalDays != 0) {
+			t.Fatalf("rejected %q but returned match=%d eval=%d rather than the zero value", raw, matchDays, evalDays)
 		}
 	})
 }

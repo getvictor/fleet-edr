@@ -447,7 +447,7 @@ func (r *Rules) SetRetentionDays(days int) {
 	r.retentionDays = days
 	// The same number bounds how far back the read surface may claim to see. Pruning at 7 days while the API advertises a 30-day
 	// window would report a period the rows no longer cover, which is the misreport the echoed window exists to prevent.
-	r.detectionConfigH.SetMatchCountCap(days)
+	r.detectionConfigH.SetCounterRetentionCap(days)
 }
 
 // pruneCountersLoop prunes the per-rule counter tables on a ticker until ctx is cancelled. The first pass runs immediately rather

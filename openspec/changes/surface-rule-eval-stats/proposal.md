@@ -11,7 +11,7 @@ The match counts, which do have a surface, cannot stand in. They answer how NOIS
 ## What changes
 
 - A read route on the detection-config surface returns per-rule evaluation statistics over a window, gated by the same action as the rest of that surface and capped by the same retention.
-- The detection-tuning table gains a Cost column beside Observed: mean time per attempt, with the worst case and the retry count reachable from the cell.
+- The detection-tuning table gains a Cost column beside Observed: mean time per attempt, with the worst case and the undecided-attempt count reachable from the cell.
 - The two columns fail independently, so an outage in one does not blank the other.
 
 ## Impact
