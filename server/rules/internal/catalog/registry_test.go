@@ -212,18 +212,44 @@ func TestAll_NonDetectionClassification(t *testing.T) {
 		"the set of non-detections changed; every rule here is absent from /api/rules, /api/attack-coverage and docs/detection-rules.md")
 }
 
-// TestAll_DetectionsClaimTechniques asserts every DETECTION maps to at least one ATT&CK technique, which is what makes the
-// coverage export meaningful. It is scoped to detections deliberately: application_control_block returns an empty set on purpose
-// (a successful block is the absence of adversary activity, not an instance of it), and before the split that correct behaviour
-// had to be special-cased out of any such check.
+// detectionsThatClaimNoTechnique names the detections that deliberately map to nothing, and it is an exact set rather than a
+// skip-list so adding to it is a decision somebody makes here.
+//
+// Declaring none is a real answer, not a gap: it says the rule reports something it cannot attribute to an actor. What it must
+// not be is an accident, because a rule that quietly stops claiming coverage looks identical in the export to one that never
+// had any. Each entry names the audit that decided it (issue #755).
+var detectionsThatClaimNoTechnique = map[string]string{
+	// Reports a capture provider that stopped and stayed stopped. A crash produces that exactly, and Impair Defenses names
+	// somebody impairing defenses, so the rule reports a state it cannot attribute to anyone.
+	"sensor_tamper": "issue #755: the signal is a state, and the technique names an actor's action",
+}
+
+// TestAll_DetectionsClaimTechniques asserts every DETECTION maps to at least one ATT&CK technique unless it is on the audited list
+// above, which is what makes the coverage export meaningful.
+//
+// It is scoped to authored detections deliberately: application_control_block returns an empty set on purpose (a successful block
+// is the absence of adversary activity, not an instance of it) and is a non-detection, and an imported rule's mapping comes from
+// upstream.
+//
+// The list is checked for staleness too. An entry for a rule that now claims a technique means somebody re-earned one and left
+// the exemption behind, which would silence this guard for that rule from then on.
 func TestAll_DetectionsClaimTechniques(t *testing.T) {
 	t.Parallel()
 
+	claimNone := make(map[string]bool)
 	for _, r := range New(nil) {
 		if !api.IsDetection(r) || !authored(r) {
 			continue
 		}
-		assert.NotEmpty(t, r.Techniques(), "detection %s must map to at least one ATT&CK technique", r.ID())
+		if len(r.Techniques()) == 0 {
+			claimNone[r.ID()] = true
+			assert.Contains(t, detectionsThatClaimNoTechnique, r.ID(),
+				"detection %s maps to no ATT&CK technique; that is allowed but must be a recorded decision, not a silent one", r.ID())
+		}
+	}
+	for id := range detectionsThatClaimNoTechnique {
+		assert.True(t, claimNone[id],
+			"%s is exempted from claiming a technique but now claims one; remove the exemption or the guard stays off for it", id)
 	}
 }
 
@@ -253,16 +279,16 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 		// T1071.004 is the beaconing pattern it always observes, and T1568.002 rides on the findings whose domain looks
 		// algorithmic. A rule that declares a union must narrow, or every finding claims the whole of it.
 		"dns_c2_beacon": {"T1071.004", "T1568.002"},
-		// Observes osascript by path, and a curl or wget among its descendants. The download is required to reach a finding at
-		// all, so both are earned on every one.
-		"osascript_network_exec": {"T1059.002", "T1105"},
+		// Observes osascript by path. NOT a transfer: the descendant check matches curl or wget by path and inspects nothing
+		// about what it did, so `curl --help` beside an unrelated temp exec reaches the same finding.
+		"osascript_network_exec": {"T1059.002"},
 		// Observes a LaunchAgent plist being written.
 		"persistence_launchagent": {"T1543.001"},
 		// Observes a BTM daemon registration, which is exactly the sub-technique.
 		"privilege_launchd_plist_write": {"T1543.004"},
-		// Observes a capture provider stopping and not returning, separated from an upgrade cutover by how fast capture resumes.
-		// Kept by the sweep, and the rule's comment records that the separation is what earns it.
-		"sensor_tamper": {"T1562.001"},
+		// Observes a capture provider stopping and not returning. That is a state, not an actor: a crash produces it exactly,
+		// and Impair Defenses names somebody doing something. The empty entry is the decision #755 asked for, not an omission.
+		"sensor_tamper": {},
 		// Observes a shell, by path, spawned from an Office process. It does NOT observe an email or an attachment, which is why
 		// T1566.001 came off.
 		"shell_from_office": {"T1059.004"},

@@ -355,9 +355,14 @@ func TestSensorTamper_Doc(t *testing.T) {
 	t.Parallel()
 	r := &SensorTamper{}
 	doc := r.Doc()
-	assert.Equal(t, []string{"T1562.001"}, r.Techniques())
+	// No technique, decided in the sweep for issue #755 rather than left out. The rule reports a capture provider that stopped
+	// and stayed stopped, and a crash produces that exactly; Impair Defenses names somebody impairing defenses, which the rule
+	// sees nothing of. Empty and not nil, per the Rule interface's contract for "no mapping".
+	//
+	// The ALERT is untouched by that: same severity, same title, same text. Only the coverage claim goes.
+	assert.Equal(t, []string{}, r.Techniques())
 	assert.Equal(t, []api.Platform{api.PlatformDarwin}, r.Platforms())
-	assert.Equal(t, api.SeverityHigh, doc.Severity)
+	assert.Equal(t, api.SeverityHigh, doc.Severity, "the alert is unchanged; only the attribution went")
 	assert.Equal(t, []string{"sensor_provider_transition"}, doc.EventTypes)
 	assert.Equal(t, doc.Title, r.DisplayName())
 	assert.NotEmpty(t, doc.Limitations, "the alert reports the stop, not the repair; that has to be stated")

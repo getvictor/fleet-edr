@@ -15,7 +15,8 @@ import (
 // frequently shell out to bootstrap a second-stage; modern macOS keeps the Office
 // binaries in /Applications/Microsoft {Word,Excel,PowerPoint,Outlook}.app/.
 //
-// MITRE ATT&CK: T1566.001 (Phishing: Spearphishing Attachment) + T1059 (Shell)
+// MITRE ATT&CK: T1059.004 (Command and Scripting Interpreter: Unix Shell). See Techniques below for why the phishing
+// sub-technique came off (issue #755).
 type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }

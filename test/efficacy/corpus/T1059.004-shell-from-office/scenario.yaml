@@ -7,7 +7,7 @@
 name: "T1059.004 shell spawned by Microsoft Word"
 host:
   id: AAAA1059-0004-0000-0000-000000000004
-  hostname: efficacy-t1566-001.local
+  hostname: efficacy-t1059-004-office.local
   os: macOS 26.0
 timeline:
   # Word itself (the parent process). We don't need a fork/exec for Word --

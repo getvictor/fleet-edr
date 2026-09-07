@@ -8,6 +8,9 @@
 # rather than alerted on immediately, since a stop that resumes in about a
 # second is an upgrade cutover and not a tamper.
 scenario_id: T1562.001-sensor-tamper
+# This field names what the SCENARIO performs, which since issue #755 is no longer the same as what the rule CLAIMS. The
+# scenario really does disable a capture provider deliberately; the rule declares no such technique, because it does not observe the actor, since a crash produces the same signal. Both are correct and
+# neither is stale.
 mitre: T1562.001
 within_seconds: 45
 rules:

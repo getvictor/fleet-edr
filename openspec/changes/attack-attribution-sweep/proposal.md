@@ -16,12 +16,14 @@ Three mappings are corrected:
 - `suspicious_exec` drops **T1105** (Ingress Tool Transfer) and moves **T1059** to **T1059.004**. It observes a binary executing from a world-writable directory, not anything arriving; and the middle link is matched against the shell path set, so the sub-technique is known rather than guessed.
 - `shell_network_connect` does the same. This is the question #776 left open when it split the rule: an outbound connection is not a transfer, and naming an application-layer protocol would need one to be observed.
 
-Two are decided and recorded rather than changed:
+Two more are corrected, and they are the two the issue called arguable and asked to have decided either way:
 
-- `sensor_tamper` keeps **T1562.001**. It separates the one benign cause it knows about, an upgrade cutover, by how fast capture resumes, and that separation is the observation. Recorded as not airtight, with what would change the answer, so the next audit does not start from scratch.
-- `osascript_network_exec` keeps **T1059.002 + T1105**, and the issue's reason to narrow it does not hold against the code. There is one place a finding is constructed and reaching it requires a curl or wget among the osascript's descendants. The shebang shape is how the temp-exec is recognised, not a second arm that skips the download, so every finding has an observed fetch behind it.
+- `osascript_network_exec` drops **T1105**. The first pass kept it, reasoning that a finding is unreachable without a curl or wget among the osascript's descendants. That reasoning is about the wrong thing: the check matches a downloader by PATH and inspects nothing else, so `curl --help` beside an unrelated temp exec reaches the same finding. What is observed is that a downloader ran; the transfer is the inference. Holding this rule to a lower standard than `suspicious_exec` because its chain feels more incriminating is how the whole class got here.
+- `sensor_tamper` drops **T1562.001**. It separates the one benign cause it knows about, an upgrade cutover, by how fast capture resumes, and that separation is real. It is not an attribution. The distinction the sweep turns on is whether a technique names a BEHAVIOUR or an ACTOR'S ACTION: T1059.004 names a behaviour, so seeing the shell is seeing the technique whoever started it; Impair Defenses names somebody impairing defenses, and a crash that stays down produces this finding exactly.
 
-Per-finding narrowing needs no further work either. `dns_c2_beacon` is the one rule with a union to narrow and it already does.
+Per-finding narrowing needs no further work. `dns_c2_beacon` is the one rule with a union to narrow and it already does.
+
+The alerts are unchanged throughout. Severity, title and text are untouched on every rule here; only the coverage claim moves.
 
 ## Impact
 
@@ -30,11 +32,14 @@ Per-finding narrowing needs no further work either. `dns_c2_beacon` is the one r
 
 **The coverage change, which the issue asks to be reviewed as one deliberate diff.** Two techniques drop from covered to monitor-only in the Navigator layer, because the only rules left covering them ship in monitor mode:
 
-| Technique | Before | After |
-|---|---|---|
-| T1059 | covered, by `suspicious_exec` + `shell_network_connect` + four imported | monitor-only, the four imported |
-| T1566.001 | covered, by `shell_from_office` + one imported | monitor-only, the one imported |
-| T1059.004 | `shell_from_office` | `shell_from_office` + `shell_network_connect` + `suspicious_exec` |
-| T1105 | six rules | four; the two that never observed a transfer come off |
+| Technique | Before                                            | After                                                           |
+| --------- | ------------------------------------------------- | --------------------------------------------------------------- |
+| T1059     | covered, by two authored rules plus four imported | monitor-only, the four imported                                 |
+| T1566.001 | covered, by `shell_from_office` plus one imported | monitor-only, the one imported                                  |
+| T1105     | covered, by two authored rules plus three imported | monitor-only, the three imported                                |
+| T1562.001 | covered, by `sensor_tamper` alone                 | **absent from the layer**                                       |
+| T1059.004 | `shell_from_office`                               | `shell_from_office`, `shell_network_connect`, `suspicious_exec` |
 
-That is a genuine reduction in claimed coverage and it is the point: we were reporting that we alert on Spearphishing Attachment because a rule fires on a shape phishing often produces.
+That is a genuine reduction in claimed coverage and it is the point: we were reporting that we alert on Spearphishing Attachment because a rule fires on a shape phishing often produces, and on Impair Defenses because a capture provider went quiet.
+
+**T1562.001 leaves the export entirely**, since `sensor_tamper` was the only rule claiming it once #754 landed. Worth seeing before merge rather than after: the tamper ALERT is untouched and an operator still learns their sensor stopped, but the Navigator layer a customer reads no longer says we detect Impair Defenses. Re-earning it is a change to the rule's predicate rather than to its technique list, by observing the actor: the process that stopped the provider, or a policy change that did.

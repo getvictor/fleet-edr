@@ -65,20 +65,31 @@ func (r *SensorTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding.
 func (r *SensorTamper) DisplayName() string { return "EDR sensor disabled" }
 
-// Techniques returns T1562.001 (Impair Defenses: Disable or Modify Tools), and the sweep in issue #755 kept it deliberately
-// rather than by leaving it alone.
+// Techniques returns none, which issue #755 called the arguable case and asked to be decided either way. This is the decision.
 //
-// The case against was that the rule cannot tell an attacker from a crash. True, and not the test: what it must attribute is
-// what it REPORTS, which is a capture provider that stopped and did not come back. It separates the one benign cause it knows
-// about, an upgrade replacing the system extension, by how fast capture resumes: a cutover measured on a live host was back in
-// about 1.1 seconds, while stops that needed the automatic repair took 32.2 and 37.9. That separation is the observation, and it
-// is what makes this different from sensor_recovery_failed, whose own documentation sends an analyst to this product's
-// components as the likely cause and which therefore declares nothing (issue #754).
+// It used to declare T1562.001 (Impair Defenses: Disable or Modify Tools). The first pass of the sweep kept it, on the grounds
+// that the rule separates the one benign cause it knows about, an upgrade replacing the system extension, by how fast capture
+// resumes: a cutover measured on a live host was back in about 1.1 seconds, while stops that needed the automatic repair took
+// 32.2 and 37.9. That separation is real and it is why this rule works.
 //
-// Not airtight, and recorded as such so the next audit does not re-litigate it from scratch. A hard crash of a provider still
-// looks like this. What would change the answer is evidence of an actor: a process that stopped it, or a policy change that did.
-// Until the rule observes one of those, T1562.001 rests on the timing separation alone.
-func (r *SensorTamper) Techniques() []string { return []string{"T1562.001"} }
+// What it is not is an attribution, and the distinction is the one this whole sweep turns on. A technique names either a
+// BEHAVIOUR or an ACTOR'S ACTION, and which it is decides what a rule has to observe to claim it. T1059.004 names a behaviour: a
+// Unix shell ran, and it ran whether an administrator or an intruder started it, so a rule that sees the shell has seen the
+// technique. T1562.001 names somebody impairing defenses. A capture provider that crashed and stayed down produces this finding
+// exactly, and a crash is not somebody doing anything. Separating the upgrade does not separate that, and the rule sees nothing
+// else that would.
+//
+// Both review bots reached this independently, and they were right that keeping the mapping contradicted the requirement this
+// project shipped in #754: a rule that cannot attribute what it reports to anyone declares none.
+//
+// The ALERT is unchanged. It keeps its severity, its title and its text, it stays the EDR's own tamper signal, and an operator
+// still learns their sensor stopped. What changes is that the coverage export no longer claims we detect Impair Defenses, which
+// we were claiming on a signal that fires on crashes. This rule was the only one claiming it, so that claim leaves the export
+// entirely; that is the honest state rather than a gap that appeared.
+//
+// Re-earning it is a change to the predicate, not to this list: observe the actor, either the process that stopped the provider
+// or a policy change that did, and the attribution follows.
+func (r *SensorTamper) Techniques() []string { return []string{} }
 
 // Doc surfaces the operator-facing description in /api/rules and the generated docs/detection-rules.md.
 func (r *SensorTamper) Doc() api.Documentation {

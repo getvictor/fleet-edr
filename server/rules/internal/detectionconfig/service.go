@@ -111,6 +111,12 @@ func (s *Service) ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSett
 	return s.store.ListRuleSettings(ctx)
 }
 
+// EvalStats reports what each rule's evaluation work cost over the window. Straight through to the store for the same reason
+// MatchCounts is: it reads counters, changes nothing, and has no audit row to write.
+func (s *Service) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.RuleEvalSummary, error) {
+	return s.store.EvalStats(ctx, days)
+}
+
 // MatchCounts reports what each rule has matched in monitor mode over the window. Straight through to the store: unlike the
 // exclusion and setting reads there is no snapshot to consult, because these counts are written by the detection pipeline rather
 // than by this service's own mutations, so there is nothing here to keep in step with them.
