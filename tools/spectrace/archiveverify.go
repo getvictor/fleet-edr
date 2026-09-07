@@ -87,7 +87,7 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 		if len(entries) == 0 {
 			continue
 		}
-		winner := lastBatchRestatement(entries)
+		winner := lastBatchRestatement(entries, life.added)
 		losses = append(losses, missingScenarios(requirement, winner, have)...)
 		losses = append(losses, unretiredScenarios(requirement, winner, have)...)
 		losses = append(losses, missingText(requirement, winner, text[requirement])...)
@@ -172,7 +172,7 @@ func unretiredScenarios(requirement string, winner winningRestatement, have map[
 // Scenario bodies are compared under their scenario NAME, and only for scenarios both sides have. A scenario that went missing is
 // reported once by name; counting its bullets too turned one lost scenario into seven findings, 127 lines across the archive.
 func missingText(requirement string, winner winningRestatement, canonical requirementText) []string {
-	out := textDiff(requirement, "", winner.by(), winner.kept.body, canonical.body, winner.everKept.body)
+	out := textDiff(requirement, "", winner.by(), winner.kept.body, canonical.body, winner.everKept.body, winner.wrote.body)
 	// Scenario text under the scenario's NAME, and only for scenarios both sides have. A scenario that went missing is reported
 	// once by name; counting its bullets too turned one lost scenario into seven findings.
 	for _, scenario := range sortedKeys(winner.kept.scenarios) {
@@ -181,14 +181,17 @@ func missingText(requirement string, winner winningRestatement, canonical requir
 			continue
 		}
 		out = append(out, textDiff(requirement, scenario, winner.by(),
-			winner.kept.scenarios[scenario], canonicalLines, winner.everKept.scenarios[scenario])...)
+			winner.kept.scenarios[scenario], canonicalLines, winner.everKept.scenarios[scenario], winner.wrote.scenarios[scenario])...)
 	}
 	return out
 }
 
 // textDiff reports one span of prose in both directions: lines every restatement carried that the canonical spec lacks, and
-// canonical lines none of them carried.
-func textDiff(requirement, scenario, by string, kept, canonical, everKept []string) []string {
+// canonical lines none of them carried. Plus the case neither direction sees, where the lines all match and their ORDER does not.
+//
+// `kept`, `canonical` and `everKept` are compared as sets and are sorted for that; `ordered` is the same span as the batch's
+// restatements actually wrote it, which is what the sequence check needs.
+func textDiff(requirement, scenario, by string, kept, canonical, everKept, ordered []string) []string {
 	where := requirement
 	if scenario != "" {
 		where = requirement + "/" + scenario
@@ -203,6 +206,16 @@ func textDiff(requirement, scenario, by string, kept, canonical, everKept []stri
 		if !slices.Contains(everKept, line) {
 			out = append(out, fmt.Sprintf("%s\n    in the canonical spec, and retired by %s:\n      %s", where, by, line))
 		}
+	}
+	if len(out) == 0 && !slices.Equal(ordered, canonical) && len(ordered) == len(canonical) {
+		// Same lines, different sequence, which the two loops above cannot see because they ask only whether each line occurs.
+		// A restatement whose only change is the ORDER of a scenario's given/when/then steps is a real refinement, and an
+		// out-of-order archive restores the old sequence with every line still present. Reported once for the span rather than
+		// per line, since naming which line moved is a diff and this is a report.
+		//
+		// Only when the sets match, so it never fires alongside a missing or surviving line: those name the difference already.
+		// No span on today's tree is in this state, and the check costs one comparison.
+		out = append(out, fmt.Sprintf("%s\n    ordered differently by %s than in the canonical spec", where, by))
 	}
 	return out
 }
@@ -219,6 +232,10 @@ type winningRestatement struct {
 	// scenarios is an intersection and everListed a union.
 	kept     requirementText
 	everKept requirementText
+	// wrote is the span in the order the batch's restatements wrote it, which the sorted sets above cannot answer. Taken from one
+	// restatement rather than merged: where a batch's restatements disagree on order, which of them won is exactly what is not
+	// recoverable, so the sequence check is only meaningful for a batch that agrees, and a batch that agrees has one order.
+	wrote requirementText
 }
 
 // by names the changes a finding is attributed to. Every change in the batch, since which of them won is not recoverable.
@@ -234,18 +251,23 @@ func (w winningRestatement) by() string { return strings.Join(w.changes, " and "
 // restatements wins and the others are discarded by design; a scenario EVERY one of them listed is therefore in the canonical spec
 // whichever won, and its absence is a real loss. A scenario only some listed is unrecoverable, and unrecoverable is silence here,
 // for the reason the whole command reports rather than gates. That drops the count on today's tree from 34 to 31.
-func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
+func lastBatchRestatement(entries []archivedRestatement, addedOn string) winningRestatement {
+	entries = currentLifetime(entries, addedOn)
+	out := winningRestatement{
+		everListed: map[string]struct{}{},
+		kept:       requirementText{scenarios: map[string][]string{}},
+		everKept:   requirementText{scenarios: map[string][]string{}},
+	}
+	if len(entries) == 0 {
+		return out
+	}
 	last := ""
 	for _, e := range entries {
 		if d := archiveDate(e.change); d > last {
 			last = d
 		}
 	}
-	out := winningRestatement{
-		everListed: map[string]struct{}{},
-		kept:       requirementText{scenarios: map[string][]string{}},
-		everKept:   requirementText{scenarios: map[string][]string{}},
-	}
+
 	shared := map[string]int{}
 	sharedText := map[[2]string]int{}
 	batch := 0
@@ -265,6 +287,11 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			sharedText[key]++
 			appendText(&out.everKept, key)
 		}
+		// The written ORDER is recorded only for a batch of ONE, which is the batch the sequence check can speak for. Where two
+		// restatements are in the batch, which of them the archive applied is exactly what is not recoverable, so neither of
+		// their orders is "the" order: taking one anyway reported six spans as reordered on the real tree, every one of them a
+		// multi-change batch.
+		out.wrote = e.text
 	}
 	for s, n := range shared {
 		if n == batch {
@@ -276,10 +303,31 @@ func lastBatchRestatement(entries []archivedRestatement) winningRestatement {
 			appendText(&out.kept, key)
 		}
 	}
+	if batch > 1 {
+		out.wrote = requirementText{}
+	}
 	sortText(&out.kept)
 	sortText(&out.everKept)
 	sort.Strings(out.changes)
 	sort.Strings(out.scenarios)
+	return out
+}
+
+// currentLifetime drops restatements archived before the requirement was last ADDED.
+//
+// Those describe a PREVIOUS lifetime of it, which review caught: a requirement retired and later re-added has a new body, and
+// comparing the old one against it reports a correct re-add as damage. Same-date ones are kept, so the batch that did the
+// re-adding is still checked.
+func currentLifetime(entries []archivedRestatement, addedOn string) []archivedRestatement {
+	if addedOn == "" {
+		return entries
+	}
+	var out []archivedRestatement
+	for _, e := range entries {
+		if archiveDate(e.change) >= addedOn {
+			out = append(out, e)
+		}
+	}
 	return out
 }
 

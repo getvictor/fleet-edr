@@ -306,7 +306,7 @@ func TestLastBatchRestatement(t *testing.T) {
 		got := lastBatchRestatement([]archivedRestatement{
 			{change: "2026-06-02-first", scenarios: []string{"one", "dropped-later"}},
 			{change: "2026-06-09-second", scenarios: []string{"one"}},
-		})
+		}, "")
 		assert.Equal(t, []string{"one"}, got.scenarios)
 		assert.Equal(t, []string{"2026-06-09-second"}, got.changes)
 	})
@@ -326,7 +326,7 @@ func TestLastBatchRestatement(t *testing.T) {
 				got := lastBatchRestatement([]archivedRestatement{
 					{change: tc.first, scenarios: []string{"shared", "only-here"}},
 					{change: tc.second, scenarios: []string{"shared"}},
-				})
+				}, "")
 				assert.Equal(t, []string{"shared"}, got.scenarios)
 				assert.Len(t, got.changes, 2, "both changes in the batch are named, since either could have won")
 			})
@@ -602,7 +602,75 @@ func TestLastBatchRestatement_ARepeatedLineStillCounts(t *testing.T) {
 	got := lastBatchRestatement([]archivedRestatement{
 		{change: "2026-09-07-aaa", text: requirementText{body: []string{"- the same bullet", "- the same bullet"}}},
 		{change: "2026-09-07-zzz", text: requirementText{body: []string{"- the same bullet"}}},
-	})
+	}, "")
 	assert.Equal(t, []string{"- the same bullet"}, got.kept.body,
 		"both restatements carried it, so losing every copy has to be reportable")
+}
+
+// TestVerifyArchive_ReorderedStepsAreAFinding covers what a set comparison cannot see: a restatement whose only change is the
+// ORDER of a scenario's steps is a real refinement, and an out-of-order archive restores the old sequence with every line still
+// present.
+func TestVerifyArchive_ReorderedStepsAreAFinding(t *testing.T) {
+	t.Parallel()
+	refined := []string{"- **GIVEN** a thing", "- **WHEN** it happens", "- **THEN** it does"}
+	old := []string{"- **WHEN** it happens", "- **GIVEN** a thing", "- **THEN** it does"}
+
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {{
+				change:    "2026-06-02-refines-it",
+				scenarios: []string{"one"},
+				text:      requirementText{scenarios: map[string][]string{"one": refined}},
+			}},
+		},
+		canonicalWith("cap/the-thing", "one"),
+		nil,
+		map[string]requirementText{"cap/the-thing": {scenarios: map[string][]string{"one": old}}},
+	)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "ordered differently by 2026-06-02-refines-it")
+}
+
+// The sequence check speaks only for a batch of ONE. Where two restatements are in the batch, which the archive applied is
+// exactly what is not recoverable, so neither of their orders is "the" order: taking the first anyway reported six spans as
+// reordered on the real tree, every one of them a multi-change batch.
+func TestVerifyArchive_OrderIsNotClaimedForABatchOfTwo(t *testing.T) {
+	t.Parallel()
+	one := []string{"- **GIVEN** a thing", "- **THEN** it does"}
+	other := []string{"- **THEN** it does", "- **GIVEN** a thing"}
+
+	assert.Empty(t, verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {
+				{change: "2026-09-07-aaa", scenarios: []string{"one"},
+					text: requirementText{scenarios: map[string][]string{"one": one}}},
+				{change: "2026-09-07-zzz", scenarios: []string{"one"},
+					text: requirementText{scenarios: map[string][]string{"one": other}}},
+			},
+		},
+		canonicalWith("cap/the-thing", "one"),
+		nil,
+		// Canonical matches the FIRST restatement's order and not the second's, so a check that picked either one of them would
+		// fire. The set is the same in all three, so nothing else in the report speaks for this span.
+		map[string]requirementText{"cap/the-thing": {scenarios: map[string][]string{"one": one}}},
+	))
+}
+
+// TestLastBatchRestatement_IgnoresAPreviousLifetime covers the case review found last: a requirement retired and later re-added
+// has a new body, and restatements from before the re-add describe the old one. Comparing those against the new canonical text
+// reports a correct re-add as archive damage.
+//
+// Same-date restatements are kept, so the batch that did the re-adding is still checked.
+func TestLastBatchRestatement_IgnoresAPreviousLifetime(t *testing.T) {
+	t.Parallel()
+	entries := []archivedRestatement{
+		{change: "2026-06-02-first-lifetime", scenarios: []string{"old"}},
+		{change: "2026-06-16-after-the-re-add", scenarios: []string{"new"}},
+	}
+	assert.Equal(t, []string{"new"}, lastBatchRestatement(entries, "2026-06-09").scenarios,
+		"the restatement from before the re-add describes a requirement that no longer exists")
+	assert.Equal(t, []string{"old"}, lastBatchRestatement(entries[:1], "2026-06-02").scenarios,
+		"a restatement in the same batch as the addition is still the current lifetime")
+	assert.Empty(t, lastBatchRestatement(entries[:1], "2026-06-09").scenarios,
+		"nothing from the current lifetime means nothing to claim, not a claim of nothing")
 }
