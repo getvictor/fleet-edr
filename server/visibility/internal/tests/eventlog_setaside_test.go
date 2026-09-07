@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -465,4 +466,33 @@ func TestNackOwnershipReadFailureIsReturned(t *testing.T) {
 	require.Error(t, err, "a failed read must not be reported as an ordinary superseded attempt")
 	assert.Zero(t, setAside)
 	assert.False(t, held, "and must not claim the attempt held a claim it could not check")
+}
+
+// TestNackRequeueFailureIsReturned covers the failure of the statement that returns the events, which is the one place a nack can
+// fail AFTER it has established ownership.
+//
+// That ordering is the point. The ownership read having succeeded means this attempt did hold the claim, so the failure must not
+// be reported as a lost one: it is a queue fault, and the caller distinguishes them (issue #840).
+//
+// Reached by overflowing the attempt counter rather than by breaking the connection, because a broken connection fails earlier and
+// would leave this path untested while looking like it covered it. attempts is an INT, the statement increments it, and MySQL
+// refuses the write rather than wrapping.
+func TestNackRequeueFailureIsReturned(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-requeue-fail"
+
+	enqueue(t, log, host, "e-requeue-fail", 1_000)
+	claimed, stamp, err := log.ClaimForHost(t.Context(), host, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+
+	_, err = db.ExecContext(t.Context(),
+		"UPDATE event_queue SET attempts = ? WHERE event_id = ?", math.MaxInt32, "e-requeue-fail")
+	require.NoError(t, err)
+
+	setAside, held, err := log.Nack(t.Context(), []string{"e-requeue-fail"}, stamp)
+	require.Error(t, err, "the increment overflows, and a write the queue refused must not be reported as success")
+	assert.Zero(t, setAside)
+	assert.False(t, held, "a failed nack reports no claim, and the caller must not read that as a lease overrun")
 }
