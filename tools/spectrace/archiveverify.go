@@ -148,21 +148,40 @@ func runArchiveVerify(args []string) int {
 	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, removedLater), len(archived))
 }
 
-// printArchiveVerify renders the report. It returns 0 whatever it finds, because the tree carries pre-existing entries that this
-// pass cannot classify, and a command that fails from the day it lands is a command someone adds a skip for. The checklist reads
-// it by DIFFERENCE: a line that was not there before this archive is one this archive caused.
+// printArchiveVerify renders the report. FINDINGS never gate: the tree carries pre-existing entries this pass cannot classify,
+// and a command that fails from the day it lands is a command someone adds a skip for. The checklist reads it by DIFFERENCE, so a
+// line that was not there before this archive is one this archive caused.
+//
+// A failed WRITE does gate, and the distinction is the point. The whole procedure is a release engineer diffing this output
+// against the run from before archiving, so a report truncated by a broken pipe while the status says it succeeded would hide
+// exactly the new line the diff exists to surface. That is the same reasoning report.go records for PR #281, and printArchiveOrder
+// for its plan. Returns 2 on a write failure, matching the usage/IO code the rest of the tool uses.
 func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
-	if len(findings) == 0 {
-		fmt.Fprintf(w, "spectrace: %d archived requirement restatement(s) checked, every scenario still canonical\n", requirements)
-		return 0
+	var werr error
+	p := func(format string, args ...any) {
+		if werr != nil {
+			return
+		}
+		_, werr = fmt.Fprintf(w, format, args...)
 	}
-	fmt.Fprintf(w, "spectrace: %d scenario(s) an archived restatement listed are not in the canonical spec.\n", len(findings))
-	fmt.Fprintln(w, "Compare this list with the one from before the archive. A line that is NEW is a scenario this archive")
-	fmt.Fprintln(w, "discarded, which is what archiving out of order does. A line that was already there is either an older")
-	fmt.Fprintln(w, "loss or a scenario a later change retired, which this cannot tell apart: openspec stamps one batch with")
-	fmt.Fprintln(w, "one date, so the order within it is not recoverable.")
-	for _, l := range findings {
-		fmt.Fprintf(w, "  %s\n", l)
+
+	if len(findings) == 0 {
+		p("spectrace: %d archived requirement restatement(s) checked, every scenario still canonical\n", requirements)
+	} else {
+		p("spectrace: %d scenario(s) an archived restatement listed are not in the canonical spec.\n", len(findings))
+		p("%s\n%s\n%s\n%s\n",
+			"Compare this list with the one from before the archive. A line that is NEW is a scenario this archive",
+			"discarded, which is what archiving out of order does. A line that was already there is either an older",
+			"loss or a scenario a later change retired, which this cannot tell apart: openspec stamps one batch with",
+			"one date, so the order within it is not recoverable.")
+		for _, l := range findings {
+			p("  %s\n", l)
+		}
+	}
+
+	if werr != nil {
+		fmt.Fprintf(os.Stderr, "spectrace archive-verify: write output: %v\n", werr)
+		return 2
 	}
 	return 0
 }

@@ -27,7 +27,8 @@ func added(name string) string {
 }
 
 func modified(name string) string {
-	return "# T\n\n## MODIFIED Requirements\n\n### Requirement: " + name + "\n\nSHALL do the thing, refined.\n\n#### Scenario: One\n\n- **THEN** it does\n"
+	return "# T\n\n## MODIFIED Requirements\n\n### Requirement: " + name +
+		"\n\nSHALL do the thing, refined.\n\n#### Scenario: One\n\n- **THEN** it does\n"
 }
 
 func removed(name string) string {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,5 +141,20 @@ func TestPrintArchiveVerify(t *testing.T) {
 		out := buf.String()
 		assert.Contains(t, out, "A line that is NEW is a scenario this archive")
 		assert.Contains(t, out, "cap/r/s")
+	})
+
+	// Findings do not gate, but a report that could not be written does. The procedure is a release engineer diffing this
+	// output against the run from before archiving, so a list truncated by a broken pipe and reported as success would hide
+	// the one new line the diff exists to surface.
+	t.Run("a truncated report is a failure, not a clean run", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, 2, printArchiveVerify(&stubbornWriter{ok: 1, err: errors.New("pipe closed")},
+			[]string{"cap/r/s\n    listed by x"}, 3))
+	})
+
+	// The clean path writes too, and its single line is just as capable of failing.
+	t.Run("a truncated clean report is a failure too", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, 2, printArchiveVerify(&stubbornWriter{err: errors.New("pipe closed")}, nil, 12))
 	})
 }

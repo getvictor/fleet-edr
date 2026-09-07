@@ -104,7 +104,9 @@ Subcommands:
   archive-verify
             Run AFTER archiving. Checks that every scenario the last archived restatement of a
             requirement listed is still in the canonical spec, which is what archiving in the
-            wrong order silently destroys. Exit code 1 when any is missing.
+            wrong order silently destroys. Findings do NOT gate: run it before archiving too and
+            compare the two, since a line that is new is one this archive lost. Exit code 2 on a
+            usage or write failure.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)
