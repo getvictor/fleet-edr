@@ -10,6 +10,15 @@
 -- of the deployment, to save a scan on a leader-only boot path. Durable completion is the cheaper side of that trade, and it makes
 -- the already-credited boot free rather than merely cheaper.
 --
+-- Deleting a row is how a pass runs again, and that is the supported escape hatch rather than an accident of the schema. It is
+-- worth having because the guarantee is now "once ever": a deployment that somehow needs the pass repeated has no other way
+-- to ask for it, and the pass is idempotent, so the cost of running it again is one scan.
+--
+-- The case that would need it is a replica writing uncredited alerts AFTER a newer replica completed the pass, which needs a
+-- version that persists vendored-rule alerts without recording their origin. No released version does: the vendored corpus,
+-- the attribution writer and promotion out of monitor mode all ship together, in the same release as this. Every cutover
+-- after that has both sides writing the origin at insert.
+--
 -- Keyed by NAME rather than a boolean column on a singleton row, because the alternative is an ALTER per backfill and there is
 -- already a second one in view: #871 widens attribution to alerts from rules no longer in the corpus, which is a different pass
 -- over a different population and completes independently of this one.
