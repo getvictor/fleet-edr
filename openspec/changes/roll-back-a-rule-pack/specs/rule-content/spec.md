@@ -1,0 +1,121 @@
+# Rule content: roll back a rule pack delta
+
+## ADDED Requirements
+
+### Requirement: A replaced generation of shipped rule content can be restored
+
+The system SHALL retain the generation of shipped rule content that installing a newer pack replaces, and SHALL be able to restore it.
+
+Retention SHALL happen in the same operation as the replacement, so that a retained generation is always one that was actually replaced.
+
+One generation SHALL be retained. Restoring it SHALL consume it, so a further rollback has nothing behind it and SHALL be reported rather than restoring the content already installed.
+
+A rollback SHALL leave content the operator wrote untouched, including content written after the upgrade being rolled back, because rolling back a pack restores shipped content rather than undoing their work.
+
+A rollback SHALL NOT restore shipped content whose RULE the operator has taken over since the upgrade, whatever path either is stored under. Their rule wins, as it does when shipped content is installed, and the shipped content withheld for that reason SHALL be reported.
+
+A rollback SHALL survive a restart: the system SHALL NOT reinstall shipped content an operator rolled back from. What is declined SHALL be identified by the content that would be STORED rather than by the content a build carries, because those differ on a deployment holding an override and the looser comparison lets a build differing only in an overridden rule reinstall the rest of itself. The refusal SHALL apply to that content only, so a later build storing different content installs normally without the operator having to re-enable anything.
+
+What is declined SHALL be the generation the upgrade installed, recorded when it was installed, so that changes an operator makes to shipped content afterwards do not alter it. A start that finds the content already installed but no generation recorded SHALL record it, so that a deployment upgraded before this was tracked can still name what a rollback declines. Otherwise deleting a shipped rule between the upgrade and the rollback records a decline describing content no build ever shipped, and the rejected generation reinstalls.
+
+A retained generation SHALL be recognised by its recorded identity rather than by whether it contains any documents, so a generation that legitimately held no shipped rules can still be restored.
+
+Rolling back when no generation is retained SHALL be reported, and SHALL NOT replace the shipped content with an empty set.
+
+#### Scenario: The previous generation is restored
+
+- **GIVEN** a deployment that installed a newer pack over an older one
+- **WHEN** it rolls back
+- **THEN** the shipped content is the older generation again, including rules the newer pack changed or dropped, and rules the newer pack added are gone
+
+#### Scenario: A rollback is not undone by the next restart
+
+- **GIVEN** a deployment that rolled back from the pack its build carries
+- **WHEN** it starts again on that same build
+- **THEN** the declined pack is not installed and the deployment is still running the generation it rolled back to
+
+#### Scenario: A later pack still installs after a rollback
+
+- **GIVEN** a deployment that rolled back from one pack
+- **WHEN** it is started on a build carrying a different pack
+- **THEN** that pack is installed, because the refusal applies to the declined pack rather than to installing in general
+
+#### Scenario: An operator's own rules survive a rollback
+
+- **GIVEN** a deployment holding rules the operator wrote
+- **WHEN** it rolls back its shipped content
+- **THEN** their rules are still stored and still recorded as theirs
+
+#### Scenario: A rule the operator took over is not taken back
+
+- **GIVEN** a deployment where the operator has taken over one of the rules in the retained generation, under any path
+- **WHEN** it rolls back
+- **THEN** their rule is unchanged, no two stored documents share an identity, and the shipped rule that was withheld is reported
+
+#### Scenario: A corpus predating pack identity offers a rollback
+
+- **GIVEN** a corpus stored before pack identity was recorded, whose identity is therefore unrecorded
+- **WHEN** it installs a newer pack and its status is read
+- **THEN** it reports a previous generation is available, and rolling back restores it
+
+#### Scenario: A rollback holds against a build differing in an override
+
+- **GIVEN** a deployment that rolled back, holding its own version of one of the shipped rules
+- **WHEN** it is started on a build whose shipped content differs from the declined content only in that rule
+- **THEN** nothing is installed, because that build would store the content the operator declined
+
+#### Scenario: A rollback holds after the operator edits shipped content
+
+- **GIVEN** a deployment that deleted one of the shipped rules a pack installed, and then rolled back
+- **WHEN** it is started again on that same build
+- **THEN** nothing is installed, because what it declined is the generation that was installed rather than the corpus as the edit left it
+
+#### Scenario: An unrecorded generation is recorded on start
+
+- **GIVEN** a deployment holding this build's shipped content with no generation recorded, as one upgraded before it was tracked would be
+- **WHEN** it is started
+- **THEN** no documents move, the generation it holds is recorded, and a rollback afterwards is not undone by the next start
+
+#### Scenario: A generation with no shipped rules is still restorable
+
+- **GIVEN** a corpus that held only the operator's own rules when a pack was first installed onto it
+- **WHEN** it rolls back
+- **THEN** the generation with no shipped rules is restored, leaving their own rules and none of the pack's
+
+#### Scenario: Rolling back with nothing retained is reported
+
+- **GIVEN** a deployment that has never installed a newer pack
+- **WHEN** it rolls back
+- **THEN** it is told no previous generation is retained, and its shipped content is unchanged
+
+#### Scenario: A second rollback is refused
+
+- **GIVEN** a deployment that has already rolled back
+- **WHEN** it rolls back again
+- **THEN** it is told no previous generation is retained
+
+### Requirement: A deployment reports which shipped rule content it is running
+
+The system SHALL report which generation of shipped rule content a deployment holds, which generation the running build carries, and which RULES differ between them.
+
+Differences SHALL be reported by rule identity rather than by the path a document is stored under, because identity is what an operator recognises and what their per-rule tuning is keyed on.
+
+Content the operator wrote SHALL be excluded from the comparison, so writing their own rule does not make a deployment appear out of date.
+
+#### Scenario: The rules that differ are named
+
+- **GIVEN** a deployment whose shipped content differs from the pack its build carries
+- **WHEN** its pack status is read
+- **THEN** it reports the deployment is not current, and names the rules added, removed and changed
+
+#### Scenario: A current deployment reports no difference
+
+- **GIVEN** a deployment holding exactly the shipped content its build carries
+- **WHEN** its pack status is read
+- **THEN** it reports the deployment is current and names no differences
+
+#### Scenario: Their own rules do not make a deployment look out of date
+
+- **GIVEN** a deployment holding this build's shipped content plus a rule the operator wrote
+- **WHEN** its pack status is read
+- **THEN** it reports the deployment is current, and their rule is not reported as a difference

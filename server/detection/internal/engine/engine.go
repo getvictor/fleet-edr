@@ -17,6 +17,7 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	detectionslices "github.com/fleetdm/edr/server/detection/internal/slices"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -24,12 +25,12 @@ import (
 // group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
 // alert_count attribute shape.
 
-// batchTally accumulates what one batch's evaluation should record ONCE THE BATCH IS ACKNOWLEDGED.
+// batchTally accumulates what one batch's evaluation should record ONCE THAT BATCH WILL NOT BE PROCESSED AGAIN.
 //
 // Nothing is written while evaluating, and that is the whole design. A batch that fails is nacked and replayed whole, so a counter
 // incremented during evaluation counts a retried batch twice; #631 measured roughly 130 materialization retries a minute from one
 // host under a sustained condition, so that is not a rounding error. Handing the tally back to the caller lets it be recorded once,
-// after the acknowledgement that says the batch will not come round again.
+// on the transition that says the batch will not come round again: its acknowledgement, or its withdrawal from the queue.
 type batchTally struct {
 	monitor map[monitorKey]int
 }
@@ -97,6 +98,9 @@ type Engine struct {
 	// race against another parallel test (a package-level var mutated by one test is read by evaluateRule in another). Production always
 	// gets the same named tracer via New.
 	tracer trace.Tracer
+	// budget stops evaluating a rule that repeatedly costs more than it is worth (issue #767). Per-replica and safe to lose; see
+	// evalBudget for why a restart clearing it is the intended behaviour rather than a gap.
+	budget *evalBudget
 }
 
 // New creates a detection engine backed by the given store.
@@ -106,7 +110,8 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	}
 	// Built once here, not per batch: it is one interface value with no per-call allocation, which keeps the non-allocating
 	// dispatch the concrete store handle exists for.
-	e := &Engine{store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
+	e := &Engine{
+		budget: newEvalBudget(), store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
 	// Seeded rather than left nil so Evaluate needs no nil check on the hot path and a batch arriving before the first load
 	// simply matches nothing.
 	e.active.Store(newRuleSet(nil))
@@ -133,6 +138,8 @@ func (e *Engine) Register(r rulesapi.Rule) {
 	next := make([]rulesapi.Rule, len(current), len(current)+1)
 	copy(next, current)
 	e.active.Store(newRuleSet(append(next, r)))
+	// Deliberately does NOT clear the evaluation budget, unlike LoadActive. This adds one rule and leaves the others as they were,
+	// so what the budget learned about them still applies; clearing it would discard useful state for no reason.
 }
 
 // ruleSet is the engine's active rules together with the indices derived from them, immutable once built.
@@ -202,6 +209,9 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 	next := make([]rulesapi.Rule, len(active))
 	copy(next, active)
 	e.active.Store(newRuleSet(next))
+	// A new set means what the budget learned about the old one no longer applies. Without this, an operator who fixes a slow rule
+	// and publishes it under the same id gets the corrected rule installed and never evaluated (issue #767 review).
+	e.budget.forget()
 }
 
 // Evaluate runs the rules that consume the batch's event types against it, per rulesFor: a rule is invoked only when the batch
@@ -235,13 +245,13 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
 	// call returns, so concurrent batches share nothing.
 	scope := &rulesapi.BatchScope{}
-	// One tally for the batch, returned to the caller to record after the acknowledgement. See batchTally.
+	// One tally for the batch, returned to the caller to record on the transition that ends the batch's life. See batchTally.
 	tally := &batchTally{}
 	// One statistics accumulator for the batch, recorded from a defer so every exit path reports the work it did: a hard error
 	// mid-loop, a retryable miss after the loop, and success. Recorded HERE rather than handed back like the tally, because
 	// unlike a monitor match an evaluation is not something a replay must avoid counting twice; see RuleEvalStat's doc. Handing
-	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is never
-	// acknowledged and the caller's record-after-ack step never runs.
+	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is nacked rather
+	// than acknowledged, and the caller records only once a batch will not be processed again.
 	var stats rulesapi.RuleEvalStats
 	defer func() { e.recordEvalStats(ctx, stats) }()
 	var pendingMiss error
@@ -250,14 +260,23 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	rs := e.active.Load()
 	for _, i := range rs.rulesFor(live) {
 		rule := rs.rules[i]
+		if e.budget.skipping(rule.ID()) {
+			// This replica has stopped evaluating the rule for exceeding its budget repeatedly. Skipped silently here: the
+			// transition was logged and counted once when it happened, and repeating it per batch would bury the signal under
+			// itself, which is the mistake the set-aside reporting in #836 avoided the same way.
+			continue
+		}
 		err := e.evaluateRule(ctx, rule, rs.declaredTypes[i], live, scope, tally, &stats)
 		if err == nil {
 			continue
 		}
 		if !errors.Is(err, rulesapi.ErrRetryBatch) {
-			// The batch will be nacked and replayed, so the tally is discarded: whatever it holds will be counted by the
-			// attempt that succeeds.
-			return nil, err
+			// Returned WITH the tally rather than instead of it. The batch is nacked, and on the ordinary path it is replayed
+			// and whatever this attempt found is counted by the attempt that succeeds; but a batch can also be withdrawn from
+			// processing entirely once its retry bounds are passed (#836), and then there is no later attempt to count it. Only
+			// the caller can tell those apart, because only the queue knows whether this nack was the withdrawal, so the engine
+			// hands the tally over and does not decide (#843).
+			return tally.snapshot(), err
 		}
 		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
 		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
@@ -272,9 +291,9 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 		}
 	}
 	if pendingMiss != nil {
-		// Same reasoning as the hard error above: a retryable miss nacks the batch, so this attempt's matches are not the ones
-		// to record.
-		return nil, pendingMiss
+		// Same reasoning as the hard error above: the tally travels with the error, and whether it is recorded is the caller's
+		// decision, because it turns on whether this nack withdrew the batch for good.
+		return tally.snapshot(), pendingMiss
 	}
 	return tally.snapshot(), nil
 }
@@ -405,8 +424,38 @@ func (e *Engine) evaluateRule(
 	// record zero misses for an evaluation that genuinely missed, and the miss is the counter an operator reads to find the rule
 	// driving the retries (issue #833 review).
 	var evalRetryable bool
+	// The rule's OWN evaluation time, assigned below and read by the defer, for the same reason evalRetryable is a variable
+	// rather than derived from a return: the defer runs on every path and needs a value the happy path sets.
+	var ruleElapsed int64
 	defer func() {
 		elapsed := time.Since(start).Nanoseconds()
+		// Deliberately NOT returned as an error. In Evaluate a rule error that is not retryable returns from the batch and the
+		// batch is nacked and replayed, so a slow rule reporting failure would be retried into the same slow rule on every
+		// attempt: #836's stalled host by another route. Recording it keeps the findings this evaluation produced and lets the
+		// batch finish, and the skip applies to later batches.
+		//
+		// Charged the rule's OWN duration, not `elapsed`, which also covers alert persistence. See ruleStart below.
+		if exhausted, worstNs := e.budget.record(rule.ID(), ruleElapsed, time.Now()); exhausted {
+			e.logger.WarnContext(ctx, "detection: rule exceeded its evaluation budget repeatedly and will not be evaluated on this replica",
+				"rule_id", rule.ID(), "worst", time.Duration(worstNs).String(), "budget", time.Duration(e.budget.budgetNs).String(),
+				"overruns", maxRuleOverruns, "window", ruleOverrunWindow.String())
+			if e.metrics != nil {
+				e.metrics.RuleEvaluationSkipped(ctx, rule.ID())
+			}
+		}
+		if e.metrics != nil {
+			// The FULL duration, matching what the durable table records, not the narrower number the budget is charged.
+			// Review found the inconsistency: the histogram is what an operator reads to ask which rule is slow, and a rule
+			// that is slow through graph reads is exactly as much of an operator problem as one slow through matching. Two
+			// surfaces answering the same question with different quantities is worse than either choice.
+			//
+			// The budget still subtracts graph-read time, deliberately and for a different purpose: it decides whether to
+			// stop evaluating a rule, and a slow datastore must not disable rules. See waitAccumulator.
+			//
+			// Recorded on every path including the failing ones, because a rule that is slow and then errors is exactly the
+			// rule an operator is looking for (issue #837).
+			e.metrics.RuleEvaluationDuration(ctx, rule.ID(), time.Duration(elapsed))
+		}
 		// One entry per rule per batch, appended rather than merged, because rulesFor sorts and compacts its indices so a rule
 		// is evaluated exactly once per batch.
 		*stats = append(*stats, rulesapi.RuleEvalStat{
@@ -436,7 +485,7 @@ func (e *Engine) evaluateRule(
 	// batch is replayed whole, so a chain declined in an attempt that is later nacked is recorded again on the next attempt's
 	// span; issue #631 measured roughly 130 retries a minute from one host under a sustained condition, so the absolute count of
 	// declines across spans can exceed the number of chains actually given up. A cumulative metric would have the same problem,
-	// which is why MonitorTally is handed back to be recorded only after the acknowledgement.
+	// which is why MonitorTally is handed back to be recorded only once the batch will not be processed again.
 	//
 	// What makes the per-attempt form sufficient here is that the requirement asks for this to be measurable against the rule's
 	// OWN alert volume, and alert_count below is measured on this same span, under the identical retry semantics. Both numbers
@@ -457,7 +506,28 @@ func (e *Engine) evaluateRule(
 		)
 	}()
 
-	findings, err := evaluate(ctx, rule, scoped, e.ruleReader, scope)
+	// Timed separately from `start` above, which spans the whole call including alert persistence. The budget must charge a rule
+	// for its OWN work: review found that feeding it the full duration lets a slow or failing database accumulate overruns and
+	// disable a rule that is not itself expensive, which punishes the wrong thing and removes detections during exactly the
+	// incident an operator most needs them. RuleEvalStats keeps reporting the full duration, since that is what "this rule cost
+	// the pipeline" means for the tuning table (issue #774).
+	// The budget subtracts what this rule spent WAITING on the graph rather than working. Review found why that matters: a rule's
+	// reads are synchronous MySQL, so charging them means a slow database disables rules instead of slow rules, worst first among
+	// the rules doing the most correlation, at the moment detections matter most.
+	//
+	// The accumulator rides the CONTEXT, not the reader. A second review round found why it has to: the Sigma adapter memoizes
+	// each event's graph lookups for the whole batch, and those closures hold the reader of whichever rule built the memo, so a
+	// reader accumulating into its own field credited the first rule for a read a later rule triggered and left the later rule
+	// with a total of zero. See waitAccumulator.
+	//
+	// The wrapper is therefore stateless and built here rather than held on the Engine, which is deliberate: ruleReader is
+	// replaced after New by tests that install a failing or counting graph, and a wrapper snapshotted at construction would keep
+	// reading the one New built. Costs one small allocation per rule per batch and cannot go stale.
+	waiting := &waitAccumulator{}
+	ruleCtx := withWaitAccumulator(ctx, waiting)
+	ruleStart := time.Now()
+	findings, err := evaluate(ruleCtx, rule, scoped, &timedReader{inner: e.ruleReader}, scope)
+	ruleElapsed = time.Since(ruleStart).Nanoseconds() - waiting.ns.Load()
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
 	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
 	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.
@@ -564,9 +634,16 @@ func (e *Engine) routeFinding(
 	// Resolved before the switch so the monitor counter and a persisted alert label the finding with the SAME severity. A monitor
 	// setting can carry an override, and applying it only on the persist path below left the two series describing one rule at two
 	// severities, which defeats the comparison the counter exists for.
+	//
+	// The override sets the BASE and the finding's own modifiers apply on top of it, rather than the override being the last word
+	// (#753). It used to replace the finished severity, so a rule that escalated conditionally lost that decision: an operator who
+	// found dns_c2_beacon noisy and set it to low got low for a high-entropy domain and low for an ordinary one, and the
+	// population they would most want to keep visible became indistinguishable from the rest. Their setting is meant to re-rank
+	// the rule, which composing does, and not to erase what the rule observed.
 	if severityOverride != "" {
 		f.Severity = severityOverride
 	}
+	f.Severity = api.ApplyModifiers(f.Severity, f.Modifiers)
 
 	switch mode {
 	case rulesapi.DetectionRuleModeDisabled:
@@ -608,6 +685,13 @@ func (e *Engine) routeFinding(
 func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string, origin string) (bool, error) {
 	if f.Techniques == nil {
 		f.Techniques = techniques
+	}
+	// A modifier's techniques are stamped HERE rather than by the rule, which is what keeps a condition's technique and its price
+	// from drifting apart: a rule cannot grow a technique for a condition without also saying what that condition is worth
+	// (issue #753). After the fallback above and not before it, or a rule that declares no per-finding techniques but earns a
+	// modifier would end up carrying only the modifier's, losing the set it declares for every finding.
+	for _, m := range f.Modifiers {
+		f.Techniques = detectionslices.Deduplicate(append(f.Techniques, m.Techniques...))
 	}
 	source := f.Source
 	if source == "" {

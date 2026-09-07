@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -887,6 +888,11 @@ func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string, _ 
 	m.monitors = append(m.monitors, ruleID)
 }
 
+// Overridden rather than left to the embedded nil, which is what a fake embedding an interface costs: it works only while the
+// engine calls exactly the methods it overrides, and any new call on the evaluation path is a nil dereference rather than a
+// compile error. Adding the evaluation-duration histogram (issue #837) hit exactly that.
+func (m *countingMetrics) RuleEvaluationDuration(context.Context, string, time.Duration) {}
+
 // spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-counted-rather-than-only-logged
 //
 // TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt pins the counter that replaced a per-match log line.
@@ -943,8 +949,8 @@ func (r overridingResolver) ResolveRuleMode(_, _ string, _ rulesapi.DetectionRul
 // comparison is wrong if one series is labelled differently from the other.
 //
 // Asserted on the tally rather than on a metrics fake, because the engine no longer touches the recorder: it hands the tally back
-// and the pipeline records it after acknowledging the batch (issue #813). The severity carried in the tally IS what reaches both
-// the counter and the durable row.
+// and the pipeline records it once the batch will not be processed again (issue #813). The severity carried in the tally IS what
+// reaches both the counter and the durable row.
 func TestEngine_MonitorTallyUsesTheOverriddenSeverity(t *testing.T) {
 	t.Parallel()
 
@@ -1090,8 +1096,9 @@ func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
 }
 
 // evaluateErr runs a batch and discards the monitor tally, for the many tests that assert only on whether evaluation failed.
-// Evaluate returns the tally so the pipeline can record it AFTER acknowledging the batch (issue #813); a test asserting on error
-// handling has no use for it, and threading `_, err :=` through every one of them would obscure what those tests are about.
+// Evaluate returns the tally so the pipeline can record it once the batch is finished with the queue (issue #813); a test
+// asserting on error handling has no use for it, and threading `_, err :=` through every one of them would obscure what those
+// tests are about.
 func evaluateErr(e *Engine, ctx context.Context, events []api.Event) error {
 	_, err := e.Evaluate(ctx, events)
 	return err
@@ -1209,10 +1216,11 @@ func (r *recordingEvalStats) byRule(id string) (rulesapi.RuleEvalStat, bool) {
 // TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne pins the counting rule that is the whole reason this type exists
 // separately from MonitorTally, and pins it on the path that would otherwise never record anything.
 //
-// A batch ending in a retryable outcome is NACKED, so the pipeline's record-after-acknowledgement step never runs for it. If the
-// statistics rode back the way the monitor tally does, the retryable-miss counter would be permanently zero: the only batches that
-// could report a miss are exactly the ones that never reach the recording step. That makes the counter worse than absent, because a
-// reader would take zero as evidence of no churn.
+// A batch ending in a retryable outcome is NACKED, and the pipeline's recording step runs only on a terminal transition, which an
+// ordinary nack is not. If the statistics rode back the way the monitor tally does, the retryable-miss counter would report almost
+// nothing: a batch that misses and then succeeds would have its misses discarded on every attempt, and the only one that could
+// report a miss is a batch eventually withdrawn from the queue, which is the rare terminal nack. That makes the counter worse than
+// absent, because a reader would take a near-zero as evidence of no churn.
 //
 // Two attempts are driven through deliberately, standing in for a nack and its replay, because counting attempts rather than
 // logical batches is the property under test. Asserting one attempt would pass equally for either design.
@@ -1407,4 +1415,129 @@ func TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError(t *testin
 	assert.Equal(t, int64(1), st.Evaluations)
 	assert.Equal(t, int64(1), st.RetryableMisses,
 		"the evaluation missed, so it counts as a miss even though a later persistence failure replaced the returned error")
+}
+
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-withdrawn-batch-is-counted-once-not-lost
+//
+// TestEngine_Evaluate_ReturnsTheTallyAlongsideAnError is the engine half of #843, and without it the fix is untested here: the
+// processor's tests stub the evaluator, so they assert what the processor DOES with a tally and prove nothing about whether the
+// engine hands one over.
+//
+// Both error classes are covered because both nack a batch, and a nacked batch can be withdrawn from processing for good once its
+// retry bounds are passed. The engine cannot tell an ordinary retry from a withdrawal, because only the queue knows, so it hands
+// the tally over on every path and lets the processor decide. Returning nil instead is what lost the count.
+//
+// The rule that matches is registered FIRST and the failing rule second, which is the ordering the property needs: matches
+// resolved before the failure are exactly the ones that used to be discarded.
+func TestEngine_Evaluate_ReturnsTheTallyAlongsideAnError(t *testing.T) {
+	t.Parallel()
+
+	// The two error CLASSES Evaluate can return, which are the two `return` statements the fix changed. A rule's own failure is
+	// neither: evaluateRule logs it and returns nil for per-rule isolation, so it never reaches the caller and never nacks
+	// anything.
+	cases := []struct {
+		name    string
+		failing rulesapi.Rule
+		why     string
+	}{
+		{
+			"a retryable miss",
+			&failingRule{
+				stubRule: stubRule{id: "waiting-rule"},
+				err:      fmt.Errorf("event x references pid 7: %w", rulesapi.ErrProcessNotYetMaterialized),
+			},
+			"the batch comes round again, and may run out of attempts before it ever succeeds",
+		},
+		{
+			// An ALERTING rule whose finding cannot be persisted, which is the only way a non-retryable error leaves the engine.
+			// The finding names no subject, so it is refused before any store is touched, which is why a nil store is enough.
+			"an alert-persistence failure",
+			&stubRuleWithFindings{
+				stubRule: stubRule{id: "alerting-rule"},
+				findings: []api.Finding{{HostID: "h1", RuleID: "alerting-rule", Severity: "high", Title: "t"}},
+			},
+			"this aborts the batch at the finding it happened on, and the retries it causes are bounded the same way",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := New(nil, discardLogger())
+			e.Register(&modeDeclaringStub{
+				stubRuleWithFindings: stubRuleWithFindings{
+					stubRule: stubRule{id: "imported"},
+					findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+				},
+				mode: rulesapi.DetectionRuleModeMonitor,
+			})
+			e.Register(tc.failing)
+
+			tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+
+			require.Error(t, err, tc.why)
+			require.Len(t, tally, 1, "the match resolved before the failure must reach the caller, or nothing can ever record it")
+			assert.Equal(t, "imported", tally[0].RuleID)
+			assert.Equal(t, 1, tally[0].Count)
+		})
+	}
+}
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/a-severity-override-adjusts-an-escalation-rather-than-erasing-it
+//
+// TestEngine_OverrideAdjustsAnEscalationRatherThanErasingIt is issue #753 at the seam where it happened: the engine used to apply
+// an operator's per-rule severity setting as the last write, so whatever a rule had decided conditionally was discarded.
+//
+// The tally is the observable here because it carries the severity that reaches BOTH the counter and the durable alert row, which
+// is exactly the property the test above pins. Driving the whole engine rather than calling the composition directly is the point:
+// the composition being right is asserted in detection/api, and what could still be wrong here is the ORDER the override and the
+// modifiers are applied in.
+//
+// Asserted as an ordering across every override, not as a table of bands. Pinning bands would pass against an implementation that
+// collapsed the two populations, as long as it collapsed them to the values written down, and the collapse IS the defect.
+func TestEngine_OverrideAdjustsAnEscalationRatherThanErasingIt(t *testing.T) {
+	t.Parallel()
+
+	severityFor := func(t *testing.T, override string, modifiers []api.RiskModifier) string {
+		t.Helper()
+		e := New(nil, discardLogger())
+		e.SetModeResolver(overridingResolver{mode: rulesapi.DetectionRuleModeMonitor, severity: override})
+		e.Register(&modeDeclaringStub{
+			stubRuleWithFindings: stubRuleWithFindings{
+				stubRule: stubRule{id: "conditional"},
+				findings: []api.Finding{{
+					HostID: "h1", RuleID: "conditional", Severity: api.SeverityHigh, Title: "t", Modifiers: modifiers,
+				}},
+			},
+			mode: rulesapi.DetectionRuleModeMonitor,
+		})
+		tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+		require.NoError(t, err)
+		require.Len(t, tally, 1)
+		return tally[0].Severity
+	}
+
+	escalated := []api.RiskModifier{{Reason: "escalating condition", Risk: 25}}
+
+	for _, override := range []string{"", api.SeverityLow, api.SeverityMedium, api.SeverityHigh} {
+		name := "no override"
+		if override != "" {
+			name = "overridden to " + override
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			plain := severityFor(t, override, nil)
+			raised := severityFor(t, override, escalated)
+			assert.Greater(t, api.RiskOf(raised), api.RiskOf(plain),
+				"the escalated finding must still outrank the ordinary one; erasing that is what made an operator's tuning "+
+					"hide the population they most wanted to see")
+		})
+	}
+
+	t.Run("an untouched rule reports exactly what it always did", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, api.SeverityHigh, severityFor(t, "", nil))
+		assert.Equal(t, api.SeverityCritical, severityFor(t, "", escalated))
+	})
 }

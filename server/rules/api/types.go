@@ -31,6 +31,10 @@ type (
 	// Finding is a per-rule positive output. Detection persists these
 	// as alerts via mysql.Store.InsertAlert.
 	Finding = detectionapi.Finding
+	// RiskModifier is one conditional escalation on a Finding: the risk a condition adds, and the techniques it implies. A rule
+	// with a conditional severity declares one instead of reporting a finished severity, so an operator's per-rule setting
+	// re-ranks the rule rather than erasing what the rule observed (issue #753).
+	RiskModifier = detectionapi.RiskModifier
 	// GraphReader is the narrow read surface the engine exposes to rules: six methods, the entire graph surface the production rules
 	// consume. The count is load-bearing rather than trivia, because the engine wraps every one of them to make a failed read
 	// retryable (issue #798), and a method missing from that wrapper loses detections silently.
@@ -75,6 +79,15 @@ const (
 	AlertSourceDetection          = detectionapi.AlertSourceDetection
 	AlertSourceApplicationControl = detectionapi.AlertSourceApplicationControl
 )
+
+// ApplyModifiers re-exports detection/api's composition, so a rule's own tests can assert what a modifier comes to without
+// importing detection/api and breaking the no-detection-import rule doc.go states.
+//
+// Re-exported rather than reimplemented for the reason every alias here exists: a second copy of the banding would agree until
+// one of them moved, and then two surfaces would disagree about what a finding is worth.
+func ApplyModifiers(base string, modifiers []RiskModifier) string {
+	return detectionapi.ApplyModifiers(base, modifiers)
+}
 
 // --- Catalog types -------------------------------------------------------------
 
@@ -180,6 +193,61 @@ type OriginNamer interface {
 	Origin() string
 }
 
+// SelfDescribingBreadth is an OPTIONAL interface a rule implements to report which of its own searches match everything.
+//
+// Optional for the same reason OriginNamer is: only a declaratively-compiled rule can answer it. A rule written in Go decides
+// what it matches in code, so there is no structure to inspect and nothing sensible to return, which is different from returning
+// "none" and should not be spelled the same way.
+//
+// The answer names the searches rather than reporting a boolean, because whoever is fixing it needs to know which part of their
+// rule to look at.
+//
+// UndiscriminatingSearches SHOULD say nothing about a matcher it cannot decide, rather than answering in the reassuring
+// direction. An empty result therefore means "nothing this can decide is undiscriminating", not "this rule is definitely
+// specific", and a caller wording a warning has to respect the difference.
+type SelfDescribingBreadth interface {
+	UndiscriminatingSearches() []string
+}
+
+// SourceCarrier is an OPTIONAL interface a rule implements to hand back the document it was loaded from, byte for byte.
+//
+// Optional because only a rule that CAME from a document has one. A rule written in Go was never a file, so there is nothing to
+// return and rendering one is a different operation with a different answer, which is why this is not spelled as an empty result.
+//
+// The bytes are the ones the rule was loaded from, which is not always the bytes this build ships. An operator can store their own
+// rule under a shipped rule's identifier, since a rule's identity is its file STEM and not its path (#873), and from then on the
+// rule that runs is theirs. Answering from the rule itself is what makes that case come out right: resolving an identifier against
+// the corpus embedded in the build finds the shipped document under that stem and hands back content the deployment is not
+// running and the operator did not write (#879).
+type SourceCarrier interface {
+	Source() []byte
+}
+
+// SourceOf returns the document r was loaded from, and whether r came from one at all.
+//
+// The two are distinguishable on purpose. A rule with no document is not a rule with an empty one: the first is rendered into a
+// document on demand, the second would be exported as a zero-byte file.
+func SourceOf(r Rule) ([]byte, bool) {
+	carrier, ok := r.(SourceCarrier)
+	if !ok {
+		return nil, false
+	}
+	return carrier.Source(), true
+}
+
+// UndiscriminatingSearchesOf returns the searches in r that match everything, or nil for a rule that cannot answer.
+//
+// The accessor exists so callers do not each repeat the type assertion, which is how the OriginOf / AlgorithmNameOf pair already
+// works. Collapsing "cannot answer" and "nothing to report" into one nil is deliberate here: both mean there is no warning to
+// show, and a caller that needed to tell them apart would be making a claim this interface does not support.
+func UndiscriminatingSearchesOf(r Rule) []string {
+	describer, ok := r.(SelfDescribingBreadth)
+	if !ok {
+		return nil
+	}
+	return describer.UndiscriminatingSearches()
+}
+
 // ProjectOrigin is the attribution carried by every rule this project wrote, i.e. every rule that declares no OriginNamer.
 //
 // It exists so attribution is TOTAL rather than conditional. The vendored corpus ships under the Detection Rule License, which
@@ -188,6 +256,17 @@ type OriginNamer interface {
 // credit at all, and it also reads as though an uncredited rule came from nowhere. Giving our own rules a real value makes the
 // presence of attribution invariant and moves the question a reader is actually asking ("whose rule is this?") onto the value.
 const ProjectOrigin = "Fleet EDR"
+
+// LocalOrigin is the attribution carried by a rule an operator wrote on their own deployment.
+//
+// It exists because neither of the other answers is true of such a rule. ProjectOrigin claims this project wrote it, and the
+// upstream credit claims a project that has never seen it wrote it, which is the bug #874 named: that credit is how the Detection
+// Rule License is honoured, so attaching it to an operator's own work misstates the licensing of content never under it.
+//
+// A real value rather than "" for the reason ProjectOrigin is one: attribution is total, so a surface renders it unconditionally
+// and a blank reaching a display means the value was dropped in transit. It is worded for the operator reading an alert, who
+// wants to know whose rule fired rather than which subsystem recorded it.
+const LocalOrigin = "Locally authored"
 
 // OriginOf returns r's declared origin, or ProjectOrigin for a rule this project authored.
 //
@@ -285,8 +364,9 @@ type RuleMetadata struct {
 	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
 	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
 	Algorithm string
-	// Origin names where the rule came from: ProjectOrigin for one this project authored, and the upstream project plus that
-	// rule's own author for one it vendored. Never empty (see api.OriginOf), so a surface may render it unconditionally.
+	// Origin names where the rule came from: ProjectOrigin for one this project authored, LocalOrigin for one an operator wrote
+	// on their own deployment, and the upstream project plus that rule's own author for one it vendored. Never empty (see
+	// api.OriginOf), so a surface may render it unconditionally.
 	// Surfaced so the operator-facing reference can credit third-party rules and so a reader can tell whose rule they are looking
 	// at, which they otherwise cannot: a vendored rule is rendered exactly like an authored one.
 	Origin string

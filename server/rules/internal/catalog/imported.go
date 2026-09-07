@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -43,8 +44,13 @@ type importedRule struct {
 	// name with no way to check it.
 	references []string
 
-	// source is the vendored file's bytes, verbatim. Kept so an operator exporting this rule gets the upstream rule they can diff
-	// against SigmaHQ, rather than a re-rendering of it in this project's format. See VendoredSource.
+	// authored records that an operator wrote this rule on their own deployment, rather than it arriving with the product. It
+	// decides attribution and nothing else: the rule evaluates identically either way.
+	authored bool
+
+	// source is the document this rule was loaded from, verbatim. Kept so exporting the rule hands back the file rather than a
+	// re-rendering of it in this project's format: for a vendored rule that is the upstream file an operator can diff against
+	// SigmaHQ, and for one they wrote themselves it is what they wrote. Read through api.SourceOf, never by id lookup (#879).
 	source []byte
 
 	id          string
@@ -124,34 +130,73 @@ func sigmaFilesUnder(fsys fs.FS, dir string) ([]string, error) {
 	return names, nil
 }
 
-// checkDuplicateStems fails when two files resolve to one rule id, whatever directories they sit in.
-//
-// The id is the filename stem, so this is reachable only because the import walks a tree. Whichever file loaded second would
-// otherwise win silently, and which rule an operator gets would depend on directory order.
-// checkStemLengths refuses any filename whose stem cannot be stored as a rule identifier, before a single file is parsed.
+// checkStemIdentifiers refuses any filename whose stem cannot serve as a rule identifier, before a single file is parsed: one
+// too long to store, or one drawn from a character set over which identity cannot be decided outside the database.
 //
 // A preflight rather than a per-file check, because the per-file position made the refusal conditional on the file being otherwise
 // valid: a rule using an unsupported field is a SOFT rejection, recorded and skipped, and an over-long name reached that exit
 // first. The identifier here is an upstream filename, so this is the path a corpus re-sync introduces the problem through.
-func checkStemLengths(names []string) error {
+func checkStemIdentifiers(names []string) error {
 	for _, name := range names {
-		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+		id := RuleIDForPath(name)
 		if err := checkRuleIDLength(name, id); err != nil {
 			return err
+		}
+		if !ruleIDCharset.MatchString(id) {
+			return fmt.Errorf("%s: rule id %q may contain only unaccented ASCII letters (a-z, A-Z), digits, underscore and hyphen",
+				name, id)
 		}
 	}
 	return nil
 }
 
+// ruleIDCharset is what a rule identifier may contain, and restricting it is what makes identity DECIDABLE rather than
+// approximated.
+//
+// The id is stored in columns collated utf8mb4_0900_ai_ci, so MySQL decides whether two ids are the same, and that collation is
+// accent-insensitive as well as case-insensitive: "naive_rule" and "naïve_rule" are one value to it. Reproducing that judgement in
+// Go means reproducing a UCA collation, and the obvious approximations do not: strings.ToLower handles case and leaves accents
+// alone, while NFD-and-strip-marks handles accents but still misses expansions such as the one that makes ss and the sharp s
+// equal. An approximation here fails in the direction that matters, letting through a pair the database will then merge.
+//
+// So the charset is narrowed instead of the comparison being widened. Over this set, case is the ONLY way two ids can differ and
+// still collate equal, which makes strings.ToLower an exact model of ai_ci rather than a hopeful one. Every rule in the vendored
+// corpus already conforms, and a rule identifier has no need of anything outside it.
+var ruleIDCharset = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// checkDuplicateStems fails when two files resolve to one rule id, whatever directories they sit in.
+//
+// The id is the filename stem, so this is reachable only because the import walks a tree. Whichever file loaded second would
+// otherwise win silently, and which rule an operator gets would depend on directory order.
 func checkDuplicateStems(names []string) error {
-	seen := make(map[string]string, len(names))
+	type claim struct{ file, id string }
+	seen := make(map[string]claim, len(names))
 	for _, name := range names {
-		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
-		if prev, dup := seen[id]; dup {
-			return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
-				name, id, prev)
+		id := RuleIDForPath(name)
+		// Compared CASE-INSENSITIVELY, because Go is not what decides whether two rule ids are the same. The id is persisted in
+		// detection_rule_settings and alerts, whose rule_id columns take the schema default collation (utf8mb4_0900_ai_ci), and
+		// both carry a unique key over it: uk_detection_rule_settings_rule_scope and uk_alerts_dedup. So "Foo" and "foo" are one
+		// value to MySQL however distinct they look here.
+		//
+		// ToLower is EXACT here rather than approximate, and only because checkStemIdentifiers has already run: loadImported calls
+		// it first, deliberately. That collation is also accent-insensitive, which lowercasing does nothing about; over unaccented
+		// ASCII letters, digits, underscore and hyphen there are no accents to be insensitive to, so case is the only way two ids
+		// can differ and still collate equal.
+		//
+		// Comparing them as exact Go strings therefore lets a corpus load two rules that the rest of the system cannot tell
+		// apart: tuning one would tune the other, and their alerts would deduplicate into a single row. The corpus path column is
+		// deliberately BINARY (see the rulecontent migration), so storage will happily hold both files, which is what makes this
+		// reachable rather than theoretical once operators author content.
+		folded := RuleIDKey(name)
+		if prev, dup := seen[folded]; dup {
+			if prev.id == id {
+				return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
+					name, id, prev.file)
+			}
+			return fmt.Errorf("%s: rule id %q collides with %q claimed by %s; rule ids are compared case-insensitively where they "+
+				"are stored, so these two would share one row of per-rule settings and one alert dedup key", name, id, prev.id, prev.file)
 		}
-		seen[id] = name
+		seen[folded] = claim{file: name, id: id}
 	}
 	return nil
 }
@@ -172,23 +217,33 @@ type rejection struct {
 // A file that is unreadable, malformed, or claims an id another file already claimed is an error instead. Those say the import
 // itself is broken rather than that one detection does not fit, and continuing past them would import a corpus that is not the one
 // on disk.
-func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
+func loadImported(fsys fs.FS, dir string, authoredAt Provenance) ([]api.Rule, []rejection, error) {
 	names, err := sigmaFilesUnder(fsys, dir)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Stems are checked BEFORE anything is parsed. Recording an id only after a successful parse would let a rejected file leave
+	// Identifiers are checked BEFORE duplicates. checkDuplicateStems folds case to decide whether two ids collide, and that fold
+	// is only an exact model of the storage collation over the character set checkStemIdentifiers enforces. Run the other way
+	// round, the fold is asked about identifiers that can still carry accents, where it silently disagrees with the database.
+	// Review caught the comment claiming this ordering before the code actually had it.
+	//
+	// Swapping them back is a MISSED mutation, measured, and that is worth stating rather than leaving someone to assume the
+	// order is covered. Either way an accented corpus is refused: the fold does not notice it and the charset check then does, so
+	// only WHICH error comes back changes. The order earns its place by making the fold's precondition true where the fold is
+	// written, so a later change to either check cannot quietly invalidate the other, not by altering any outcome today.
+	// Both are preflights, run before anything is parsed, and that was NOT true of the length check at first, which was a defect.
+	// parseImported returns soft rejections for a rule using a field the binder cannot map, and those are recorded and skipped
+	// rather than failing the load. So an over-long filename whose rule also used an unsupported field exited early as a soft
+	// rejection, and the hard refusal this is meant to be never happened (issue #835 review). Checking the names up front means
+	// the refusal does not depend on what else is wrong with the file.
+	//
+	// Recording an id only after a successful parse would have the matching problem for duplicates: a rejected file would leave
 	// its id unclaimed, so a second file with the same stem would import and the collision would go unreported.
-	if err := checkDuplicateStems(names); err != nil {
+	if err := checkStemIdentifiers(names); err != nil {
 		return nil, nil, err
 	}
-	// Length is a preflight for the same reason, and it was NOT one at first, which was a defect. parseImported returns soft
-	// rejections for a rule using a field the binder cannot map, and those are recorded and skipped rather than failing the load.
-	// So an over-long filename whose rule also used an unsupported field exited early as a soft rejection, and the hard refusal
-	// this is meant to be never happened (issue #835 review). Checking the names up front means the refusal does not depend on
-	// what else is wrong with the file.
-	if err := checkStemLengths(names); err != nil {
+	if err := checkDuplicateStems(names); err != nil {
 		return nil, nil, err
 	}
 
@@ -199,7 +254,7 @@ func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", name, err)
 		}
-		rule, err := parseImported(name, raw)
+		rule, err := parseImported(name, raw, authoredAt.authored(name))
 		if err != nil {
 			if cannotRun, ok := errors.AsType[unmappableError](err); ok {
 				rejected = append(rejected, rejection{File: name, Reason: cannotRun.reason})
@@ -251,7 +306,7 @@ func compileImportedDetection(name string, detection yaml.Node) (*sigma.Rule, er
 }
 
 // parseImported turns one upstream file into a rule, or explains exactly why it cannot.
-func parseImported(name string, raw []byte) (*importedRule, error) {
+func parseImported(name string, raw []byte, authored bool) (*importedRule, error) {
 	var f sigmaFile
 	if err := yaml.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -303,7 +358,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 
 	// The rule id is the filename stem, which is what lets an upstream file carry no x-engine block at all. SigmaHQ names its files
 	// after the rule, and the stem is stable across a re-sync in a way the file's own UUID is not readable.
-	id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+	id := RuleIDForPath(name)
 	if id == "" {
 		// A file named exactly `.yml` is a valid directory entry and leaves nothing to identify the rule by. Findings, exclusions
 		// and per-host settings all key on the id.
@@ -323,6 +378,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		eventTypes:  []string{eventType},
 		falsePos:    f.FalsePositive,
 		detection:   compiled,
+		authored:    authored,
 	}, nil
 }
 
@@ -514,7 +570,7 @@ var importedCorpus embed.FS
 // importedRules is the corpus loaded once. Memoized because loadImported walks 69 files and compiles a detection for each, which is
 // start-up work, not per-call work.
 var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
-	rules, rejected, err := loadImported(importedCorpus, "imported")
+	rules, rejected, err := loadImported(importedCorpus, "imported", nil)
 	if err != nil {
 		// A corpus this repository vendors either loads or the build is broken. Failing at start-up is the whole point of
 		// checking it in: the alternative is a server that boots with a detection silently missing.
@@ -530,6 +586,31 @@ var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
 // carve. Until then the wiring runs through cmd/main, which passes this FS to rulecontent's seed, so rulecontent depends on
 // nothing here and the supplier direction the ADR sets is preserved.
 func ImportedCorpusFS() fs.FS { return importedCorpus }
+
+// RuleIDForPath derives a rule's identifier from the path its document is stored under.
+//
+// The id is the filename STEM, and this is the one place that says so. It was five places until review counted them: the two
+// preflights here, the constructor below, and two more in the operator validator. Five copies of one derivation is the semantic
+// duplication this codebase is most prone to, and the failure mode is quiet rather than loud: the copies agree today, so nothing
+// breaks until one of them is changed, and then a lookup keyed on a stem simply misses and the caller sees an absent value rather
+// than an error.
+//
+// Exported because the validator outside this package has to key on the same answer. A rule loaded from the corpus cannot say
+// which path it came from, so mapping an id back to its document is only possible if both sides derive it identically.
+func RuleIDForPath(p string) string {
+	return strings.TrimSuffix(path.Base(p), path.Ext(p))
+}
+
+// RuleIDKey is the key two rules are compared BY, as opposed to the id they are called by.
+//
+// Folded, because the columns a rule id reaches (detection_rule_settings.rule_id, alerts.rule_id) collate case-insensitively and
+// carry unique keys over it: "Foo" and "foo" are one row of per-rule settings and one alert dedup key, so the corpus must not hold
+// both. checkDuplicateStems has always folded for that reason; this exports the same fold so a caller outside the loader can ask
+// whether two documents collide without deciding for itself what colliding means.
+//
+// ToLower is exact rather than approximate here only because the identifier charset is checked first, so an id reaching this is
+// ASCII. That precondition belongs to loadImported's ordering and is documented at checkStemIdentifiers.
+func RuleIDKey(p string) string { return strings.ToLower(RuleIDForPath(p)) }
 
 // IsCorpusFile reports whether a path is rule content, as opposed to the packaging that ships alongside it.
 //
@@ -555,8 +636,23 @@ const CorpusRoot = "imported"
 // Returns an error rather than panicking, because a stored corpus is not a build artifact. A malformed vendored file is a mistake
 // caught before check-in, which is why the embedded path may panic; a malformed STORED corpus is a runtime condition its caller has
 // to decide about, and the decision (keep the previous good set) is not this function's to make.
-func LoadCorpus(fsys fs.FS, root string) ([]api.Rule, []rejection, error) {
-	return loadImported(fsys, root)
+func LoadCorpus(fsys fs.FS, root string, authoredAt Provenance) ([]api.Rule, []rejection, error) {
+	return loadImported(fsys, root, authoredAt)
+}
+
+// Provenance reports whether the document at a path was written by an operator rather than shipped with the product.
+//
+// Passed in rather than read off the path, which is the whole point of #874's fix. A rule's identity is its file STEM and not its
+// path (#873), operators choose their own paths, and a prefix rule would let someone launder an authored rule into a vendored one
+// by writing to `imported/mine.yml`, taking a licence attribution with it. Only the store knows how a document arrived.
+//
+// A nil Provenance means every document is vendored, which is right for the corpus embedded in the build: it is by definition
+// what shipped.
+type Provenance func(path string) bool
+
+// authored answers p safely for a nil Provenance.
+func (p Provenance) authored(path string) bool {
+	return p != nil && p(path)
 }
 
 // MustLoadImported returns the imported rules, panicking if the vendored corpus does not load. Mirrors MustLoadPack and
@@ -576,25 +672,42 @@ func ImportedRejections() []rejection {
 	return rejected
 }
 
-// VendoredSource returns the upstream file a rule was imported from, verbatim, and whether the rule is a vendored one at all.
+// Source implements api.SourceCarrier by returning the document this rule was loaded from, verbatim.
 //
-// It is the single place that answers "is this rule ours or upstream's", and both callers that need to know go through it. The
-// exported rule pack skips vendored rules, because their declarative form already exists as the file this repository vendored and
-// rendering a second one in this project's format would put two representations of one rule on disk. The per-rule export endpoint
-// serves these bytes instead, so an operator exporting an imported rule gets the upstream rule they can diff against SigmaHQ
-// rather than a re-rendering of it.
-func VendoredSource(ruleID string) ([]byte, bool) {
-	for _, r := range MustLoadImported() {
-		imported, ok := r.(*importedRule)
-		if ok && imported.id == ruleID {
-			return imported.source, true
-		}
-	}
-	return nil, false
+// It answers from the rule rather than by resolving an identifier, which is the fix for #879. The version this replaced looked the
+// id up in the corpus embedded in the BUILD, and a rule's identity is its file stem (#873), so an operator who stored their own
+// version of a shipped detection kept its id and the lookup went on finding the shipped document under it. Exporting the rule then
+// returned upstream's bytes: content the deployment was not running and the operator had not written.
+func (r *importedRule) Source() []byte { return r.source }
+
+// UndiscriminatingSearches implements api.SelfDescribingBreadth by asking the compiled detection which of its searches match
+// everything.
+//
+// A thin delegation on purpose. The question is about compiled matcher structure, so the sigma package is the only place that can
+// answer it without a second implementation of matching semantics, and this type's job is to carry the answer out to the
+// operator-facing surfaces rather than to work it out again.
+//
+// No nil guard on detection, and review was right to ask. parseImported returns before constructing this type whenever the
+// compile failed, including for a refusable unmappableError (see the `if compileErr != nil` return above the constructor), so a
+// constructed importedRule always carries a compiled rule. A guard for a state the constructor cannot produce is dead code rather
+// than robustness, which is the same rule that removed the absent check from discriminatesNothing.
+func (r *importedRule) UndiscriminatingSearches() []string {
+	return r.detection.UndiscriminatingSearches()
 }
 
-// Origin implements the origin accessor the catalog surfaces mirror, naming the upstream project and the rule's own author.
+// Origin implements the origin accessor the catalog surfaces mirror.
+//
+// It names the upstream project and the rule's own author for content that shipped with the product, and the deployment for
+// content an operator wrote. Which of the two it is comes from the recorded provenance, never from the file's path or from what
+// the rule says about itself.
 func (r *importedRule) Origin() string {
+	// An operator's own rule is credited to their deployment, never upstream. Crediting SigmaHQ for it is false, and because that
+	// credit is how the Detection Rule License is honoured, it also states a licence the content was never under (#874). The
+	// rule's own `author:` field is not consulted here: it is whatever the operator typed, and this is a statement about where the
+	// content came from rather than about what it says of itself.
+	if r.authored {
+		return api.LocalOrigin
+	}
 	if r.author == "" {
 		return "SigmaHQ"
 	}

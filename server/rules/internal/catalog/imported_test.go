@@ -21,6 +21,7 @@ import (
 )
 
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-rule-reading-an-unavailable-field-is-refused-and-the-others-still-import
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/the-content-the-system-ships-is-unaffected
 //
 // TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
 // description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and each rule this sensor cannot run is refused BY NAME with a
@@ -32,7 +33,7 @@ import (
 func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	t.Parallel()
 
-	rules, rejected, err := loadImported(importedCorpus, "imported")
+	rules, rejected, err := loadImported(importedCorpus, "imported", nil)
 	require.NoError(t, err)
 
 	assert.Len(t, rules, 66, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
@@ -205,7 +206,7 @@ detection: {sel: {Image: x}, condition: other}`,
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := parseImported("rule.yml", []byte(tc.file))
+			_, err := parseImported("rule.yml", []byte(tc.file), false)
 			require.Error(t, err, "must be refused rather than imported broken")
 			assert.Contains(t, err.Error(), tc.wantErr, "the message must name what is wrong")
 		})
@@ -230,7 +231,7 @@ func TestLoadImported_RefusesADuplicateRuleID(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, sub, "same_name.yml"), body, 0o600))
 	}
 
-	_, _, err := loadImported(os.DirFS(dir), ".")
+	_, _, err := loadImported(os.DirFS(dir), ".", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "same_name", "the message must name the id that collided")
 	assert.Contains(t, err.Error(), "already claimed by", "and where it was first seen")
@@ -245,7 +246,7 @@ func TestLoadImported_WalksTheTree(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "macos", "process_creation"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "macos", "process_creation", "nested.yml"), body, 0o600))
 
-	rules, rejected, err := loadImported(os.DirFS(dir), ".")
+	rules, rejected, err := loadImported(os.DirFS(dir), ".", nil)
 	require.NoError(t, err)
 	assert.Empty(t, rejected)
 	require.Len(t, rules, 1)
@@ -288,7 +289,7 @@ func TestTechniquesFrom(t *testing.T) {
 func TestImportedRule_FiresOnAMatchingEvent(t *testing.T) {
 	t.Parallel()
 
-	rules, _, err := loadImported(importedCorpus, "imported")
+	rules, _, err := loadImported(importedCorpus, "imported", nil)
 	require.NoError(t, err)
 	var rule api.Rule
 	for _, r := range rules {
@@ -434,7 +435,7 @@ detection: "a string"`, "decode detection"},
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := parseImported("rule.yml", []byte(tc.file))
+			_, err := parseImported("rule.yml", []byte(tc.file), false)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 			assert.NotErrorIs(t, err, unmappableError{}, "a broken file is not a rule this sensor merely cannot run")
@@ -450,7 +451,7 @@ func TestParseImported_RefusesAnEmptyFilenameStem(t *testing.T) {
 	t.Parallel()
 
 	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
-	_, err := parseImported(".yml", body)
+	_, err := parseImported(".yml", body, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no filename stem")
 }
@@ -554,7 +555,7 @@ func TestLoadImported_ADuplicateIDIsCaughtEvenWhenTheFirstFileIsRejected(t *test
 		require.NoError(t, os.WriteFile(filepath.Join(dir, sub, "same.yml"), body, 0o600))
 	}
 
-	_, _, err := loadImported(os.DirFS(dir), ".")
+	_, _, err := loadImported(os.DirFS(dir), ".", nil)
 	require.Error(t, err, "the collision must fail the import even though the first file is unmappable")
 	assert.Contains(t, err.Error(), "same")
 }
@@ -569,7 +570,7 @@ func TestImportedRule_TechniquesMayBeEmpty(t *testing.T) {
 
 	body := []byte("title: T\nlevel: medium\ntags: [attack.persistence]\n" +
 		"logsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
-	rule, err := parseImported("tactics_only.yml", body)
+	rule, err := parseImported("tactics_only.yml", body, false)
 	require.NoError(t, err, "a rule with only tactic tags is still a rule")
 	assert.Empty(t, rule.Techniques(), "and it claims no technique, because its file names none")
 }
@@ -588,7 +589,7 @@ func TestCategoryIsInert_RefusesEvenASudoersRule(t *testing.T) {
 
 	body := []byte("title: Sudoers write\nlevel: high\nlogsource: {category: file_event, product: macos}\n" +
 		"detection: {sel: {TargetFilename|startswith: '/etc/sudoers'}, condition: sel}\n")
-	_, err := parseImported("sudoers.yml", body)
+	_, err := parseImported("sudoers.yml", body, false)
 	require.Error(t, err, "known false refusal: this rule WOULD run, and the category refusal does not look at its paths")
 	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the trade auditable")
 }
@@ -605,7 +606,7 @@ func TestParseImported_UnsupportedSigmaIsARejection(t *testing.T) {
 	// A keyword search: a list of bare strings rather than field matchers. Valid Sigma, unsupported here.
 	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
 		"detection:\n  keywords:\n    - 'some phrase'\n  condition: keywords\n")
-	_, err := parseImported("keywords.yml", body)
+	_, err := parseImported("keywords.yml", body, false)
 	require.Error(t, err)
 
 	_, isRejection := errors.AsType[unmappableError](err)
@@ -641,7 +642,7 @@ func TestParseImported_MalformedDetectionIsAHardError(t *testing.T) {
 			t.Parallel()
 
 			body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" + tc.detect + "\n")
-			_, err := parseImported("broken.yml", body)
+			_, err := parseImported("broken.yml", body, false)
 			require.Error(t, err)
 
 			_, isRejection := errors.AsType[unmappableError](err)
@@ -709,7 +710,7 @@ func TestParseImported_CorruptionOutranksInapplicability(t *testing.T) {
 		t.Parallel()
 
 		body := []byte("title: T\nlevel: high\nlogsource: {category: registry_set, product: windows}\n" + broken)
-		_, err := parseImported("windows.yml", body)
+		_, err := parseImported("windows.yml", body, false)
 		require.Error(t, err)
 
 		_, isRejection := errors.AsType[unmappableError](err)
@@ -720,7 +721,7 @@ func TestParseImported_CorruptionOutranksInapplicability(t *testing.T) {
 		t.Parallel()
 
 		body := []byte("title: T\nlevel: high\nlogsource: {category: file_event, product: macos}\n" + broken)
-		_, err := parseImported("inert.yml", body)
+		_, err := parseImported("inert.yml", body, false)
 		require.Error(t, err)
 
 		_, isRejection := errors.AsType[unmappableError](err)
@@ -734,7 +735,7 @@ func TestParseImported_CorruptionOutranksInapplicability(t *testing.T) {
 		// re-sync can act on is the telemetry one, so that is the one reported.
 		body := []byte("title: T\nlevel: high\nlogsource: {category: registry_set, product: windows}\n" +
 			"detection:\n  keywords:\n    - 'some phrase'\n  condition: keywords\n")
-		_, err := parseImported("both.yml", body)
+		_, err := parseImported("both.yml", body, false)
 		require.Error(t, err)
 
 		_, isRejection := errors.AsType[unmappableError](err)
@@ -810,7 +811,7 @@ func TestLoadImported_CarriesAttributionAndReferences(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cited.yml"), body, 0o600))
 
-	rules, rejected, err := loadImported(os.DirFS(dir), ".")
+	rules, rejected, err := loadImported(os.DirFS(dir), ".", nil)
 	require.NoError(t, err)
 	assert.Empty(t, rejected)
 	require.Len(t, rules, 1)
@@ -831,10 +832,42 @@ func TestLoadImported_UncitedRuleCarriesNoReferences(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "uncited.yml"), body, 0o600))
 
-	rules, _, err := loadImported(os.DirFS(dir), ".")
+	rules, _, err := loadImported(os.DirFS(dir), ".", nil)
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Empty(t, rules[0].Doc().References)
 	// It still names an origin: the corpus is the source even when the file names no author (see api.OriginOf).
 	assert.Contains(t, api.OriginOf(rules[0]), "SigmaHQ")
+}
+
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-rule-refused-for-cost-does-not-stop-the-others-loading
+//
+// TestLoadImported_ARuleRefusedForCostDoesNotStopTheOthers covers the part of the cost bound that only the loader can show.
+//
+// The value tests prove a costly pattern is refused; they cannot prove what happens to the content around it. A cost bound that
+// failed the whole import would turn one carelessly written rule into a deployment with no detections, which is the outcome the
+// refusal contract exists to prevent, and it is the shape #767's authoring flow makes reachable by accident rather than by malice.
+func TestLoadImported_ARuleRefusedForCostDoesNotStopTheOthers(t *testing.T) {
+	t.Parallel()
+
+	// A middle segment far past the per-pattern limit, written as literals so this also pins that the bound is not wildcard-only.
+	costly := []byte("title: Costly\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {Image: '*" + strings.Repeat("a", 9000) + "*'}, condition: sel}\n")
+	fine := []byte("title: Fine\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {Image: '*/usr/bin/tool*'}, condition: sel}\n")
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "process_creation"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "process_creation", "costly.yml"), costly, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "process_creation", "fine.yml"), fine, 0o600))
+
+	rules, rejected, err := loadImported(os.DirFS(dir), ".", nil)
+	require.NoError(t, err, "one unaffordable rule must not fail the import")
+
+	require.Len(t, rules, 1, "the affordable rule must still load")
+	assert.Equal(t, "fine", rules[0].ID())
+
+	require.Len(t, rejected, 1)
+	assert.Contains(t, rejected[0].File, "costly", "the refusal must name the file so an author can find it")
+	assert.Contains(t, rejected[0].Reason, "Image", "and the field within it")
 }

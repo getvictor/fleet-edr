@@ -59,7 +59,10 @@ func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	b.WriteString("# Detection rules\n\n")
 	// Every rule carries a Source row since issue #765, so this line can no longer use the row's presence to mean "vendored":
 	// it now says which VALUE means that, because "reproduced unmodified" is true of the upstream corpus and false of ours.
-	b.WriteString("Every rule names a **Source**. `Fleet EDR` marks a rule this project wrote; any other value credits an ")
+	// Three values rather than two since #874: a rule an operator wrote on their own deployment is neither ours nor upstream's,
+	// and crediting it to either would misstate who wrote it and which licence it is under.
+	b.WriteString("Every rule names a **Source**. `Fleet EDR` marks a rule this project wrote, and `Locally authored` one ")
+	b.WriteString("written on this deployment; any other value credits an ")
 	b.WriteString("upstream project and that rule's own author, and those rules are reproduced unmodified. The upstream macOS ")
 	b.WriteString("corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the ")
 	b.WriteString("[Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License).\n\n")

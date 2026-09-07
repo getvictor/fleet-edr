@@ -9,8 +9,8 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// SensorTamper fires when one of the EDR's own capture providers stops and does not come back within a few seconds
-// (T1562.001). Switching off the sensor is the first move in a great many intrusions, and until this rule the product
+// SensorTamper fires when one of the EDR's own capture providers stops and does not come back within a few seconds.
+// Switching off the sensor is the first move in a great many intrusions, and until this rule the product
 // detected it nowhere: the sudoers rule covers tampering with the HOST's controls, but nothing watched our own.
 //
 // The self-heal (issue #632) makes the detection more necessary rather than less. It restores a disabled provider in
@@ -65,8 +65,33 @@ func (r *SensorTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding.
 func (r *SensorTamper) DisplayName() string { return "EDR sensor disabled" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1562.001 (Impair Defenses: Disable or Modify Tools).
-func (r *SensorTamper) Techniques() []string { return []string{"T1562.001"} }
+// Techniques returns none, which issue #755 called the arguable case and asked to be decided either way. This is the decision.
+//
+// It used to declare T1562.001 (Impair Defenses: Disable or Modify Tools). The first pass of the sweep kept it, on the grounds
+// that the rule separates the one benign cause it knows about, an upgrade replacing the system extension, by how fast capture
+// resumes: a cutover measured on a live host was back in about 1.1 seconds, while stops that needed the automatic repair took
+// 32.2 and 37.9. That separation is real and it is why this rule works.
+//
+// What it is not is an attribution, and the distinction is the one this whole sweep turns on. A technique names either a
+// BEHAVIOUR or an ACTOR'S ACTION, and which it is decides what a rule has to observe to claim it. T1059.004 names a behaviour: a
+// Unix shell ran, and it ran whether an administrator or an intruder started it, so a rule that sees the shell has seen the
+// technique. T1562.001 names somebody impairing defenses. A capture provider that crashed and stayed down produces this finding
+// exactly, and a crash is not somebody doing anything. Separating the upgrade does not separate that, and the rule sees nothing
+// else that would.
+//
+// Both review bots reached this independently, and they were right that keeping the mapping contradicted the requirement this
+// project shipped in #754: a rule that cannot attribute what it reports to anyone declares none.
+//
+// The ALERT keeps its severity, its title and its operational sentence, it stays the EDR's own tamper signal, and an operator
+// still learns their sensor stopped. Its text does lose the trailing "(MITRE T1562.001)" it carried, because a description is
+// copied onto the alert verbatim and an identifier there is this same claim by another route (issue #754). What the product
+// loses is the coverage export claiming we detect Impair Defenses, which we were claiming on a signal that fires on crashes.
+// This rule was the only one claiming it, so that claim leaves the export entirely; that is the honest state rather than a gap
+// that appeared.
+//
+// Re-earning it is a change to the predicate, not to this list: observe the actor, either the process that stopped the provider
+// or a policy change that did, and the attribution follows.
+func (r *SensorTamper) Techniques() []string { return []string{} }
 
 // Doc surfaces the operator-facing description in /api/rules and the generated docs/detection-rules.md.
 func (r *SensorTamper) Doc() api.Documentation {
@@ -221,7 +246,7 @@ func sensorTamperDescription(p sensorTransitionPayload) string {
 		reason = fmt.Sprintf("platform stop reason %d", *p.StopReason)
 	}
 	return fmt.Sprintf(
-		"EDR capture provider %s stopped (%s) and had not resumed %s later: the host is not reporting this telemetry (MITRE T1562.001)",
+		"EDR capture provider %s stopped (%s) and had not resumed %s later: the host is not reporting this telemetry",
 		p.Provider, reason, sensorRecoveryWindow,
 	)
 }

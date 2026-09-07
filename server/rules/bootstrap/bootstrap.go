@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"path"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 
@@ -21,6 +24,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/export"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
+	"github.com/fleetdm/edr/server/rules/internal/ruleauthoring"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 )
@@ -38,6 +42,14 @@ type Deps struct {
 	// AuthZ is the authorization chokepoint every privileged operator
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
+
+	// EvalStatsFlushInterval is how often accumulated per-rule evaluation statistics are written (issue #837). Optional: zero
+	// or negative means DefaultEvalStatsFlushInterval, applied by FlushLoop so one place decides it.
+	//
+	// A dep rather than a constant for the same reason the detection context takes ProcessInterval: an integration test that
+	// ingests a batch and then asserts the statistics landed would otherwise have to wait out the production interval, and a
+	// test that waits thirty seconds gets deleted or made flaky. Nothing in production sets it.
+	EvalStatsFlushInterval time.Duration
 
 	// PrincipalLabel resolves a principal id (usr_<id> / svc_<id> / sys) to its display label (a user's email, a service account's
 	// name, or "system") for the detection-config exclusions list's created_by column. Optional: when nil the handler returns the raw
@@ -59,6 +71,18 @@ type Deps struct {
 	// evaluates it. Optional. When nil, or when the stored corpus is empty or fails to load, the catalog falls back to the corpus
 	// embedded in the binary, so a deployment that has not seeded storage behaves exactly as it did before (issue #766).
 	Corpus rulecontentapi.Corpus
+	// RuleAuthor is rulecontent's authoring lifecycle, which backs the operator surface for creating and deleting rule
+	// documents (issue #767). Nil leaves that surface unmounted, which is the right answer for a deployment or a tool that has
+	// no business changing rule content, and is what tooling and the tests that only read the catalog pass.
+	//
+	// It is handed in rather than built here because building it needs a validator, the only honest validator is this package's
+	// CorpusValidator, and rulecontent must not import it (ADR-0021). cmd/main closes that loop by constructing the lifecycle
+	// with the validator and passing the result back.
+	RuleAuthor rulecontentapi.Author
+	// RulePacks is rulecontent's pack lifecycle, which backs the operator surface for reading which generation of shipped rules
+	// a deployment runs and restoring the one before it (issue #768). Optional on the same terms as RuleAuthor: nil leaves that
+	// surface unmounted, which is right for a tool that has no business changing rule content.
+	RulePacks rulecontentapi.PackLifecycle
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -72,7 +96,13 @@ type Rules struct {
 	// detectionConfigStore is retained beyond the Service because the monitor-match counters are written by the detection
 	// pipeline and pruned here, neither of which goes through the config Service's snapshot machinery.
 	detectionConfigStore *detectionconfig.Store
-	detectionConfigH     *operator.DetectionConfigHandler
+	// evalStatsBuffer is what the detection context actually writes per-rule evaluation statistics into, so that write stops
+	// touching the database on the drain path (issue #837). Flushed by Run below, and on shutdown.
+	evalStatsBuffer *detectionconfig.BufferedEvalStats
+	// evalStatsFlushInterval is how often that buffer is written. See Deps.EvalStatsFlushInterval.
+	evalStatsFlushInterval time.Duration
+	detectionConfigH       *operator.DetectionConfigHandler
+	ruleAuthoringH         *operator.RuleAuthoringHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -111,6 +141,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	// resolves both for the rules (ExclusionResolver, consulted before a rule fires) and the engine (RuleModeResolver). Built here so
 	// the rule set is constructed against the live resolver; the initial snapshot is loaded in ApplySchema once the tables exist.
 	detectionConfigStore := detectionconfig.NewStore(deps.DB)
+	evalStatsBuffer := detectionconfig.NewBufferedEvalStats(detectionConfigStore, logger)
 	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
 
 	// Built empty and filled below by installRuleSet, so the initial load and every later reload go through ONE definition of what
@@ -124,6 +155,25 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	detectionConfigH := operator.NewDetectionConfig(detectionConfigSvc, deps.AuthZ, logger)
 	if deps.PrincipalLabel != nil {
 		detectionConfigH.SetPrincipalLabelResolver(deps.PrincipalLabel)
+	}
+
+	// Mounted only when every half is present: the lifecycle to change documents, the corpus to read them back, and the pack
+	// lifecycle behind the status and rollback routes. Without any one of them the surface would be partial, and a handler that
+	// 500s on some of its routes is worse than routes that are not there.
+	var ruleAuthoringH *operator.RuleAuthoringHandler
+	if deps.RuleAuthor != nil && deps.Corpus != nil && deps.RulePacks != nil {
+		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, deps.Audit, logger)
+		if aerr != nil {
+			return nil, fmt.Errorf("build rule authoring service: %w", aerr)
+		}
+		packSvc, perr := ruleauthoring.NewPackService(deps.RulePacks, deps.Audit, logger)
+		if perr != nil {
+			return nil, fmt.Errorf("build rule pack service: %w", perr)
+		}
+		ruleAuthoringH, aerr = operator.NewRuleAuthoringHandler(authoringSvc, deps.Corpus, packSvc, deps.AuthZ, logger)
+		if aerr != nil {
+			return nil, fmt.Errorf("build rule authoring handler: %w", aerr)
+		}
 	}
 
 	appControlStore := appcontrol.NewStore(deps.DB)
@@ -140,17 +190,20 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
 	r := &Rules{
-		svc:                  svc,
-		detectionConfigStore: detectionConfigStore,
-		operatorH:            opH,
-		appControlH:          appControlH,
-		appControlSt:         appControlStore,
-		appControlSvc:        appControlSvc,
-		detectionConfigSvc:   detectionConfigSvc,
-		detectionConfigH:     detectionConfigH,
-		db:                   deps.DB,
-		logger:               logger,
-		corpus:               deps.Corpus,
+		svc:                    svc,
+		detectionConfigStore:   detectionConfigStore,
+		evalStatsBuffer:        evalStatsBuffer,
+		evalStatsFlushInterval: deps.EvalStatsFlushInterval,
+		operatorH:              opH,
+		appControlH:            appControlH,
+		appControlSt:           appControlStore,
+		appControlSvc:          appControlSvc,
+		detectionConfigSvc:     detectionConfigSvc,
+		detectionConfigH:       detectionConfigH,
+		ruleAuthoringH:         ruleAuthoringH,
+		db:                     deps.DB,
+		logger:                 logger,
+		corpus:                 deps.Corpus,
 	}
 
 	// Version 0: the initial set is stamped as not-from-storage even when it came from the store, because the version that produced
@@ -223,20 +276,24 @@ const DefaultDetectionConfigRefreshInterval = 5 * time.Second
 // (issue #722). The delete here is idempotent and needs no coordination: replicas racing on it delete rows the others already
 // deleted, which costs one statement per replica per interval and buys back a permanently held connection.
 func (r *Rules) Run(ctx context.Context) {
+	// Listed rather than hand-counted, so adding a loop cannot leave the WaitGroup short and make Run return while one is still
+	// live. The magic-number lint flagged the count, and the count drifting from the list is the real hazard behind it.
+	loops := []func(context.Context){
+		func(ctx context.Context) {
+			r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
+		},
+		func(ctx context.Context) { r.pruneCountersLoop(ctx, DefaultCounterPruneInterval) },
+		func(ctx context.Context) { r.CorpusRefreshLoop(ctx, DefaultCorpusRefreshInterval) },
+		// Flushes on cancellation as well as on the interval, which is what makes a graceful shutdown lose no counts. Run is
+		// waited on by the server's shutdown path, so the final write completes before the process exits.
+		func(ctx context.Context) {
+			r.evalStatsBuffer.FlushLoop(ctx, r.evalStatsFlushInterval)
+		},
+	}
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
-	}()
-	go func() {
-		defer wg.Done()
-		r.pruneCountersLoop(ctx, DefaultCounterPruneInterval)
-	}()
-	go func() {
-		defer wg.Done()
-		r.CorpusRefreshLoop(ctx, DefaultCorpusRefreshInterval)
-	}()
+	for _, loop := range loops {
+		wg.Go(func() { loop(ctx) })
+	}
 	wg.Wait()
 }
 
@@ -343,7 +400,7 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 	//
 	// The real remedy is upstream: content that cannot run should never reach the store, which is what publish-time validation in
 	// #767 is for. Until then the conservative choice is the contract, and issue #851 carries the cross-replica question.
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
 	switch {
 	case len(docs) == 0:
 		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force", "version", version)
@@ -390,7 +447,7 @@ func (r *Rules) SetRetentionDays(days int) {
 	r.retentionDays = days
 	// The same number bounds how far back the read surface may claim to see. Pruning at 7 days while the API advertises a 30-day
 	// window would report a period the rows no longer cover, which is the misreport the echoed window exists to prevent.
-	r.detectionConfigH.SetMatchCountCap(days)
+	r.detectionConfigH.SetCounterRetentionCap(days)
 }
 
 // pruneCountersLoop prunes the per-rule counter tables on a ticker until ctx is cancelled. The first pass runs immediately rather
@@ -455,7 +512,7 @@ func loadCorpus(ctx context.Context, corpus rulecontentapi.Corpus, logger *slog.
 	if len(docs) == 0 {
 		return catalog.MustLoadImported()
 	}
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
 	if err != nil {
 		logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
 			"documents", len(docs), "err", err)
@@ -484,6 +541,22 @@ func EmbeddedCorpusFS() fs.FS { return catalog.ImportedCorpusFS() }
 
 // EmbeddedCorpusRoot is the path prefix the embedded corpus is stored under, which the loader reads it back by.
 const EmbeddedCorpusRoot = catalog.CorpusRoot
+
+// RuleIdentityForPath reports the key a stored document's rule is COMPARED by, which is what a caller asking "do these two
+// collide?" needs.
+//
+// Exported so a caller outside this context can ask the question without answering it itself, which is the whole point: it
+// delegates to the single definition of the derivation rather than restating it. #873 counted five copies of that derivation and
+// unified them, and the failure mode of a sixth is quiet: two sides agree until one changes, and then a lookup keyed on identity
+// simply misses.
+//
+// rulecontent needs this to install a pack safely. A rule is identified by its file STEM, so an operator's `authored/foo.yml` and
+// a pack's `imported/foo.yml` are the same rule stored twice, and a corpus holding both does not load at all.
+//
+// The key is FOLDED, and review caught the first version returning the case-preserving stem. The loader compares ids
+// case-insensitively because the columns they reach do, so `authored/Foo.yml` does not block a shipped `foo.yml` under an exact
+// comparison: both get stored, and the corpus then fails to load exactly as it would for an exact-case collision.
+func RuleIdentityForPath(p string) string { return catalog.RuleIDKey(p) }
 
 // EmbeddedCorpusIncludes reports whether a walked path is rule content rather than the packaging beside it, so a seed stores
 // exactly what the loader will read.
@@ -532,11 +605,12 @@ func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.de
 // RuleEvalStatsRecorder exposes the durable per-rule evaluation-statistics sink the detection engine writes to (issue #774).
 //
 // Separate from MonitorMatchRecorder, and consumed by the ENGINE rather than the pipeline, because the two obey opposite recording
-// rules: monitor matches are written only after the batch is acknowledged so a replay cannot count them twice, while evaluation
-// statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
-func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.detectionConfigStore }
+// rules: monitor matches are written only once the batch will not be processed again so a replay cannot count them twice, while
+// evaluation statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
+func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.evalStatsBuffer }
 
-// MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to after acknowledging a batch
+// MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to once a batch will not be
+// processed again
 // (issue #813). Same direction as the mode resolver above: the rules context owns the table, and detection consumes the narrow
 // interface rather than reaching into it (ADR-0004).
 func (r *Rules) MonitorMatchRecorder() api.MonitorMatchRecorder { return r.detectionConfigStore }
@@ -558,6 +632,11 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 //	GET  /api/v1/app-control/policies                    (when CommandBatchInserter + HostLister are wired)
 //	GET  /api/v1/app-control/policies/{id}               (when CommandBatchInserter + HostLister are wired)
 //	POST /api/v1/app-control/policies/{id}/rules         (when CommandBatchInserter + HostLister are wired)
+//	GET  /api/v1/rule-content/documents                  (when RuleAuthor + Corpus are wired)
+//	POST /api/v1/rule-content/documents:check            (when RuleAuthor + Corpus are wired)
+//	GET  /api/v1/rule-content/documents/{path...}        (when RuleAuthor + Corpus are wired)
+//	PUT  /api/v1/rule-content/documents/{path...}        (when RuleAuthor + Corpus are wired)
+//	DELETE /api/v1/rule-content/documents/{path...}      (when RuleAuthor + Corpus are wired)
 //
 // Caller wraps in identity Session + CSRF middleware before mounting.
 // rules has no public agent-facing routes, so RegisterPublicRoutes
@@ -568,6 +647,9 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 		r.appControlH.RegisterRoutes(mux)
 	}
 	r.detectionConfigH.RegisterRoutes(mux)
+	if r.ruleAuthoringH != nil {
+		r.ruleAuthoringH.RegisterRoutes(mux)
+	}
 }
 
 // CatalogOnly returns just the rule catalog, without wiring the operator routes. Exposed for tooling that doesn't have a DB handle
@@ -601,10 +683,16 @@ func PrunePack(dir string, pack map[string][]byte) ([]string, error) {
 // rendering a second one in this project's format would put two representations of one rule on disk, and the two would say the
 // same thing in different shapes. The per-rule export endpoint serves the vendored bytes for them instead, which is also the more
 // useful artifact: an operator gets the upstream rule they can diff against SigmaHQ.
+//
+// The partition is on each rule's ATTRIBUTION rather than on an id lookup against the embedded corpus, which is what it used to
+// be. Both answer identically here, because this runs at build time against the corpus this build embeds and nothing else, but the
+// attribution is the question actually being asked: this pack holds the rules this project wrote, and a rule an operator wrote on
+// their deployment is no more ours to render than an upstream one is (#879).
 func ExportPack() (map[string][]byte, error) {
-	authored := make([]api.RuleMetadata, 0, len(CatalogOnly().List()))
-	for _, rm := range CatalogOnly().List() {
-		if _, vendored := catalog.VendoredSource(rm.ID); vendored {
+	listed := CatalogOnly().List()
+	authored := make([]api.RuleMetadata, 0, len(listed))
+	for _, rm := range listed {
+		if rm.Origin != api.ProjectOrigin {
 			continue
 		}
 		authored = append(authored, rm)
@@ -633,4 +721,249 @@ func ImportedRejections() []RefusedRule {
 		out = append(out, RefusedRule{File: r.File, Reason: r.Reason})
 	}
 	return out
+}
+
+// storedCorpusRoot is the root the STORED corpus is walked from, and it is deliberately not catalog.CorpusRoot.
+//
+// catalog.CorpusRoot ("imported") is where the corpus VENDORED into this build lives, and it stays the prefix the seed records
+// those documents under, because that is where they came from. But the store holds exactly the corpus and nothing else: the seed
+// filters to rule files, so there is no README or checksum manifest beside them to exclude. Walking the whole document set is
+// therefore the honest reading of "the stored corpus", and filtering it to one prefix would only mean that a document stored under
+// any other prefix is silently never loaded.
+//
+// Which is what operator authoring needs (issue #767). An operator's own rule has no business living under a directory called
+// "imported", and a prefix that quietly excludes content from evaluation is the worst way to find that out.
+//
+// Rule identity is unaffected: it comes from the file STEM, not the path, and checkDuplicateStems already collides across
+// directories by design. So a rule means the same thing wherever it is stored, and two documents claiming one identity are refused
+// whether they sit in the same directory or not.
+const storedCorpusRoot = "."
+
+// maxDocumentBytes and maxCorpusDocuments bound what a corpus may cost to validate and to load.
+//
+// Both are what a trust boundary needs and neither is what storage allows: the content column is MEDIUMTEXT (16 MiB) and nothing
+// caps the row count. A cap belongs here rather than in the schema because it is a policy about untrusted input, which is exactly
+// what the rulecontent migration said when it declined to make the column width the thing that bounds a rule.
+const (
+	maxDocumentBytes   = 64 * 1024
+	maxCorpusDocuments = 4096
+	// maxDocumentPathLen mirrors rule_corpus_documents.path, declared VARCHAR(255). Checked here so an over-long path is a
+	// refusal that names what to shorten rather than a database error surfacing as an internal failure.
+	maxDocumentPathLen = 255
+)
+
+// CorpusValidator validates a proposed rule-content document set by loading it, and satisfies rulecontentapi.Validator.
+//
+// The whole point is that it runs the SAME loader the corpus load runs, over the same root, so "valid" means exactly "this
+// deployment will load this". A validator that re-implemented the loader's checks would be a second notion of validity whose only
+// job is to agree with the first, and the direction it would drift is the dangerous one: content accepted at authoring time that
+// the deployment then refuses, which drops the whole rule set back to the copy embedded in the binary.
+//
+// It lives in `rules` rather than in `rulecontent` because the loader does: producing evaluatable rules is what `rules` is for.
+// `rulecontent` declares the port and `cmd` wires this in, so content still imports no other context's api (ADR-0021, arch-go.yml).
+type CorpusValidator struct{}
+
+// Compile-time proof that this satisfies the port rulecontent declares. Without it the two could drift apart silently until the
+// wiring in cmd/main failed to build, which is a long way from where the mistake would be.
+var _ rulecontentapi.Validator = CorpusValidator{}
+
+// Validate reports whether docs would load as a corpus.
+//
+// An error means refused. A rejection does NOT: the loader refuses individual rules it cannot map to this sensor's events, which
+// is an expected outcome for a corpus written for a fleet of sensors, and refusing the write over one would mean an operator
+// cannot store a rule that the deployment would simply not run. Those come back as warnings so the operator learns the rule will
+// not fire, rather than being told the document is broken.
+func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]rulecontentapi.ContentWarning, error) {
+	// Every check below runs BEFORE the corpus is parsed, and each one exists because the loader would otherwise not object.
+	// They are separate functions rather than a run of conditions because each carries a different reason, and a reader tracing
+	// a refusal needs the reason more than the sequence.
+	for _, check := range []func([]rulecontentapi.Document) error{
+		boundCorpusSize,
+		checkDocumentPaths,
+		checkIdentifiersAgainstBuiltIns,
+		checkNoDocumentShadowsAnother,
+	} {
+		if err := check(docs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Provenance is passed here even though no check below reads it, and the reason is that `nil` would not mean "unused": it is
+	// the claim that every document is vendored, which is false for a corpus holding an operator's rules. Wiring the true value
+	// costs a map build and cannot be wrong; wiring a false one is a trap for the first check that does read it.
+	//
+	// A mutant replacing this with nil therefore SURVIVES, and that is expected rather than a gap: validation reports rules that
+	// will not run and searches that match everything, and neither depends on who wrote the rule. The two production LOAD seams
+	// are a different matter and are pinned, since provenance is what they decide attribution from.
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
+	if err != nil {
+		return nil, err
+	}
+	// Each warning carries the document it is about, so the authoring path can report the ones concerning the change it is making
+	// (#876). Validation is corpus-wide and that is deliberate; attributing its findings to an unrelated write was not.
+	warnings := make([]rulecontentapi.ContentWarning, 0, len(rejected))
+	for _, r := range rejected {
+		warnings = append(warnings, rulecontentapi.ContentWarning{
+			Path:    r.File,
+			Message: fmt.Sprintf("%s will not run: %s", r.File, r.Reason),
+		})
+	}
+
+	// A loaded rule cannot say which path it came from, so the breadth warnings below have to be mapped back through the id.
+	// Both sides go through catalog.RuleIDForPath, which is the point: if the two derived the id independently they would agree
+	// until one changed, and then this lookup would simply miss and the warning would carry no path, which WarningsFor then drops.
+	// An operator's own warning disappearing silently is a worse outcome than a loud mismatch.
+	pathByStem := make(map[string]string, len(docs))
+	for _, d := range docs {
+		pathByStem[catalog.RuleIDForPath(d.Path)] = d.Path
+	}
+	// A rule that matches everything is the foot-gun issue #767 names: it fires on every event of its type, so it buries real
+	// detections and costs evaluation on every batch to tell an operator nothing.
+	//
+	// Warned about rather than refused, and that is the design rather than caution. An operator writing a deliberately broad
+	// hunting rule is doing something legitimate, and refusing it would substitute our judgement for theirs on the one question
+	// we cannot answer, which is whether they meant it.
+	//
+	// Worded as "matches every event carrying its fields" because that is what it is: a field test still requires the field to be
+	// PRESENT. For an exec event's Image that is a distinction without a difference; for a field only some events carry, it is not.
+	for _, loadedRule := range loaded {
+		for _, searchName := range api.UndiscriminatingSearchesOf(loadedRule) {
+			warnings = append(warnings, rulecontentapi.ContentWarning{
+				Path: pathByStem[loadedRule.ID()],
+				Message: fmt.Sprintf(
+					"%s: search %q matches every event carrying its fields, so it discriminates nothing",
+					loadedRule.ID(), searchName),
+			})
+		}
+	}
+	if len(loaded) == 0 {
+		// Nothing in the proposed corpus can run, which includes the proposal to store NOTHING. Both cases have the same
+		// consequence and it is not the obvious one: Reload and loadCorpus each keep the rule set already in force when the store
+		// is empty or unusable, so the rules an operator just deleted would go on running while the delete reported success. An
+		// empty corpus is therefore not "no rules", it is "the previous rules, indefinitely, with no way to tell".
+		return warnings, fmt.Errorf("no document in the proposed corpus can run: %d document(s), %d refused", len(docs), len(rejected))
+	}
+	return warnings, nil
+}
+
+// boundCorpusSize bounds what a corpus can cost to validate and to load.
+//
+// Parsing is the expensive part and this is a trust boundary. Storage takes MEDIUMTEXT, 16 MiB per row and unlimited rows, and
+// the cost of a corpus is not paid once: every edit revalidates the whole set, and every replica reparses it on each version
+// change. Without a bound an operator can make each of those arbitrarily slow using nothing but valid rules, which is a denial of
+// service that needs no malformed input at all.
+//
+// The numbers are far above real content and far below where it hurts, the same shape as the other limits here: the largest
+// vendored rule is a few kilobytes against a 64 KiB per-document cap, and the corpus is 69 rules against a 4096 cap.
+func boundCorpusSize(docs []rulecontentapi.Document) error {
+	if len(docs) > maxCorpusDocuments {
+		return fmt.Errorf("a corpus may hold at most %d documents, and this one has %d", maxCorpusDocuments, len(docs))
+	}
+	for _, d := range docs {
+		if len(d.Content) > maxDocumentBytes {
+			return fmt.Errorf("%s: rule content may be at most %d bytes, and this is %d", d.Path, maxDocumentBytes, len(d.Content))
+		}
+	}
+	return nil
+}
+
+// checkDocumentPaths refuses a path the loader would not read, or that storage cannot hold.
+//
+// All three refusals share one failure mode, which is why they sit together: the document is stored, the operator is told it
+// succeeded, and the rule is never evaluated anywhere.
+//
+//   - Canonical, because rulecontentapi.FS strips ONE leading slash while storage keys the raw path. "/authored/x.yml" and
+//     "authored/x.yml" are two rows that collapse to one entry when the loader is handed them, so validation sees a single
+//     document, both persist, and every later load silently drops whichever the map does not keep. fs.ValidPath also rejects
+//     "..", ".", the empty path and a trailing slash, which alias or escape the same way.
+//   - A .yml extension, because LoadCorpus walks only the paths IsCorpusFile accepts. A document at "authored/rule.yaml" is
+//     invisible to it, so validation would pass on the strength of the OTHER documents.
+//   - A length storage accepts. The loader bounds the rule IDENTIFIER, which is the file stem, but the path carries directories
+//     too, so a canonical .yml with a long enough prefix parses fine and then fails as a raw database error on write. That
+//     surfaces as an internal failure rather than a refusal naming what to shorten.
+func checkDocumentPaths(docs []rulecontentapi.Document) error {
+	for _, d := range docs {
+		if !fs.ValidPath(d.Path) {
+			return fmt.Errorf("%q: rule content needs a plain relative path, with no leading slash and no . or .. segments", d.Path)
+		}
+		if !catalog.IsCorpusFile(d.Path) {
+			return fmt.Errorf("%s: rule content must be a .yml file, or the loader will not read it", d.Path)
+		}
+		if n := utf8.RuneCountInString(d.Path); n > maxDocumentPathLen {
+			return fmt.Errorf("%s: rule content path may be at most %d characters, and this is %d", d.Path, maxDocumentPathLen, n)
+		}
+	}
+	return nil
+}
+
+// checkIdentifiersAgainstBuiltIns refuses a stored rule claiming an id this project already ships.
+//
+// The loader cannot see this. checkDuplicateStems compares a corpus only against ITSELF, and NewWithCorpus then appends the
+// result to the built-in list and checks nothing. So a corpus file named suspicious_exec.yml yields a second rule under an id
+// already in use, and because per-rule settings and alert deduplication are keyed by that id, tuning one would tune both and
+// their alerts would merge while the catalog listed two rules under one identity.
+//
+// Folded on both sides for the same reason the corpus-internal check is: the columns holding the id compare it
+// case-insensitively, so Suspicious_Exec collides just as surely as suspicious_exec.
+func checkIdentifiersAgainstBuiltIns(docs []rulecontentapi.Document) error {
+	builtIn := make(map[string]string, 16)
+	for _, id := range catalog.BuiltInRuleIDs() {
+		builtIn[strings.ToLower(id)] = id
+	}
+	for _, d := range docs {
+		stem := catalog.RuleIDForPath(d.Path)
+		if claimed, taken := builtIn[strings.ToLower(stem)]; taken {
+			return fmt.Errorf("%s: rule id %q is already the id of a rule this deployment ships (%q); "+
+				"per-rule settings and alert deduplication are keyed by it, so the two could not be told apart",
+				d.Path, stem, claimed)
+		}
+	}
+	return nil
+}
+
+// checkNoDocumentShadowsAnother refuses a document nested beneath another, which fs.ValidPath does not decide.
+//
+// "authored/a.yml" and "authored/a.yml/hidden.yml" are both perfectly valid relative paths and both store fine, but the
+// projection makes the first an ordinary FILE, so WalkDir stops there and never reaches the second. Validation would pass on the
+// strength of the parent alone, the child would be written, and it would never be evaluated: the same silent outcome as the
+// leading-slash alias, reached from the other direction.
+func checkNoDocumentShadowsAnother(docs []rulecontentapi.Document) error {
+	paths := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		paths[d.Path] = struct{}{}
+	}
+	for _, d := range docs {
+		for dir := path.Dir(d.Path); dir != "." && dir != "/"; dir = path.Dir(dir) {
+			if _, shadowed := paths[dir]; shadowed {
+				return fmt.Errorf("%s: sits under %q, which is itself a rule file, so the loader would never reach it", d.Path, dir)
+			}
+		}
+	}
+	return nil
+}
+
+// authoredIn reports which of these documents an operator wrote, for the loader to attribute them by.
+//
+// Built from the SOURCE the store recorded rather than from the path, which is the fix for #874. Deriving it from a prefix would
+// contradict #873's rule that identity is the file stem and not the path, and would let an operator launder their own rule into a
+// vendored one by writing to `imported/mine.yml`, carrying a Detection Rule License attribution it was never under.
+//
+// The projection strips one leading slash the same way rulecontentapi.FS does, because the loader walks the names FS produced and
+// looks them up here; deriving the key differently on the two sides is the silent-miss shape that has already cost this work once.
+func authoredIn(docs []rulecontentapi.Document) catalog.Provenance {
+	authored := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		if d.Source == rulecontentapi.SourceAuthored {
+			authored[strings.TrimPrefix(d.Path, "/")] = struct{}{}
+		}
+	}
+	if len(authored) == 0 {
+		// Nil rather than an empty map, so the loader takes its "everything is vendored" path explicitly rather than consulting a
+		// lookup that can only answer no.
+		return nil
+	}
+	return func(path string) bool {
+		_, ok := authored[path]
+		return ok
+	}
 }

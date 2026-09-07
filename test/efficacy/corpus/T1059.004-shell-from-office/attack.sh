@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# L5 VM-driver placeholder for T1566.001 (T1059.004-shell-from-office).
+# L5 VM-driver placeholder for T1059.004 (T1059.004-shell-from-office).
 #
 # Detection target: catalog rule shell_from_office.
 #

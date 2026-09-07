@@ -2,9 +2,11 @@
 #
 # scripts/uat/scenarios/sensor-tamper/attack.sh
 #
-# L5 attack phase for the sensor_tamper rule (T1562.001, issue #684): switch
-# off one of the EDR's own capture providers on a live VM and let the driver
-# assert the alert.
+# L5 attack phase for the sensor_tamper rule (issue #684). Switch off one of the
+# EDR's own capture providers on a live VM and let the driver assert the alert.
+#
+# The scenario PERFORMS T1562.001; the rule it exercises claims no technique,
+# because it cannot tell deliberate tampering from a crash (issue #755).
 #
 # What this covers that the synthetic L6 corpus cannot. The corpus scenario
 # injects a sensor_provider_transition event that already exists, so it proves

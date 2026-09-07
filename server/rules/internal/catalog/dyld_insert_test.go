@@ -21,9 +21,19 @@ func TestDyldInsert_TableDriven(t *testing.T) {
 
 	cases := []fixture{
 		{
-			name:        "DYLD_INSERT_LIBRARIES leading shell-style prefix fires",
+			// Issue #791: this shape does NOT reach the server, so the rule no longer claims it. ESF serialises the argument
+			// vector only, never the environment a shell applies, so `DYLD_INSERT_LIBRARIES=x /bin/ls` arrives as
+			// `argv == ["/bin/ls"]`. Measured at zero across 670,185 real exec events, and structurally zero rather than
+			// rare. Kept as a NEGATIVE so the narrowing is visible here rather than only in a doc comment.
+			name:        "a leading shell-style assignment does not fire, because that shape never reaches us",
 			path:        "/bin/ls",
 			args:        []string{"DYLD_INSERT_LIBRARIES=/tmp/inject.dylib", "/bin/ls", "-la"},
+			wantFinding: false,
+		},
+		{
+			name:        "DYLD_INSERT_LIBRARIES through env command fires",
+			path:        "/usr/bin/env",
+			args:        []string{"/usr/bin/env", "DYLD_INSERT_LIBRARIES=/tmp/inject.dylib", "/bin/ls"},
 			wantFinding: true,
 		},
 		{

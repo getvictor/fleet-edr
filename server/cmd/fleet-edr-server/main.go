@@ -33,6 +33,7 @@ import (
 	"github.com/fleetdm/edr/server/metrics"
 	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
+	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/tracingpolicy"
@@ -145,6 +146,47 @@ func run() error {
 		return err
 	}
 
+	// Credit alerts raised by a vendored rule before attribution was recorded (issue #827). A boot-time one-shot on whichever
+	// replica wins the lock, and a no-op on every later boot because it only touches rows with an empty origin.
+	//
+	// A failure here does NOT stop the server. The obligation it settles is real, but an unpaid credit on historical rows is not
+	// a reason to refuse to detect anything today, and the next boot tries again.
+	//
+	// In the BACKGROUND for the same reason, which review asked about. The pass reads a table it has no index for, so its cost
+	// scales with alert history; run inline it would sit between this replica and its first served request, and a rolling restart
+	// would pay that per replica. Nothing here waits on the result, and a credit on historical rows is not something a request
+	// can observe missing, so there is nothing for startup to gain by blocking on it.
+	//
+	// Contrast the revocation snapshots below, which ARE loaded synchronously and are fatal on failure: those gate an allow-all
+	// security decision on the hot path, and serving before they are loaded would honour a revoked credential. This gates nothing.
+	// Its own context, cancelled and WAITED FOR by a defer registered here rather than left to ride on the lifecycle context, and
+	// the placement is the point. Defers run last-registered-first, and `db.Close()` is registered above this, so it would
+	// otherwise run while this goroutine still held a live context: any later fatal step would tear down into a pool waiting on
+	// an unindexed scan to finish. Registering the cancel HERE puts it ahead of that close, and waiting for the goroutine means
+	// the pool has its connection back before anything tries to shut it down.
+	backfillCtx, stopBackfill := context.WithCancel(ctx)
+	backfillDone := make(chan struct{})
+	defer func() {
+		stopBackfill()
+		<-backfillDone
+	}()
+
+	backfillRules := rulesCtx.ContentService().ActiveRules()
+	go func() {
+		defer close(backfillDone)
+		// Shutdown reaching a pass that was still walking is not a failure, and warning about it would put a line in the log of
+		// every deployment that restarts mid-pass describing something that is working.
+		//
+		// The test for that is whether OUR context is done, NOT whether the error is context.Canceled, and the difference is real
+		// enough that review caught it here. DoOnceIfLeader hands the callback a LEASE context and its keep-alive cancels that
+		// lease when the advisory lock is lost, so a lock loss surfaces as context.Canceled while backfillCtx is still perfectly
+		// alive. Matching on the error would file that under "we are shutting down" and say nothing, which is exactly the failure
+		// someone would want told about.
+		if _, err := detectionCtx.BackfillAlertOrigins(backfillCtx, coord, backfillRules); err != nil && backfillCtx.Err() == nil {
+			logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
+		}
+	}()
+
 	// The revocation snapshot is the ONLY revocation enforcement on the no-DB verify hot path, so an empty snapshot is "revocation
 	// disabled" (absent host => allowed). Fail closed: load it once before serving and treat a failed initial load as fatal rather than
 	// serving with an allow-all snapshot. The DB was just exercised by the schema apply above, so a failure here is a real outage, not a
@@ -197,7 +239,26 @@ func run() error {
 	go tracing.StartSettingsPoller(ctx, traceSampler, samplerReader, logger, primedSampler)
 	// Converge this replica's detection-config snapshot with mutations made on other replicas (ADR-0010): a peer's exclusion / rule-mode
 	// edit only bumps the shared version counter, so without this poll a non-mutating replica would serve a stale config until restart.
-	go rulesCtx.Run(ctx)
+	// Cancellable independently of ctx, so the join below can stop these loops whether we are shutting down on a signal or
+	// returning on a fatal server error. Review found that: with the process context still live on the error path, the join
+	// waited out its full timeout and then logged a statistics-loss warning that had not happened.
+	rulesLoopCtx, stopRulesLoops := context.WithCancel(ctx)
+	rulesDone := make(chan struct{})
+	go func() {
+		defer close(rulesDone)
+		rulesCtx.Run(rulesLoopCtx)
+	}()
+	// Deferred rather than placed after RunAndShutdown, so it covers EVERY return from here on. Review found the gap: a bad
+	// trusted-proxy list or a TLS failure returns before the server ever runs, and a join that only follows RunAndShutdown let
+	// the process exit with the shutdown flush still in flight. Same shape as the one in the integration harness.
+	defer func() {
+		stopRulesLoops()
+		select {
+		case <-rulesDone:
+		case <-time.After(rulesShutdownWait):
+			logger.WarnContext(ctx, "rules background loops did not finish before shutdown; per-rule statistics for the last window may be lost")
+		}
+	}()
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
 	// resolver, and httpserver.ClientIP's fallback returns the same peer IP the resolver's empty-list path would return, so this saves
@@ -227,8 +288,19 @@ func run() error {
 	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
 	go gw.Run(gwCtx)
+	// The deferred join above waits for the rules loops before this returns, so the shutdown flush (issue #837) completes rather
+	// than racing the process exit. Bounded, because a shutdown must end.
+	//
+	// What it does NOT cover, and review was right to say so: the detection workers are not joined, so an evaluation still in
+	// flight can record statistics after the final flush has run, and those are lost. Joining them too would mean ordering two
+	// contexts' shutdowns against each other, which is a larger change than the residual justifies: the loss is whatever one
+	// in-flight batch had produced, against a table read over days. Documented in the spec rather than left to be discovered.
 	return httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
 }
+
+// rulesShutdownWait bounds how long shutdown waits for the rules context's loops to return. Only has to outlast the eval-stats
+// flush's own timeout, which is what it is waiting for.
+const rulesShutdownWait = 10 * time.Second
 
 // controlChannel adapts the response control gateway to httpserver.ControlMux so shutdown also ends the gateway's delivery loop. The
 // gateway's ServeHTTP is promoted from the embedded interface; Stop first cancels the delivery-loop context (started with SIGTERM
@@ -525,6 +597,14 @@ func openRuleContent(ctx context.Context, logger *slog.Logger, db *sqlx.DB) (*ru
 		logger.WarnContext(ctx, "rulecontent: corpus seed failed; the catalog will use the corpus embedded in this build",
 			"err", err)
 	}
+	// Then install this build's pack over the shipped half, which the seed cannot do: it acts only on an empty corpus, so a
+	// deployment that seeded once would otherwise run its first generation of detections forever (issue #768). A no-op when the
+	// stored pack already matches, so the ordinary restart writes nothing.
+	if _, err := rcCtx.UpgradePackFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
+		rulesbootstrap.EmbeddedCorpusIncludes, rulesbootstrap.RuleIdentityForPath); err != nil {
+		// Same reasoning as the seed: a deployment that cannot install a newer pack still detects with the pack it has.
+		logger.WarnContext(ctx, "rulecontent: could not install this build's rule pack; keeping the stored one", "err", err)
+	}
 	return rcCtx, nil
 }
 
@@ -538,10 +618,30 @@ func openRules(
 	responseCtx *responsebootstrap.Response,
 	ruleContentCtx *rulecontentbootstrap.RuleContent,
 ) (*rulesbootstrap.Rules, error) {
+	// Closing the loop ADR-0021 leaves open. rulecontent owns the authoring lifecycle but must not import the evaluator, so it
+	// takes the validator as a port; the only honest validator is the corpus loader, which lives in rules. Neither context can
+	// construct the pair, so cmd does: build the lifecycle with rules' validator, then hand it to rules as a dependency.
+	//
+	// A failure here leaves the authoring surface unmounted rather than stopping the server. An operator who cannot author a rule
+	// today still has a deployment that detects, and the alternative is refusing to boot over a surface nothing depends on yet.
+	// The pack lifecycle is bound to this build's own embedded corpus, the same FS the seed and the startup install read, so the
+	// status surface compares against exactly what this process would install.
+	rulePacks := ruleContentCtx.Packs(rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
+		rulesbootstrap.EmbeddedCorpusIncludes, rulesbootstrap.RuleIdentityForPath)
+
+	var ruleAuthor rulecontentapi.Author
+	if author, aerr := ruleContentCtx.Author(rulesbootstrap.CorpusValidator{}); aerr != nil {
+		logger.WarnContext(ctx, "rule authoring surface unavailable; rule content cannot be changed through the API", "err", aerr)
+	} else {
+		ruleAuthor = author
+	}
+
 	rulesCtx, err := rulesbootstrap.New(ctx, rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               logger,
 		Corpus:               ruleContentCtx.Corpus(),
+		RuleAuthor:           ruleAuthor,
+		RulePacks:            rulePacks,
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		PrincipalLabel:       identityCtx.Service().PrincipalLabel,

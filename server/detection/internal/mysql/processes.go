@@ -433,8 +433,17 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 //
 // So the ordering resolves the generation first (fork_time_ns DESC), then the image within it: rows whose exec landed at or before the
 // instant sort first, and among those the latest exec wins, being the image actually in force. When no image in the chain had been
-// applied yet, the child's stamp fell inside its parent's own fork-to-exec window, and the trailing exec_time_ns ASC key takes the
-// chain's EARLIEST image instead of dropping the generation and attributing the child to an older one. That window is reachable
+// applied yet, the child's stamp fell inside its parent's own fork-to-exec window, and the next key takes the chain's EARLIEST image
+// instead of dropping the generation and attributing the child to an older one.
+//
+// That key is SCOPED to the not-yet-applied rows, and the scoping is the fix for #861. It was a bare `exec_time_ns ASC`, which is
+// inert for the group it was written for (every row there has an exec, and it is in the future) but not for the applied group,
+// where MySQL sorts NULL first and it therefore preferred a row that never exec'd over one whose exec landed at the same instant as
+// the other's fork. That is the pre-exec image reported for an instant at which the process had executed. It also put this SQL out
+// of step with the batch overlay, which has no counterpart to the clause and falls through to pidversion in that tie: the answer
+// then depended on whether the row happened to be preloaded into the batch, which is the shape of bug that reproduces only at a
+// batch boundary. Written as a CASE, the key is NULL for every applied row, so the applied group ties here and falls through to
+// pidversion exactly as the overlay does. That window is reachable
 // because fork and exec are stamped independently at handler time, so their errors are independent and a child's fork can carry a
 // stamp below its parent's exec even when it truly followed it (562 rows on the same data). The pre-exec image itself is
 // unrecoverable, since the first exec after a fork updates that row in place, so the chain's first image is the closest evidence that
@@ -485,12 +494,12 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTim
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
 		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
-		         exec_time_ns ASC,
+		         CASE WHEN exec_time_ns > ? THEN exec_time_ns END ASC,
 		         pidversion IS NOT NULL DESC,
 		         pidversion DESC,
 		         id DESC
 		LIMIT 1`,
-		hostID, pid, atTimeNs, atTimeNs, atTimeNs,
+		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -586,8 +595,36 @@ func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int,
 	return exists, nil
 }
 
-// GetProcessByPID returns the process that was active at the given
-// timestamp. Satisfies api.GraphReader.
+// GetProcessByPID returns the process generation whose IMAGE was running at the given timestamp. Satisfies api.GraphReader.
+//
+// The image's own start instant, COALESCE(exec_time_ns, fork_time_ns), decides WHICH generation is returned, rather than the fork
+// (issue #799). A re-exec preserves the original fork time on every generation of a pid, so fork_time_ns cannot order them: both
+// rows satisfied `fork_time_ns <= atTimeNs` and `id DESC` then handed back whichever generation was written LAST. For a parent that
+// forked a child at T1 and re-executed at T2, a rule asking what the parent's image was at T1 was told the T2 image, a binary that
+// had not run yet.
+//
+// The ordering is GetParentPath's, verbatim, which is the second correction review forced and the more important one. My first
+// version filtered on the image start in the WHERE, which excluded a process between its fork and its FIRST exec: that exec updates
+// the fork row in place, so such a row's image start lies in the future, and the callers this change exists to fix ask at a CHILD's
+// fork time, which can fall in exactly that window. A parent that forked a child before executing anything itself came back as
+// having no record at all.
+//
+// My second version preferred rather than filtered, which fixed that and was still a fourth hand-written ordering for one question.
+// GetParentPath already answers "what was this pid running at this instant" and its ordering handles a case neither of my versions
+// did: when NEITHER candidate's image had been applied yet, the chain's EARLIEST image is the closest surviving evidence of what
+// the parent was running, so that one sorts first. Issues #723 and #724 paid for that reasoning; reusing it is cheaper and more
+// correct than repeating it.
+//
+// The open question that reuse inherited is answered: see GetParentPath's ordering comment. The earliest-image key is scoped to the
+// rows it was written for, so a row that never exec'd no longer outranks one whose exec landed at the same image start, and this
+// SQL and the batch overlay now break that tie the same way (#861).
+//
+// This is the lookup every parent-image and attribution question goes through, including the eleven corpus rules that read
+// ParentImage, so the wrong answer was both wrong attribution and a missed detection: a malicious parent that re-executed into
+// something benign before the batch was evaluated read as benign.
+//
+// COALESCE falls back to fork_time_ns for a generation that has not executed, which is the pure-fork row's only start instant.
+// Issue #723 fixed the aliveness half of this bracket; this is the generation-selection half.
 func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `
@@ -598,9 +635,15 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
-		ORDER BY fork_time_ns DESC, id DESC
+		ORDER BY fork_time_ns DESC,
+		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
+		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
+		         CASE WHEN exec_time_ns > ? THEN exec_time_ns END ASC,
+		         pidversion IS NOT NULL DESC,
+		         pidversion DESC,
+		         id DESC
 		LIMIT 1`,
-		hostID, pid, atTimeNs, atTimeNs,
+		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

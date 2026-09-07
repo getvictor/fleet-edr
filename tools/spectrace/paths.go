@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -77,4 +78,22 @@ func userSetFlagNames(fs *flag.FlagSet) map[string]bool {
 	out := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
 	return out
+}
+
+// requireDir refuses a path that is not an existing directory, which every command that WALKS a tree has to do for itself.
+//
+// The walkers deliberately treat a missing tree as an empty one: `collectChange` and `forEachInFlightChangeDir` both return nil
+// for a change with no `specs/` and for a project with no `changes/`, which is right for them and wrong for a command whose whole
+// job is to check that tree. Review caught what it costs here: a typo in `--changes-dir` makes `archive-order` print "0 pending
+// changes" and `archive-verify` print "0 requirements checked", both with exit 0, so the release checklist's before-and-after is
+// two identical clean reports taken with the safeguard switched off.
+func requireDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s: not a directory", path)
+	}
+	return nil
 }

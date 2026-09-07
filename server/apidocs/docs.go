@@ -13,11 +13,14 @@
 // /api/docs/logo-mini.svg (served from embed/ too) so there are zero
 // external requests on load.
 //
-// The canonical spec lives at docs/api/openapi.yaml in the repo root; the
-// copy in embed/openapi.yaml is refreshed via go generate (see the
-// directive below) and a `task sync:openapi-embed` helper is a follow-up.
-// If you edit the canonical copy, run `go generate ./server/apidocs/...`
-// before building.
+// The canonical spec lives at docs/api/openapi.yaml in the repo root. The
+// copy in embed/openapi.yaml exists only because a go:embed pattern cannot
+// reach outside its own package directory, so it has to be refreshed when
+// the canonical file changes: run `task sync:openapi-embed`, which is
+// implemented by the generate directive below.
+//
+// Forgetting is not silent. TestEmbeddedSpecMatchesCanonical fails the
+// build when the two disagree.
 //
 // Cache invalidation strategy across the three assets:
 //   - redoc.standalone.js is hash-busted via ?v=<bundleHash> in the served

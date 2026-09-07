@@ -580,8 +580,8 @@ export interface RuleDocEntry {
   // reports nothing about.
   mode?: string;
   mode_source?: string;
-  // Where the rule came from: "Fleet EDR" for one this project wrote, and the upstream project plus that rule's author for a
-  // vendored one. Shown so an operator can tell whose rule they are reading. Since issue #765 the server names an origin for every
+  // Where the rule came from: "Fleet EDR" for one this project wrote, "Locally authored" for one written on this deployment, and
+  // the upstream project plus that rule's author for a vendored one. Shown so an operator can tell whose rule they are reading. Since issue #765 the server names an origin for every
   // rule, so this is absent only from a server that predates that change.
   origin?: string;
   // The exclusion match types this rule actually consults (issue #520). The detection-tuning exclusion editor offers only these for
@@ -1170,12 +1170,26 @@ export interface RuleMatchCount {
 //
 // Date.parse rather than an RFC 3339 regex: Go marshals time.Time with nanosecond precision and a Z offset, which Date.parse
 // handles, and a hand-rolled pattern here would more likely reject valid server output than catch a real fault.
+// wholeCount and parseableTime are the wire-validation primitives both per-rule row validators are built from. One definition
+// rather than one per validator, so a change to what counts as an acceptable number or timestamp cannot land on one adjacent
+// endpoint and not the other.
+//
+// A number is required to be a SAFE integer, not merely an integer. A JSON number is an IEEE 754 double, so a value above 2^53-1
+// has already lost precision by the time it reaches here and cannot be trusted as the count the server sent; the published schema
+// states the same bound rather than promising an int64 range the wire cannot carry.
+const wholeCount = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+// Checked for PARSEABILITY, not merely for being a string. Date.parse rather than an RFC 3339 regex: Go marshals time.Time with
+// nanosecond precision and a Z offset, which Date.parse handles, and a hand-rolled pattern here would more likely reject valid
+// server output than catch a real fault.
+const parseableTime = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+
 function isRuleMatchCount(row: unknown): row is RuleMatchCount {
   if (typeof row !== "object" || row === null) return false;
   const r = row as Record<string, unknown>;
-  const whole = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
-  const when = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
-  return typeof r.rule_id === "string" && r.rule_id !== "" && whole(r.matches) && whole(r.hosts) && when(r.last_seen);
+  return (
+    typeof r.rule_id === "string" && r.rule_id !== "" && wholeCount(r.matches) && wholeCount(r.hosts) && parseableTime(r.last_seen)
+  );
 }
 
 // listDetectionRuleMatchCounts reads the per-rule monitor-match counts. The response states the window it actually covers, which
@@ -1206,6 +1220,68 @@ export async function listDetectionRuleMatchCounts(days?: number): Promise<{ cou
     throw new Error("malformed rule-match-counts response: match_counts must be RuleMatchCount rows and days a positive whole number");
   }
   return { counts, days: served };
+}
+
+export interface RuleEvalSummary {
+  rule_id: string;
+  evaluations: number;
+  retryable_misses: number;
+  mean_eval_ns: number;
+  max_eval_ns: number;
+  last_seen: string;
+}
+
+// isRuleEvalSummary validates one row off the wire, for the reasons isRuleMatchCount above sets out at length: the HTTP client is
+// the trust boundary, and a bad row fails silently rather than loudly, keyed under `undefined` so every real rule reads as having
+// no statistics at all.
+//
+// The failure that matters here is the mirror of the match-count one. A fleet that reads as having no timings looks exactly like a
+// fleet of cheap rules, so an operator hunting the rule that is holding up the drain loop concludes there isn't one.
+//
+// evaluations is required to be at least 1, unlike the match-count fields which allow 0. That is not inconsistency: a row exists
+// only because a rule evaluated, and a mean is computed by dividing by this number, so a zero here is a malformed row rather than a
+// quiet rule. The other counters allow 0 because a rule can genuinely evaluate without missing or without measurable time.
+function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
+  if (typeof row !== "object" || row === null) return false;
+  const r = row as Record<string, unknown>;
+  // atLeastOne rather than `wholeCount(x) && x >= 1` at each call site, because the second half of that reads the field as
+  // unknown: a type predicate on a helper does not narrow the caller's value.
+  const atLeastOne = (v: unknown): boolean => wholeCount(v) && (v as number) >= 1;
+  // The two RELATIONS are checked as well as the fields, because a row can be well-typed and still impossible: more undecided
+  // attempts than attempts, or a mean above the maximum it is drawn from. Neither can come from the store, which derives both from
+  // the same rows, so either means the response is not what it claims. Rendering it anyway would put a contradictory number in
+  // front of an operator as plausible evidence, which is worse than the unavailable path a rejection takes.
+  const withinAttempts = wholeCount(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
+  const meanWithinMax =
+    wholeCount(r.mean_eval_ns) && wholeCount(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
+  return (
+    typeof r.rule_id === "string" &&
+    r.rule_id !== "" &&
+    atLeastOne(r.evaluations) &&
+    withinAttempts &&
+    meanWithinMax &&
+    parseableTime(r.last_seen)
+  );
+}
+
+// listDetectionRuleEvalStats reads the per-rule evaluation statistics: how often each rule ran, how often it could not decide, and
+// what it cost. The response states the window it actually covers, which can be narrower than the one requested, and callers render
+// that rather than the window they asked for.
+//
+// Nothing is coalesced to [], for the same reason the match-count reader does not: the server normalises an empty result to [], so a
+// missing array is a malformed response, and reading it as "no rule has evaluated" is the one wrong answer.
+export async function listDetectionRuleEvalStats(days?: number): Promise<{ stats: RuleEvalSummary[]; days: number }> {
+  const query = days === undefined ? "" : `?days=${String(days)}`;
+  const body = await fetchJSON<{ eval_stats?: RuleEvalSummary[] | null; days?: number }>(
+    `/v1/detection-config/rule-eval-stats${query}`,
+  );
+  const stats = body.eval_stats;
+  const served = body.days;
+  const validRows = Array.isArray(stats) && stats.every(isRuleEvalSummary);
+  if (!validRows || typeof served !== "number" || !Number.isSafeInteger(served) || served < 1) {
+    throw new Error("malformed rule-eval-stats response: eval_stats must be RuleEvalSummary rows and days a positive whole number");
+  }
+  return { stats, days: served };
 }
 
 export async function createDetectionExclusion(

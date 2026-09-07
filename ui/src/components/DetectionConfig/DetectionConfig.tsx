@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleEvalStats,
   listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
@@ -10,6 +11,7 @@ import {
   DetectionConfigApiError,
   type DetectionExclusion,
   type DetectionRuleSetting,
+  type RuleEvalSummary,
   type RuleMatchCount,
   type RuleDocEntry,
 } from "../../api";
@@ -132,6 +134,13 @@ const MODE_COLUMN_TOOLTIP =
 
 // Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
 // for the reader to infer from a column that says nothing was recorded.
+// COST_COLUMN_TOOLTIP explains what the mean is over, because "1.2ms" beside a promote control invites being read as the cost of
+// one alert rather than of one evaluation attempt.
+const COST_COLUMN_TOOLTIP =
+  "Mean wall time per evaluation attempt, with the worst case and the undecided count in each cell. A replayed batch really " +
+  "does evaluate again and counts as another attempt, so this is what the rule costs the server rather than how much work it " +
+  "did. An undecided attempt is one that could not reach a verdict; most are retried, but one whose batch is set aside is not.";
+
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
 
@@ -190,6 +199,83 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
   );
 }
 
+// COST_UNAVAILABLE_TOOLTIP is the Cost column's version of OBSERVED_UNAVAILABLE_TOOLTIP, and it exists separately because the two
+// reads fail independently: one column can be evidence while the other is silence, and a shared sentence would claim both are.
+const COST_UNAVAILABLE_TOOLTIP =
+  "Evaluation statistics could not be loaded, so this column shows no evidence either way. Reload before reading a rule as cheap.";
+
+// formatDuration renders a nanosecond figure at the scale a reader is comparing at.
+//
+// Sub-millisecond timings are the normal case and the interesting ones are the outliers, so the unit changes rather than the
+// precision: nanoseconds below a microsecond, microseconds below a millisecond, milliseconds below a second, seconds above.
+//
+// One decimal on every unit except nanoseconds, which are whole. The question this column answers is "which rule is slow", not
+// "how slow exactly", and trailing digits make a scan harder; at nanosecond scale a decimal would be false precision on a figure
+// that is already an integer division of a sum by a count.
+const nsPerUs = 1_000;
+const nsPerMs = 1_000_000;
+const nsPerSecond = 1_000_000_000;
+
+function formatDuration(ns: number): string {
+  // Nanoseconds below a microsecond, because `(49 / 1000).toFixed(1)` is "0.0" and a rule that measured 49ns would read as one
+  // that measured nothing. The column's own test asserts a measured zero outranks an absent one, so the two must stay
+  // distinguishable in the display as well as in the sort.
+  if (ns < nsPerUs) return `${String(ns)}ns`;
+  if (ns < nsPerMs) return `${(ns / nsPerUs).toFixed(1)}us`;
+  if (ns < nsPerSecond) return `${(ns / nsPerMs).toFixed(1)}ms`;
+  return `${(ns / nsPerSecond).toFixed(1)}s`;
+}
+
+// renderCost draws the Cost cell for one rule: what its evaluations have cost, and how often they could not decide.
+//
+// Three states, mirroring renderObserved for the same reason it has them. A failed read reads UNAVAILABLE rather than "not
+// recorded", because an empty result reads as a cheap rule, and a cheap-looking rule is exactly what an operator hunting a slow
+// one will skip over.
+//
+// The MEAN is displayed and the maximum rides in the tooltip, rather than the other way round. Scanning a column of maxima finds
+// the rule with one bad batch; scanning a column of means finds the rule that is expensive every time, which is the one holding up
+// the drain loop. The maximum still has to be reachable, because a rule that is usually fast and occasionally terrible is a real
+// answer, so it is in the label rather than dropped.
+//
+// Retryable misses are shown only when there are any. A "0 misses" annotation on every row would cost the column's width for the
+// rows where it says nothing, and the count matters precisely when it is not zero.
+function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: number, unavailable: boolean) {
+  if (unavailable) {
+    return (
+      <span className="detection-config__observed-unavailable" aria-label={`evaluation statistics unavailable for ${ruleID}`}>
+        unavailable
+      </span>
+    );
+  }
+  if (stat === undefined) {
+    return (
+      <span className="detection-config__observed-none" aria-label={`no evaluations recorded for ${ruleID}`}>
+        not recorded
+      </span>
+    );
+  }
+  const evaluations = `${stat.evaluations.toLocaleString()} evaluation${stat.evaluations === 1 ? "" : "s"}`;
+  // "could not decide", not "were retried", and the difference is real rather than pedantic: the counter increments the moment an
+  // attempt returns a retryable outcome, before anything knows whether another attempt follows. A batch that is eventually set
+  // aside has its last miss counted with no retry after it, so labelling the figure as completed retries overstates it for exactly
+  // the rules an operator is chasing.
+  // Always in the LABEL, even at zero, because that is where the figure is promised and where a reader without the column's width
+  // gets it. Only the VISIBLE annotation is suppressed at zero, since "0 undecided" on every row spends width saying nothing.
+  const misses = `, ${stat.retryable_misses.toLocaleString()} of which could not decide`;
+  const title =
+    `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst, ` +
+    `across ${evaluations} in the last ${String(days)} days${misses}`;
+  return (
+    <span title={title} aria-label={title}>
+      {formatDuration(stat.mean_eval_ns)}
+      <span className="detection-config__observed-hosts"> avg</span>
+      {stat.retryable_misses === 0 ? null : (
+        <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} undecided</span>
+      )}
+    </span>
+  );
+}
+
 // SEVERITY_ORDER lists declared severities most- to least-severe; the rule-modes table sorts by it (ascending rank = critical first).
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
 
@@ -232,6 +318,14 @@ export function DetectionConfig() {
   // cell would read "not recorded", i.e. as evidence that every rule is quiet, which is the reading that gets a noisy rule
   // promoted; with it they read "unavailable" instead.
   const [observedUnavailable, setObservedUnavailable] = useState(false);
+  // The Cost column's own three, kept separate from the Observed ones rather than merged: the two reads are separate requests that
+  // fail separately, and one shared "unavailable" flag would blank a column that loaded fine.
+  const [cost, setCost] = useState<Record<string, RuleEvalSummary | undefined>>({});
+  const [costDays, setCostDays] = useState<number>(0);
+  const [costUnavailable, setCostUnavailable] = useState(false);
+  // Off by default, so the table's usual reading order (most severe first) is what an operator sees when they came here to tune a
+  // rule they already have in mind. Sorting by cost answers the other question, which is which rule to look at at all.
+  const [sortByCost, setSortByCost] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -286,20 +380,73 @@ export function DetectionConfig() {
     [rules],
   );
 
+  // The order the table is actually drawn in. Sorting by cost is what makes the Cost column answer "which rule should I look at",
+  // rather than only "what does this rule cost": without it the slowest rule sits wherever its severity puts it, which is findable
+  // in thirteen rows and not in a thousand. The server already returns the statistics in this order, and keying them by rule id to
+  // render them beside their rule is what discards it, so this restores an ordering rather than inventing one.
+  //
+  // A rule with NO statistics sorts last rather than as zero, for the same reason its cell reads "not recorded": absence is not a
+  // measurement of nothing, and sorting them up as zero-cost would bury the answer under every rule that never ran.
+  // sortActive, not sortByCost, everywhere the order is produced OR described. With no statistics there is nothing to sort by, so
+  // a sort that stays "on" announces an order it is not producing: the rows come out in severity order while the header says
+  // slowest first. Clearing the data was not enough on its own; the CLAIM had to go with it.
+  //
+  // An EMPTY result counts as nothing to sort by too, and it is a different state from a failed read: the response was fine, no
+  // rule has evaluated in the window yet. A fresh deployment is exactly that. Without this the sort switches on over a table where
+  // every comparison is a tie, so the rows keep severity order while the header announces slowest first, which is the same untrue
+  // claim by a route that does not involve an outage.
+  // Defined on what is RENDERED, not on what the response contained, and the difference is a real state rather than a nicety.
+  // Statistics outlive the rule they describe: a rule content reload can retire a rule while its rows sit in the table until
+  // retention expires, so a response can be non-empty and still leave every visible row without a figure. Sorting would then be
+  // enabled over a table of ties again.
+  //
+  // Defining it this way is also what makes the condition general rather than a list of failure modes. I claimed that once while
+  // it was still derived from the response, and review found this case; derived from the intersection, "there is something on
+  // screen to sort by" is the whole question and a sixth route to having nothing cannot need a sixth branch.
+  const haveCost = useMemo(() => rulesBySeverity.some((r) => cost[r.id] !== undefined), [rulesBySeverity, cost]);
+  const sortActive = sortByCost && haveCost;
+
+  const rulesForTable = useMemo(() => {
+    if (!sortActive) return rulesBySeverity;
+    return [...rulesBySeverity].sort((a, b) => {
+      const left = cost[a.id];
+      const right = cost[b.id];
+      if (left === undefined && right === undefined) return 0;
+      if (left === undefined) return 1;
+      if (right === undefined) return -1;
+      return right.mean_eval_ns - left.mean_eval_ns;
+    });
+  }, [sortActive, rulesBySeverity, cost]);
+
   const reload = useCallback(async (): Promise<void> => {
-    const [excl, ruleDocs, ruleSettings, matchCounts] = await Promise.all([
+    const [excl, ruleDocs, ruleSettings, matchCounts, evalStats] = await Promise.all([
       listDetectionExclusions(),
       fetchRuleDocs(),
       listDetectionRuleSettings(),
       // Recovered rather than fatal: the counts are evidence for a decision, and losing them should grey out one column, not
       // stop an operator reaching the mode control on a page whose other three reads succeeded.
       listDetectionRuleMatchCounts().catch(() => null),
+      // Caught separately so one column's failure does not blank the other, and so neither can fail the page: both are evidence
+      // beside a control, and a table that will not render is worse than a table with one column saying it has nothing to say.
+      listDetectionRuleEvalStats().catch(() => null),
     ]);
     if (!mountedRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);
     setObservedUnavailable(matchCounts === null);
+    setCostUnavailable(evalStats === null);
+    if (evalStats === null) {
+      // Dropped rather than kept, because unavailable has to mean the component HOLDS nothing. Keeping the previous map is
+      // invisible in the cells, which short-circuit to "unavailable" before reading it, and visible in the SORT, which would
+      // order the table by figures the same screen reports as unavailable. An operator following that ranking is following
+      // numbers from before the outage while being told there are none.
+      setCost({});
+      setCostDays(0);
+    } else {
+      setCost(Object.fromEntries(evalStats.stats.map((s) => [s.rule_id, s])));
+      setCostDays(evalStats.days);
+    }
     if (matchCounts !== null) {
       setObserved(Object.fromEntries(matchCounts.counts.map((c) => [c.rule_id, c])));
       setObservedDays(matchCounts.days);
@@ -617,6 +764,15 @@ export function DetectionConfig() {
                   "indication of volume, not of how many alerts promoting the rule would raise: repeated matches on the same " +
                   "process collapse into a single alert once a rule alerts."}
             </p>
+            {/*
+              The Cost caveat gets the same treatment for the same reason. It had been left in the header's `title`, which a
+              non-focusable th only surfaces on pointer hover, so the sentence that stops the number reading as a per-alert cost
+              was the one keyboard and touch users did not get.
+            */}
+            <p className="detection-config__note">
+              {costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
+            </p>
+
             <Table>
               <thead>
                 <tr>
@@ -626,6 +782,27 @@ export function DetectionConfig() {
                   </th>
                   {/* The window is in the header text, not only in each cell's hover, so every reader knows what the numbers cover. */}
                   <th>Observed{observedUnavailable || observedDays === 0 ? "" : ` (${String(observedDays)}d)`}</th>
+                  {/*
+                    A real button rather than a click handler on the th, so the sort is reachable by keyboard and announced as a
+                    control; the th carries aria-sort so the order is stated rather than left implied by the label.
+                  */}
+                  <th
+                    title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
+                    aria-sort={sortActive ? "descending" : "none"}
+                  >
+                    <button
+                      type="button"
+                      className="detection-config__sort-button"
+                      aria-pressed={sortActive}
+                      disabled={!haveCost}
+                      onClick={() => {
+                        setSortByCost((on) => !on);
+                      }}
+                    >
+                      Cost{costUnavailable || costDays === 0 ? "" : ` (${String(costDays)}d)`}
+                      {sortActive ? " (slowest first)" : ""}
+                    </button>
+                  </th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override
@@ -633,7 +810,7 @@ export function DetectionConfig() {
                 </tr>
               </thead>
               <tbody>
-                {rulesBySeverity.map((r) => {
+                {rulesForTable.map((r) => {
                   const setting = globalSetting(settings, r.id);
                   // The rule's OWN default when no operator setting applies, not a constant (issue #764). Sixty-six imported
                   // rules ship in monitor, so falling back to "alert" both displayed them as alerting and, because this value is
@@ -651,6 +828,7 @@ export function DetectionConfig() {
                       <td className="detection-config__observed">
                         {renderObserved(observed[r.id], r.id, observedDays, observedUnavailable)}
                       </td>
+                      <td className="detection-config__observed">{renderCost(cost[r.id], r.id, costDays, costUnavailable)}</td>
                       <td>
                         <Select
                           label=""
