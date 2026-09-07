@@ -28,7 +28,11 @@ Whether this signal belongs on a health surface rather than in the detection fee
 
 ## What this does not do
 
-It does not sweep the other rules. `shell_from_office` and `suspicious_exec` both declare a technique the requirement this delta states would not allow, and both are #755, which audits every mapping at once and reviews the coverage change as one diff. The requirement lands here rather than there so that sweep is a correction to a stated rule rather than a matter of taste, and the spec names the two outstanding rules so nobody reads the merged spec as a claim that the tree already conforms.
+It does not sweep the other rules, and on merge the tree does not fully satisfy the requirement this delta states. `shell_from_office` declares Spearphishing Attachment on a chain where it observes no delivery vector, and `suspicious_exec` declares Ingress Tool Transfer where it observes an execution rather than a transfer. Both are #755, which audits every mapping at once and reviews the resulting coverage change as one deliberate diff.
+
+The requirement still lands here rather than with that sweep, which makes the sweep a correction to a stated rule rather than a matter of taste, and lets this change fix the least arguable case on its own: the one rule whose own documentation names this product as the likely cause of what it reports.
+
+That shortfall is recorded here rather than in the requirement itself, because the requirement is archived into the canonical spec and outlives the transition. A sentence naming two noncompliant rules would become false the moment #755 lands, and stale spec prose is the failure this project keeps paying for. The proposal is the record of what was true when the change was made, which is exactly what this is.
 
 ## Impact
 
