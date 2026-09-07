@@ -2032,14 +2032,17 @@ components:
         evaluations:
           type: integer
           format: int64
+          minimum: 1
           description: |
             Evaluation attempts in the window. At least 1, because a rule with
-            no attempts has no row. A replayed batch counts again, since it
-            really did evaluate again.
+            no attempts has no row, and because the mean below is derived by
+            dividing by this. A replayed batch counts again, since it really
+            did evaluate again.
           example: 400
         retryable_misses:
           type: integer
           format: int64
+          minimum: 0
           description: |
             Attempts that ended without reaching a verdict. NOT a subset that
             reduces `evaluations`: such an attempt still cost its time and
@@ -2050,6 +2053,7 @@ components:
         mean_eval_ns:
           type: integer
           format: int64
+          minimum: 0
           description: |
             Mean wall time per attempt, in nanoseconds. Computed from the
             stored sum and count rather than stored, so it stays correct as
@@ -2058,6 +2062,7 @@ components:
         max_eval_ns:
           type: integer
           format: int64
+          minimum: 0
           description: |
             Worst single attempt in the window, in nanoseconds. The maximum of
             the daily maxima, so it is a real observed attempt rather than an

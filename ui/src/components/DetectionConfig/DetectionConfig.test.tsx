@@ -840,6 +840,62 @@ describe("DetectionConfig observed column", () => {
       expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
     });
 
+    // Sorting is what makes the column answer "which rule should I look at". Without it the slowest rule sits wherever its
+    // severity puts it, which is fine in thirteen rows and useless in a thousand, and the issue's criterion is finding the rule
+    // rather than reading one you already chose.
+    it("sorts the table by cost, slowest first, and leaves rules with no statistics last", async () => {
+      // The "measured" rule records a mean of ZERO, which is legal and is what makes this fixture able to fail. A first version
+      // used only rules with positive means, where treating an absent rule as zero sorts it last anyway: the assertion held for
+      // both the correct implementation and the wrong one, and the mutant survived. Zero-versus-absent is the only pair where the
+      // two differ, so the fixture has to contain one.
+      //
+      // Severities are chosen so a stable sort would put the absent rule ABOVE the zero one if the two compared equal: "silent" is
+      // high and "measured" is low, so severity order separates them in the direction opposite to the assertion below.
+      const rules = [
+        makeRuleEntry({ id: "cheap", doc: makeRuleDoc({ title: "Cheap rule", severity: "critical" }) }),
+        makeRuleEntry({ id: "silent", doc: makeRuleDoc({ title: "Silent rule", severity: "high" }) }),
+        makeRuleEntry({ id: "slow", doc: makeRuleDoc({ title: "Slow rule", severity: "medium" }) }),
+        makeRuleEntry({ id: "measured", doc: makeRuleDoc({ title: "Measured rule", severity: "low" }) }),
+      ];
+      stubReads({
+        rules,
+        evalStats: [
+          stat({ rule_id: "cheap", mean_eval_ns: 1_000 }),
+          stat({ rule_id: "slow", mean_eval_ns: 900_000_000 }),
+          stat({ rule_id: "measured", mean_eval_ns: 0, max_eval_ns: 0 }),
+        ],
+      });
+      renderPage();
+
+      const titles = () => screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^Cost/ })).toBeVisible();
+      });
+      // Severity order first: critical, high, medium, low. The slow rule is third, which is the problem being fixed.
+      expect(titles()[0]).toContain("Cheap rule");
+      expect(titles()[2]).toContain("Slow rule");
+
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+
+      const sorted = titles();
+      expect(sorted[0]).toContain("Slow rule");
+      expect(sorted[1]).toContain("Cheap rule");
+      // A measured zero outranks an absent one, because absence is not a measurement of nothing. This is the pair that fails if
+      // an absent rule is treated as zero.
+      expect(sorted[2]).toContain("Measured rule");
+      expect(sorted[3]).toContain("Silent rule");
+    });
+
+    it("announces the sort to a screen reader rather than leaving it to the label", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      const header = await screen.findByRole("columnheader", { name: /^Cost/ });
+      expect(header).toHaveAttribute("aria-sort", "none");
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(await screen.findByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "descending");
+    });
+
     // The window the SERVER served, not the one asked for, because the cap can narrow it and a header that says 7d over 3d of
     // data is the misreport the echo exists to prevent.
     it("labels the column with the window the server reported", async () => {

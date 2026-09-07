@@ -317,6 +317,9 @@ export function DetectionConfig() {
   const [cost, setCost] = useState<Record<string, RuleEvalSummary | undefined>>({});
   const [costDays, setCostDays] = useState<number>(0);
   const [costUnavailable, setCostUnavailable] = useState(false);
+  // Off by default, so the table's usual reading order (most severe first) is what an operator sees when they came here to tune a
+  // rule they already have in mind. Sorting by cost answers the other question, which is which rule to look at at all.
+  const [sortByCost, setSortByCost] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -370,6 +373,25 @@ export function DetectionConfig() {
     () => [...rules].sort((a, b) => severityRank(a.doc.severity) - severityRank(b.doc.severity) || a.doc.title.localeCompare(b.doc.title)),
     [rules],
   );
+
+  // The order the table is actually drawn in. Sorting by cost is what makes the Cost column answer "which rule should I look at",
+  // rather than only "what does this rule cost": without it the slowest rule sits wherever its severity puts it, which is findable
+  // in thirteen rows and not in a thousand. The server already returns the statistics in this order, and keying them by rule id to
+  // render them beside their rule is what discards it, so this restores an ordering rather than inventing one.
+  //
+  // A rule with NO statistics sorts last rather than as zero, for the same reason its cell reads "not recorded": absence is not a
+  // measurement of nothing, and sorting them up as zero-cost would bury the answer under every rule that never ran.
+  const rulesForTable = useMemo(() => {
+    if (!sortByCost) return rulesBySeverity;
+    return [...rulesBySeverity].sort((a, b) => {
+      const left = cost[a.id];
+      const right = cost[b.id];
+      if (left === undefined && right === undefined) return 0;
+      if (left === undefined) return 1;
+      if (right === undefined) return -1;
+      return right.mean_eval_ns - left.mean_eval_ns;
+    });
+  }, [sortByCost, rulesBySeverity, cost]);
 
   const reload = useCallback(async (): Promise<void> => {
     const [excl, ruleDocs, ruleSettings, matchCounts, evalStats] = await Promise.all([
@@ -719,8 +741,25 @@ export function DetectionConfig() {
                   </th>
                   {/* The window is in the header text, not only in each cell's hover, so every reader knows what the numbers cover. */}
                   <th>Observed{observedUnavailable || observedDays === 0 ? "" : ` (${String(observedDays)}d)`}</th>
-                  <th title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}>
-                    Cost{costUnavailable || costDays === 0 ? "" : ` (${String(costDays)}d)`}
+                  {/*
+                    A real button rather than a click handler on the th, so the sort is reachable by keyboard and announced as a
+                    control; the th carries aria-sort so the order is stated rather than left implied by the label.
+                  */}
+                  <th
+                    title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
+                    aria-sort={sortByCost ? "descending" : "none"}
+                  >
+                    <button
+                      type="button"
+                      className="detection-config__sort-button"
+                      aria-pressed={sortByCost}
+                      onClick={() => {
+                        setSortByCost((on) => !on);
+                      }}
+                    >
+                      Cost{costUnavailable || costDays === 0 ? "" : ` (${String(costDays)}d)`}
+                      {sortByCost ? " (slowest first)" : ""}
+                    </button>
                   </th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
@@ -729,7 +768,7 @@ export function DetectionConfig() {
                 </tr>
               </thead>
               <tbody>
-                {rulesBySeverity.map((r) => {
+                {rulesForTable.map((r) => {
                   const setting = globalSetting(settings, r.id);
                   // The rule's OWN default when no operator setting applies, not a constant (issue #764). Sixty-six imported
                   // rules ship in monitor, so falling back to "alert" both displayed them as alerting and, because this value is

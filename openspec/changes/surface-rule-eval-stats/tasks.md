@@ -25,3 +25,5 @@
 - [x] 3.7 Label the undecided count for what the engine records: the counter increments at the miss, before anything knows a retry follows, so a batch that is set aside has its last miss counted with no retry after it.
 - [x] 3.8 Reject a row that is well-typed and still impossible: more undecided attempts than attempts, or a mean above the maximum it is drawn from. Both sides of each come from the same rows in the store, so either means the response is not what it claims.
 - [x] 3.9 Reuse the existing recording Router rather than writing a second one, and name the cap setter for the retention it reads rather than for one of the two reads it bounds.
+- [x] 2.5 Let the table be sorted by cost, so the column answers which rule to look at rather than only what one rule costs. The server already returns the statistics slowest-first; keying them by rule id to render them beside their rule is what discards that.
+- [x] 3.10 Put the numeric bounds the client enforces into the published schema too, so a generated validator does not accept rows the client refuses.
