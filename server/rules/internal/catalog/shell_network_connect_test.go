@@ -628,6 +628,7 @@ func TestShellNetworkConnectToleratesAProcessStampedAfterItsOwnFlow(t *testing.T
 // The connecting process is deliberately recorded AROUND the flow rather than 60s after it. An earlier version of this test put both
 // far in the future, and it passed for the wrong reason: the flow process could not be resolved at all, so evaluation returned before
 // the window was ever consulted and the test pinned nothing.
+// spec:server-detection-rules-engine/rules-tolerate-a-process-stamped-after-an-event-that-followed-it/a-shell-far-beyond-the-pad-is-still-rejected
 func TestShellNetworkConnectStillRejectsAShellFarAfterTheTrigger(t *testing.T) {
 	t.Parallel()
 
