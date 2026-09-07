@@ -411,7 +411,14 @@ export function DetectionConfig() {
     setSettings(ruleSettings);
     setObservedUnavailable(matchCounts === null);
     setCostUnavailable(evalStats === null);
-    if (evalStats !== null) {
+    if (evalStats === null) {
+      // Dropped rather than kept, because unavailable has to mean the component HOLDS nothing. Keeping the previous map is
+      // invisible in the cells, which short-circuit to "unavailable" before reading it, and visible in the SORT, which would
+      // order the table by figures the same screen reports as unavailable. An operator following that ranking is following
+      // numbers from before the outage while being told there are none.
+      setCost({});
+      setCostDays(0);
+    } else {
       setCost(Object.fromEntries(evalStats.stats.map((s) => [s.rule_id, s])));
       setCostDays(evalStats.days);
     }

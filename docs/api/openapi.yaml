@@ -2033,6 +2033,11 @@ components:
           type: integer
           format: int64
           minimum: 1
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
           description: |
             Evaluation attempts in the window. At least 1, because a rule with
             no attempts has no row, and because the mean below is derived by
@@ -2043,6 +2048,11 @@ components:
           type: integer
           format: int64
           minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
           description: |
             Attempts that ended without reaching a verdict. NOT a subset that
             reduces `evaluations`: such an attempt still cost its time and
@@ -2054,6 +2064,11 @@ components:
           type: integer
           format: int64
           minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
           description: |
             Mean wall time per attempt, in nanoseconds. Computed from the
             stored sum and count rather than stored, so it stays correct as
@@ -2063,6 +2078,11 @@ components:
           type: integer
           format: int64
           minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
           description: |
             Worst single attempt in the window, in nanoseconds. The maximum of
             the daily maxima, so it is a real observed attempt rather than an

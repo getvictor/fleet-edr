@@ -886,6 +886,41 @@ describe("DetectionConfig observed column", () => {
       expect(sorted[3]).toContain("Silent rule");
     });
 
+    // A refresh that fails must not leave the sort ordering by what the previous one returned. The cells short-circuit to
+    // "unavailable" before reading the map, so the staleness is invisible everywhere EXCEPT the sort, which is the one place an
+    // operator would act on it: a ranking that looks current while the same screen says there is nothing to rank.
+    it("does not sort by statistics from before a failed refresh", async () => {
+      const rules = [
+        makeRuleEntry({ id: "cheap", doc: makeRuleDoc({ title: "Cheap rule", severity: "critical" }) }),
+        makeRuleEntry({ id: "slow", doc: makeRuleDoc({ title: "Slow rule", severity: "low" }) }),
+      ];
+      stubReads({
+        rules,
+        settings: [makeSetting({ rule_id: "cheap", mode: "monitor" })],
+        evalStats: [stat({ rule_id: "cheap", mean_eval_ns: 1_000 }), stat({ rule_id: "slow", mean_eval_ns: 900_000_000 })],
+      });
+      renderPage();
+
+      const titles = () => screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+      await waitFor(() => {
+        expect(screen.getByText("900.0ms")).toBeVisible();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(titles()[0]).toContain("Slow rule");
+
+      // The next read fails. The reload is the one every mutation performs, so this is the ordinary path rather than a contrived
+      // one: promoting a rule out of monitor increases its reach, so it needs no reason prompt and goes straight through.
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ rule_id: "cheap", mode: "alert" }));
+      fireEvent.change(screen.getByLabelText("mode for cheap"), { target: { value: "alert" } });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for cheap")).toBeVisible();
+      });
+      // Back to severity order: critical first. The previous ranking is gone rather than preserved behind an unavailable label.
+      expect(titles()[0]).toContain("Cheap rule");
+    });
+
     it("announces the sort to a screen reader rather than leaving it to the label", async () => {
       stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
       renderPage();

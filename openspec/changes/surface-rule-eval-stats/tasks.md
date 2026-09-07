@@ -27,3 +27,5 @@
 - [x] 3.9 Reuse the existing recording Router rather than writing a second one, and name the cap setter for the retention it reads rather than for one of the two reads it bounds.
 - [x] 2.5 Let the table be sorted by cost, so the column answers which rule to look at rather than only what one rule costs. The server already returns the statistics slowest-first; keying them by rule id to render them beside their rule is what discards that.
 - [x] 3.10 Put the numeric bounds the client enforces into the published schema too, so a generated validator does not accept rows the client refuses.
+- [x] 2.6 Drop the statistics on a failed read rather than keeping them. The cells short-circuit before reading them, so the staleness is invisible everywhere except the sort, which is the one place an operator would act on it.
+- [x] 3.11 Bound the published numbers at the largest integer a JSON parser round-trips, since `int64` promises a range the wire format cannot carry and the client is right to refuse it.

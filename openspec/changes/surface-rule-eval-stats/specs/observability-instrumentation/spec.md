@@ -18,7 +18,7 @@ A rule that did not evaluate in the window SHALL be absent from the response rat
 
 The window SHALL default when unspecified and SHALL be capped at the deployment's own retention, and the response SHALL state the window it covers, for the same reasons the match-count read does: the cap can make the served window narrower than the one requested, and a figure labelled with a period it does not cover is a misreport rather than an approximation. A window that is not a positive whole number SHALL be rejected rather than defaulted.
 
-A failure to read SHALL be reported as an error rather than as an empty result, and SHALL be distinguished from a rule having no recorded evaluations wherever the statistics are presented. An empty result reads as a cheap rule, so rendering a failed read as absence tells an operator hunting the slow rule that there isn't one.
+A failure to read SHALL be reported as an error rather than as an empty result, and SHALL be distinguished from a rule having no recorded evaluations wherever the statistics are presented. An empty result reads as a cheap rule, so rendering a failed read as absence tells an operator hunting the slow rule that there isn't one. A surface that reports the statistics as unavailable SHALL NOT go on ordering or ranking by the ones it read before, since a ranking an operator can act on is not distinguishable from a current one by looking at it.
 
 This read and the match-count read SHALL fail independently. They describe different populations over different questions, and a rule that never matches still evaluates, so one failing SHALL NOT suppress the other.
 
