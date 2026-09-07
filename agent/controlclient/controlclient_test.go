@@ -445,8 +445,8 @@ func TestSilentStreamIsTornDownAndReconnected(t *testing.T) {
 // It runs against a FROZEN clock, so the silence watchdog cannot conclude anything during the test whatever the scheduler does.
 // That is deliberate. This test used to assert the watchdog's own decision by sleeping 600ms against a 150ms deadline fed by 20ms
 // heartbeats, which needed the process never to stall for 7.5 intervals and failed on a contended runner at silent_for=150.327ms
-// (issue #834). The watchdog's decision is now decided by arithmetic in silence_internal_test.go, where both operands are driven
-// by the test rather than by two goroutines racing.
+// (issue #834). That decision is now settled by arithmetic in silence_internal_test.go, where both operands are driven by the
+// test rather than by two goroutines racing.
 //
 // What is left here is still worth asserting and cannot flake on timing: nothing ELSE reconnects an idle stream. A frozen clock
 // rules out the silence path, so a second connection attempt means a genuine defect somewhere else in the loop.
