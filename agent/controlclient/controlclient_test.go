@@ -126,6 +126,13 @@ func startClientWithSilence(
 	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration,
 ) (isConnected func() bool, authFails func() int) {
 	t.Helper()
+	return startClientWithClock(t, fake, sender, silence, nil)
+}
+
+func startClientWithClock(
+	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration, now func() time.Time,
+) (isConnected func() bool, authFails func() int) {
+	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
 	control.RegisterControlChannelServer(srv, fake)
@@ -165,6 +172,7 @@ func startClientWithSilence(
 		InitialBackoff:  10 * time.Millisecond,
 		MaxBackoff:      50 * time.Millisecond,
 		SilenceDeadline: silence,
+		Now:             now,
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -432,14 +440,24 @@ func TestSilentStreamIsTornDownAndReconnected(t *testing.T) {
 // The counter-case, and the reason the deadline is measured against ANY frame rather than against command traffic: an idle fleet is
 // normal, and a heartbeat is what separates idle from forgotten. Without this the watchdog would just be a periodic disconnect.
 // spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/an-idle-connection-still-carries-proof-that-the-server-holds-it
+// TestAHeartbeatingStreamIsLeftAlone pins that an idle stream carrying heartbeats stays up: no reconnect, still connected.
+//
+// It runs against a FROZEN clock, so the silence watchdog cannot conclude anything during the test whatever the scheduler does.
+// That is deliberate. This test used to assert the watchdog's own decision by sleeping 600ms against a 150ms deadline fed by 20ms
+// heartbeats, which needed the process never to stall for 7.5 intervals and failed on a contended runner at silent_for=150.327ms
+// (issue #834). That decision is now settled by arithmetic in silence_internal_test.go, where both operands are driven by the
+// test rather than by two goroutines racing.
+//
+// What is left here is still worth asserting and cannot flake on timing: nothing ELSE reconnects an idle stream. A frozen clock
+// rules out the silence path, so a second connection attempt means a genuine defect somewhere else in the loop.
 func TestAHeartbeatingStreamIsLeftAlone(t *testing.T) {
 	t.Parallel()
+	frozen := func() time.Time { return time.Unix(0, 0) }
 	fake := &fakeGateway{heartbeatEvery: 20 * time.Millisecond}
-	isConnected, _ := startClientWithSilence(t, fake, &recordingSender{}, 150*time.Millisecond)
+	isConnected, _ := startClientWithClock(t, fake, &recordingSender{}, 150*time.Millisecond, frozen)
 
 	require.Eventually(t, isConnected, 2*time.Second, 10*time.Millisecond)
-	// Well past several deadlines: an idle but heartbeating stream must not be reconnected.
 	time.Sleep(600 * time.Millisecond)
-	assert.Equal(t, 1, fake.attemptCount(), "a stream carrying heartbeats is alive even with no commands on it")
+	assert.Equal(t, 1, fake.attemptCount(), "an idle stream carrying heartbeats must not be reconnected")
 	assert.True(t, isConnected())
 }
