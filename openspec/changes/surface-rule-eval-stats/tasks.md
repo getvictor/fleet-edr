@@ -37,3 +37,5 @@
 - [x] 3.15 Reach that state with the sort ALREADY on. Asserting it from a cold start cannot fail: aria-sort is "none" and the control disabled for the ordinary reason, whatever the condition says.
 - [x] 3.16 Put the cost caveat in a visible note beside the Observed one, since a `title` on a non-focusable header only reaches a pointer.
 - [x] 3.17 Extend the server-level wiring test to the second read, since one setter now narrows both caps and the operator-package tests set them directly: a cap nothing ever narrowed would report 30 days over 7 and every one of those tests would still pass.
+- [x] 2.9 Decide whether there is anything to sort by from what is RENDERED, not from what the response contained. Statistics outlive the rule they describe, so a non-empty response can leave every visible row without a figure.
+- [x] 3.18 Render sub-microsecond timings in nanoseconds, since `(49 / 1000).toFixed(1)` is "0.0" and a measured 49ns would read as a rule that measured nothing, which this column treats as a different claim.

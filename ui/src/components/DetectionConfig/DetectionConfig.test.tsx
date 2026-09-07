@@ -751,6 +751,9 @@ describe("DetectionConfig observed column", () => {
     // The unit follows the magnitude, because sub-millisecond is the normal case and a column of "0.0ms" would hide every
     // difference that matters between cheap rules.
     it.each([
+      // 49ns is the case that motivated the nanosecond branch: `(49 / 1000).toFixed(1)` is "0.0", so it would have read as a rule
+      // that measured nothing, which the column treats as a different claim from a rule that was never asked.
+      ["nanoseconds below a microsecond", 49, "49ns"],
       ["microseconds below a millisecond", 1_500, "1.5us"],
       ["milliseconds below a second", 1_500_000, "1.5ms"],
       ["seconds above one", 1_500_000_000, "1.5s"],
@@ -993,6 +996,24 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByText(/Reload before reading a rule as cheap/)).toBeVisible();
       });
+    });
+
+    // Statistics outlive the rule they describe: a content reload can retire a rule while its rows sit in the table until
+    // retention expires. The response is then non-empty while every RENDERED row has no figure, which is a fifth way of having
+    // nothing to sort by and the one that showed my "the condition is general" claim was wrong while it was derived from the
+    // response rather than from what is on screen.
+    it("does not offer a cost order when the statistics are all for rules that are gone", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        evalStats: [stat({ rule_id: "a_rule_that_was_retired" })],
+      });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+      expect(screen.getByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "none");
     });
 
     // A refresh that fails must not leave the sort ordering by what the previous one returned. The cells short-circuit to

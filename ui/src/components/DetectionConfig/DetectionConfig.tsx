@@ -214,6 +214,10 @@ const nsPerMs = 1_000_000;
 const nsPerSecond = 1_000_000_000;
 
 function formatDuration(ns: number): string {
+  // Nanoseconds below a microsecond, because `(49 / 1000).toFixed(1)` is "0.0" and a rule that measured 49ns would read as one
+  // that measured nothing. The column's own test asserts a measured zero outranks an absent one, so the two must stay
+  // distinguishable in the display as well as in the sort.
+  if (ns < nsPerUs) return `${String(ns)}ns`;
   if (ns < nsPerMs) return `${(ns / nsPerUs).toFixed(1)}us`;
   if (ns < nsPerSecond) return `${(ns / nsPerMs).toFixed(1)}ms`;
   return `${(ns / nsPerSecond).toFixed(1)}s`;
@@ -388,7 +392,15 @@ export function DetectionConfig() {
   // rule has evaluated in the window yet. A fresh deployment is exactly that. Without this the sort switches on over a table where
   // every comparison is a tie, so the rows keep severity order while the header announces slowest first, which is the same untrue
   // claim by a route that does not involve an outage.
-  const haveCost = Object.keys(cost).length > 0;
+  // Defined on what is RENDERED, not on what the response contained, and the difference is a real state rather than a nicety.
+  // Statistics outlive the rule they describe: a rule content reload can retire a rule while its rows sit in the table until
+  // retention expires, so a response can be non-empty and still leave every visible row without a figure. Sorting would then be
+  // enabled over a table of ties again.
+  //
+  // Defining it this way is also what makes the condition general rather than a list of failure modes. I claimed that once while
+  // it was still derived from the response, and review found this case; derived from the intersection, "there is something on
+  // screen to sort by" is the whole question and a sixth route to having nothing cannot need a sixth branch.
+  const haveCost = useMemo(() => rulesBySeverity.some((r) => cost[r.id] !== undefined), [rulesBySeverity, cost]);
   const sortActive = sortByCost && haveCost;
 
   const rulesForTable = useMemo(() => {
