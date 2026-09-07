@@ -27,6 +27,10 @@ export async function clearGlobalRuleSetting(ruleId: string): Promise<void> {
  *
  * The companion to clearGlobalRuleSetting, and scoped for the same reason: a spec arranging a precondition should touch the row
  * the surface under test resolves, not every host group's override of it.
+ *
+ * updated_by is written on the conflict path too. Updating only the mode, which is the shape this was extracted from, leaves a row
+ * a previous run wrote still credited to that run's actor while carrying this one's mode, so anything reading the attribution sees
+ * a pairing that never happened.
  */
 export async function setGlobalRuleMode(ruleId: string, mode: string, updatedBy: string): Promise<void> {
   const db = await openDB();
@@ -34,7 +38,7 @@ export async function setGlobalRuleMode(ruleId: string, mode: string, updatedBy:
     await db.query(
       `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, updated_by)
        VALUES (?, 0, ?, ?)
-       ON DUPLICATE KEY UPDATE mode = VALUES(mode)`,
+       ON DUPLICATE KEY UPDATE mode = VALUES(mode), updated_by = VALUES(updated_by)`,
       [ruleId, mode, updatedBy],
     );
     await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
