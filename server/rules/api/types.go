@@ -31,6 +31,10 @@ type (
 	// Finding is a per-rule positive output. Detection persists these
 	// as alerts via mysql.Store.InsertAlert.
 	Finding = detectionapi.Finding
+	// RiskModifier is one conditional escalation on a Finding: the risk a condition adds, and the techniques it implies. A rule
+	// with a conditional severity declares one instead of reporting a finished severity, so an operator's per-rule setting
+	// re-ranks the rule rather than erasing what the rule observed (issue #753).
+	RiskModifier = detectionapi.RiskModifier
 	// GraphReader is the narrow read surface the engine exposes to rules: six methods, the entire graph surface the production rules
 	// consume. The count is load-bearing rather than trivia, because the engine wraps every one of them to make a failed read
 	// retryable (issue #798), and a method missing from that wrapper loses detections silently.
@@ -75,6 +79,15 @@ const (
 	AlertSourceDetection          = detectionapi.AlertSourceDetection
 	AlertSourceApplicationControl = detectionapi.AlertSourceApplicationControl
 )
+
+// ApplyModifiers re-exports detection/api's composition, so a rule's own tests can assert what a modifier comes to without
+// importing detection/api and breaking the no-detection-import rule doc.go states.
+//
+// Re-exported rather than reimplemented for the reason every alias here exists: a second copy of the banding would agree until
+// one of them moved, and then two surfaces would disagree about what a finding is worth.
+func ApplyModifiers(base string, modifiers []RiskModifier) string {
+	return detectionapi.ApplyModifiers(base, modifiers)
+}
 
 // --- Catalog types -------------------------------------------------------------
 

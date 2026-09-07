@@ -87,6 +87,14 @@ func (r *DNSC2Beacon) Doc() api.Documentation {
 	}
 }
 
+// dgaDomainRisk is what a domain reading as algorithmically generated adds to this rule's base risk.
+//
+// Chosen so the untuned rule keeps the severity it has always reported: the base is high, and high plus this lands in the
+// critical band. It is a delta rather than "critical" so the same escalation still means something on a rule an operator has
+// re-ranked: lowered to low, a DGA-domain finding comes out medium and an ordinary one low, which is the distinction the
+// operator was tuning the volume of rather than asking to lose (#753).
+const dgaDomainRisk = 25
+
 // MITRE technique IDs the rule stamps. Named constants (not inline literals) so the rule body, Techniques(), and the
 // per-finding subset all reference one source (Sonar go:S1192).
 const (
@@ -216,22 +224,32 @@ func (r *DNSC2Beacon) evalEvent(
 		return nil, 0, nil
 	}
 
-	severity := api.SeverityHigh
-	techniques := []string{techniqueDNSC2}
+	// The DGA escalation is a MODIFIER rather than a finished severity, which is what lets an operator's per-rule severity
+	// setting re-rank this rule without erasing the distinction (#753). Setting a destination here would put the escalated
+	// findings back at critical however the rule was tuned; setting a finished severity, as this did, let the setting overwrite
+	// them so a lowered rule reported a high-entropy phone-home and an ordinary one identically.
+	//
+	// The technique travels in the modifier for the same reason it used to be assigned in the same branch: the escalation and
+	// T1568.002 describe one observation, and separating them is how a rule drifts into claiming a technique it does not price.
+	var modifiers []api.RiskModifier
 	if looksLikeDGADomain(queryName) {
-		severity = api.SeverityCritical
-		techniques = []string{techniqueDNSC2, techniqueDGA}
+		modifiers = append(modifiers, api.RiskModifier{
+			Reason:     "the resolved domain reads as algorithmically generated",
+			Risk:       dgaDomainRisk,
+			Techniques: []string{techniqueDGA},
+		})
 	}
 
 	return &api.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
-		Severity:    severity,
+		Severity:    api.SeverityHigh,
 		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("%s resolved %s and connected to %s", proc.Path, queryName, conn.RemoteAddress),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{dnsEvt.EventID, evt.EventID},
-		Techniques:  techniques,
+		Techniques:  []string{techniqueDNSC2},
+		Modifiers:   modifiers,
 	}, conn.PID, nil
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	detectionslices "github.com/fleetdm/edr/server/detection/internal/slices"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -633,9 +634,16 @@ func (e *Engine) routeFinding(
 	// Resolved before the switch so the monitor counter and a persisted alert label the finding with the SAME severity. A monitor
 	// setting can carry an override, and applying it only on the persist path below left the two series describing one rule at two
 	// severities, which defeats the comparison the counter exists for.
+	//
+	// The override sets the BASE and the finding's own modifiers apply on top of it, rather than the override being the last word
+	// (#753). It used to replace the finished severity, so a rule that escalated conditionally lost that decision: an operator who
+	// found dns_c2_beacon noisy and set it to low got low for a high-entropy domain and low for an ordinary one, and the
+	// population they would most want to keep visible became indistinguishable from the rest. Their setting is meant to re-rank
+	// the rule, which composing does, and not to erase what the rule observed.
 	if severityOverride != "" {
 		f.Severity = severityOverride
 	}
+	f.Severity = api.ApplyModifiers(f.Severity, f.Modifiers)
 
 	switch mode {
 	case rulesapi.DetectionRuleModeDisabled:
@@ -677,6 +685,13 @@ func (e *Engine) routeFinding(
 func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string, origin string) (bool, error) {
 	if f.Techniques == nil {
 		f.Techniques = techniques
+	}
+	// A modifier's techniques are stamped HERE rather than by the rule, which is what keeps a condition's technique and its price
+	// from drifting apart: a rule cannot grow a technique for a condition without also saying what that condition is worth
+	// (issue #753). After the fallback above and not before it, or a rule that declares no per-finding techniques but earns a
+	// modifier would end up carrying only the modifier's, losing the set it declares for every finding.
+	for _, m := range f.Modifiers {
+		f.Techniques = detectionslices.Deduplicate(append(f.Techniques, m.Techniques...))
 	}
 	source := f.Source
 	if source == "" {

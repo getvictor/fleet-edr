@@ -62,6 +62,8 @@ func stubUserExists(known ...int64) bootstrap.UserExists {
 type stubRule struct {
 	id         string
 	techniques []string
+	// modifiers are attached to every finding, standing in for a rule with a conditional escalation (issue #753).
+	modifiers []api.RiskModifier
 }
 
 func (r *stubRule) ID() string           { return r.id }
@@ -89,6 +91,7 @@ func (r *stubRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.Gr
 			Description: "stub rule fired",
 			ProcessID:   1,
 			EventIDs:    []string{e.EventID},
+			Modifiers:   r.modifiers,
 		})
 	}
 	return out, nil
@@ -4045,4 +4048,61 @@ func TestHostHealth_DerivedSignalToleratesAnArchiveOutage(t *testing.T) {
 	hosts, err := d.Service().ListHosts(ctx)
 	require.NoError(t, err, "an archive outage must not fail the hosts list")
 	assert.NotEmpty(t, hosts)
+}
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/a-severity-override-adjusts-an-escalation-rather-than-erasing-it
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-escalation-s-technique-is-stamped-with-its-risk
+//
+// TestEngine_ModifierReachesTheAlert drives issue #753 all the way to the persisted row, which is the only place a technique a
+// modifier implies becomes observable.
+//
+// It is here rather than beside the engine's unit tests because of what those could not catch. A unit test asserted the union
+// helper directly, and removing the engine's call to it left that test green: the helper being right is not the property, the
+// engine using it is. The alert row is where an operator reads both fields, so it is where both are asserted.
+//
+// A rule declaring techniques AND earning a modifier is the case that pins the ordering of the two steps. The modifier's
+// techniques are added after the rule's own are resolved, so a rule that declares a set for every finding keeps it; adding them
+// first would have replaced that set with the modifier's alone.
+func TestEngine_ModifierReachesTheAlert(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	rule := &stubRule{
+		id:         "stub-modifier",
+		techniques: api.JSONStringSlice{"T1071.004"},
+		modifiers: []api.RiskModifier{{
+			Reason: "the resolved domain reads as algorithmically generated",
+			Risk:   25,
+			// Deliberately RE-DECLARES the technique the rule already carries, alongside the one only this condition implies.
+			// That is the shape the requirement names, and it is reachable: a modifier author naming the techniques their
+			// condition implies has no reason to check which of them the rule already declares for every finding.
+			Techniques: []string{"T1071.004", "T1568.002"},
+		}},
+	}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	mustInsertProcess(t, ctx, d, "host-mod", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-mod", []api.Event{
+		{
+			EventID: "fork-m", HostID: "host-mod", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`),
+		},
+		{EventID: "trigger-m", HostID: "host-mod", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-mod"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-mod"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+
+	assert.Equal(t, api.SeverityCritical, alerts[0].Severity,
+		"the rule's base is high and the modifier is worth 25, which lands in the critical band")
+	assert.Equal(t, api.JSONStringSlice{"T1071.004", "T1568.002"}, alerts[0].Techniques,
+		"the rule's own technique AND the one its modifier implies, since a condition that adds a technique must also price it; "+
+			"the technique both of them name appears once, because a repeat inflates the coverage figure read during procurement")
 }

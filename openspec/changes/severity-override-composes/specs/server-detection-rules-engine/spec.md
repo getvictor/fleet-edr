@@ -1,4 +1,4 @@
-# Server detection rules engine
+# Server detection rules engine: a severity setting adjusts, it does not replace
 
 ## MODIFIED Requirements
 
@@ -66,3 +66,4 @@ Where an escalation implies a MITRE technique, the technique SHALL be declared t
 - **WHEN** a finding meets that condition
 - **THEN** the persisted alert carries that technique alongside the ones the rule declares
 - **AND** a technique the rule already declares appears once
+
