@@ -66,6 +66,12 @@ type Config struct {
 	// InitialBackoff / MaxBackoff override the reconnect backoff bounds; zero uses the defaults.
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	// Now is the clock the silence watchdog measures with, injected so a test decides how much time the watchdog believes has
+	// passed instead of racing the scheduler for it. Nil uses the wall clock, which is every production caller.
+	//
+	// It is read from the stream goroutine on every frame and from the watchdog goroutine on every tick, so an injected clock
+	// MUST be safe for concurrent use. Same contract as selfheal.Options.Now.
+	Now func() time.Time
 }
 
 // Client maintains the persistent control stream.
@@ -77,6 +83,8 @@ type Client struct {
 	maxBackoff     time.Duration
 	// silenceDeadline is how long the stream may carry no frames before the agent treats it as dead. See defaultSilenceDeadline.
 	silenceDeadline time.Duration
+	// now is the clock, never nil after New. See Config.Now.
+	now func() time.Time
 }
 
 // New builds a control Client. Panics if Client is nil (a programming error: there is nothing to stream over).
@@ -106,6 +114,10 @@ func New(cfg Config) *Client {
 	if silence <= 0 {
 		silence = defaultSilenceDeadline
 	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	executor := commander.NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
 	executor.SetInFlight(cfg.InFlight)
@@ -116,6 +128,7 @@ func New(cfg Config) *Client {
 		initialBackoff:  initial,
 		maxBackoff:      maxB,
 		silenceDeadline: silence,
+		now:             now,
 	}
 }
 
@@ -181,7 +194,7 @@ func (c *Client) watchSilence(ctx context.Context, lastFrame *atomic.Int64, canc
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			since := time.Since(time.Unix(0, lastFrame.Load()))
+			since := c.now().Sub(time.Unix(0, lastFrame.Load()))
 			if since >= c.silenceDeadline {
 				c.logger.WarnContext(ctx, "control channel silent past its deadline; reconnecting",
 					"silent_for", since.String(), "deadline", c.silenceDeadline.String())
@@ -218,7 +231,7 @@ func (c *Client) notifyAuthFailure(ctx context.Context, err error) {
 // the stream has already connected, so the caller reports connected=true regardless of how it ends.
 func (c *Client) pumpStream(ctx context.Context, stream control.ControlChannel_ConnectClient, cancel context.CancelFunc) error {
 	var lastFrame atomic.Int64
-	lastFrame.Store(time.Now().UnixNano())
+	lastFrame.Store(c.now().UnixNano())
 	go c.watchSilence(ctx, &lastFrame, cancel)
 	for {
 		frame, err := stream.Recv()
@@ -228,7 +241,7 @@ func (c *Client) pumpStream(ctx context.Context, stream control.ControlChannel_C
 		}
 		// ANY frame resets the clock, heartbeat or command: what the watchdog measures is whether this stream is still being served,
 		// not whether there is work.
-		lastFrame.Store(time.Now().UnixNano())
+		lastFrame.Store(c.now().UnixNano())
 		if cmd := frame.GetCommand(); cmd != nil {
 			if err := c.handleCommand(ctx, stream, cmd); err != nil {
 				// A send failure means the stream is one-way broken (we can still Recv but can no longer report outcomes). Tear it

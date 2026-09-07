@@ -126,6 +126,39 @@ func startClientWithSilence(
 	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration,
 ) (isConnected func() bool, authFails func() int) {
 	t.Helper()
+	return startClientWithClock(t, fake, sender, silence, nil)
+}
+
+// steppingClock advances a fixed step on every read, which is what makes the silence watchdog testable without racing the
+// scheduler.
+//
+// The watchdog's question is "how long since the last frame", and it answers it by subtracting two clock reads: one taken when a
+// frame arrived, one taken on its own tick. Under a stepping clock that difference counts the READS BETWEEN THEM rather than the
+// wall time between them, so what the test measures is the ratio of watchdog ticks to frames. That is the property. A loaded
+// runner stalls the whole process, so it delays frames and ticks together and the ratio holds; wall time, which is what the
+// previous version asserted against, does not survive that.
+type steppingClock struct {
+	mu   sync.Mutex
+	at   time.Time
+	step time.Duration
+}
+
+func newSteppingClock(step time.Duration) *steppingClock {
+	return &steppingClock{at: time.Unix(0, 0), step: step}
+}
+
+// Now advances and returns. Called from the stream goroutine and the watchdog goroutine, so it locks.
+func (c *steppingClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(c.step)
+	return c.at
+}
+
+func startClientWithClock(
+	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration, now func() time.Time,
+) (isConnected func() bool, authFails func() int) {
+	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
 	control.RegisterControlChannelServer(srv, fake)
@@ -165,6 +198,7 @@ func startClientWithSilence(
 		InitialBackoff:  10 * time.Millisecond,
 		MaxBackoff:      50 * time.Millisecond,
 		SilenceDeadline: silence,
+		Now:             now,
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -432,13 +466,27 @@ func TestSilentStreamIsTornDownAndReconnected(t *testing.T) {
 // The counter-case, and the reason the deadline is measured against ANY frame rather than against command traffic: an idle fleet is
 // normal, and a heartbeat is what separates idle from forgotten. Without this the watchdog would just be a periodic disconnect.
 // spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/an-idle-connection-still-carries-proof-that-the-server-holds-it
+// TestAHeartbeatingStreamIsLeftAlone pins that heartbeats keep a stream alive: an idle but heartbeating stream carries no commands
+// and must not be torn down for silence.
+//
+// It measures with a stepping clock rather than the wall clock (issue #834). The previous version heartbeat every 20ms against a
+// 150ms deadline and asserted one connection attempt after sleeping 600ms, so it needed the process never to stall for 7.5
+// heartbeat intervals across that window. On a contended hosted runner it does: the failure was reproduced at silent_for=150.3ms,
+// on a server-only PR touching nothing under agent/. Widening the ratio would have lowered the rate without removing the cause,
+// which is that a timing property was being asserted against a clock CI does not control.
+//
+// Under the stepping clock the watchdog's "time since the last frame" counts clock READS between a frame and a tick, and a stall
+// pauses the frames and the ticks together, so the property holds however the scheduler behaves. The step is a tenth of the
+// deadline, so the watchdog would have to tick ten times without a single frame landing to conclude silence, against a heartbeat
+// arriving twice as often as it ticks.
 func TestAHeartbeatingStreamIsLeftAlone(t *testing.T) {
 	t.Parallel()
+	const silence = 150 * time.Millisecond
 	fake := &fakeGateway{heartbeatEvery: 20 * time.Millisecond}
-	isConnected, _ := startClientWithSilence(t, fake, &recordingSender{}, 150*time.Millisecond)
+	isConnected, _ := startClientWithClock(t, fake, &recordingSender{}, silence, newSteppingClock(silence/10).Now)
 
 	require.Eventually(t, isConnected, 2*time.Second, 10*time.Millisecond)
-	// Well past several deadlines: an idle but heartbeating stream must not be reconnected.
+	// Long enough for many watchdog ticks (the watchdog ticks at a quarter of the deadline) and many heartbeats.
 	time.Sleep(600 * time.Millisecond)
 	assert.Equal(t, 1, fake.attemptCount(), "a stream carrying heartbeats is alive even with no commands on it")
 	assert.True(t, isConnected())
