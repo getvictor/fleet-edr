@@ -29,3 +29,5 @@
 - [x] 3.10 Put the numeric bounds the client enforces into the published schema too, so a generated validator does not accept rows the client refuses.
 - [x] 2.6 Drop the statistics on a failed read rather than keeping them. The cells short-circuit before reading them, so the staleness is invisible everywhere except the sort, which is the one place an operator would act on it.
 - [x] 3.11 Bound the published numbers at the largest integer a JSON parser round-trips, since `int64` promises a range the wire format cannot carry and the client is right to refuse it.
+- [x] 2.7 Turn the sort OFF when there is nothing to sort by, not merely clear the data. A sort left switched on announces an order it is no longer producing, which is untrue rather than stale.
+- [x] 3.12 Carry the undecided count in the label even at zero, since that is where the figure is promised; only the visible annotation is suppressed, for width.

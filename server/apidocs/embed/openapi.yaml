@@ -982,10 +982,12 @@ paths:
         claims, and a rule may have been registered after the window opened.
 
         Attempts are counted, not logical batches. A batch that is replayed
-        really does evaluate again and counts again. The mean is unaffected
-        by that, because the time inflates by the same factor, but a reader
-        comparing attempt COUNTS between rules should know that a rule whose
-        misses cause replays is counted more often as a result.
+        really does evaluate again, and counts again with its own duration.
+        The mean therefore stays a mean per ATTEMPT rather than per batch,
+        and a replay moves it in whichever direction that attempt was faster
+        or slower than the others. A reader comparing attempt counts between
+        rules should also know that a rule whose misses cause replays is
+        counted more often as a result.
       security:
         - SessionCookie: []
       parameters:

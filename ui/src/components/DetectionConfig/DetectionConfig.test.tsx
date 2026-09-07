@@ -886,6 +886,43 @@ describe("DetectionConfig observed column", () => {
       expect(sorted[3]).toContain("Silent rule");
     });
 
+    // The count is promised on every rule's entry, so it belongs in the label even at zero. Only the VISIBLE annotation is
+    // suppressed there, because "0 undecided" on every row spends the column's width saying nothing.
+    it("carries the undecided count in the label even when it is zero", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 0 })] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByTitle(/0 of which could not decide/)).toBeVisible();
+      });
+      expect(screen.queryByText(/undecided/)).not.toBeInTheDocument();
+    });
+
+    // Clearing the statistics was not enough on its own: a sort left switched on announces "slowest first" over rows it is no
+    // longer ordering, which is a claim about the table that is simply untrue rather than merely stale.
+    it("stops claiming a cost order when there is no cost to order by", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^Cost/ })).toBeEnabled();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(await screen.findByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "descending");
+
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+      fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for suspicious_exec")).toBeVisible();
+      });
+      const header = screen.getByRole("columnheader", { name: /^Cost/ });
+      expect(header).toHaveAttribute("aria-sort", "none");
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+      expect(header.textContent).not.toContain("slowest first");
+    });
+
     // A refresh that fails must not leave the sort ordering by what the previous one returned. The cells short-circuit to
     // "unavailable" before reading the map, so the staleness is invisible everywhere EXCEPT the sort, which is the one place an
     // operator would act on it: a ranking that looks current while the same screen says there is nothing to rank.

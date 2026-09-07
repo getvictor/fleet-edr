@@ -252,10 +252,9 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
   // attempt returns a retryable outcome, before anything knows whether another attempt follows. A batch that is eventually set
   // aside has its last miss counted with no retry after it, so labelling the figure as completed retries overstates it for exactly
   // the rules an operator is chasing.
-  const misses =
-    stat.retryable_misses === 0
-      ? ""
-      : `, ${stat.retryable_misses.toLocaleString()} of which could not decide`;
+  // Always in the LABEL, even at zero, because that is where the figure is promised and where a reader without the column's width
+  // gets it. Only the VISIBLE annotation is suppressed at zero, since "0 undecided" on every row spends width saying nothing.
+  const misses = `, ${stat.retryable_misses.toLocaleString()} of which could not decide`;
   const title =
     `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst, ` +
     `across ${evaluations} in the last ${String(days)} days${misses}`;
@@ -381,8 +380,13 @@ export function DetectionConfig() {
   //
   // A rule with NO statistics sorts last rather than as zero, for the same reason its cell reads "not recorded": absence is not a
   // measurement of nothing, and sorting them up as zero-cost would bury the answer under every rule that never ran.
+  // sortActive, not sortByCost, everywhere the order is produced OR described. With no statistics there is nothing to sort by, so
+  // a sort that stays "on" announces an order it is not producing: the rows come out in severity order while the header says
+  // slowest first. Clearing the data was not enough on its own; the CLAIM had to go with it.
+  const sortActive = sortByCost && !costUnavailable;
+
   const rulesForTable = useMemo(() => {
-    if (!sortByCost) return rulesBySeverity;
+    if (!sortActive) return rulesBySeverity;
     return [...rulesBySeverity].sort((a, b) => {
       const left = cost[a.id];
       const right = cost[b.id];
@@ -391,7 +395,7 @@ export function DetectionConfig() {
       if (right === undefined) return -1;
       return right.mean_eval_ns - left.mean_eval_ns;
     });
-  }, [sortByCost, rulesBySeverity, cost]);
+  }, [sortActive, rulesBySeverity, cost]);
 
   const reload = useCallback(async (): Promise<void> => {
     const [excl, ruleDocs, ruleSettings, matchCounts, evalStats] = await Promise.all([
@@ -754,18 +758,19 @@ export function DetectionConfig() {
                   */}
                   <th
                     title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
-                    aria-sort={sortByCost ? "descending" : "none"}
+                    aria-sort={sortActive ? "descending" : "none"}
                   >
                     <button
                       type="button"
                       className="detection-config__sort-button"
-                      aria-pressed={sortByCost}
+                      aria-pressed={sortActive}
+                      disabled={costUnavailable}
                       onClick={() => {
                         setSortByCost((on) => !on);
                       }}
                     >
                       Cost{costUnavailable || costDays === 0 ? "" : ` (${String(costDays)}d)`}
-                      {sortByCost ? " (slowest first)" : ""}
+                      {sortActive ? " (slowest first)" : ""}
                     </button>
                   </th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
