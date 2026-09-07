@@ -23,6 +23,27 @@ export async function clearGlobalRuleSetting(ruleId: string): Promise<void> {
 }
 
 /**
+ * setGlobalRuleMode writes the GLOBAL-scope operator setting for one rule and bumps the configuration version.
+ *
+ * The companion to clearGlobalRuleSetting, and scoped for the same reason: a spec arranging a precondition should touch the row
+ * the surface under test resolves, not every host group's override of it.
+ */
+export async function setGlobalRuleMode(ruleId: string, mode: string, updatedBy: string): Promise<void> {
+  const db = await openDB();
+  try {
+    await db.query(
+      `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, updated_by)
+       VALUES (?, 0, ?, ?)
+       ON DUPLICATE KEY UPDATE mode = VALUES(mode)`,
+      [ruleId, mode, updatedBy],
+    );
+    await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
+  } finally {
+    await db.end();
+  }
+}
+
+/**
  * waitForRuleMode blocks until the server REPORTS the rule running in the given mode, which is a different event from the write
  * that caused it.
  *
