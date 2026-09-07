@@ -13,8 +13,9 @@ import (
 // the server performed, and a replayed batch genuinely did evaluate again, so every attempt counts.
 //
 // That is not the retry-inflation mistake MonitorTally's doc warns about, and the difference is worth being able to state: the
-// figures a reader derives are unaffected by replay, because Evaluations and EvalNs inflate by the same factor and the mean they
-// produce together does not move. Recording only on a batch's terminal transition would additionally make RetryableMisses nearly
+// figure a reader derives stays honest under replay, because Evaluations and EvalNs grow together, so the mean remains a mean per
+// ATTEMPT rather than being inflated the way a per-batch figure would be. Not invariant: a replay that ran faster or slower than
+// the others moves it. Recording only on a batch's terminal transition would additionally make RetryableMisses nearly
 // unreachable, since a batch ending in a retryable miss is nacked rather than acknowledged and reaches one only if it is later
 // withdrawn. That counter is the whole point of the type: it names the rule whose
 // misses are driving the churn, which the fleet-wide edr.detection.materialization_retries counter cannot.

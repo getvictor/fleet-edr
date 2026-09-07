@@ -58,6 +58,8 @@ function stubReads(
     settings?: DetectionRuleSetting[];
     matchCounts?: api.RuleMatchCount[];
     matchCountDays?: number;
+    evalStats?: api.RuleEvalSummary[];
+    evalStatsDays?: number;
   } = {},
 ) {
   vi.spyOn(api, "listDetectionExclusions").mockResolvedValue(opts.exclusions ?? []);
@@ -66,6 +68,10 @@ function stubReads(
   vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({
     counts: opts.matchCounts ?? [],
     days: opts.matchCountDays ?? 7,
+  });
+  vi.spyOn(api, "listDetectionRuleEvalStats").mockResolvedValue({
+    stats: opts.evalStats ?? [],
+    days: opts.evalStatsDays ?? 7,
   });
 }
 
@@ -713,6 +719,358 @@ describe("DetectionConfig observed column", () => {
     });
     expect(screen.getByText(/on 3 hosts/)).toBeInTheDocument();
     expect(screen.getByTitle(/approximately 4,102 matches on 3 hosts in the last 7 days/)).toBeInTheDocument();
+  });
+
+  // The Cost column (issue #774). Its states mirror Observed's because the failure modes are the same, and the cases below are
+  // the ones where getting it wrong misleads rather than merely looks wrong.
+  describe("Cost column", () => {
+    const stat = (over: Partial<api.RuleEvalSummary> = {}): api.RuleEvalSummary => ({
+      rule_id: "suspicious_exec",
+      evaluations: 400,
+      retryable_misses: 0,
+      mean_eval_ns: 1_500_000,
+      max_eval_ns: 90_000_000,
+      last_seen: "2026-09-01T00:00:00Z",
+      ...over,
+    });
+
+    // The MEAN is what is displayed and the maximum rides in the label. Scanning a column of maxima finds the rule with one bad
+    // batch; scanning means finds the rule that is expensive every time, which is the one an operator is looking for.
+    it("shows the mean, and carries the worst case and the attempt count in the label", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText("1.5ms")).toBeVisible();
+      });
+      expect(
+        screen.getByTitle(/1\.5ms on average and 90\.0ms at worst, across 400 evaluations in the last 7 days/),
+      ).toBeVisible();
+    });
+
+    // The unit follows the magnitude, because sub-millisecond is the normal case and a column of "0.0ms" would hide every
+    // difference that matters between cheap rules.
+    it.each([
+      // 49ns is the case that motivated the nanosecond branch: `(49 / 1000).toFixed(1)` is "0.0", so it would have read as a rule
+      // that measured nothing, which the column treats as a different claim from a rule that was never asked.
+      ["nanoseconds below a microsecond", 49, "49ns"],
+      ["microseconds below a millisecond", 1_500, "1.5us"],
+      ["milliseconds below a second", 1_500_000, "1.5ms"],
+      ["seconds above one", 1_500_000_000, "1.5s"],
+    ])("renders %s", async (_name, ns, want) => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ mean_eval_ns: ns, max_eval_ns: ns })] });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByText(want)).toBeVisible();
+      });
+    });
+
+    // Shown only when there are any: a "0 undecided" on every row spends the column's width saying nothing, and the number
+    // matters precisely when it is not zero. Undecided rather than retried, because a set-aside batch's last miss is counted here
+    // with no retry after it.
+    it("annotates undecided evaluations, and only when there are some", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 12 })] });
+      const { unmount } = renderPage();
+      await waitFor(() => {
+        expect(screen.getByText(/12 undecided/)).toBeVisible();
+      });
+      unmount();
+
+      vi.restoreAllMocks();
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 0 })] });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByText("1.5ms")).toBeVisible();
+      });
+      // Scoped to the row for the same reason as above: the column note mentions undecided attempts by design.
+      expect(within(screen.getByRole("row", { name: /suspicious_exec/ })).queryByText(/undecided/)).not.toBeInTheDocument();
+    });
+
+    // The same distinction the Observed column draws, and for the same reason pointed the other way: a failed read rendered as
+    // absence reads as a CHEAP rule, so an operator hunting the slow one skips it.
+    // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/a-failed-read-is-not-presented-as-no-cost
+    it("says unavailable when the read fails, rather than showing the rule as having no cost", async () => {
+      stubReads({ rules: [makeRuleEntry()] });
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.queryByLabelText("no evaluations recorded for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    it("reads \"not recorded\" for a rule absent from a successful read", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // The two reads are separate requests that fail separately. One shared unavailable flag would blank a column that loaded
+    // fine, which is why the component keeps two.
+    //
+    // BOTH directions, and the second is the one that earns the test. Only-Cost-fails passes just as happily against a shared
+    // flag, because the shared flag is already true from the failure; mutating the component to `cost || matches` survived until
+    // the only-Observed-fails case existed. A test for an independence claim has to break it from each side.
+    it("Observed still renders when only the Cost read fails", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        matchCounts: [{ rule_id: "suspicious_exec", matches: 42, hosts: 2, last_seen: "2026-09-01T00:00:00Z" }],
+      });
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByText("42")).toBeVisible();
+      expect(screen.queryByLabelText("match counts unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/one-read-failing-does-not-suppress-the-other
+    it("Cost still renders when only the Observed read fails", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("match counts unavailable for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByText("1.5ms")).toBeVisible();
+      expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // Sorting is what makes the column answer "which rule should I look at". Without it the slowest rule sits wherever its
+    // severity puts it, which is fine in thirteen rows and useless in a thousand, and the issue's criterion is finding the rule
+    // rather than reading one you already chose.
+    it("sorts the table by cost, slowest first, and leaves rules with no statistics last", async () => {
+      // The "measured" rule records a mean of ZERO, which is legal and is what makes this fixture able to fail. A first version
+      // used only rules with positive means, where treating an absent rule as zero sorts it last anyway: the assertion held for
+      // both the correct implementation and the wrong one, and the mutant survived. Zero-versus-absent is the only pair where the
+      // two differ, so the fixture has to contain one.
+      //
+      // Severities are chosen so a stable sort would put the absent rule ABOVE the zero one if the two compared equal: "silent" is
+      // high and "measured" is low, so severity order separates them in the direction opposite to the assertion below.
+      const rules = [
+        makeRuleEntry({ id: "cheap", doc: makeRuleDoc({ title: "Cheap rule", severity: "critical" }) }),
+        makeRuleEntry({ id: "silent", doc: makeRuleDoc({ title: "Silent rule", severity: "high" }) }),
+        makeRuleEntry({ id: "slow", doc: makeRuleDoc({ title: "Slow rule", severity: "medium" }) }),
+        makeRuleEntry({ id: "measured", doc: makeRuleDoc({ title: "Measured rule", severity: "low" }) }),
+      ];
+      stubReads({
+        rules,
+        evalStats: [
+          stat({ rule_id: "cheap", mean_eval_ns: 1_000 }),
+          stat({ rule_id: "slow", mean_eval_ns: 900_000_000 }),
+          stat({ rule_id: "measured", mean_eval_ns: 0, max_eval_ns: 0 }),
+        ],
+      });
+      renderPage();
+
+      const titles = () => screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^Cost/ })).toBeVisible();
+      });
+      // Severity order first: critical, high, medium, low. The slow rule is third, which is the problem being fixed.
+      expect(titles()[0]).toContain("Cheap rule");
+      expect(titles()[2]).toContain("Slow rule");
+
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+
+      const sorted = titles();
+      expect(sorted[0]).toContain("Slow rule");
+      expect(sorted[1]).toContain("Cheap rule");
+      // A measured zero outranks an absent one, because absence is not a measurement of nothing. This is the pair that fails if
+      // an absent rule is treated as zero.
+      expect(sorted[2]).toContain("Measured rule");
+      expect(sorted[3]).toContain("Silent rule");
+    });
+
+    // The count is promised on every rule's entry, so it belongs in the label even at zero. Only the VISIBLE annotation is
+    // suppressed there, because "0 undecided" on every row spends the column's width saying nothing.
+    it("carries the undecided count in the label even when it is zero", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 0 })] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByTitle(/0 of which could not decide/)).toBeVisible();
+      });
+      // Scoped to the ROW, because the column's explanatory note above the table also says "undecided". A document-wide query
+      // would pass or fail on that sentence rather than on the cell, which is the thing being asserted.
+      const row = screen.getByRole("row", { name: /suspicious_exec/ });
+      expect(within(row).queryByText(/undecided/)).not.toBeInTheDocument();
+    });
+
+    // Clearing the statistics was not enough on its own: a sort left switched on announces "slowest first" over rows it is no
+    // longer ordering, which is a claim about the table that is simply untrue rather than merely stale.
+    it("stops claiming a cost order when there is no cost to order by", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^Cost/ })).toBeEnabled();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(await screen.findByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "descending");
+
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+      fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for suspicious_exec")).toBeVisible();
+      });
+      const header = screen.getByRole("columnheader", { name: /^Cost/ });
+      expect(header).toHaveAttribute("aria-sort", "none");
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+      expect(header.textContent).not.toContain("slowest first");
+    });
+
+    // An empty SUCCESSFUL read is a different state from a failed one, and just as unsortable. A fresh deployment where nothing
+    // has evaluated yet reaches it, and without this the sort switches on over a table of ties: the rows keep severity order
+    // while the header announces slowest first, which is the same untrue claim as the outage case by a route with no outage.
+    it("does not offer a cost order when the read succeeded with nothing in it", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+      expect(screen.getByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "none");
+      // And it is NOT the unavailable state: the read worked, so the cells say "not recorded" rather than "unavailable".
+      expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // The case above cannot fail on its own, which is why this one exists: with the sort never switched on, a wrong condition
+    // still yields aria-sort="none" and a disabled button, because both are already false for the ordinary reason. Reaching the
+    // state with the sort ALREADY on is what separates "there is nothing to sort by" from "nobody asked to sort".
+    //
+    // The sequence is a real one: statistics are there, an operator sorts by them, and the next read comes back empty because
+    // retention pruned the window out from under them.
+    it("drops a live cost order when the next read comes back empty", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^Cost/ })).toBeEnabled();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(screen.getByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "descending");
+
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockResolvedValue({ stats: [], days: 7 });
+      vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+      fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      const header = screen.getByRole("columnheader", { name: /^Cost/ });
+      expect(header).toHaveAttribute("aria-sort", "none");
+      expect(header.textContent).not.toContain("slowest first");
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+    });
+
+    // The caveat has to reach a reader who never hovers. It had been left in the header's `title`, which a non-focusable th only
+    // surfaces to a pointer, so the sentence that stops the number reading as a per-alert cost was the one keyboard and touch
+    // users did not get. The Observed column already solved this with a visible note.
+    it("explains the cost figure visibly rather than only on hover", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText(/Mean wall time per evaluation attempt/)).toBeVisible();
+      });
+      expect(screen.getByText(/most are retried, but one whose batch is set aside is not/)).toBeVisible();
+    });
+
+    it("says visibly that the cost figures are unavailable, not only on hover", async () => {
+      stubReads({ rules: [makeRuleEntry()] });
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText(/Reload before reading a rule as cheap/)).toBeVisible();
+      });
+    });
+
+    // Statistics outlive the rule they describe: a content reload can retire a rule while its rows sit in the table until
+    // retention expires. The response is then non-empty while every RENDERED row has no figure, which is a fifth way of having
+    // nothing to sort by and the one that showed my "the condition is general" claim was wrong while it was derived from the
+    // response rather than from what is on screen.
+    it("does not offer a cost order when the statistics are all for rules that are gone", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        evalStats: [stat({ rule_id: "a_rule_that_was_retired" })],
+      });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByRole("button", { name: /^Cost/ })).toBeDisabled();
+      expect(screen.getByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "none");
+    });
+
+    // A refresh that fails must not leave the sort ordering by what the previous one returned. The cells short-circuit to
+    // "unavailable" before reading the map, so the staleness is invisible everywhere EXCEPT the sort, which is the one place an
+    // operator would act on it: a ranking that looks current while the same screen says there is nothing to rank.
+    it("does not sort by statistics from before a failed refresh", async () => {
+      const rules = [
+        makeRuleEntry({ id: "cheap", doc: makeRuleDoc({ title: "Cheap rule", severity: "critical" }) }),
+        makeRuleEntry({ id: "slow", doc: makeRuleDoc({ title: "Slow rule", severity: "low" }) }),
+      ];
+      stubReads({
+        rules,
+        settings: [makeSetting({ rule_id: "cheap", mode: "monitor" })],
+        evalStats: [stat({ rule_id: "cheap", mean_eval_ns: 1_000 }), stat({ rule_id: "slow", mean_eval_ns: 900_000_000 })],
+      });
+      renderPage();
+
+      const titles = () => screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+      await waitFor(() => {
+        expect(screen.getByText("900.0ms")).toBeVisible();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(titles()[0]).toContain("Slow rule");
+
+      // The next read fails. The reload is the one every mutation performs, so this is the ordinary path rather than a contrived
+      // one: promoting a rule out of monitor increases its reach, so it needs no reason prompt and goes straight through.
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ rule_id: "cheap", mode: "alert" }));
+      fireEvent.change(screen.getByLabelText("mode for cheap"), { target: { value: "alert" } });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for cheap")).toBeVisible();
+      });
+      // Back to severity order: critical first. The previous ranking is gone rather than preserved behind an unavailable label.
+      expect(titles()[0]).toContain("Cheap rule");
+    });
+
+    it("announces the sort to a screen reader rather than leaving it to the label", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      const header = await screen.findByRole("columnheader", { name: /^Cost/ });
+      expect(header).toHaveAttribute("aria-sort", "none");
+      fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
+      expect(await screen.findByRole("columnheader", { name: /^Cost/ })).toHaveAttribute("aria-sort", "descending");
+    });
+
+    // The window the SERVER served, not the one asked for, because the cap can narrow it and a header that says 7d over 3d of
+    // data is the misreport the echo exists to prevent.
+    it("labels the column with the window the server reported", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()], evalStatsDays: 3 });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("columnheader", { name: /^Cost \(3d\)/ })).toBeVisible();
+      });
+    });
   });
 
   // A rule with nothing recorded is ABSENT from the response, and absence is not the same claim as zero: the rule may have been
