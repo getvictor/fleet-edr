@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
-import { clearGlobalRuleSetting, waitForRuleMode } from "../../fixtures/detection-config";
+import type { GlobalRuleSetting } from "../../fixtures/detection-config";
+import { clearGlobalRuleSetting, restoreGlobalRuleSetting, takeGlobalRuleSetting, waitForRuleMode } from "../../fixtures/detection-config";
 
 // The Mode row on rule detail (issue #813/#810), which reports the mode in force plus the sentences that explain and qualify it.
 //
@@ -12,11 +13,21 @@ import { clearGlobalRuleSetting, waitForRuleMode } from "../../fixtures/detectio
 const RULE_ID = "proc_creation_macos_applescript";
 
 test.describe("rule detail mode row", () => {
-  // Any GLOBAL operator setting for this rule is cleared, which the signed-in fixture does not do: it resets auth and
-  // deliberately leaves detection configuration alone. Without this the rule's resolved mode is whatever a previous run left
-  // behind, and a leftover `alert` removes the row entirely, so the spec would fail on a correct page.
+  // The rule's GLOBAL setting is taken away for the duration and put back afterwards, rather than deleted.
+  //
+  // Cleared because the fixture resets auth and deliberately leaves detection configuration alone, so a leftover `alert` would
+  // remove the row this spec is about and it would fail on a correct page. Restored because those rows are persistent shared
+  // state: against a long-lived dev database, deleting one destroys an operator's actual tuning for good. oidc-jit-disabled
+  // already preserves and restores the SSO flag for the same reason.
+  let previous: GlobalRuleSetting | null = null;
+
   test.beforeEach(async () => {
+    previous = await takeGlobalRuleSetting(RULE_ID);
     await clearGlobalRuleSetting(RULE_ID);
+  });
+
+  test.afterEach(async () => {
+    await restoreGlobalRuleSetting(RULE_ID, previous);
   });
 
   // spec:web-ui/detection-configuration-admin-views/the-rule-detail-view-reports-the-mode-a-rule-runs-in

@@ -3,6 +3,67 @@ import { expect } from "@playwright/test";
 import { openDB } from "./db";
 
 /**
+ * GlobalRuleSetting is a rule's global-scope row as it stood before a spec touched it, or null when there was none.
+ *
+ * Every column an operator can set, not just the mode: severity_override and settings carry their own tuning, and restoring a row
+ * without them would hand back something that looks right and has lost the rest.
+ */
+export interface GlobalRuleSetting {
+  mode: string;
+  severityOverride: string | null;
+  settings: string | null;
+  updatedBy: string;
+}
+
+/**
+ * takeGlobalRuleSetting reads a rule's global-scope row so a spec can put it back.
+ *
+ * resetDB deliberately leaves detection configuration alone, so these rows are persistent shared state: against a long-lived dev
+ * database a spec that clears one to arrange a precondition destroys an operator's actual tuning, silently and for good. The
+ * preserve-and-restore shape is the one oidc-jit-disabled already uses for the SSO flag, for the same reason.
+ */
+export async function takeGlobalRuleSetting(ruleId: string): Promise<GlobalRuleSetting | null> {
+  const db = await openDB();
+  try {
+    const [rows] = (await db.query(
+      "SELECT mode, severity_override, settings, updated_by FROM detection_rule_settings WHERE rule_id = ? AND host_group_id = 0",
+      [ruleId],
+    )) as [Array<{ mode: string; severity_override: string | null; settings: string | null; updated_by: string }>, unknown];
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      mode: row.mode,
+      severityOverride: row.severity_override,
+      settings: row.settings === null ? null : JSON.stringify(row.settings),
+      updatedBy: row.updated_by,
+    };
+  } finally {
+    await db.end();
+  }
+}
+
+/** restoreGlobalRuleSetting puts back exactly what takeGlobalRuleSetting found, including the absence of a row. */
+export async function restoreGlobalRuleSetting(ruleId: string, previous: GlobalRuleSetting | null): Promise<void> {
+  if (previous === null) {
+    await clearGlobalRuleSetting(ruleId);
+    return;
+  }
+  const db = await openDB();
+  try {
+    await db.query(
+      `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, severity_override, settings, updated_by)
+       VALUES (?, 0, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE mode = VALUES(mode), severity_override = VALUES(severity_override),
+                               settings = VALUES(settings), updated_by = VALUES(updated_by)`,
+      [ruleId, previous.mode, previous.severityOverride, previous.settings, previous.updatedBy],
+    );
+    await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
+  } finally {
+    await db.end();
+  }
+}
+
+/**
  * clearGlobalRuleSetting removes the GLOBAL-scope operator setting for one rule and bumps the configuration version.
  *
  * Global scope only. A blanket delete on rule_id would also remove every host-group override for that rule, which a browser test

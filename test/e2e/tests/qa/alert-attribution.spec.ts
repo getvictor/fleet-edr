@@ -14,7 +14,8 @@ import { test, expect } from "../../fixtures/agent";
 import { signInAsAdminViaBreakGlass, uninstallVirtualAuthenticator } from "../../fixtures/auth";
 import type { VirtualAuthenticator } from "../../fixtures/webauthn";
 import { openDB, resetDB } from "../../fixtures/db";
-import { clearGlobalRuleSetting, setGlobalRuleMode, waitForRuleMode } from "../../fixtures/detection-config";
+import type { GlobalRuleSetting } from "../../fixtures/detection-config";
+import { restoreGlobalRuleSetting, setGlobalRuleMode, takeGlobalRuleSetting, waitForRuleMode } from "../../fixtures/detection-config";
 
 // The upstream rule the osascript scenario matches, and the author its file credits. Pinned as literals because they are the
 // artifact the licence is about: a rename upstream should surface here as a failing assertion, not as a silently changed credit.
@@ -23,6 +24,7 @@ const UPSTREAM_AUTHOR = "SigmaHQ, by Alejandro Ortuno, oscd.community";
 
 test.describe("alert attribution", () => {
   let va: VirtualAuthenticator | undefined;
+  let previousSetting: GlobalRuleSetting | null = null;
 
   // Above the default 30s. The journey is deliberately the long one: enrol, post, ingest, build the graph, evaluate, then poll the
   // rendered page. The default leaves no headroom over the poll budget itself, so a slow-but-working run fails as a timeout.
@@ -35,6 +37,7 @@ test.describe("alert attribution", () => {
     } finally {
       await db.end();
     }
+    previousSetting = await takeGlobalRuleSetting(RULE_ID);
     // Promote the vendored rule out of monitor. Written directly rather than through the detection-config API because the
     // promotion is this test's PRECONDITION, not its subject: routing it through the UI would make an attribution failure
     // indistinguishable from a promotion failure. The helper carries the version bump, which is the cache-invalidation signal
@@ -45,10 +48,10 @@ test.describe("alert attribution", () => {
 
   test.afterEach(async () => {
     if (va) await uninstallVirtualAuthenticator(va);
-    // Same reason as the promotion: without the version bump the server keeps serving this rule as promoted after the test that
-    // promoted it has finished, and a later spec inherits an alerting rule it never asked for. Global scope, so a host-group
-    // override belonging to something else survives.
-    await clearGlobalRuleSetting(RULE_ID);
+    // Put back exactly what was there, which on a long-lived dev database may be an operator's own tuning rather than nothing.
+    // The helper carries the version bump either way: without it the server keeps serving this rule as promoted after the test
+    // that promoted it has finished, and a later spec inherits an alerting rule it never asked for.
+    await restoreGlobalRuleSetting(RULE_ID, previousSetting);
   });
 
   // Both surfaces in one test, following this suite's convention: each break-glass ceremony burns two tokens out of a global
