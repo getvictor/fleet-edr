@@ -131,6 +131,38 @@ func TestUngatedInFlight_E2E(t *testing.T) { //nolint:paralleltest // uses t.Chd
 			"a MODIFIED requirement restates the headings it keeps, so most of a delta is canonical and already gated")
 	})
 
+	t.Run("editing a requirement does not gate the scenarios it already had", func(t *testing.T) {
+		// The distinction between ADDED and merely touched, which review caught. computeNewCodeScenarioIDs promotes every
+		// scenario under a requirement whose prose changed, which is right for the canonical gate because those scenarios are
+		// gated anyway. Here it would attribute a sibling somebody else left unmarked to whoever next edits that requirement's
+		// wording, which is the branch-scoping wedge one level in.
+		edited := strings.Join([]string{
+			"# Cap", "", "## ADDED Requirements", "",
+			"### Requirement: Their req", "",
+			"The system SHALL do the thing, stated more precisely than before.", "",
+			"#### Scenario: Their scenario", "",
+			"- WHEN x THEN y", "",
+		}, "\n")
+		writeInFlightDelta(t, changes, "someone-elses", "cap-other", edited)
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "--quiet", "-m", "reword their requirement")
+
+		touched, err := computeNewCodeScenarioIDs(context.Background(), "openspec/changes", "base")
+		require.NoError(t, err)
+		require.Contains(t, touched, "cap-other/their-req/their-scenario",
+			"the premise: the diff scope DOES promote it, which is why the gate has to narrow further")
+
+		got, err := UngatedInFlight(context.Background(), "openspec/changes", "base", nil, nil)
+		require.NoError(t, err)
+		ids := make([]string, 0, len(got))
+		for _, s := range got {
+			ids = append(ids, s.ID)
+		}
+		assert.NotContains(t, ids, "cap-other/their-req/their-scenario",
+			"it was already in the delta at the merge base, so this branch did not introduce it")
+		assert.Contains(t, ids, "cap-mine/my-req/my-scenario", "and the one this branch did add is still gated")
+	})
+
 	t.Run("a branch that touched no delta gates nothing", func(t *testing.T) {
 		got, err := UngatedInFlight(context.Background(), "openspec/changes", "HEAD", nil, nil)
 		require.NoError(t, err)
