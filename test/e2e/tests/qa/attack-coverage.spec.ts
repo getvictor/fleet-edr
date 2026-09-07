@@ -43,7 +43,10 @@ test.describe("ATT&CK coverage page", () => {
     const sampleTechnique = layerJSON.techniques[0].techniqueID;
 
     await page.goto("/ui/coverage");
-    await expect(page.getByRole("heading", { name: /att&ck coverage/i })).toBeVisible({ timeout: 10_000 });
+    // Anchored on the export control rather than a heading. #622 deliberately removed the on-page title and description from the
+    // top-nav tab pages (Alerts, Search, Application control, Coverage) as redundant with the tab itself, so this page renders no
+    // h1 at all. The export button is unique to this page, so it still fails if the route renders something else.
+    await expect(page.getByRole("button", { name: /export json/i })).toBeVisible({ timeout: 10_000 });
 
     // Each tactic row is rendered with scope="rowgroup" inside its own <tbody>. The tactic strings come from
     // the canonical 14-tactic kill chain (TACTIC_ORDER in AttackCoverage.tsx); we assert at least one is on

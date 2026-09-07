@@ -93,7 +93,9 @@ test.describe("process tree detail and kill control", () => {
       ),
       killBtn.click(),
     ]);
-    expect(response.status()).toBe(200);
+    // 201, not 200: issuing a command creates one, and the operator handler has answered Created since the response context was
+    // extracted (27dab26e). The Go integration and handler tests pin 201 too; this spec kept 200 because it has never run in CI.
+    expect(response.status()).toBe(201);
 
     // Lifecycle badge renders with class process-detail__cmd-status--<status>. The dev environment has no
     // agent, so "pending" is the expected steady state. Match the partial class so a future "acked" interim

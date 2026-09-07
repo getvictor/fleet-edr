@@ -29,6 +29,17 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1, // shared DB; one worker
+  // 90s rather than Playwright's 30s default, because a sign-in can legitimately have to WAIT.
+  //
+  // `/admin/break-glass/setup` is capped at 5 submissions per minute globally and one sign-in spends two, so a phase signing in
+  // more often than the bucket refills makes a rate-limited attempt an expected path rather than an exceptional one. The helper
+  // waits it out, bounded at six refill intervals of 13s, and hooks share the test's budget, so the default 30s would fail the
+  // test on the timeout instead of letting it recover. 90s covers the bounded sequence with room for the ceremony itself.
+  //
+  // The cost is that a genuinely hung test now takes 90s to fail rather than 30s. Worth it against specs failing spuriously on
+  // arithmetic, and temporary: #912 forges the session for the specs that only need to be signed in, which removes the waiting
+  // and lets this come back down.
+  timeout: 90_000,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: `https://localhost:${PORT}`,

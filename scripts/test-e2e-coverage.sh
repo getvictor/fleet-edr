@@ -27,6 +27,17 @@
 #   5. short-session-timeouts : session lifecycle specs against tight
 #                               idle windows so wall-clock waits are
 #                               seconds, not minutes
+#   6. default-env-ui-regressions : UI presentation regressions on the
+#                                   shared sign-in fixture
+#   7. default-env-alerts   : alert list, alert attribution, anonymous
+#                             entry
+#   8. default-env-catalog  : ATT&CK coverage, rule detail, policy
+#                             editor, process-tree detail
+#
+# Every spec under test/e2e/tests/qa/ must be named by exactly one
+# phase. scripts/check-e2e-spec-coverage.sh enforces that, because
+# seven specs were once in the tree and in no phase, so they never ran
+# and four of them had rotted by the time anyone noticed (#907).
 #
 # Tighter timeouts in CI than the recommended local defaults: the
 # script sets idle=5s / break-glass-idle=3s so the two idle-eviction
@@ -271,7 +282,7 @@ echo "$END_GROUP"
 # shared fixture all three pass together in under a second.
 #
 # Grouped as their own phase for legibility rather than necessity, since two submissions would also fit inside phase 2.
-echo "::group::Phase 6: UI presentation regressions (detection tuning, rule detail, host health)"
+echo "::group::Phase 6: UI presentation regressions + the detection-config fixture guarantee"
 start_server "default-env-ui-regressions"
 seed_oidc 1
 (
@@ -280,6 +291,43 @@ seed_oidc 1
     tests/qa/detection-tuning-cost-column.spec.ts \
     tests/qa/rule-detail-mode-row.spec.ts \
     tests/qa/host-health-components.spec.ts \
+    tests/qa/detection-config-fixture.spec.ts \
+    --workers=1
+)
+stop_server
+echo "$END_GROUP"
+
+# Phases 7 and 8 run the specs that had never run in CI at all (#907). They were named by no phase, so seven spec files sat in the
+# tree unexercised: alert-attribution (the licence-attribution journey #874 exists for), policy-editor and process-tree-detail
+# (both v0.5 surfaces), alert-list, attack-coverage, rule-detail and anonymous-redirect.
+#
+# Two phases rather than one, and the reason is the setup bucket rather than the env: both phases want the DEFAULT env, but a
+# phase starts a fresh server and therefore a full bucket, and these specs sign in roughly sixteen times between them. Measured on
+# one phase the run takes 7.2 minutes, most of it waiting for tokens to refill; split, each half starts with five of its own.
+echo "::group::Phase 7: alert-centric specs that had never run in CI (list, attribution, anonymous entry)"
+start_server "default-env-alerts"
+seed_oidc 1
+(
+  cd "$REPO_ROOT/test/e2e"
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
+    tests/qa/alert-list.spec.ts \
+    tests/qa/alert-attribution.spec.ts \
+    tests/qa/anonymous-redirect.spec.ts \
+    --workers=1
+)
+stop_server
+echo "$END_GROUP"
+
+echo "::group::Phase 8: catalog and policy specs that had never run in CI (coverage, rule detail, policy editor, process tree)"
+start_server "default-env-catalog"
+seed_oidc 1
+(
+  cd "$REPO_ROOT/test/e2e"
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
+    tests/qa/attack-coverage.spec.ts \
+    tests/qa/rule-detail.spec.ts \
+    tests/qa/policy-editor.spec.ts \
+    tests/qa/process-tree-detail.spec.ts \
     --workers=1
 )
 stop_server
