@@ -175,7 +175,11 @@ func missingText(requirement string, winner winningRestatement, canonical requir
 	out := textDiff(requirement, "", winner.by(), winner.kept.body, canonical.body, winner.everKept.body, winner.wrote.body)
 	// Scenario text under the scenario's NAME, and only for scenarios both sides have. A scenario that went missing is reported
 	// once by name; counting its bullets too turned one lost scenario into seven findings.
-	for _, scenario := range sortedKeys(winner.kept.scenarios) {
+	// Over the scenario NAMES the batch agreed on, not over the names that survived the text intersection. Review caught the
+	// difference: where two restatements list the same scenario and their bodies share no line, `kept.scenarios` has no key for
+	// it, and iterating the keys would silently skip the canonical side of a scenario whose failed retirement is unambiguous. A
+	// nil `kept` slice for a scenario is a legitimate answer, and the loop below handles it.
+	for _, scenario := range winner.scenarios {
 		canonicalLines, both := canonical.scenarios[scenario]
 		if !both {
 			continue

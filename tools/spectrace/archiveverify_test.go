@@ -674,3 +674,28 @@ func TestLastBatchRestatement_IgnoresAPreviousLifetime(t *testing.T) {
 	assert.Empty(t, lastBatchRestatement(entries[:1], "2026-06-09").scenarios,
 		"nothing from the current lifetime means nothing to claim, not a claim of nothing")
 }
+
+// TestVerifyArchive_AScenarioWhoseBodiesShareNothingIsStillChecked covers the gap review found in iterating the surviving text
+// keys rather than the agreed scenario names: two restatements can list the same scenario and share no body line, which leaves
+// the intersection with no key for it, and the canonical side of that scenario then goes unchecked even though a canonical line
+// neither of them carried is an unambiguous failed retirement.
+func TestVerifyArchive_AScenarioWhoseBodiesShareNothingIsStillChecked(t *testing.T) {
+	t.Parallel()
+	findings := verifyArchive(
+		map[string][]archivedRestatement{
+			"cap/the-thing": {
+				{change: "2026-09-07-aaa", scenarios: []string{"one"},
+					text: requirementText{scenarios: map[string][]string{"one": {"- **THEN** aaa says this"}}}},
+				{change: "2026-09-07-zzz", scenarios: []string{"one"},
+					text: requirementText{scenarios: map[string][]string{"one": {"- **THEN** zzz says that"}}}},
+			},
+		},
+		canonicalWith("cap/the-thing", "one"),
+		nil,
+		map[string]requirementText{"cap/the-thing": {scenarios: map[string][]string{
+			"one": {"- **THEN** aaa says this", "- **THEN** neither of them carried this"},
+		}}},
+	)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0], "neither of them carried this")
+}
