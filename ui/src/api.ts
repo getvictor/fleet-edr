@@ -1208,6 +1208,64 @@ export async function listDetectionRuleMatchCounts(days?: number): Promise<{ cou
   return { counts, days: served };
 }
 
+export interface RuleEvalSummary {
+  rule_id: string;
+  evaluations: number;
+  retryable_misses: number;
+  mean_eval_ns: number;
+  max_eval_ns: number;
+  last_seen: string;
+}
+
+// isRuleEvalSummary validates one row off the wire, for the reasons isRuleMatchCount above sets out at length: the HTTP client is
+// the trust boundary, and a bad row fails silently rather than loudly, keyed under `undefined` so every real rule reads as having
+// no statistics at all.
+//
+// The failure that matters here is the mirror of the match-count one. A fleet that reads as having no timings looks exactly like a
+// fleet of cheap rules, so an operator hunting the rule that is holding up the drain loop concludes there isn't one.
+//
+// evaluations is required to be at least 1, unlike the match-count fields which allow 0. That is not inconsistency: a row exists
+// only because a rule evaluated, and a mean is computed by dividing by this number, so a zero here is a malformed row rather than a
+// quiet rule. The other counters allow 0 because a rule can genuinely evaluate without missing or without measurable time.
+function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
+  if (typeof row !== "object" || row === null) return false;
+  const r = row as Record<string, unknown>;
+  const whole = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+  // atLeastOne rather than `whole(x) && x >= 1`, because the second half of that reads r.evaluations as unknown: a type predicate
+  // on a helper does not narrow the caller's value.
+  const atLeastOne = (v: unknown): boolean => whole(v) && (v as number) >= 1;
+  const when = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+  return (
+    typeof r.rule_id === "string" &&
+    r.rule_id !== "" &&
+    atLeastOne(r.evaluations) &&
+    whole(r.retryable_misses) &&
+    whole(r.mean_eval_ns) &&
+    whole(r.max_eval_ns) &&
+    when(r.last_seen)
+  );
+}
+
+// listDetectionRuleEvalStats reads the per-rule evaluation statistics: how often each rule ran, how often it could not decide, and
+// what it cost. The response states the window it actually covers, which can be narrower than the one requested, and callers render
+// that rather than the window they asked for.
+//
+// Nothing is coalesced to [], for the same reason the match-count reader does not: the server normalises an empty result to [], so a
+// missing array is a malformed response, and reading it as "no rule has evaluated" is the one wrong answer.
+export async function listDetectionRuleEvalStats(days?: number): Promise<{ stats: RuleEvalSummary[]; days: number }> {
+  const query = days === undefined ? "" : `?days=${String(days)}`;
+  const body = await fetchJSON<{ eval_stats?: RuleEvalSummary[] | null; days?: number }>(
+    `/v1/detection-config/rule-eval-stats${query}`,
+  );
+  const stats = body.eval_stats;
+  const served = body.days;
+  const validRows = Array.isArray(stats) && stats.every(isRuleEvalSummary);
+  if (!validRows || typeof served !== "number" || !Number.isSafeInteger(served) || served < 1) {
+    throw new Error("malformed rule-eval-stats response: eval_stats must be RuleEvalSummary rows and days a positive whole number");
+  }
+  return { stats, days: served };
+}
+
 export async function createDetectionExclusion(
   req: CreateDetectionExclusionRequest,
 ): Promise<DetectionExclusion> {

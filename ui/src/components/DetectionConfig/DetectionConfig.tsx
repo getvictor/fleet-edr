@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleEvalStats,
   listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
@@ -10,6 +11,7 @@ import {
   DetectionConfigApiError,
   type DetectionExclusion,
   type DetectionRuleSetting,
+  type RuleEvalSummary,
   type RuleMatchCount,
   type RuleDocEntry,
 } from "../../api";
@@ -132,6 +134,12 @@ const MODE_COLUMN_TOOLTIP =
 
 // Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
 // for the reader to infer from a column that says nothing was recorded.
+// COST_COLUMN_TOOLTIP explains what the mean is over, because "1.2ms" beside a promote control invites being read as the cost of
+// one alert rather than of one evaluation attempt.
+const COST_COLUMN_TOOLTIP =
+  "Mean wall time per evaluation attempt, with the worst case and the retry count in each cell. A replayed batch really does " +
+  "evaluate again and counts as another attempt, so this is what the rule costs the server rather than how much work it did.";
+
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
 
@@ -190,6 +198,73 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
   );
 }
 
+// COST_UNAVAILABLE_TOOLTIP is the Cost column's version of OBSERVED_UNAVAILABLE_TOOLTIP, and it exists separately because the two
+// reads fail independently: one column can be evidence while the other is silence, and a shared sentence would claim both are.
+const COST_UNAVAILABLE_TOOLTIP =
+  "Evaluation statistics could not be loaded, so this column shows no evidence either way. Reload before reading a rule as cheap.";
+
+// formatDuration renders a nanosecond figure at the scale a reader is comparing at.
+//
+// Sub-millisecond timings are the normal case and the interesting ones are the outliers, so the unit changes rather than the
+// precision: microseconds below a millisecond, milliseconds below a second, seconds above. One decimal throughout, because the
+// question this column answers is "which rule is slow", not "how slow exactly", and trailing digits make a scan harder.
+const nsPerUs = 1_000;
+const nsPerMs = 1_000_000;
+const nsPerSecond = 1_000_000_000;
+
+function formatDuration(ns: number): string {
+  if (ns < nsPerMs) return `${(ns / nsPerUs).toFixed(1)}us`;
+  if (ns < nsPerSecond) return `${(ns / nsPerMs).toFixed(1)}ms`;
+  return `${(ns / nsPerSecond).toFixed(1)}s`;
+}
+
+// renderCost draws the Cost cell for one rule: what its evaluations have cost, and how often they could not decide.
+//
+// Three states, mirroring renderObserved for the same reason it has them. A failed read reads UNAVAILABLE rather than "not
+// recorded", because an empty result reads as a cheap rule, and a cheap-looking rule is exactly what an operator hunting a slow
+// one will skip over.
+//
+// The MEAN is displayed and the maximum rides in the tooltip, rather than the other way round. Scanning a column of maxima finds
+// the rule with one bad batch; scanning a column of means finds the rule that is expensive every time, which is the one holding up
+// the drain loop. The maximum still has to be reachable, because a rule that is usually fast and occasionally terrible is a real
+// answer, so it is in the label rather than dropped.
+//
+// Retryable misses are shown only when there are any. A "0 misses" annotation on every row would cost the column's width for the
+// rows where it says nothing, and the count matters precisely when it is not zero.
+function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: number, unavailable: boolean) {
+  if (unavailable) {
+    return (
+      <span className="detection-config__observed-unavailable" aria-label={`evaluation statistics unavailable for ${ruleID}`}>
+        unavailable
+      </span>
+    );
+  }
+  if (stat === undefined) {
+    return (
+      <span className="detection-config__observed-none" aria-label={`no evaluations recorded for ${ruleID}`}>
+        not recorded
+      </span>
+    );
+  }
+  const evaluations = `${stat.evaluations.toLocaleString()} evaluation${stat.evaluations === 1 ? "" : "s"}`;
+  const misses =
+    stat.retryable_misses === 0
+      ? ""
+      : `, ${stat.retryable_misses.toLocaleString()} of which could not decide and were retried`;
+  const title =
+    `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst, ` +
+    `across ${evaluations} in the last ${String(days)} days${misses}`;
+  return (
+    <span title={title} aria-label={title}>
+      {formatDuration(stat.mean_eval_ns)}
+      <span className="detection-config__observed-hosts"> avg</span>
+      {stat.retryable_misses === 0 ? null : (
+        <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} retried</span>
+      )}
+    </span>
+  );
+}
+
 // SEVERITY_ORDER lists declared severities most- to least-severe; the rule-modes table sorts by it (ascending rank = critical first).
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
 
@@ -232,6 +307,11 @@ export function DetectionConfig() {
   // cell would read "not recorded", i.e. as evidence that every rule is quiet, which is the reading that gets a noisy rule
   // promoted; with it they read "unavailable" instead.
   const [observedUnavailable, setObservedUnavailable] = useState(false);
+  // The Cost column's own three, kept separate from the Observed ones rather than merged: the two reads are separate requests that
+  // fail separately, and one shared "unavailable" flag would blank a column that loaded fine.
+  const [cost, setCost] = useState<Record<string, RuleEvalSummary | undefined>>({});
+  const [costDays, setCostDays] = useState<number>(0);
+  const [costUnavailable, setCostUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -287,19 +367,27 @@ export function DetectionConfig() {
   );
 
   const reload = useCallback(async (): Promise<void> => {
-    const [excl, ruleDocs, ruleSettings, matchCounts] = await Promise.all([
+    const [excl, ruleDocs, ruleSettings, matchCounts, evalStats] = await Promise.all([
       listDetectionExclusions(),
       fetchRuleDocs(),
       listDetectionRuleSettings(),
       // Recovered rather than fatal: the counts are evidence for a decision, and losing them should grey out one column, not
       // stop an operator reaching the mode control on a page whose other three reads succeeded.
       listDetectionRuleMatchCounts().catch(() => null),
+      // Caught separately so one column's failure does not blank the other, and so neither can fail the page: both are evidence
+      // beside a control, and a table that will not render is worse than a table with one column saying it has nothing to say.
+      listDetectionRuleEvalStats().catch(() => null),
     ]);
     if (!mountedRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);
     setObservedUnavailable(matchCounts === null);
+    setCostUnavailable(evalStats === null);
+    if (evalStats !== null) {
+      setCost(Object.fromEntries(evalStats.stats.map((s) => [s.rule_id, s])));
+      setCostDays(evalStats.days);
+    }
     if (matchCounts !== null) {
       setObserved(Object.fromEntries(matchCounts.counts.map((c) => [c.rule_id, c])));
       setObservedDays(matchCounts.days);
@@ -626,6 +714,9 @@ export function DetectionConfig() {
                   </th>
                   {/* The window is in the header text, not only in each cell's hover, so every reader knows what the numbers cover. */}
                   <th>Observed{observedUnavailable || observedDays === 0 ? "" : ` (${String(observedDays)}d)`}</th>
+                  <th title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}>
+                    Cost{costUnavailable || costDays === 0 ? "" : ` (${String(costDays)}d)`}
+                  </th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override
@@ -651,6 +742,7 @@ export function DetectionConfig() {
                       <td className="detection-config__observed">
                         {renderObserved(observed[r.id], r.id, observedDays, observedUnavailable)}
                       </td>
+                      <td className="detection-config__observed">{renderCost(cost[r.id], r.id, costDays, costUnavailable)}</td>
                       <td>
                         <Select
                           label=""

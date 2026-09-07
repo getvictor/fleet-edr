@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleEvalStats,
   listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
@@ -148,6 +149,80 @@ describe("detection-config API client", () => {
     it(`listDetectionRuleMatchCounts rejects a malformed envelope: ${name}`, async () => {
       stubFetch(envelope);
       await expect(listDetectionRuleMatchCounts()).rejects.toThrow(/malformed rule-match-counts/);
+    });
+  }
+
+  // The eval-stats client is the same trust boundary as the match-count one and fails the same way, so it gets the same
+  // treatment. The difference worth its own coverage is the evaluations floor: a row exists only because a rule evaluated, and the
+  // mean is a division by that number, so 0 is malformed here where it is legitimate on the match-count side.
+  it("listDetectionRuleEvalStats accepts a well-formed row", async () => {
+    const row = {
+      rule_id: "suspicious_exec", evaluations: 400, retryable_misses: 12,
+      mean_eval_ns: 1_500_000, max_eval_ns: 90_000_000, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
+  // Zero misses and zero timings are real: a rule can evaluate cheaply and never miss. Only `evaluations` has a floor.
+  it("listDetectionRuleEvalStats accepts zero misses and zero timings", async () => {
+    const row = {
+      rule_id: "suspicious_exec", evaluations: 1, retryable_misses: 0,
+      mean_eval_ns: 0, max_eval_ns: 0, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
+  it("listDetectionRuleEvalStats omits the query when no window is given", async () => {
+    const mock = stubFetch({ eval_stats: [], days: 7 });
+    const out = await listDetectionRuleEvalStats();
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("/api/v1/detection-config/rule-eval-stats");
+    expect(target.toString()).not.toContain("days=");
+    expect(out).toEqual({ stats: [], days: 7 });
+  });
+
+  it("listDetectionRuleEvalStats serialises an explicit window", async () => {
+    const mock = stubFetch({ eval_stats: [], days: 14 });
+    await listDetectionRuleEvalStats(14);
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("days=14");
+  });
+
+  it("listDetectionRuleEvalStats reports the server's window, not the requested one", async () => {
+    stubFetch({ eval_stats: [], days: 30 });
+    expect(await listDetectionRuleEvalStats(365)).toEqual({ stats: [], days: 30 });
+  });
+
+  // Each row is malformed in exactly ONE way, with every other field valid, so a mutant that breaks one guard is caught by the
+  // case for that guard rather than by a fixture that was already failing for a different reason.
+  for (const [name, envelope] of [
+    ["null eval_stats", { eval_stats: null, days: 7 }],
+    ["omitted eval_stats", { days: 7 }],
+    ["eval_stats is not an array", { eval_stats: { "0": {} }, days: 7 }],
+    ["omitted days", { eval_stats: [] }],
+    ["days is not a number", { eval_stats: [], days: "7" }],
+    ["days is zero", { eval_stats: [], days: 0 }],
+    ["days is fractional", { eval_stats: [], days: 1.5 }],
+    ["a row with no rule_id", { eval_stats: [{ evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row with an empty rule_id", { eval_stats: [{ rule_id: "", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    // The floor. Without it a zero row divides by zero somewhere upstream and reads here as a rule that ran for free.
+    ["a row with zero evaluations", { eval_stats: [{ rule_id: "r", evaluations: 0, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing evaluations", { eval_stats: [{ rule_id: "r", retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing retryable_misses", { eval_stats: [{ rule_id: "r", evaluations: 1, mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing mean_eval_ns", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing max_eval_ns", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing last_seen", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1 }], days: 7 }],
+    ["a row whose last_seen is unparseable", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1, max_eval_ns: 1, last_seen: "not-a-date" }], days: 7 }],
+    ["a row with a negative timing", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: -1, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row with a fractional timing", { eval_stats: [{ rule_id: "r", evaluations: 1, retryable_misses: 0, mean_eval_ns: 1.5, max_eval_ns: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row that is null", { eval_stats: [null], days: 7 }],
+    ["an empty row", { eval_stats: [{}], days: 7 }],
+  ] as [string, unknown][]) {
+    it(`listDetectionRuleEvalStats rejects a malformed envelope: ${name}`, async () => {
+      stubFetch(envelope);
+      await expect(listDetectionRuleEvalStats()).rejects.toThrow(/malformed rule-eval-stats/);
     });
   }
 

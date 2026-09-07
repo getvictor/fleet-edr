@@ -58,6 +58,8 @@ function stubReads(
     settings?: DetectionRuleSetting[];
     matchCounts?: api.RuleMatchCount[];
     matchCountDays?: number;
+    evalStats?: api.RuleEvalSummary[];
+    evalStatsDays?: number;
   } = {},
 ) {
   vi.spyOn(api, "listDetectionExclusions").mockResolvedValue(opts.exclusions ?? []);
@@ -66,6 +68,10 @@ function stubReads(
   vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({
     counts: opts.matchCounts ?? [],
     days: opts.matchCountDays ?? 7,
+  });
+  vi.spyOn(api, "listDetectionRuleEvalStats").mockResolvedValue({
+    stats: opts.evalStats ?? [],
+    days: opts.evalStatsDays ?? 7,
   });
 }
 
@@ -713,6 +719,136 @@ describe("DetectionConfig observed column", () => {
     });
     expect(screen.getByText(/on 3 hosts/)).toBeInTheDocument();
     expect(screen.getByTitle(/approximately 4,102 matches on 3 hosts in the last 7 days/)).toBeInTheDocument();
+  });
+
+  // The Cost column (issue #774). Its states mirror Observed's because the failure modes are the same, and the cases below are
+  // the ones where getting it wrong misleads rather than merely looks wrong.
+  describe("Cost column", () => {
+    const stat = (over: Partial<api.RuleEvalSummary> = {}): api.RuleEvalSummary => ({
+      rule_id: "suspicious_exec",
+      evaluations: 400,
+      retryable_misses: 0,
+      mean_eval_ns: 1_500_000,
+      max_eval_ns: 90_000_000,
+      last_seen: "2026-09-01T00:00:00Z",
+      ...over,
+    });
+
+    // The MEAN is what is displayed and the maximum rides in the label. Scanning a column of maxima finds the rule with one bad
+    // batch; scanning means finds the rule that is expensive every time, which is the one an operator is looking for.
+    it("shows the mean, and carries the worst case and the attempt count in the label", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText("1.5ms")).toBeVisible();
+      });
+      expect(
+        screen.getByTitle(/1\.5ms on average and 90\.0ms at worst, across 400 evaluations in the last 7 days/),
+      ).toBeVisible();
+    });
+
+    // The unit follows the magnitude, because sub-millisecond is the normal case and a column of "0.0ms" would hide every
+    // difference that matters between cheap rules.
+    it.each([
+      ["microseconds below a millisecond", 1_500, "1.5us"],
+      ["milliseconds below a second", 1_500_000, "1.5ms"],
+      ["seconds above one", 1_500_000_000, "1.5s"],
+    ])("renders %s", async (_name, ns, want) => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ mean_eval_ns: ns, max_eval_ns: ns })] });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByText(want)).toBeVisible();
+      });
+    });
+
+    // Shown only when there are any: a "0 retried" on every row spends the column's width saying nothing, and the number matters
+    // precisely when it is not zero.
+    it("annotates retried evaluations, and only when there are some", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 12 })] });
+      const { unmount } = renderPage();
+      await waitFor(() => {
+        expect(screen.getByText(/12 retried/)).toBeVisible();
+      });
+      unmount();
+
+      vi.restoreAllMocks();
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 0 })] });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByText("1.5ms")).toBeVisible();
+      });
+      expect(screen.queryByText(/retried/)).not.toBeInTheDocument();
+    });
+
+    // The same distinction the Observed column draws, and for the same reason pointed the other way: a failed read rendered as
+    // absence reads as a CHEAP rule, so an operator hunting the slow one skips it.
+    // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/a-failed-read-is-not-presented-as-no-cost
+    it("says unavailable when the read fails, rather than showing the rule as having no cost", async () => {
+      stubReads({ rules: [makeRuleEntry()] });
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.queryByLabelText("no evaluations recorded for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    it("reads \"not recorded\" for a rule absent from a successful read", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [] });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("no evaluations recorded for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // The two reads are separate requests that fail separately. One shared unavailable flag would blank a column that loaded
+    // fine, which is why the component keeps two.
+    //
+    // BOTH directions, and the second is the one that earns the test. Only-Cost-fails passes just as happily against a shared
+    // flag, because the shared flag is already true from the failure; mutating the component to `cost || matches` survived until
+    // the only-Observed-fails case existed. A test for an independence claim has to break it from each side.
+    it("Observed still renders when only the Cost read fails", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        matchCounts: [{ rule_id: "suspicious_exec", matches: 42, hosts: 2, last_seen: "2026-09-01T00:00:00Z" }],
+      });
+      vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("evaluation statistics unavailable for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByText("42")).toBeVisible();
+      expect(screen.queryByLabelText("match counts unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/one-read-failing-does-not-suppress-the-other
+    it("Cost still renders when only the Observed read fails", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("db down"));
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("match counts unavailable for suspicious_exec")).toBeVisible();
+      });
+      expect(screen.getByText("1.5ms")).toBeVisible();
+      expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
+    });
+
+    // The window the SERVER served, not the one asked for, because the cap can narrow it and a header that says 7d over 3d of
+    // data is the misreport the echo exists to prevent.
+    it("labels the column with the window the server reported", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()], evalStatsDays: 3 });
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("columnheader", { name: /^Cost \(3d\)/ })).toBeVisible();
+      });
+    });
   });
 
   // A rule with nothing recorded is ABSENT from the response, and absence is not the same claim as zero: the rule may have been

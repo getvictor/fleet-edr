@@ -46,11 +46,21 @@ type fakeDCService struct {
 	matchCounts   []api.RuleMatchCount
 	matchCountErr error
 	lastWindow    api.MatchCountWindow
+	// evalStats is the same pair for the evaluation-statistics route, with its own recorded window: the two windows are
+	// separate types, and one shared field could not tell a handler that forwarded the wrong one from a handler that did not.
+	evalStats      []api.RuleEvalSummary
+	evalStatsErr   error
+	lastEvalWindow api.EvalStatsWindow
 }
 
 func (f *fakeDCService) MatchCounts(_ context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
 	f.lastWindow = days
 	return f.matchCounts, f.matchCountErr
+}
+
+func (f *fakeDCService) EvalStats(_ context.Context, days api.EvalStatsWindow) ([]api.RuleEvalSummary, error) {
+	f.lastEvalWindow = days
+	return f.evalStats, f.evalStatsErr
 }
 
 func (f *fakeDCService) ListExclusions(context.Context) ([]api.DetectionExclusion, error) {
@@ -387,26 +397,63 @@ func TestDetectionConfigHandler_MissingActorIs500(t *testing.T) {
 	resp.Body.Close()
 }
 
+// recordingRouter captures the patterns RegisterRoutes registers, so a test can ask the handler what its surface IS rather than
+// keeping a second copy of the answer.
+type recordingRouter struct {
+	patterns []string
+	mux      *http.ServeMux
+}
+
+func (r *recordingRouter) HandleFunc(pattern string, fn func(http.ResponseWriter, *http.Request)) {
+	r.patterns = append(r.patterns, pattern)
+	r.mux.HandleFunc(pattern, fn)
+}
+
+func (r *recordingRouter) Handle(pattern string, h http.Handler) {
+	r.patterns = append(r.patterns, pattern)
+	r.mux.Handle(pattern, h)
+}
+
 func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 	t.Parallel()
 	h := NewDetectionConfig(&fakeDCService{}, denyAllAuthZ{}, slog.Default())
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-	srv := httptest.NewServer(mux)
+	router := &recordingRouter{mux: http.NewServeMux()}
+	h.RegisterRoutes(router)
+	srv := httptest.NewServer(router.mux)
 	t.Cleanup(srv.Close)
-	for _, ep := range []struct{ method, path, body string }{
-		{http.MethodGet, "/api/v1/detection-config/exclusions", ""},
-		{http.MethodGet, "/api/v1/detection-config/rule-settings", ""},
-		// Added with the route itself. A table like this is exactly the shape that silently omits a new endpoint: nothing fails
-		// when a row is missing, so the gate goes untested precisely for the route nobody remembered.
-		{http.MethodGet, "/api/v1/detection-config/rule-match-counts", ""},
-		{http.MethodPost, "/api/v1/detection-config/exclusions", `{}`},
-		{http.MethodDelete, "/api/v1/detection-config/exclusions/1?reason=r", ""},
-		{http.MethodPut, "/api/v1/detection-config/rule-settings", `{}`},
-	} {
-		resp := dcDo(t, srv, ep.method, ep.path, ep.body)
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode, "%s %s must be forbidden", ep.method, ep.path)
+
+	// Keyed by the registered PATTERN rather than listed alongside it, which is what stops this table doing the thing its previous
+	// comment warned about and could not prevent: a route added without a row here left the gate untested, silently, for exactly
+	// the endpoint nobody remembered. That happened, to the eval-stats route (issue #774). The set is now compared against what
+	// RegisterRoutes actually registered, so an omission fails instead of passing quietly.
+	//
+	// The value supplies what the pattern cannot: a concrete id for a wildcard, the query a handler requires before it would
+	// reach its own validation, and a body for the methods that need one. None of that changes the assertion, which is only ever
+	// that authorization is refused before any of it is looked at.
+	requests := map[string]struct{ path, body string }{
+		"GET /api/v1/detection-config/exclusions":         {"/api/v1/detection-config/exclusions", ""},
+		"GET /api/v1/detection-config/rule-settings":      {"/api/v1/detection-config/rule-settings", ""},
+		"GET /api/v1/detection-config/rule-match-counts":  {"/api/v1/detection-config/rule-match-counts", ""},
+		"GET /api/v1/detection-config/rule-eval-stats":    {"/api/v1/detection-config/rule-eval-stats", ""},
+		"POST /api/v1/detection-config/exclusions":        {"/api/v1/detection-config/exclusions", `{}`},
+		"DELETE /api/v1/detection-config/exclusions/{id}": {"/api/v1/detection-config/exclusions/1?reason=r", ""},
+		"PUT /api/v1/detection-config/rule-settings":      {"/api/v1/detection-config/rule-settings", `{}`},
+	}
+
+	require.NotEmpty(t, router.patterns, "RegisterRoutes registered nothing, so the loop below would assert nothing")
+	for _, pattern := range router.patterns {
+		req, ok := requests[pattern]
+		if !assert.True(t, ok, "%s is registered but has no row here, so its authorization gate is untested", pattern) {
+			continue
+		}
+		method, _, _ := strings.Cut(pattern, " ")
+		resp := dcDo(t, srv, method, req.path, req.body)
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode, "%s must be forbidden", pattern)
 		resp.Body.Close()
+	}
+	// And the other direction: a row for a route that no longer exists is a test asserting nothing, which reads as coverage.
+	for pattern := range requests {
+		assert.Contains(t, router.patterns, pattern, "%s has a row here but is not registered", pattern)
 	}
 }
 
@@ -424,6 +471,127 @@ var _ detectionConfigService = (*detectionconfig.Service)(nil)
 // spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-cap-follows-the-deployment-s-retention
 //
 // TestHandler_ListMatchCounts covers the endpoint an operator's promote decision reads.
+// spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/statistics-are-readable-per-rule-over-a-window
+// spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/the-window-is-stated-and-bounded
+//
+// TestHandler_ListEvalStats covers the evaluation-statistics route, which is the half of issue #774 that lets an operator find
+// the slow rule from the UI rather than from a metrics backend.
+//
+// The window cases mirror the match-count ones deliberately rather than by copying: the two routes have SEPARATE window types and
+// separate caps, so a handler that forwarded the wrong one, or clamped with the wrong cap, would pass every test on the other
+// route. The cases that matter are the ones asserting the store saw the same window the response reports.
+func TestHandler_ListEvalStats(t *testing.T) {
+	t.Parallel()
+
+	newSrvWithHandler := func(t *testing.T, svc *fakeDCService) (*httptest.Server, *DetectionConfigHandler) {
+		t.Helper()
+		h := NewDetectionConfig(svc, allowAllAuthZ{}, slog.Default())
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		return srv, h
+	}
+	newSrv := func(t *testing.T, svc *fakeDCService) *httptest.Server {
+		t.Helper()
+		srv, _ := newSrvWithHandler(t, svc)
+		return srv
+	}
+	get := func(t *testing.T, srv *httptest.Server, query string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			srv.URL+"/api/v1/detection-config/rule-eval-stats"+query, nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	t.Run("serves the statistics and echoes the window", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeDCService{evalStats: []api.RuleEvalSummary{
+			{RuleID: "imported", Evaluations: 400, RetryableMisses: 12, MeanEvalNs: 1_500_000, MaxEvalNs: 90_000_000},
+		}}
+		resp := get(t, newSrv(t, svc), "?days=14")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var body struct {
+			EvalStats []api.RuleEvalSummary `json:"eval_stats"`
+			Days      api.EvalStatsWindow   `json:"days"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		require.Len(t, body.EvalStats, 1)
+		assert.Equal(t, int64(400), body.EvalStats[0].Evaluations)
+		assert.Equal(t, int64(12), body.EvalStats[0].RetryableMisses)
+		assert.Equal(t, int64(1_500_000), body.EvalStats[0].MeanEvalNs, "the mean is served, not left for the client to derive")
+		assert.Equal(t, int64(90_000_000), body.EvalStats[0].MaxEvalNs, "and the worst case, which the mean hides")
+		assert.Equal(t, api.EvalStatsWindow(14), svc.lastEvalWindow, "the requested window reaches the store")
+		assert.Equal(t, api.EvalStatsWindow(14), body.Days, "and is echoed, so the reader knows what the numbers cover")
+	})
+
+	t.Run("the cap follows the deployment's retention, not the constant", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name      string
+			retention int
+			query     string
+			want      api.EvalStatsWindow
+		}{
+			{"a request past the retention is served at the retention", 7, "?days=30", 7},
+			{"the DEFAULT is capped too, not just an explicit request", 3, "", 3},
+			{"a request inside the retention is untouched", 14, "?days=10", 10},
+			{"a retention wider than the constant cap does not raise it", 365, "?days=90", api.MaxEvalStatsWindow},
+			{"retention disabled leaves the constant cap in force", 0, "?days=90", api.MaxEvalStatsWindow},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				svc := &fakeDCService{}
+				srv, h := newSrvWithHandler(t, svc)
+				// The SAME setter as the match-count cap, which is the wiring worth asserting: both counter tables are pruned
+				// by one retention knob, so a second setter nobody called would leave this route reporting 30 days over 7.
+				h.SetMatchCountCap(tc.retention)
+				resp := get(t, srv, tc.query)
+				defer resp.Body.Close()
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+
+				var body struct {
+					Days api.EvalStatsWindow `json:"days"`
+				}
+				require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+				assert.Equal(t, tc.want, svc.lastEvalWindow, "the store is asked for the window retention can actually cover")
+				assert.Equal(t, tc.want, body.Days, "and the response reports the same one")
+			})
+		}
+	})
+
+	t.Run("an explicitly empty window is rejected, not defaulted", func(t *testing.T) {
+		t.Parallel()
+		resp := get(t, newSrv(t, &fakeDCService{}), "?days=")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("no statistics serialise as an empty array, never null", func(t *testing.T) {
+		t.Parallel()
+		resp := get(t, newSrv(t, &fakeDCService{}), "")
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), `"eval_stats":[]`, "the UI iterates this without a nil guard")
+	})
+
+	t.Run("a store failure is a 500, and does not leak the error", func(t *testing.T) {
+		t.Parallel()
+		resp := get(t, newSrv(t, &fakeDCService{evalStatsErr: errors.New("boom")}), "")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "boom")
+	})
+}
+
 func TestHandler_ListMatchCounts(t *testing.T) {
 	t.Parallel()
 

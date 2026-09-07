@@ -960,6 +960,76 @@ paths:
               schema:
                 $ref: "#/components/schemas/DetectionConfigError"
 
+  /api/v1/detection-config/rule-eval-stats:
+    get:
+      tags: [Detection tuning]
+      summary: List per-rule evaluation statistics
+      description: |
+        Returns what each rule's evaluation work cost over a window: how many
+        attempts it made, how many of those could not decide and were
+        retried, and the mean and worst-case wall time. This is how a slow
+        rule, or the one driving retry churn, is found without querying a
+        metrics backend.
+
+        A rule that never evaluated in the window is ABSENT rather than
+        present with zeros, for the same reason a rule that never matched is
+        absent from the match-count route: absence and zero are different
+        claims, and a rule may have been registered after the window opened.
+
+        Attempts are counted, not logical batches. A batch that is replayed
+        really does evaluate again and counts again. The mean is unaffected
+        by that, because the time inflates by the same factor, but a reader
+        comparing attempt COUNTS between rules should know that a rule whose
+        misses cause replays is counted more often as a result.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: |
+            Window in whole days. Defaults to 7. Capped at the deployment's
+            own counter retention (`EDR_RETENTION_DAYS`), and never more than
+            30 days even where retention is longer or disabled. The default
+            is capped by the same bound. A request above the cap is served at
+            the cap, and the `days` field in the response reports the window
+            actually covered, which may be narrower than the one requested.
+            `?days=` (supplied but empty) is rejected, like any other value
+            that is not a positive whole number.
+          schema:
+            type: integer
+            minimum: 1
+            default: 7
+      responses:
+        "200":
+          description: Per-rule evaluation statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [eval_stats, days]
+                properties:
+                  eval_stats:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleEvalSummary"
+                  days:
+                    type: integer
+                    description: The window actually covered, after the cap is applied.
+                    example: 7
+        "400":
+          description: "`days` is not a positive whole number"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
   /api/v1/rule-content/pack:
     get:
       tags: [Rule authoring]
@@ -1947,6 +2017,46 @@ components:
             things at one host (an exclusion candidate) and at many (the rule
             is too broad).
           example: 3
+        last_seen: {type: string, format: date-time}
+
+    RuleEvalSummary:
+      type: object
+      required: [rule_id, evaluations, retryable_misses, mean_eval_ns, max_eval_ns, last_seen]
+      properties:
+        rule_id: {type: string, example: proc_creation_macos_applescript}
+        evaluations:
+          type: integer
+          format: int64
+          description: |
+            Evaluation attempts in the window. At least 1, because a rule with
+            no attempts has no row. A replayed batch counts again, since it
+            really did evaluate again.
+          example: 400
+        retryable_misses:
+          type: integer
+          format: int64
+          description: |
+            Attempts that ended without a decision and were retried. NOT a
+            subset that reduces `evaluations`: a miss still cost its time and
+            still counts as an attempt. This is what names the rule driving
+            retry churn.
+          example: 12
+        mean_eval_ns:
+          type: integer
+          format: int64
+          description: |
+            Mean wall time per attempt, in nanoseconds. Computed from the
+            stored sum and count rather than stored, so it stays correct as
+            the window widens and as retention prunes days out of it.
+          example: 1500000
+        max_eval_ns:
+          type: integer
+          format: int64
+          description: |
+            Worst single attempt in the window, in nanoseconds. The maximum of
+            the daily maxima, so it is a real observed attempt rather than an
+            estimate, and it is what the mean hides.
+          example: 90000000
         last_seen: {type: string, format: date-time}
 
     CreateDetectionExclusionRequest:
