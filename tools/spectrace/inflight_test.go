@@ -184,6 +184,21 @@ func TestUngatedInFlight_E2E(t *testing.T) { //nolint:paralleltest // uses t.Chd
 			"the ID was already declared by an untouched delta at the merge base, so this branch did not introduce it")
 	})
 
+	t.Run("an absolute changes-dir still scopes against the merge base", func(t *testing.T) {
+		// resolvePathFlag hands back an absolute path whenever the caller sets --changes-dir, and review read that as a defect:
+		// git pathspecs are repo-relative, so an absolute one would match nothing and the gate would report nothing while
+		// appearing to have run. git in fact accepts an absolute pathspec inside the repository, so there is nothing to convert.
+		// The case is pinned here anyway, because it is worth knowing if that ever stops being true, and because TMPDIR on macOS
+		// reaches this repository through a symlink, which is where a conversion would have gone wrong.
+		got, err := UngatedInFlight(context.Background(), filepath.Join(dir, "openspec", "changes"), "base", nil, nil)
+		require.NoError(t, err)
+		ids := make([]string, 0, len(got))
+		for _, s := range got {
+			ids = append(ids, s.ID)
+		}
+		assert.Contains(t, ids, "cap-mine/my-req/my-scenario", "an absolute path must gate exactly as a relative one does")
+	})
+
 	t.Run("a branch that touched no delta gates nothing", func(t *testing.T) {
 		got, err := UngatedInFlight(context.Background(), "openspec/changes", "HEAD", nil, nil)
 		require.NoError(t, err)
@@ -246,4 +261,20 @@ func TestCollectScenarioIDs(t *testing.T) {
 		require.Error(t, err, "dropping it would put the file's scenarios outside the baseline and blame this branch for them")
 		assert.Contains(t, err.Error(), "git timed out")
 	})
+}
+
+// TestInFlightScenarios_ChangeWithoutADelta pins the shape the traversal this replaced tolerated: a change folder carrying a
+// proposal and tasks and no delta at all, which is what a tooling or documentation change ships. Failing on it would take
+// spectrace down on a legitimate change rather than gating anything.
+func TestInFlightScenarios_ChangeWithoutADelta(t *testing.T) {
+	t.Parallel()
+	changes := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(changes, "docs-only"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(changes, "docs-only", "proposal.md"), []byte("# Why\n"), 0o600))
+	writeInFlightDelta(t, changes, "with-delta", "cap-a", normativeDelta("A req", "A scenario"))
+
+	got, err := InFlightScenarios(changes)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "cap-a/a-req/a-scenario", got[0].ID)
 }

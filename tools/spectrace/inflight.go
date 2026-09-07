@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,14 @@ import (
 func InFlightScenarios(changesDir string) ([]Scenario, error) {
 	var all []Scenario
 	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
-		scenarios, err := ParseAllSpecs(filepath.Join(changeDir, "specs"))
+		specs := filepath.Join(changeDir, "specs")
+		// A change folder need not carry a delta at all: a tooling or documentation change ships a proposal and tasks and
+		// nothing else, and the traversal this replaced walked the change folder itself, so it tolerated that shape. Failing
+		// here instead would take spectrace down on a legitimate change rather than gating anything (review caught it).
+		if info, statErr := os.Stat(specs); statErr != nil || !info.IsDir() {
+			return nil
+		}
+		scenarios, err := ParseAllSpecs(specs)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", changeDir, err)
 		}
@@ -147,6 +155,12 @@ func inFlightIDsAtMergeBase(ctx context.Context, changesDir, baseRef string) (ma
 	if err != nil {
 		return nil, fmt.Errorf("git merge-base HEAD %s: %w", baseRef, err)
 	}
+	// changesDir goes to git as it stands, absolute or not. Review suggested making it repo-relative first, on the reasoning that
+	// git pathspecs are repo-relative and an absolute one would match nothing, which would leave the baseline empty and every
+	// scenario in the branch's deltas reading as newly added. Measured instead of taken: git accepts an absolute pathspec inside
+	// the repository, including one reached through a symlink, which is the case that would have mattered on macOS where TMPDIR
+	// is /var and the repository resolves to /private/var. Converting it was not just unnecessary, it broke exactly that case,
+	// because the two spellings differ and filepath.Rel produced a path outside the repository. The E2E test covers it.
 	files, err := gitListFiles(ctx, repoRoot, mergeBase, changesDir)
 	if err != nil {
 		return nil, fmt.Errorf("git ls-tree %s: %w", mergeBase, err)
