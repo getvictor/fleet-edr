@@ -258,6 +258,29 @@ seed_oidc 1
 stop_server
 echo "$END_GROUP"
 
+# --- phase 6: UI presentation regressions --------------------------------
+# Layout regressions found by a browser pass over the v0.5 surfaces: a header rendering in the wrong case, a value that read as
+# part of its own explanation, a component row whose shape depended on its label's length. All three are computed-style
+# assertions, so they cannot live in vitest: jsdom applies no user-agent stylesheet, and the value it would report is not the one
+# a user gets.
+#
+# Its own phase for the reason phase 2's comment gives: each spec signs in once and /admin/break-glass/setup allows 5/min
+# globally, so a phase's spec count is a token budget rather than a preference. Three specs plus phase 2's five would overflow it;
+# a fresh server starts the bucket empty.
+echo "::group::Phase 6 - UI presentation regressions (detection tuning, rule detail, host health)"
+start_server "default-env-ui-regressions"
+seed_oidc 1
+(
+  cd "$REPO_ROOT/test/e2e"
+  E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
+    tests/qa/detection-tuning-cost-column.spec.ts \
+    tests/qa/rule-detail-mode-row.spec.ts \
+    tests/qa/host-health-components.spec.ts \
+    --workers=1
+)
+stop_server
+echo "$END_GROUP"
+
 trap - EXIT  # cleanup already ran via the final stop_server
 
 # --- merge Go coverage ---------------------------------------------------
