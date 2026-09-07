@@ -207,8 +207,11 @@ const COST_UNAVAILABLE_TOOLTIP =
 // formatDuration renders a nanosecond figure at the scale a reader is comparing at.
 //
 // Sub-millisecond timings are the normal case and the interesting ones are the outliers, so the unit changes rather than the
-// precision: microseconds below a millisecond, milliseconds below a second, seconds above. One decimal throughout, because the
-// question this column answers is "which rule is slow", not "how slow exactly", and trailing digits make a scan harder.
+// precision: nanoseconds below a microsecond, microseconds below a millisecond, milliseconds below a second, seconds above.
+//
+// One decimal on every unit except nanoseconds, which are whole. The question this column answers is "which rule is slow", not
+// "how slow exactly", and trailing digits make a scan harder; at nanosecond scale a decimal would be false precision on a figure
+// that is already an integer division of a sum by a count.
 const nsPerUs = 1_000;
 const nsPerMs = 1_000_000;
 const nsPerSecond = 1_000_000_000;
