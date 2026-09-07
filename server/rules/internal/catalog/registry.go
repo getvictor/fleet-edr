@@ -50,3 +50,22 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 func New(resolver api.ExclusionResolver) []api.Rule {
 	return NewWithCorpus(resolver, MustLoadImported())
 }
+
+// BuiltInRuleIDs returns the identifiers of the rules this project registers in code, which a stored corpus must not claim.
+//
+// Exported for validation at the authoring boundary. checkDuplicateStems only compares a corpus against ITSELF, because that is
+// all the loader can see; the rules it produces are then APPENDED to the built-in list by NewWithCorpus, and nothing there checks
+// that the two sets are disjoint. So a corpus file named suspicious_exec.yml would give a second rule with an id this project
+// already uses: per-rule settings and alert deduplication are keyed by that id, so tuning one would tune both and their alerts
+// would merge, while the catalog listed two rules under one identity.
+//
+// The resolver is nil deliberately. It is used during evaluation, never by ID(), which returns a constant on every rule here, so
+// the rules built to read their identifiers are never asked to decide anything.
+func BuiltInRuleIDs() []string {
+	built := NewWithCorpus(nil, nil)
+	ids := make([]string, 0, len(built))
+	for _, r := range built {
+		ids = append(ids, r.ID())
+	}
+	return ids
+}

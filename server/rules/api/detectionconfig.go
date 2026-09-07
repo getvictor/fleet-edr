@@ -262,9 +262,11 @@ type MonitorMatch struct {
 // It is RETURNED from evaluation rather than written during it, and that is the point of the type existing. A batch that fails is
 // nacked and replayed whole, so anything counted while evaluating is counted again on the retry. Retries are not rare enough to
 // wave away: issue #631 measured roughly 130 materialization retries a minute from a single host under a sustained condition.
-// Handing the tally back lets the caller record it only once the batch is acknowledged, which counts a replayed batch once.
+// Handing the tally back lets the caller record it only once the batch will not be processed again, which counts a replayed batch
+// once. That is usually its acknowledgement; it is also its withdrawal from the queue after repeated failure, where there is no
+// later attempt to count it (#843).
 //
-// The cost of that choice is the opposite failure: a crash between the acknowledgement and the write loses those counts, and that
+// The cost of that choice is the opposite failure: a crash between that transition and the write loses those counts, and that
 // is the RISK-BEARING direction, not a safe one. A number that is too low makes a rule look quiet, which is what persuades an
 // operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to prevent. It is accepted here because
 // the alternative counts a replayed batch once per attempt, which is a systematic error on every retry rather than a rare one
@@ -321,12 +323,18 @@ const (
 	MaxMatchCountWindow MatchCountWindow = 30
 )
 
-// MonitorMatchRecorder is the narrow write surface the detection pipeline uses to persist a batch's monitor matches once the batch
-// is acknowledged. A nil recorder records nothing, which is the correct behaviour for a deployment or a test with no rules-context
-// store wired: monitor mode still suppresses the alert and still emits its observability signal.
+// MonitorMatchRecorder is the narrow write surface the detection pipeline uses to persist a batch's monitor matches once that batch
+// has reached the end of its life in the work queue. A nil recorder records nothing, which is the correct behaviour for a
+// deployment or a test with no rules-context store wired: monitor mode still suppresses the alert and still emits its
+// observability signal.
 type MonitorMatchRecorder interface {
-	// RecordMonitorMatches persists tally, adding to whatever is already recorded for each (rule, host, day). It is called after
-	// the batch is acknowledged, so it must not be able to fail the batch: the caller logs an error and moves on.
+	// RecordMonitorMatches persists tally, adding to whatever is already recorded for each (rule, host, day).
+	//
+	// Called once the batch will not be processed again, which is either its acknowledgement or its withdrawal from the queue
+	// after repeated failure. Both are terminal, and calling on anything short of one would count a replayed batch once per
+	// attempt. An implementation MUST NOT rely on the events having been acknowledged: on the withdrawal path they were not.
+	//
+	// It must not be able to fail the batch either way: the caller logs an error and moves on.
 	RecordMonitorMatches(ctx context.Context, tally MonitorTally) error
 }
 

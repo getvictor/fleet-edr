@@ -94,10 +94,25 @@ func TestCommandArguments(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-leading-assignment-is-distinguished-from-a-later-argument
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-shell-form-assignment-is-not-reported
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-s-operand-is-not-an-assignment
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-after-the-end-of-options-marker-belongs-to-the-command
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-name-a-shell-would-reject-does-not-end-the-run
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-attached-operand-is-not-read-as-further-options
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-invocation-env-would-refuse-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-suppressing-the-command-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-command-line-carried-as-an-option-value-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unset-of-a-name-env-cannot-unset-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
 //
-// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
-// different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
-// only one of them is an injection. That is the reason this field exists.
+// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. Two env invocations carrying the
+// same assignment text in different positions join to different CommandLine strings, so a `CommandLine|contains` match cannot tell
+// them apart, and only one of them is an injection. That is the reason this field exists.
+//
+// The shell form appears here only as a NEGATIVE. It is not a shape the field declines to report; it is a shape no agent can send,
+// which issue #791 measured and which the rows below pin so the distinction cannot quietly reverse.
 func TestEnvAssignments(t *testing.T) {
 	t.Parallel()
 
@@ -107,9 +122,13 @@ func TestEnvAssignments(t *testing.T) {
 		argv []string
 		want []string
 	}{
-		{"shell form: the assignment is argv[0]", "/usr/bin/true",
-			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
-		{"the same text as a later argument is NOT an assignment", "/usr/bin/true",
+		{"the shell form reports nothing, because it never reaches us", "/usr/bin/true",
+			// Issue #791. ESF serialises the argument vector and never the environment a shell applies, so
+			// `DYLD_INSERT_LIBRARIES=x /usr/bin/true` arrives as `argv == ["/usr/bin/true"]`. This shape is what a synthetic
+			// event looks like, not what an agent sends: measured at zero across 670,185 real exec events, and structurally
+			// zero rather than rare. The field used to report it, which made the rule advertise a case it could not detect.
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, nil},
+		{"and neither does the same text as a later argument", "/usr/bin/true",
 			[]string{"/usr/bin/true", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}, nil},
 		{"env form: leading assignments", "/usr/bin/env",
 			[]string{"env", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/usr/bin/true"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
@@ -119,10 +138,129 @@ func TestEnvAssignments(t *testing.T) {
 			[]string{"env", "A=1", "prog", "C=3"}, []string{"A=1"}},
 		{"a shim path ending in /env counts as env", "/opt/homebrew/bin/env",
 			[]string{"env", "A=1", "prog"}, []string{"A=1"}},
-		{"a non-env binary gets only argv[0]", "/bin/sh",
+		{"a non-env binary reports nothing", "/bin/sh",
 			[]string{"sh", "A=1", "B=2"}, nil},
 		{"no assignments", "/usr/bin/true", []string{"/usr/bin/true"}, nil},
 		{"empty argv", "/usr/bin/env", nil, nil},
+
+		// Issue #792: env's own options used to end the scan, so every assignment behind one was invisible. The first row is a
+		// real injection shape that this field reported nothing for.
+		{"env -i hides nothing now", "/usr/bin/env",
+			[]string{"env", "-i", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a lone dash is the historic synonym for the ignore-environment option", "/usr/bin/env",
+			[]string{"env", "-", "A=1", "prog"}, []string{"A=1"}},
+		{"an option's operand is not mistaken for an assignment", "/usr/bin/env",
+			[]string{"env", "-u", "PATH", "A=1", "prog"}, []string{"A=1"}},
+		{"an unset of the very variable being looked for is not an injection", "/usr/bin/env",
+			[]string{"env", "-u", "DYLD_INSERT_LIBRARIES", "/bin/true"}, nil},
+		{"an attached operand consumes nothing extra", "/usr/bin/env",
+			[]string{"env", "-uPATH", "A=1", "prog"}, []string{"A=1"}},
+		{"a cluster's operand belongs to its last letter", "/usr/bin/env",
+			[]string{"env", "-iu", "PATH", "A=1", "prog"}, []string{"A=1"}},
+		{"options with no operand", "/usr/bin/env",
+			[]string{"env", "-i", "-v", "A=1", "prog"}, []string{"A=1"}},
+		{"the NUL-output option means no command ran", "/usr/bin/env",
+			// Measured: `env -0 A=1 /bin/sh` exits `cannot specify command with -0`. Review caught this being modelled as an
+			// ordinary no-operand option, which reported an assignment for an invocation that execs nothing.
+			[]string{"env", "-0", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
+		{"the NUL-output option inside a cluster too", "/usr/bin/env",
+			[]string{"env", "-i0", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
+		{"everything after the end-of-options marker is operands", "/usr/bin/env",
+			[]string{"env", "--", "A=1", "prog"}, []string{"A=1"}},
+		{"after the end-of-options marker an option-looking token is the command", "/usr/bin/env",
+			// `env -- -i A=1` runs a command NAMED -i with A=1 as its argument, so there is no assignment. Without honouring
+			// `--` this parses -i as an option and reports A=1 as an injection that never happened.
+			[]string{"env", "--", "-i", "A=1"}, nil},
+		{"a token a shell would reject does not end the run", "/usr/bin/env",
+			// Measured against env(1) on macOS: `env 2+2=4 MARKER=yes sh -c 'echo $MARKER'` prints yes, so env really does
+			// apply both and keep going. An earlier round ended the run here instead, on the theory that only a shell-legal
+			// name counts, and that was a bypass: `env 2+2=4 DYLD_INSERT_LIBRARIES=x prog` reported nothing at all.
+			[]string{"env", "2+2=4", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a token assigning nothing is the command and ends the run", "/usr/bin/env",
+			[]string{"env", "A=1", "prog", "B=2"}, []string{"A=1"}},
+		{"an assignment with an empty name means nothing ran", "/usr/bin/env",
+			// Measured: `env =bad DYLD_INSERT_LIBRARIES=x prog` prints `setenv =bad: Invalid argument` and execs nothing, so
+			// what follows was never applied. An earlier round had this reporting B=2, which was a fabrication; review caught
+			// it. The discriminator is the EMPTY name, not shell-legality, which the row below pins.
+			[]string{"env", "A=1", "=bad", "B=2"}, nil},
+		{"an empty name ahead of an injection suppresses it too", "/usr/bin/env",
+			[]string{"env", "=bad", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+
+		// The two rows below are the option-parse bypasses review found in the first cut of this fix, both verified against
+		// env(1) rather than reasoned about.
+		{"an attached operand ending in an option letter consumes nothing extra", "/usr/bin/env",
+			// `env -uS A=1 prog` unsets S and applies A=1: measured. Reading the LAST letter of the cluster to decide whether
+			// the next argument is an operand ate A=1 here, and would equally have eaten a DYLD_ assignment.
+			[]string{"env", "-uS", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"an option env does not have means nothing ran", "/usr/bin/env",
+			// `env -z A=1 prog` exits with `illegal option -- z` and never execs prog, so reporting the assignment would be a
+			// finding for an injection that did not happen.
+			[]string{"env", "-z", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
+		{"an unknown option inside an otherwise valid cluster also refuses", "/usr/bin/env",
+			[]string{"env", "-iz", "A=1", "prog"}, nil},
+		{"an unset of an invalid name means nothing ran", "/usr/bin/env",
+			// Measured: `env -u A=B DYLD_INSERT_LIBRARIES=/tmp/x prog` exits `unsetenv A=B: Invalid argument` and never execs
+			// prog, so the assignment behind it was never applied. Review caught this being reported as an injection.
+			[]string{"env", "-u", "A=B", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an unset of an empty name also means nothing ran", "/usr/bin/env",
+			[]string{"env", "-u", "", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an attached unset of an invalid name refuses too", "/usr/bin/env",
+			[]string{"env", "-uA=B", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"a valid unset still reports what follows it", "/usr/bin/env",
+			[]string{"env", "-u", "PATH", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a working-directory option does NOT suppress the finding", "/usr/bin/env",
+			// Deliberate asymmetry with the two run-ending options, and the reason is in envOperandUsable: whether the directory
+			// exists is a host property this cannot know, env usually succeeds, and treating it as unusable would hand an
+			// attacker a one-flag bypass. The miss-over-fabrication preference inverts when the miss is attacker-controlled.
+			[]string{"env", "-C", "/tmp", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"an empty working directory means nothing ran", "/usr/bin/env",
+			// Statically invalid whatever the host looks like, because chdir("") always fails (measured: `cannot change
+			// directory to ''`). Review caught this: an earlier pass treated -C as host-dependent wholesale, and the empty
+			// case is the one value of it that is not.
+			[]string{"env", "-C", "", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an attached empty working directory refuses too", "/usr/bin/env",
+			[]string{"env", "-C", "", "A=1", "prog"}, nil},
+		{"a working-directory whose name contains an equals sign still reports", "/usr/bin/env",
+			// Mutation testing found this gap: validating every operand the way -u is validated changes nothing unless an
+			// operand would actually fail those rules. A directory name may legally contain an equals sign, and env runs there
+			// happily (measured), so treating one as invalid would suppress a real injection, and an attacker can create such
+			// a directory.
+			[]string{"env", "-C", "/tmp/a=b", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a utility-path option does not suppress it either", "/usr/bin/env",
+			// env never refuses this one: a bogus or empty utilpath still runs, measured.
+			[]string{"env", "-P", "/nonexistent/bin", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"an unknown option carrying an equals sign refuses too", "/usr/bin/env",
+			// This row is the one that makes the refusal observable, and mutation testing is what found that out. On a refused
+			// option the scan is reported as starting at the offending token, which normally ends the run by itself for want of
+			// an equals sign; `-z=1` has one, so without the refusal the run would step over it and collect what followed.
+			// Measured: env exits `illegal option -- z` here and execs nothing.
+			[]string{"env", "-z=1", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an operand-taking option's own operand may look like an option", "/usr/bin/env",
+			// -P's operand is a path, and a path is not parsed as a further option.
+			[]string{"env", "-P", "-weird", "A=1", "prog"}, []string{"A=1"}},
+		{"the string option's payload is not parsed for assignments", "/usr/bin/env",
+			// KNOWN GAP, pinned deliberately: `-S` carries a whole command line that env re-splits, so an assignment inside it
+			// is invisible to this field. Reporting nothing is the safe direction (a miss, not a fabricated finding); splitting
+			// -S the way env does is tracked separately.
+			[]string{"env", "-S", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib prog"}, nil},
+		{"nothing after the string option is an assignment either", "/usr/bin/env",
+			// Measured: `env -S "/bin/echo hi" DYLD_INSERT_LIBRARIES=/tmp/x` prints `hi DYLD_INSERT_LIBRARIES=/tmp/x`, so the
+			// trailing token is echo's ARGUMENT. Skipping only the payload and collecting what followed fabricated an injection
+			// finding, which review caught.
+			[]string{"env", "-S", "/bin/echo hi", "DYLD_INSERT_LIBRARIES=/tmp/x"}, nil},
+		{"an attached string-option payload ends the run too", "/usr/bin/env",
+			[]string{"env", "-S/bin/echo hi", "DYLD_INSERT_LIBRARIES=/tmp/x"}, nil},
+		{"an option with a missing operand at the end of argv", "/usr/bin/env",
+			[]string{"env", "-u"}, nil},
+		{"options with no command at all", "/usr/bin/env",
+			[]string{"env", "-i"}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,11 +283,12 @@ func TestComputedFieldsAreAbsentWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestEnvAssignments_RejectsNonAssignments pins that merely containing "=" is not enough. `=VALUE` and `2+2=4` are not assignments,
-// and admitting them would let a future rule match on something the shell never assigned.
+// TestEnvAssignments_RejectsNonAssignments pins that merely containing "=" is not enough to be REPORTED. `=VALUE` and `2+2=4` are
+// not well-formed assignments, and admitting them would let a future rule match on something no shell would have assigned.
 //
-// This narrowing is behaviour-neutral for the rule the field serves today: every DYLD_ prefix it looks for carries a valid key, so
-// nothing the Go matcher would have matched is dropped.
+// The distinction this test does not make, and TestEnvAssignments does: rejecting a token from the report is not the same as
+// ending the scan at it. env keeps applying assignments past a name a shell would reject, so the boundary stays permissive and
+// only the reported set is narrowed. Getting those two the same way round was a measured bypass.
 func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
 	t.Parallel()
 
@@ -169,7 +308,11 @@ func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/true", tc.argv...), "EnvAssignments"))
+			// Driven through env, because #791 removed the shell form: an ordinary binary now reports nothing whatever its
+			// argv holds, so this table would pass vacuously against /usr/bin/true and stop testing isAssignment at all.
+			argv := append([]string{"env"}, tc.argv...)
+			argv = append(argv, "prog")
+			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/env", argv...), "EnvAssignments"))
 		})
 	}
 }

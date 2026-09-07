@@ -23,7 +23,7 @@ import (
 func TestLoadCorpus_MatchesTheEmbeddedLoad(t *testing.T) {
 	t.Parallel()
 
-	supplied, rejected, err := LoadCorpus(ImportedCorpusFS(), CorpusRoot)
+	supplied, rejected, err := LoadCorpus(ImportedCorpusFS(), CorpusRoot, nil)
 	require.NoError(t, err, "the vendored corpus must load through the injectable path too")
 
 	embedded := MustLoadImported()
@@ -47,7 +47,7 @@ func TestLoadCorpus_ReportsAFailureRatherThanPanicking(t *testing.T) {
 	t.Parallel()
 
 	// A directory that holds no rule files at all: the loader has nothing to read under the root it was given.
-	empty, rejected, err := LoadCorpus(ImportedCorpusFS(), "does-not-exist")
+	empty, rejected, err := LoadCorpus(ImportedCorpusFS(), "does-not-exist", nil)
 
 	require.Error(t, err, "an unreadable corpus root must be returned, not panicked, so a caller can fall back")
 	assert.Empty(t, empty)

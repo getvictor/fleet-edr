@@ -11,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	detectionslices "github.com/fleetdm/edr/server/detection/internal/slices"
 )
 
 // alertEventsBatchSize caps the number of (alert_id, event_id) rows per INSERT. Today's rules cap their output at ~10 events per
@@ -31,7 +32,7 @@ const alertEventsBatchSize = 500
 // fallback is belt-and-braces for any future caller that constructs
 // an Alert by hand.
 func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error) {
-	eventIDs = deduplicateStrings(eventIDs)
+	eventIDs = detectionslices.Deduplicate(eventIDs)
 	// Defense in depth: callers that forget to stamp Source land in the catalog-rule bucket. The ENUM column would otherwise reject an
 	// empty string with Error 1265 (Data truncated).
 	if a.Source == "" {
@@ -353,20 +354,4 @@ func (s *Store) CountAlerts(ctx context.Context, f api.AlertFilter) (int64, erro
 		return 0, fmt.Errorf("count alerts: %w", err)
 	}
 	return count, nil
-}
-
-func deduplicateStrings(ss []string) []string {
-	if len(ss) <= 1 {
-		return ss
-	}
-	seen := make(map[string]struct{}, len(ss))
-	result := make([]string, 0, len(ss))
-	for _, s := range ss {
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		result = append(result, s)
-	}
-	return result
 }

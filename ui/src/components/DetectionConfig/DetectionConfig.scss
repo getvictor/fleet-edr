@@ -145,3 +145,15 @@
   margin-bottom: $pad-medium;
   font-size: $xx-small;
 }
+
+// The Cost header's sort control. Styled to read as the header it replaces rather than as a button in a table head, while staying
+// a real button so it is focusable and announced.
+.detection-config__sort-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: inherit;
+}

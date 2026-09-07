@@ -62,6 +62,8 @@ func stubUserExists(known ...int64) bootstrap.UserExists {
 type stubRule struct {
 	id         string
 	techniques []string
+	// modifiers are attached to every finding, standing in for a rule with a conditional escalation (issue #753).
+	modifiers []api.RiskModifier
 }
 
 func (r *stubRule) ID() string           { return r.id }
@@ -89,6 +91,7 @@ func (r *stubRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.Gr
 			Description: "stub rule fired",
 			ProcessID:   1,
 			EventIDs:    []string{e.EventID},
+			Modifiers:   r.modifiers,
 		})
 	}
 	return out, nil
@@ -287,6 +290,11 @@ func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n in
 	m.setAsideHost = hostID
 	m.setAside += n
 }
+
+// Not recorded: the transition is asserted against the engine's own recorder in the engine package, where the skip is produced.
+// A field here that nothing reads is the kind of unused surface that reads as coverage.
+func (m *recordingMetrics) RuleEvaluationSkipped(context.Context, string)                 {}
+func (m *recordingMetrics) RuleEvaluationDuration(context.Context, string, time.Duration) {}
 
 func (m *recordingMetrics) EventsIngested(_ context.Context, _ string, n int) {
 	m.mu.Lock()
@@ -1258,6 +1266,47 @@ func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
 	require.Len(t, alerts, 1, "dedup must skip the second fire on the same (host, rule, process)")
 	assert.Equal(t, api.JSONStringSlice{"T1059.002", "T1105"}, alerts[0].Techniques,
 		"historical alert's technique stamp must not change when the rule's mapping is later refined")
+}
+
+// spec:server-detection-rules-engine/mitre-att-ck-technique-stamping/a-rule-that-cannot-attribute-what-it-reports-declares-no-technique
+//
+// TestEngine_ARuleWithNoTechniquesStampsNone covers the end of that scenario the catalog unit test cannot reach. The unit test
+// proves the RULE declares none; this proves what an analyst then sees, which is the alert ROW, and the two are not the same
+// claim: persistence substitutes the rule's declared list for a finding whose own Techniques is NIL, so the row is where an
+// unearned technique would actually appear (issue #754). The stub's findings leave it nil, which is the shape this rule and most
+// others have.
+//
+// The substitution itself is pinned in the other direction by the test above, which asserts a NON-empty declared list reaches the
+// row. That matters here, because this test alone could not tell a live substitution returning nothing from no substitution at
+// all. Together they bracket it: one fails if it stops carrying a list, the other if it starts carrying one it should not.
+//
+// Empty rather than non-nil-empty is the assertion, because the row is what an analyst reads and both representations render as
+// no techniques. The nil-versus-empty distinction belongs to the rule interface's contract and is pinned in the catalog test.
+func TestEngine_ARuleWithNoTechniquesStampsNone(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-unattributed", techniques: []string{}}}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+	assert.Empty(t, alerts[0].Techniques,
+		"a rule that declares no technique must leave the alert row carrying none, since the row is what an analyst reads")
+	assert.NotRegexp(t, `\bT\d{4}(\.\d{3})?\b`, alerts[0].Description,
+		"and none in the persisted text either, which is copied from the finding verbatim")
 }
 
 // spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-from-a-vendored-rule-credits-its-author
@@ -4040,4 +4089,61 @@ func TestHostHealth_DerivedSignalToleratesAnArchiveOutage(t *testing.T) {
 	hosts, err := d.Service().ListHosts(ctx)
 	require.NoError(t, err, "an archive outage must not fail the hosts list")
 	assert.NotEmpty(t, hosts)
+}
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/a-severity-override-adjusts-an-escalation-rather-than-erasing-it
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-escalation-s-technique-is-stamped-with-its-risk
+//
+// TestEngine_ModifierReachesTheAlert drives issue #753 all the way to the persisted row, which is the only place a technique a
+// modifier implies becomes observable.
+//
+// It is here rather than beside the engine's unit tests because of what those could not catch. A unit test asserted the union
+// helper directly, and removing the engine's call to it left that test green: the helper being right is not the property, the
+// engine using it is. The alert row is where an operator reads both fields, so it is where both are asserted.
+//
+// A rule declaring techniques AND earning a modifier is the case that pins the ordering of the two steps. The modifier's
+// techniques are added after the rule's own are resolved, so a rule that declares a set for every finding keeps it; adding them
+// first would have replaced that set with the modifier's alone.
+func TestEngine_ModifierReachesTheAlert(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	rule := &stubRule{
+		id:         "stub-modifier",
+		techniques: api.JSONStringSlice{"T1071.004"},
+		modifiers: []api.RiskModifier{{
+			Reason: "the resolved domain reads as algorithmically generated",
+			Risk:   25,
+			// Deliberately RE-DECLARES the technique the rule already carries, alongside the one only this condition implies.
+			// That is the shape the requirement names, and it is reachable: a modifier author naming the techniques their
+			// condition implies has no reason to check which of them the rule already declares for every finding.
+			Techniques: []string{"T1071.004", "T1568.002"},
+		}},
+	}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+	mustInsertProcess(t, ctx, d, "host-mod", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-mod", []api.Event{
+		{
+			EventID: "fork-m", HostID: "host-mod", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`),
+		},
+		{EventID: "trigger-m", HostID: "host-mod", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-mod"})
+		return len(alerts) > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-mod"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+
+	assert.Equal(t, api.SeverityCritical, alerts[0].Severity,
+		"the rule's base is high and the modifier is worth 25, which lands in the critical band")
+	assert.Equal(t, api.JSONStringSlice{"T1071.004", "T1568.002"}, alerts[0].Techniques,
+		"the rule's own technique AND the one its modifier implies, since a condition that adds a technique must also price it; "+
+			"the technique both of them name appears once, because a repeat inflates the coverage figure read during procurement")
 }

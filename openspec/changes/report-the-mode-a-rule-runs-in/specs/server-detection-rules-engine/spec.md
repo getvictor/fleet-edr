@@ -12,6 +12,14 @@ The mode and its source SHALL be resolved together, from one read of the configu
 
 Global scope is what a catalog listing can answer, since the listing names no host. A per-host mode remains a separate resolution the engine performs at evaluation time.
 
+An operator MAY also set a rule's severity, and that setting SHALL adjust what the rule decided rather than replace it. Where a rule raises a finding's severity because of a condition it observed, that escalation SHALL still apply on top of the severity the operator set, so an escalated finding continues to rank above an ordinary one from the same rule at every setting that leaves room above it. At the top of the scale there is no room, so the two rank equally there; that is the one setting at which an operator has said every finding from this rule is already as severe as the system can express.
+
+Replacing is not a smaller version of adjusting, it is the opposite outcome. A rule that escalates conditionally reported one finished severity, and the setting overwrote it, so an operator who found the rule noisy and lowered it got the same answer for the escalated findings and the ordinary ones. The population they would most want to keep visible became indistinguishable from the rest, silently, as a result of an action taken to reduce volume.
+
+An escalation SHALL therefore be expressed as an amount of risk it ADDS, not as a severity it arrives at. A destination is the same value however the rule was tuned, which reintroduces the same failure from the other side: the escalated findings would snap back to the rule's own opinion and ignore the operator's. Risk SHALL be bounded, so a stack of escalations on an already-severe finding stays within the scale rather than running off it. Composition SHALL be an identity where a finding carries no escalation, so a severity this system does not recognise passes through as it arrived rather than being reclassified into one that it does.
+
+Where an escalation implies a MITRE technique, the technique SHALL be declared together with the risk it adds, and stamped on the finding by the same step that applies the risk. A rule cannot then grow a technique for a condition without saying what that condition is worth, and an operator retuning the amount is knowingly re-weighting that technique for their environment rather than creating an inconsistency. A technique the rule already declares SHALL NOT be duplicated by this, since a repeated technique inflates the coverage figure read during procurement.
+
 #### Scenario: An operator disables a noisy rule for their environment
 
 - **GIVEN** a running engine and an operator who sets a rule's global mode to `disabled` through the detection-configuration API
@@ -41,3 +49,20 @@ Global scope is what a catalog listing can answer, since the listing names no ho
 - **GIVEN** a rule whose global mode was previously set to `disabled`
 - **WHEN** the operator sets its mode back to `alert` through the API
 - **THEN** subsequent batches that satisfy the rule produce alerts again without a server restart
+
+#### Scenario: A severity override adjusts an escalation rather than erasing it
+
+- **GIVEN** a rule that raises a finding's severity when it observes some condition
+- **AND** an operator who has set that rule's severity lower
+- **WHEN** the rule produces one finding that met the condition and one that did not
+- **THEN** both are ranked below where they would have been without the setting
+- **AND** the one that met the condition still ranks above the one that did not
+- **AND** with no setting in force, both carry exactly the severities they always did
+- **AND** a finding carrying no escalation keeps the severity it arrived with, whatever that is
+
+#### Scenario: An escalation's technique is stamped with its risk
+
+- **GIVEN** a rule whose escalation implies a MITRE technique
+- **WHEN** a finding meets that condition
+- **THEN** the persisted alert carries that technique alongside the ones the rule declares
+- **AND** a technique the rule already declares appears once

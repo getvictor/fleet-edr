@@ -90,7 +90,7 @@ The system SHALL accept batches.
 - WHEN the agent POSTs
 - THEN 401
 `
-	got, err := parseSpec(strings.NewReader(doc), "server-event-ingestion",
+	got, _, err := parseSpec(strings.NewReader(doc), "server-event-ingestion",
 		"openspec/specs/server-event-ingestion/spec.md")
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -114,7 +114,7 @@ The catalog is browsable from the admin UI; this is convenient for operators.
 
 #### Scenario: Operator opens the rules page
 `
-	got, err := parseSpec(strings.NewReader(doc), "server-detection-rules-engine",
+	got, _, err := parseSpec(strings.NewReader(doc), "server-detection-rules-engine",
 		"openspec/specs/server-detection-rules-engine/spec.md")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -138,7 +138,7 @@ The system MUST do Y.
 
 #### Scenario: Two
 `
-	got, err := parseSpec(strings.NewReader(doc), "x", "x/spec.md")
+	got, _, err := parseSpec(strings.NewReader(doc), "x", "x/spec.md")
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "x/first/one", got[0].ID)

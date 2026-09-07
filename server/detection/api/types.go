@@ -326,7 +326,8 @@ type Alert struct {
 	Description string `db:"description" json:"description"`
 	// Origin credits the rule's author, and is distinct from Source above: Source says which SUBSYSTEM raised the alert
 	// (detection vs application_control), Origin says who WROTE the rule that fired. "SigmaHQ, by <author>" for a rule from
-	// the imported corpus, "Fleet EDR" for one this project wrote.
+	// the imported corpus, "Fleet EDR" for one this project wrote, and "Locally authored" for one the operator wrote on their
+	// own deployment.
 	//
 	// Stamped by the engine from the rule (rules/api.AlertOriginOf), never read off the Finding, so a rule cannot forge its
 	// own credit. Present because the imported corpus ships under the Detection Rule License, which requires the author be
@@ -380,6 +381,88 @@ const (
 	SeverityCritical = "critical"
 )
 
+// The risk scale behind those bands, and the risk each band names.
+//
+// A band is what an operator reads and what is persisted; the number exists so a conditional escalation can be expressed as a
+// DELTA and compose with a base an operator may have changed (#753). Bands alone cannot do that: "critical" is the same answer
+// whatever the base, so escalations either erase the operator's tuning or are erased by it.
+//
+// The banding is Elastic's, which is the one most operators reading this product will already have a feel for.
+//
+// The value chosen for each band is a point INSIDE it, not its edge, so a delta lands within a band rather than teetering on a
+// boundary. They are neither the band midpoints nor evenly spaced, and review corrected both claims in turn. What is true of them
+// is the property they were picked for: adding 25 crosses exactly one band boundary from each of the three non-critical values,
+// so the one delta the catalog uses today advances a finding by one band wherever it starts. A future modifier is free to be
+// worth more or less than a band.
+const (
+	riskScaleMin = 0
+	riskScaleMax = 100
+
+	// Band floors, as Elastic defines them: low 0..21, medium 22..47, high 48..73, critical 74..100.
+	riskFloorMedium   = 22
+	riskFloorHigh     = 48
+	riskFloorCritical = 74
+
+	riskLow      = 15
+	riskMedium   = 35
+	riskHigh     = 60
+	riskCritical = 85
+)
+
+// RiskOf returns the risk a severity band names. An unrecognised band reads as medium, which is the answer that neither buries
+// a finding nor promotes one on the strength of a value nothing here defined.
+func RiskOf(severity string) int {
+	switch severity {
+	case SeverityLow:
+		return riskLow
+	case SeverityMedium:
+		return riskMedium
+	case SeverityHigh:
+		return riskHigh
+	case SeverityCritical:
+		return riskCritical
+	default:
+		return riskMedium
+	}
+}
+
+// SeverityOf returns the band a risk falls in, clamped to the scale.
+func SeverityOf(risk int) string {
+	switch {
+	case risk >= riskFloorCritical:
+		return SeverityCritical
+	case risk >= riskFloorHigh:
+		return SeverityHigh
+	case risk >= riskFloorMedium:
+		return SeverityMedium
+	default:
+		return SeverityLow
+	}
+}
+
+// ApplyModifiers returns the severity that base becomes once every modifier's risk is added.
+//
+// Composition rather than replacement is the whole point. A rule that escalates conditionally used to hand back one collapsed
+// value, so an operator's per-rule severity setting overwrote the escalation along with everything else and the escalated
+// findings became indistinguishable from the ordinary ones. Adding deltas to whatever base is in force keeps the ordering the
+// rule observed while letting the operator move the whole rule up or down (#753).
+//
+// Clamped to the scale, so a stack of modifiers on an already-critical finding stays critical rather than running off the end.
+func ApplyModifiers(base string, modifiers []RiskModifier) string {
+	// Identity when there is nothing to compose, and review was right that this is not a formality. routeFinding calls this for
+	// every finding, so without it a severity this package does not recognise would be silently rewritten as medium on its way
+	// past: application_control_block copies a severity out of the agent's payload without validating it, and the alerts column's
+	// enum used to reject a bad one loudly. Rewriting it here would turn that refusal into a plausible-looking alert.
+	if len(modifiers) == 0 {
+		return base
+	}
+	risk := RiskOf(base)
+	for _, m := range modifiers {
+		risk += m.Risk
+	}
+	return SeverityOf(min(max(risk, riskScaleMin), riskScaleMax))
+}
+
 // Finding is a per-rule positive output, persisted by the engine
 // into the alerts table. Canonical definition; rules/api re-exports
 // it as a type alias so catalog rule files implement
@@ -404,6 +487,37 @@ type Finding struct {
 	// produce distinct alerts rather than colliding on process_id 0.
 	Subject    string
 	EventIDs   []string
+	Techniques []string
+	// Modifiers are the conditional escalations this finding earned, each carrying the risk it adds and the techniques that
+	// come with it. Empty for the ordinary case, which is most findings.
+	//
+	// Separate from Severity because an operator's per-rule severity setting REPLACES what a rule decided, and a rule that
+	// escalated conditionally lost that decision entirely: an operator who found dns_c2_beacon noisy and set it to low got low
+	// for a high-entropy domain and low for an ordinary one, so the population they would most want to keep visible became
+	// indistinguishable from the rest. The setting is meant to re-rank the rule, not to erase what it observed (#753).
+	//
+	// So Severity is the BASE the setting replaces, and these apply on top of it. See RiskModifier for why they are deltas.
+	Modifiers []RiskModifier
+}
+
+// RiskModifier is one conditional escalation: how much risk the condition adds, and the techniques observing it implies.
+//
+// A DELTA rather than a destination, so it composes with whatever base is in force. A destination ("critical") is the same
+// value however the rule was tuned, which is the defect in another shape: an operator who lowers a rule's base would find the
+// escalated findings snapping back to the rule's original opinion. A delta re-ranks relative to the base, so lowering the base
+// lowers the escalated findings too while keeping them above the unescalated ones.
+//
+// The techniques ride ALONG with the delta rather than being stamped separately, which is what keeps the two from drifting: a
+// rule cannot grow a technique for a condition without also saying what that condition is worth, and an operator retuning the
+// delta is knowingly re-weighting that technique for their environment rather than creating an inconsistency.
+type RiskModifier struct {
+	// Reason names the condition, for whoever is reading the rule. It is NOT served or persisted: an operator sees the severity
+	// it produced and the technique it stamped, not this text, and saying otherwise would document a surface the API does not
+	// have. It is kept because a bare number at a rule's call site says what the escalation is worth and not what it is for.
+	Reason string
+	// Risk is added to the base risk, before clamping to the 0..100 scale.
+	Risk int
+	// Techniques the condition implies, added to the finding's own.
 	Techniques []string
 }
 

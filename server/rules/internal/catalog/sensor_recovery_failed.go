@@ -9,7 +9,7 @@ import (
 )
 
 // SensorRecoveryFailed fires when the agent's automatic repair of a stopped capture provider gives up, leaving the host
-// not capturing until a human intervenes (T1562.001, issue #691).
+// not capturing until a human intervenes (issue #691). It claims no ATT&CK technique; see Techniques below for why.
 //
 // # Why this is separate from sensor_tamper rather than folded into it
 //
@@ -58,9 +58,32 @@ func (r *SensorRecoveryFailed) SupportedExclusionMatchTypes() []api.ExclusionMat
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding.
 func (r *SensorRecoveryFailed) DisplayName() string { return "EDR sensor could not be restored" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1562.001 (Impair Defenses: Disable or Modify Tools). Same
-// technique as the stop it follows, because it reports the same attack having succeeded.
-func (r *SensorRecoveryFailed) Techniques() []string { return []string{"T1562.001"} }
+// Techniques returns no MITRE ATT&CK IDs, and the absence is the mapping rather than an omission (issue #754).
+//
+// It used to claim T1562.001 (Impair Defenses: Disable or Modify Tools) on the grounds that it reported "the same attack having
+// succeeded". The rule contradicted itself: its own Limitations say it reports that recovery gave up and NOT why the provider
+// stopped, and its Description sends an analyst to look at the host application and the system configuration daemon, which are
+// ours. Both outcome values, enable_failed and enable_ineffective, describe this product's repair mechanism failing rather than
+// anyone acting against it.
+//
+// The observed base rate settles it. The 37.8-hour providerless episode on 2026-07-17 was the enable_ineffective shape, and its
+// cause was a Settings disable-then-enable leaving the network extension with no filter or DNS sessions: an OS-interaction bug.
+// That is the common cause of this alert in practice.
+//
+// Where the claim actually landed is worth stating, because the obvious answer is no longer the right one. Issue #754 was filed
+// about the ATT&CK coverage export, and this rule has since been classified a health signal, which already keeps it off that
+// export and off GET /api/rules and the generated reference. What the claim still reached is every ALERT this rule raises: the
+// finding declares no techniques of its own, so alert persistence falls back to this list and stamped T1562.001 onto the row an
+// analyst reads. That is the surface the removal fixes.
+//
+// The alert keeps its Critical severity and its operational explanation. Removing an attribution is not a downgrade: without an
+// adversary attached this is a visibility and health statement, and that needs no adversary label to earn its severity, since a
+// host that is not capturing needs an operator either way. What the removal does take out of the text is the attribution itself,
+// which the description used to carry as a trailing "(MITRE T1562.001)" and which is the same claim by another route. Whether
+// this belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
+//
+// Empty and not nil, which is what the interface asks for (see api.Rule) and what the other unmapped rule returns.
+func (r *SensorRecoveryFailed) Techniques() []string { return []string{} }
 
 // Doc surfaces the operator-facing description in /api/rules and the generated docs/detection-rules.md.
 func (r *SensorRecoveryFailed) Doc() api.Documentation {
@@ -164,9 +187,12 @@ func sensorRecoveryFailedDescription(p sensorRecoveryFailedPayload) string {
 	case outcomeEnableIneffective:
 		diagnosis = "every attempt to re-enable it reported success and it stayed stopped"
 	}
+	// No technique in the prose either, and review was right that removing it from the structured list alone was half a fix: the
+	// description is copied verbatim onto the alert, so an analyst went on reading "(MITRE T1562.001)" on a condition this rule
+	// cannot attribute to anyone (issue #754). The operational sentence is what was worth keeping and is untouched.
 	return fmt.Sprintf(
 		"EDR capture provider %s is still stopped after %d automatic repair attempts (%s): this host is not reporting "+
-			"that telemetry and will not until it is restored by hand (MITRE T1562.001)",
+			"that telemetry and will not until it is restored by hand",
 		p.Provider, p.Attempts, diagnosis,
 	)
 }

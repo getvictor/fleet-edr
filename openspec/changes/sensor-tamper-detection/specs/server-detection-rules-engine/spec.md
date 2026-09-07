@@ -26,7 +26,9 @@ The changes from the prior requirement are the addition of `sensor_tamper` and `
 
 ### Requirement: EDR sensor tamper detection
 
-Disabling security tooling is a recognised technique, and the product has never detected it being used against itself. The system SHALL register a `sensor_tamper` rule that raises a finding when one of the EDR's own capture providers stops, carrying the `T1562.001` technique.
+Disabling security tooling is a recognised technique, and the product has never detected it being used against itself. The system SHALL register a `sensor_tamper` rule that raises a finding when one of the EDR's own capture providers stops.
+
+The finding SHALL carry no ATT&CK technique. The rule reports a provider that stopped and did not come back, and a crash produces that state identically, so it cannot observe the actor that Impair Defenses names. Deciding that is the ATT&CK attribution sweep's, and it is stated here rather than left for the sweep's delta alone, because a requirement mandating the technique would archive alongside the one forbidding it and leave the canonical spec contradicting itself.
 
 The rule SHALL be evaluated against the durable capture-provider transition records rather than against agent health. Health is level state, and the agent repairs a stopped provider automatically, so by the time an analyst looks the health view reports the host healthy and no trace remains that capture was ever off.
 
@@ -44,7 +46,8 @@ The rule reports that capture stopped, NOT whether it was later restored. Whethe
 
 - **GIVEN** a host reporting a capture provider running
 - **WHEN** that provider stops and capture does not resume within the recovery window
-- **THEN** the engine produces one `sensor_tamper` finding carrying the `T1562.001` technique
+- **THEN** the engine produces one `sensor_tamper` finding
+- **AND** that finding carries no ATT&CK technique
 - **AND** the finding names the provider and cites the stop record
 
 #### Scenario: An upgrade cutover does not fire

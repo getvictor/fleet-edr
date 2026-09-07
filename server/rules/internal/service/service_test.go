@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -305,4 +306,104 @@ func TestNew_NilRulesIsAnEmptySet(t *testing.T) {
 	assert.Empty(t, svc.ActiveRules())
 	assert.Empty(t, svc.List())
 	assert.Zero(t, svc.ActiveVersion())
+}
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestExportable_ResolvesTheRuleAndItsMetadataTogether pins the seam that keeps an export coherent.
+//
+// The export needs two things about one rule: the rule itself, to ask for the document it was loaded from, and its metadata, to
+// render one when it has no document. Pairing List with ActiveRules gets both, and gets them from two reads of an atomically
+// swapped pointer, so a reload landing between them describes a generation the deployment is no longer running. For an imported
+// rule that is not a cosmetic inconsistency: its metadata renders to nothing, so the export turns into a transient 500 (#879).
+//
+// The metadata is asserted EQUAL to what List reports rather than merely populated, because the failure this guards against is a
+// second projection that drifts from the first. Both would look like plausible metadata, and only a comparison catches it.
+func TestExportable_ResolvesTheRuleAndItsMetadataTogether(t *testing.T) {
+	t.Parallel()
+
+	wanted := stubRule{id: "detection_first"}
+	svc := New([]api.Rule{
+		wanted,
+		stubProjection{stubRule{id: "a_projection"}},
+		stubHealth{stubRule{id: "a_health_signal"}},
+	}, nil, nil)
+
+	t.Run("a detection resolves to its own rule and the metadata List publishes", func(t *testing.T) {
+		t.Parallel()
+		md, rule, ok := svc.Exportable("detection_first")
+		require.True(t, ok)
+		assert.Equal(t, wanted, rule, "the rule itself, since only it can hand back the document it was loaded from")
+
+		listed := svc.List()
+		require.Len(t, listed, 1)
+		assert.Equal(t, listed[0], md, "one projection, or the export renders different metadata from the one the catalog shows")
+	})
+
+	t.Run("a non-detection is absent, indistinguishably from a rule that does not exist", func(t *testing.T) {
+		t.Parallel()
+		for _, id := range []string{"a_projection", "a_health_signal", "no_such_rule"} {
+			_, rule, ok := svc.Exportable(id)
+			assert.False(t, ok, "rule %q", id)
+			assert.Nil(t, rule, "rule %q", id)
+		}
+	})
+}
+
+// titledRule distinguishes two generations of the same rule id, so a reader can be asked which one it is holding.
+type titledRule struct {
+	stubRule
+	title string
+}
+
+func (r titledRule) DisplayName() string    { return r.title }
+func (r titledRule) Doc() api.Documentation { return api.Documentation{Title: r.title} }
+
+// spec:server-detection-rules-engine/the-export-serves-the-document-a-rule-was-loaded-from/a-rule-an-operator-overwrote-exports-as-theirs
+//
+// TestExportable_PairsComeFromOneGeneration is the concurrency half, and it exists because the test above cannot fail without it.
+//
+// With a single generation installed, a metadata read and a rule read agree however they were obtained, so an Exportable that
+// regressed to two separate reads would pass. The property is about what happens WHILE the set is being replaced, so the test has
+// to replace it.
+//
+// Two generations carry the same rule id and different titles, which is the shape a rule content reload produces when an operator
+// edits a rule. Every pair Exportable returns must be internally consistent: metadata describing generation A alongside the rule
+// from generation B is precisely the mismatch a caller pairing List with ActiveRules would eventually serve.
+func TestExportable_PairsComeFromOneGeneration(t *testing.T) {
+	t.Parallel()
+
+	const id = "detection_first"
+	generations := [][]api.Rule{
+		{titledRule{stubRule{id: id}, "generation one"}},
+		{titledRule{stubRule{id: id}, "generation two"}},
+	}
+	svc := New(generations[0], nil, nil)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	// Registered BEFORE the worker starts, not after the loop. A require in the loop below calls t.FailNow, which unwinds the
+	// goroutine running the test, so a stop-and-wait written after the loop is simply skipped: the worker would then spin forever,
+	// burning a core and swapping the service under whatever ran next.
+	t.Cleanup(func() {
+		close(stop)
+		wg.Wait()
+	})
+	wg.Go(func() {
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			svc.Swap(generations[i%2], int64(i))
+		}
+	})
+
+	for range 5000 {
+		md, rule, ok := svc.Exportable(id)
+		require.True(t, ok)
+		require.Equal(t, rule.DisplayName(), md.Doc.Title,
+			"the metadata and the rule must describe one generation, and a reload must not be able to split them")
+	}
 }

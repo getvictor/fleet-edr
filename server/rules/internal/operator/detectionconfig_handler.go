@@ -41,6 +41,7 @@ type detectionConfigService interface {
 	ListExclusions(ctx context.Context) ([]api.DetectionExclusion, error)
 	ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSetting, error)
 	MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error)
+	EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.RuleEvalSummary, error)
 	CreateExclusion(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.CreateExclusionInput) (api.DetectionExclusion, error)
 	DeleteExclusion(ctx context.Context, actor *identityapi.Actor, reason string, id int64) error
 	UpsertRuleSetting(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.UpsertSettingInput) (api.DetectionRuleSetting, error)
@@ -61,11 +62,15 @@ type DetectionConfigHandler struct {
 	principalLabel principalLabelResolver
 	logger         *slog.Logger
 	// matchCountCap is the furthest back a match-count read may reach. Seeded with the constant maximum at construction and
-	// narrowed by SetMatchCountCap once the deployment's retention is known, so there is exactly ONE place that decides what an
+	// narrowed by SetCounterRetentionCap once the deployment's retention is known, so there is exactly ONE place that decides what an
 	// unconfigured or disabled retention means (api.EffectiveMatchCountCap) rather than a second fallback here that agrees with
 	// it by coincidence. Atomic because it is written during wiring and read by every request goroutine; a plain field would
 	// rest on a happens-before that is real today but invisible to the race detector.
 	matchCountCap atomic.Int64
+	// evalStatsCap is the same bound for the evaluation-statistics read. A second field rather than one shared cap because the
+	// two windows are separate types on purpose (see api.EvalStatsWindow), so a shared int64 would be the place they silently
+	// re-merged.
+	evalStatsCap atomic.Int64
 }
 
 // NewDetectionConfig builds the detection-config operator handler. svc + authz are required; logger defaults to slog.Default. A nil
@@ -82,14 +87,19 @@ func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, log
 	}
 	h := &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
 	h.matchCountCap.Store(int64(api.MaxMatchCountWindow))
+	h.evalStatsCap.Store(int64(api.MaxEvalStatsWindow))
 	return h
 }
 
-// SetMatchCountCap records how many days of monitor-match counters the deployment retains, which bounds how far back a
+// SetCounterRetentionCap records how many days of per-rule counters the deployment retains, which bounds how far back a
 // rule-match-count read can honestly reach. cmd/main wires it from EDR_RETENTION_DAYS alongside the prune that enforces it.
 // Unset (or zero) leaves the constant cap in force.
-func (h *DetectionConfigHandler) SetMatchCountCap(retentionDays int) {
+func (h *DetectionConfigHandler) SetCounterRetentionCap(retentionDays int) {
 	h.matchCountCap.Store(int64(api.EffectiveMatchCountCap(retentionDays)))
+	// Both counter tables are pruned by the same retention sweep, so one setter narrows both, which is why this is named for the
+	// retention rather than for either read. They stay separate values because nothing guarantees the two windows stay equal,
+	// and a reader told "30 days" over 7 days of data is the failure this cap exists for.
+	h.evalStatsCap.Store(int64(api.EffectiveEvalStatsCap(retentionDays)))
 }
 
 // SetPrincipalLabelResolver wires the optional directory lookup that resolves an exclusion's created_by principal id to a display
@@ -139,6 +149,7 @@ func (h *DetectionConfigHandler) resolveCreatedByLabels(ctx context.Context, exc
 //	GET    /api/v1/detection-config/rule-settings
 //	PUT    /api/v1/detection-config/rule-settings
 //	GET    /api/v1/detection-config/rule-match-counts
+//	GET    /api/v1/detection-config/rule-eval-stats
 //
 // Caller wraps in the identity Session + CSRF middleware before mounting (the session-protected allowlist auto-derives from what is
 // registered here).
@@ -148,6 +159,7 @@ func (h *DetectionConfigHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("DELETE /api/v1/detection-config/exclusions/{id}", h.handleDeleteExclusion)
 	mux.HandleFunc("GET /api/v1/detection-config/rule-settings", h.handleListRuleSettings)
 	mux.HandleFunc("GET /api/v1/detection-config/rule-match-counts", h.handleListMatchCounts)
+	mux.HandleFunc("GET /api/v1/detection-config/rule-eval-stats", h.handleListEvalStats)
 	mux.HandleFunc("PUT /api/v1/detection-config/rule-settings", h.handleUpsertRuleSetting)
 }
 
@@ -217,6 +229,73 @@ func (h *DetectionConfigHandler) handleListMatchCounts(w http.ResponseWriter, r 
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"match_counts": counts, "days": days})
 }
 
+// handleListEvalStats serves what each rule's evaluation work has cost over a window, which is how an operator finds the slow rule
+// and the one driving retries without querying a metrics backend (issue #774).
+//
+// Separate from the match-count route rather than folded into it, because the two answer different questions about different
+// populations: a rule that never matches still evaluates, so it has statistics here and no row there. Serving them together would
+// mean inventing a zero row for one side or the other, and a rule reported as matching zero times is not the same claim as a rule
+// that was never asked.
+//
+// Read-gated by the same action as the rest of this surface, for the same reason: it describes what detection configuration is
+// doing, and anyone who can see which rules are enabled should be able to see what they cost.
+func (h *DetectionConfigHandler) handleListEvalStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionDetectionConfigRead, identityapi.Resource{Type: "detection_config"}) {
+		return
+	}
+	query := r.URL.Query()
+	days, ok := evalStatsWindow(query.Has("days"), query.Get("days"))
+	if !ok {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput,
+			"days must be a positive whole number")
+		return
+	}
+	days = min(days, api.EvalStatsWindow(h.evalStatsCap.Load()))
+	stats, err := h.svc.EvalStats(ctx, days)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "detectionconfig list eval stats", "err", err)
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
+		return
+	}
+	if stats == nil {
+		stats = []api.RuleEvalSummary{}
+	}
+	// The RESOLVED window is echoed, for the reason the match-count route echoes it: a caller that asked for 90 days and is
+	// reading 7 must be told, or it will describe a mean latency to an operator as covering a period it does not.
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"eval_stats": stats, "days": days})
+}
+
+// positiveWindow parses a `days` query parameter, in days, returning the supplied default when the parameter is ABSENT.
+//
+// The policy lives here once and the two routes wrap it, following parsePositiveInt64Path and its parseRuleID / parsePolicyID
+// wrappers in this package: the call site still reads as the window it is asking for, and a change to what counts as a valid
+// window lands in one place. The typed wrappers are what keep the two window types from being interchangeable, which is the
+// separation worth having; a single shared implementation was never in tension with that.
+//
+// Only an ABSENT parameter is the default. Anything supplied that is not a positive whole number is rejected rather than silently
+// defaulted, since a typo that reads as "the last week" when the operator meant ninety days is a wrong number presented as a right
+// one. `?days=` is supplied-and-empty, which is a malformed value rather than an omission, so `present` is threaded through
+// instead of inferring omission from the empty string.
+func positiveWindow(present bool, raw string, fallback int) (int, bool) {
+	if !present {
+		return fallback, true
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days <= 0 {
+		return 0, false
+	}
+	return days, true
+}
+
+// evalStatsWindow parses the `days` query parameter for the evaluation-statistics route. Wrapper around positiveWindow; see
+// matchCountWindow for the rationale.
+func evalStatsWindow(present bool, raw string) (api.EvalStatsWindow, bool) {
+	days, ok := positiveWindow(present, raw, int(api.DefaultEvalStatsWindow))
+	return api.EvalStatsWindow(days), ok
+}
+
 // matchCountWindow parses the `days` query parameter. Only an ABSENT parameter is the default window; anything supplied that is
 // not a positive whole number is rejected rather than silently defaulted, since a typo that reads as "the last week" when the
 // operator meant ninety days is a wrong number presented as a right one. `?days=` is supplied-and-empty, which is a malformed
@@ -225,14 +304,8 @@ func (h *DetectionConfigHandler) handleListMatchCounts(w http.ResponseWriter, r 
 // Values above the cap are clamped by the caller, not refused, because asking for more history than retention keeps is a
 // reasonable request with a truthful answer.
 func matchCountWindow(present bool, raw string) (api.MatchCountWindow, bool) {
-	if !present {
-		return api.DefaultMatchCountWindow, true
-	}
-	days, err := strconv.Atoi(raw)
-	if err != nil || days <= 0 {
-		return 0, false
-	}
-	return api.MatchCountWindow(days), true
+	days, ok := positiveWindow(present, raw, int(api.DefaultMatchCountWindow))
+	return api.MatchCountWindow(days), ok
 }
 
 // createExclusionRequest is the POST wire shape. host_group_id defaults to 0 (global). created_by + the audit actor come from the

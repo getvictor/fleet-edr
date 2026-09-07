@@ -47,7 +47,7 @@ The driver inherits `EDR_ENROLL_SECRET` from the environment so the same value t
 ## Scenario mix
 
 - 80% of hosts run `test/fakeagent/scenarios/quiet-host.yaml` on a 5-second jittered cadence (noise floor).
-- 20% of hosts round-robin across a curated subset of the L6 corpus (`test/efficacy/corpus/T*/scenario.yaml`) on a 1-second jittered cadence. Currently `T1059-suspicious-exec`, `T1543.001-launchagent-persistence`, `T1548.003-sudoers-tamper`, `T1555.001-keychain-dump`.
+- 20% of hosts round-robin across a curated subset of the L6 corpus (`test/efficacy/corpus/T*/scenario.yaml`) on a 1-second jittered cadence. Currently `T1059.004-suspicious-exec`, `T1543.001-launchagent-persistence`, `T1548.003-sudoers-tamper`, `T1555.001-keychain-dump`.
 
 Both ratios and the scenario lists are flags (`--quiet-ratio`, `--active-scenarios`); the defaults match the M12 plan exactly. The +/- 25% jitter applied to each gap de-synchronises hosts so the server does not see a heartbeat-shaped fan-in.
 

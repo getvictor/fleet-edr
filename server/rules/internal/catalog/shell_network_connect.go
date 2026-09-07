@@ -62,10 +62,19 @@ func (r *ShellNetworkConnect) SupportedExclusionMatchTypes() []api.ExclusionMatc
 	}
 }
 
+// Techniques returns T1059.004 (Command and Scripting Interpreter: Unix Shell), and only that.
+//
+// This is the question #776 deliberately left open, now decided by the sweep in issue #755. The rule inherited T1059 + T1105 from
+// the rule it was split out of, and neither survived unchanged.
+//
+// T1105 (Ingress Tool Transfer) is dropped. An outbound connection is not a transfer: the rule sees that a shell connected out,
+// not that anything came back, and not what protocol carried it. T1071 would be the same overreach in the other direction, since
+// naming an application-layer protocol means observing one.
+//
+// T1059 becomes T1059.004 for the reason it does on suspicious_exec: the middle link is matched against shellPaths, so the
+// sub-technique is observed rather than inferred.
 func (r *ShellNetworkConnect) Techniques() []string {
-	// Unchanged from the merged rule (issue #776): whether the connect shape warrants its own mapping is a separate
-	// question, deliberately not decided by the split.
-	return []string{"T1059", "T1105"}
+	return []string{"T1059.004"}
 }
 
 func (r *ShellNetworkConnect) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
@@ -92,6 +101,7 @@ func (r *ShellNetworkConnect) Doc() api.Documentation {
 			"The window bounds how long after the shell exec a connection still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not fire; a lookup to a publicly routable resolver still does.",
 			"Exclusions saved against `suspicious_exec` before the split (issue #776) do not apply here, because exclusions are keyed by rule id. Re-add any that should silence this shape too.",
+			"A shell started directly by launchd has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.",
 		},
 	}
 }
@@ -189,10 +199,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	parentPath := "(unknown)"
-	if parent != nil {
-		parentPath = parent.Path
-	}
+	parentPath := parentPathFor(parent, shell)
 	eventIDs := []string{evt.EventID}
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)

@@ -40,22 +40,41 @@ type EventLog interface {
 	// match the claimable predicate: a claimer that died between claiming a fork and flushing it would let the next claimer take
 	// the following exec and fold it as an exec with no fork. Callers therefore get at-most-one-gap-free prefix per host and may
 	// see nothing for a host until an abandoned claim's lease expires, which is bounded and preferable to out-of-order folding.
-	ClaimForHost(ctx context.Context, hostID string, limit int) ([]Event, error)
+	// Returns the claim's stamp alongside the events, which Ack requires to prove it still holds the claim (issue #817). The
+	// stamp is meaningless when no events were claimed.
+	ClaimForHost(ctx context.Context, hostID string, limit int) ([]Event, int64, error)
 
 	// Ack marks the claimed events (identified by EventID) fully processed: they are excluded from future claims but stay in the queue
 	// until PruneProcessed removes them, so Ack is a cheap index update off the delete path. Acknowledgment needs only identity, so it
 	// takes IDs rather than whole events: the caller need not retain the (potentially large) payloads until ack.
-	Ack(ctx context.Context, eventIDs []string) error
+	//
+	// Takes the stamp ClaimForHost returned and reports whether this claim still held the rows (issue #817). A claim expires and is
+	// re-offered, so an evaluation that outlives its lease runs alongside its own reclaimer; an unconditional ack let both attempts
+	// succeed and neither learn it had lost, so anything additive done after acknowledging counted the batch twice. A caller told
+	// held=false MUST skip whatever it does after the ack, because the attempt that owns the rows now will do it.
+	Ack(ctx context.Context, eventIDs []string, claimStampNs int64) (held bool, err error)
 
-	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost (retry after a
-	// processing failure).
-	// Nack returns claimed events for a later claim and counts the attempt, reporting how many it SET ASIDE instead of returning.
+	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost, counting the
+	// attempt, and reports how many it SET ASIDE instead of returning.
+	//
+	// claimStampNs is the stamp ClaimForHost issued, and an implementation SHALL act only on events this claim still holds, as Ack
+	// does. Identifying a claim by an event's STATE instead lets a caller whose processing outran its lease reset and count an
+	// attempt against a claim a replacement now owns, which pushes that batch toward its retry bounds on failures it did not have,
+	// and leaves the replacement's own acknowledgement to be refused so its work is redone (issue #840).
+	//
+	// A caller SHALL be told whether it still held the claim, as Ack tells it. Without that, "withdrew nothing" is the same
+	// answer for a superseded attempt and for a held batch that simply had no event reach its bounds, so an attempt whose
+	// processing outran its lease would leave no trace: the ack path reports that at WARN and is the only signal anyone gets
+	// that leases are being exceeded, and this path would have been the one way to lose a claim silently.
 	//
 	// The count is the point of the return value. A batch that fails the same way every time is otherwise retried forever, and
 	// because the claim takes a host's oldest work first, nothing newer for that host is ever claimed: the host stops
 	// contributing to the process graph and raising detections at all (issue #836). An implementation SHALL bound the retries and
 	// withdraw the events once that bound is passed, and the caller reports the count so a stalled host is visible.
-	Nack(ctx context.Context, eventIDs []string) (setAside int64, err error)
+	//
+	// The count SHALL be exact rather than merely non-zero. A caller decides whether a WHOLE batch was withdrawn by comparing it
+	// against the events it handed over, so an under-count reads as a partial withdrawal.
+	Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, held bool, err error)
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)
@@ -70,8 +89,8 @@ type EventLog interface {
 	// PruneSetAside removes set-aside events older than retentionDays, in batches of at most batchSize. A non-positive
 	// retentionDays prunes nothing, which keeps them indefinitely and matches what a disabled retention window means elsewhere.
 	//
-	// Set-aside rows are the only record of which events a host stopped contributing to its process graph, so they are retained
-	// for the deployment's window rather than deleted when they are created; that window doubles as the time an operator has to
-	// look at them (issue #836).
+	// Set-aside rows are the only record of which events a host stopped processing, so they are retained for the deployment's
+	// window rather than deleted when they are created; that window doubles as the time an operator has to look at them
+	// (issue #836).
 	PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error)
 }
