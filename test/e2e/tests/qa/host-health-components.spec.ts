@@ -40,7 +40,7 @@ test.describe("host health components", () => {
   });
 
   // spec:web-ui/the-host-detail-surfaces-the-health-conditions/every-component-is-laid-out-the-same-way
-  test("every component renders in the same shape", async ({ signedInAdmin: page }) => {
+  test("every component renders in the same shape", async ({ signedInAdminShared: page }) => {
     await page.goto(`/ui/hosts/${HOST_ID}`);
     await page.getByRole("button", { name: /^details$/i }).click();
 

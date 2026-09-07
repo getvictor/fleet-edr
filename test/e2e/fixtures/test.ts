@@ -57,7 +57,7 @@ async function dumpCoverage(page: Page, testId: string): Promise<void> {
   await writeFile(join(COVERAGE_DIR, `${slug}.json`), JSON.stringify(entries));
 }
 
-export const test = base.extend<{ page: Page; signedInAdmin: Page }>({
+export const test = base.extend<{ page: Page; signedInAdmin: Page }, { signedInAdminShared: Page }>({
   page: async ({ page }, use, testInfo) => {
     await startCoverage(page);
     await use(page);
@@ -88,6 +88,39 @@ export const test = base.extend<{ page: Page; signedInAdmin: Page }>({
     await use(page);
     await uninstallVirtualAuthenticator(authenticator);
   },
+
+  // signedInAdminShared is the same admin, signed in ONCE PER WORKER instead of once per test, for specs whose tests only read.
+  //
+  // The reason is a budget rather than speed. `/admin/break-glass/setup` is capped at 5 submissions per minute GLOBALLY
+  // (DefaultSetupRatePerMin), and one sign-in spends TWO of them: gateSetupRequest is shared by the begin and finish handlers and
+  // each calls AllowSetup. So three per-test sign-ins need six against a burst of five and the third fails with a 429 that
+  // presents as a sign-in timeout. That is what shapes the phase lists in scripts/test-e2e-coverage.sh, and it is why three
+  // read-only presentation specs cannot each take their own ceremony.
+  //
+  // The contract is the narrow part: tests sharing this page share its cookies, its history and anything one of them leaves
+  // behind. Use it only for tests that navigate and assert. A test that mutates state, or that needs a reset between cases, takes
+  // `signedInAdmin` and pays the two tokens.
+  //
+  // Coverage is dumped once per worker rather than once per test, since the page outlives the test.
+  signedInAdminShared: [
+    async ({ browser }, use, workerInfo) => {
+      const db = await openDB();
+      try {
+        await resetDB(db);
+      } finally {
+        await db.end();
+      }
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      const page = await context.newPage();
+      await startCoverage(page);
+      const authenticator = await signInAsAdminViaBreakGlass(page);
+      await use(page);
+      await dumpCoverage(page, `worker-${String(workerInfo.workerIndex)}`);
+      await uninstallVirtualAuthenticator(authenticator);
+      await context.close();
+    },
+    { scope: "worker" },
+  ],
 });
 
 // createCoveredPage spawns a page off the given BrowserContext with

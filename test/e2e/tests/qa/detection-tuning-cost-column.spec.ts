@@ -10,7 +10,7 @@ import { test, expect } from "../../fixtures/test";
 // unit test could have seen it.
 test.describe("detection tuning cost column", () => {
   // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/the-ordering-control-still-reads-as-a-column-header
-  test("the cost header renders as a header, not as a button", async ({ signedInAdmin: page }) => {
+  test("the cost header renders as a header, not as a button", async ({ signedInAdminShared: page }) => {
     await page.goto("/ui/detection-config");
 
     const headers = page.locator("table thead th");

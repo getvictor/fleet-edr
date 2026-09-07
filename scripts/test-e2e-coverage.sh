@@ -264,9 +264,13 @@ echo "$END_GROUP"
 # assertions, so they cannot live in vitest: jsdom applies no user-agent stylesheet, and the value it would report is not the one
 # a user gets.
 #
-# Its own phase for the reason phase 2's comment gives: each spec signs in once and /admin/break-glass/setup allows 5/min
-# globally, so a phase's spec count is a token budget rather than a preference. Three specs plus phase 2's five would overflow it;
-# a fresh server starts the bucket empty.
+# The three share ONE break-glass ceremony, via the worker-scoped signedInAdminShared fixture, because they only navigate and
+# assert. That matters here: /admin/break-glass/setup allows 5 submissions per minute globally and a single sign-in spends two of
+# them (gateSetupRequest is shared by the begin and finish handlers), so three per-test ceremonies need six and the third fails
+# with a 429 that presents as a sign-in timeout. Measured: three specs per-test fail 2 of 3 together and pass individually; on the
+# shared fixture all three pass together in under a second.
+#
+# Grouped as their own phase for legibility rather than necessity, since two submissions would also fit inside phase 2.
 echo "::group::Phase 6 - UI presentation regressions (detection tuning, rule detail, host health)"
 start_server "default-env-ui-regressions"
 seed_oidc 1
