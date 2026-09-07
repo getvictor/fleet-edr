@@ -14,23 +14,24 @@ import { installVirtualAuthenticator, VirtualAuthenticator } from "./webauthn";
 export const BG_PASSWORD = "qa-l4-break-glass-pw";
 
 /**
- * SETUP_REFILL_MS is how long to wait for the setup bucket to yield another token, and SETUP_RETRY_LIMIT bounds the waiting.
+ * SETUP_REFILL_MS is how long to wait for the setup bucket to yield the TWO tokens a sign-in needs, and SETUP_RETRY_LIMIT bounds
+ * the waiting.
  *
  * `/admin/break-glass/setup` is capped globally at DefaultSetupRatePerMin=5 (server/identity/internal/breakglass/ratelimit.go), a
- * token bucket that starts full and refills one token every 12s. One sign-in spends TWO tokens, because the begin and finish halves
- * of the ceremony are both gated, so a freshly started server affords exactly two sign-ins before the third has to wait. Measured,
- * not inferred: two specs sign in, the third gets 429.
+ * token bucket that starts full and refills one token every 12s. One sign-in spends TWO, because `gateSetupRequest` is shared by
+ * handleBeginSetup and handleFinishSetup and each calls AllowSetup, so a freshly started server affords exactly two sign-ins
+ * before the third has to wait. Measured, not inferred: two specs sign in, the third gets 429.
  *
- * That is why the CI phases used to name their specs one by one, with a comment that each phase was "intentionally short enough
- * that the bucket doesn't overflow within the phase". Waiting for budget removes the constraint: a phase can hold as many specs as
- * its ENV calls for, which is what a phase is actually for, and a spec added to the tree cannot silently exceed a token budget
- * nobody was tracking.
+ * Waiting ONE refill interval is what a first version did and it livelocks. The two halves are gated separately, so an attempt
+ * whose begin succeeds and whose finish is denied has still spent a token; wait 13s, gain one token, and the next attempt's begin
+ * consumes it again with nothing left for its finish. The loop then never gets ahead of the bucket however many times it runs.
+ * Waiting for both tokens at once is what converges, which is why this is two intervals and not one.
  *
- * 13s rather than 12 leaves room for clock granularity. Six retries is 78s, comfortably longer than any legitimate backlog on a
- * suite that runs one worker, and short enough that a genuinely stuck bucket fails the run rather than hanging it.
+ * 26s rather than 24 leaves room for clock granularity. Three retries is 78s, which fits the 90s per-test timeout the config sets
+ * for exactly this (hooks share the test's budget), with room for the ceremony itself.
  */
-const SETUP_REFILL_MS = 13_000;
-const SETUP_RETRY_LIMIT = 6;
+const SETUP_REFILL_MS = 26_000;
+const SETUP_RETRY_LIMIT = 3;
 
 /**
  * signInAsAdminViaBreakGlass installs a virtual WebAuthn authenticator, mints a fresh bootstrap-redemption token, walks the
@@ -48,26 +49,27 @@ const SETUP_RETRY_LIMIT = 6;
 export async function signInAsAdminViaBreakGlass(page: Page): Promise<VirtualAuthenticator> {
   const va = await installVirtualAuthenticator(page);
   for (let attempt = 0; ; attempt++) {
-    const rateLimited = watchForSetupRateLimit(page);
+    const limit = watchForSetupRateLimit(page);
     try {
-      await redeemBootstrapToken(page);
-      return va;
+      if (await redeemBootstrapToken(page, limit)) {
+        return va;
+      }
     } catch (err) {
-      if (!rateLimited.seen) {
+      if (!limit.seen) {
         throw err;
       }
-      if (attempt >= SETUP_RETRY_LIMIT) {
-        throw new Error(
-          `break-glass setup was rate limited (429) on ${SETUP_RETRY_LIMIT + 1} attempts over ` +
-            `${((SETUP_RETRY_LIMIT * SETUP_REFILL_MS) / 1000).toFixed(0)}s. The global cap is ` +
-            `DefaultSetupRatePerMin=5 with one token refilling every 12s, and one sign-in spends two. ` +
-            `Either this phase signs in far more often than the bucket refills, or the cap regressed.`,
-        );
-      }
-      await page.waitForTimeout(SETUP_REFILL_MS);
     } finally {
-      rateLimited.stop();
+      limit.stop();
     }
+    if (attempt >= SETUP_RETRY_LIMIT) {
+      throw new Error(
+        `break-glass setup was rate limited (429) on ${SETUP_RETRY_LIMIT + 1} attempts over ` +
+          `${((SETUP_RETRY_LIMIT * SETUP_REFILL_MS) / 1000).toFixed(0)}s. The global cap is ` +
+          `DefaultSetupRatePerMin=5 with one token refilling every 12s, and one sign-in spends two. ` +
+          `Either this phase signs in far more often than the bucket refills, or the cap regressed.`,
+      );
+    }
+    await page.waitForTimeout(SETUP_REFILL_MS);
   }
 }
 
@@ -79,7 +81,7 @@ export async function signInAsAdminViaBreakGlass(page: Page): Promise<VirtualAut
  * A fresh token per attempt rather than a reused one. A 429 rejects before redemption so the previous token is still live, but
  * minting is one INSERT and reusing it would make a retry depend on that ordering holding.
  */
-async function redeemBootstrapToken(page: Page): Promise<void> {
+async function redeemBootstrapToken(page: Page, limit: SetupRateLimitWatch): Promise<boolean> {
   const setupDB = await openDB();
   let plaintext: string;
   try {
@@ -91,22 +93,53 @@ async function redeemBootstrapToken(page: Page): Promise<void> {
   await page.goto(`/admin/break-glass/setup?token=${plaintext}`);
   await page.getByLabel(/password/i).fill(BG_PASSWORD);
   await page.getByRole("button", { name: /register security key/i }).click();
-  await page.waitForURL((url) => !url.pathname.includes("break-glass") && !url.pathname.includes("login"), { timeout: 15_000 });
+
+  // The race is HERE, after the form is driven, rather than around the whole ceremony. Abandoning a ceremony mid-fill would leave
+  // it typing into the page while the next attempt navigates away, so two attempts would drive one page at once. What is
+  // abandoned here is a wait, which mutates nothing.
+  const redirected = page
+    .waitForURL((url) => !url.pathname.includes("break-glass") && !url.pathname.includes("login"), { timeout: 15_000 })
+    .then(() => true);
+  // The losing branch still settles, by rejecting on its own timeout long after the race has moved on, and nothing would be
+  // listening. The sink keeps that from failing the run; the race still sees the original promise, since catch returns a new one.
+  redirected.catch(() => undefined);
+  return await Promise.race([redirected, limit.rateLimited.then(() => false)]);
 }
 
 /**
- * watchForSetupRateLimit records whether the setup endpoint answered 429 during one attempt.
+ * watchForSetupRateLimit reports a 429 from the setup endpoint, as a flag and as a promise.
  *
- * The 429 is why this retry exists and it is invisible from the page: the ceremony simply never redirects, so the failure surfaces
- * as a waitForURL timeout that reads like a broken sign-in. Watching the response tells a rate limit apart from a real break, so a
- * genuine sign-in regression still fails on the first attempt instead of being retried into a much slower failure.
+ * The 429 is invisible from the page: the ceremony simply never redirects, so it surfaces as a waitForURL timeout that reads like
+ * a broken sign-in. The flag tells a rate limit apart from a real break, so a genuine regression still fails on the first attempt
+ * rather than being retried into a much slower failure.
+ *
+ * The promise is what keeps the retry inside Playwright's test budget. Waiting out the ceremony's own 15s navigation timeout
+ * before each 13s refill would put a single retry at 28s against a 30s default per-test timeout, so a rate-limited sign-in would
+ * fail on the timeout rather than recover, and a second retry could never happen. Racing the ceremony against this promise
+ * abandons a rate-limited attempt as soon as the response arrives, which costs milliseconds, so the bounded sequence is paced by
+ * the refill wait alone.
  */
-function watchForSetupRateLimit(page: Page): { readonly seen: boolean; stop: () => void } {
-  const state = { seen: false, stop: () => page.off("response", onResponse) };
+interface SetupRateLimitWatch {
+  readonly seen: boolean;
+  readonly rateLimited: Promise<true>;
+  stop: () => void;
+}
+
+function watchForSetupRateLimit(page: Page): SetupRateLimitWatch {
+  let markSeen: (v: true) => void = () => undefined;
+  const rateLimited = new Promise<true>((resolve) => {
+    markSeen = resolve;
+  });
   const onResponse = (response: { url: () => string; status: () => number }) => {
     if (response.url().includes("/admin/break-glass/setup") && response.status() === 429) {
       state.seen = true;
+      markSeen(true);
     }
+  };
+  const state = {
+    seen: false,
+    rateLimited,
+    stop: () => page.off("response", onResponse),
   };
   page.on("response", onResponse);
   return state;

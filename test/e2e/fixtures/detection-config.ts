@@ -1,3 +1,4 @@
+import type { Connection } from "mysql2/promise";
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import { openDB } from "./db";
@@ -29,17 +30,23 @@ export async function takeGlobalRuleSetting(ruleId: string): Promise<GlobalRuleS
       "SELECT mode, severity_override, settings, updated_by FROM detection_rule_settings WHERE rule_id = ? AND host_group_id = 0",
       [ruleId],
     )) as [Array<{ mode: string; severity_override: string | null; settings: string | null; updated_by: string }>, unknown];
-    const row = rows[0];
-    if (!row) return null;
-    return {
-      mode: row.mode,
-      severityOverride: row.severity_override,
-      settings: row.settings === null ? null : JSON.stringify(row.settings),
-      updatedBy: row.updated_by,
-    };
+    return toSetting(rows[0]);
   } finally {
     await db.end();
   }
+}
+
+/** toSetting projects a settings row, or its absence, into the snapshot shape. Shared so the locked and unlocked reads agree. */
+type SettingRow = { mode: string; severity_override: string | null; settings: string | null; updated_by: string };
+
+function toSetting(row?: SettingRow): GlobalRuleSetting | null {
+  if (!row) return null;
+  return {
+    mode: row.mode,
+    severityOverride: row.severity_override,
+    settings: row.settings === null ? null : JSON.stringify(row.settings),
+    updatedBy: row.updated_by,
+  };
 }
 
 /**
@@ -67,36 +74,51 @@ const lastWritten = new Map<string, GlobalRuleSetting | null>();
  */
 export async function restoreGlobalRuleSetting(ruleId: string, previous: GlobalRuleSetting | null): Promise<void> {
   const expected = lastWritten.get(ruleId);
-  if (expected !== undefined) {
-    const current = await takeGlobalRuleSetting(ruleId);
-    if (!sameSetting(current, expected)) {
+  lastWritten.delete(ruleId);
+
+  const db = await openDB();
+  try {
+    // One transaction, and the read takes the lock. Comparing on one connection and writing on another leaves the window this is
+    // supposed to close: an operator's edit landing between the two would pass the comparison and then be overwritten. SELECT
+    // FOR UPDATE holds the row, and for a rule with no row it holds the gap, so a concurrent INSERT waits rather than slipping in.
+    await db.beginTransaction();
+    if (expected !== undefined && !sameSetting(await readLocked(db, ruleId), expected)) {
+      await db.rollback();
       console.warn(
         `restoreGlobalRuleSetting(${ruleId}): the row changed since this spec wrote it, so it was left as it stands rather than ` +
           `reverted. Something else is editing this rule's global setting while the suite runs.`,
       );
-      lastWritten.delete(ruleId);
       return;
     }
-  }
-  lastWritten.delete(ruleId);
-
-  if (previous === null) {
-    await writeCleared(ruleId);
-    return;
-  }
-  const db = await openDB();
-  try {
-    await db.query(
-      `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, severity_override, settings, updated_by)
-       VALUES (?, 0, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE mode = VALUES(mode), severity_override = VALUES(severity_override),
-                               settings = VALUES(settings), updated_by = VALUES(updated_by)`,
-      [ruleId, previous.mode, previous.severityOverride, previous.settings, previous.updatedBy],
-    );
+    if (previous === null) {
+      await db.query("DELETE FROM detection_rule_settings WHERE rule_id = ? AND host_group_id = 0", [ruleId]);
+    } else {
+      await db.query(
+        `INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, severity_override, settings, updated_by)
+         VALUES (?, 0, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE mode = VALUES(mode), severity_override = VALUES(severity_override),
+                                 settings = VALUES(settings), updated_by = VALUES(updated_by)`,
+        [ruleId, previous.mode, previous.severityOverride, previous.settings, previous.updatedBy],
+      );
+    }
     await db.query("UPDATE detection_config_meta SET version = version + 1 WHERE id = 1");
+    await db.commit();
+  } catch (err) {
+    await db.rollback();
+    throw err;
   } finally {
     await db.end();
   }
+}
+
+/** readLocked reads the row inside the caller's transaction, holding it (or its gap) against a concurrent write. */
+async function readLocked(db: Connection, ruleId: string): Promise<GlobalRuleSetting | null> {
+  const [rows] = (await db.query(
+    `SELECT mode, severity_override, settings, updated_by FROM detection_rule_settings
+      WHERE rule_id = ? AND host_group_id = 0 FOR UPDATE`,
+    [ruleId],
+  )) as [Array<{ mode: string; severity_override: string | null; settings: string | null; updated_by: string }>, unknown];
+  return toSetting(rows[0]);
 }
 
 /** sameSetting compares two snapshots by the columns an operator sets, which is everything a restore writes. */

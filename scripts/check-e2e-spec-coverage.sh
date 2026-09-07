@@ -30,9 +30,13 @@ if [[ -z "$in_tree" ]]; then
   exit 2
 fi
 
-# Specs the script names. Anchored on the same literal path form so a rename in either place shows up as an orphan rather than
-# silently matching nothing.
-named="$(grep -oE 'tests/qa/[A-Za-z0-9._-]+\.spec\.ts' "$COVERAGE_SCRIPT" | sort -u)"
+# Specs the script RUNS. Comments are stripped first: a phase's prose can name a spec, and a name mentioned only in a comment
+# would make a deleted invocation look present, which is the failure this check exists to prevent, hiding behind the check itself.
+# No comment names one in this form today; the stripping keeps that from becoming load-bearing.
+#
+# Anchored on the same literal path form as the tree scan above, so a rename in either place shows up rather than silently
+# matching nothing.
+named="$(sed 's/#.*//' "$COVERAGE_SCRIPT" | grep -oE 'tests/qa/[A-Za-z0-9._-]+\.spec\.ts' | sort -u)"
 
 orphans="$(comm -23 <(echo "$in_tree") <(echo "$named"))"
 missing="$(comm -13 <(echo "$in_tree") <(echo "$named"))"
