@@ -388,9 +388,15 @@ jobs:
           npm ci --ignore-scripts
           ./node_modules/.bin/playwright install --with-deps chromium
 
-      - name: Run E2E coverage pipeline (6 phases)
+      - name: Every qa spec is named by a phase
+        # Cheap and first, so a spec nobody placed in a phase fails here
+        # in seconds rather than after the pipeline has run without it.
+        # Seven specs were once in exactly that state and never ran (#907).
+        run: bash scripts/check-e2e-spec-coverage.sh
+
+      - name: Run E2E coverage pipeline (8 phases)
         # task test:e2e:coverage delegates to scripts/test-e2e-coverage.sh,
-        # which builds the `-cover` binary once, then walks six phases:
+        # which builds the `-cover` binary once, then walks eight phases:
         #   1. default-env-auth        (auth specs)
         #   2. default-env-qa          (A.5 + C/D/F.4)
         #   3. default-env-a7          (A.7 rate-limit; isolated so its
@@ -399,6 +405,12 @@ jobs:
         #   5. short-session-timeouts  (E.1+E.4+E.5 with idle=5s/3s)
         #   6. default-env-ui-regressions (browser-level presentation
         #                               regressions; one shared sign-in)
+        #   7. default-env-alerts      (alert list + attribution +
+        #                               anonymous entry)
+        #   8. default-env-catalog     (coverage, rule detail, policy
+        #                               editor, process-tree detail)
+        # Phases 7 and 8 are split rather than merged because a phase
+        # starts a fresh server and so a fresh break-glass setup budget.
         # All phases share GOCOVERDIR; covdata textfmt merges + the
         # monocart converter aggregates V8 payloads from coverage-raw/.
         run: task test:e2e:coverage

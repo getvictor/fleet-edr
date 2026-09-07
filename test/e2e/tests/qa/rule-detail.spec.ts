@@ -76,7 +76,10 @@ test.describe("per-rule documentation page", () => {
     // a regex on the prefix tolerates copy edits while still pinning to "unknown" + "rule" + the bad id.
     await expect(page.getByText(/unknown rule/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("code", { hasText: "qa-unknown-rule-id-not-in-catalog" })).toBeVisible();
-    const backLink = page.getByRole("link", { name: /coverage/i });
+    // Scoped to main, and to the empty state's own wording. /coverage/i alone now matches the top nav's Coverage tab as well as
+    // this link, which is a strict-mode violation rather than a pass: the tab was added after this spec was written and the spec
+    // has not run in CI since, so nothing caught the ambiguity.
+    const backLink = page.getByRole("main").getByRole("link", { name: /back to coverage/i });
     await expect(backLink).toBeVisible();
     await expect(backLink).toHaveAttribute("href", /\/coverage$/);
   });

@@ -1,4 +1,5 @@
 import type { Connection } from "mysql2/promise";
+import type { Page } from "@playwright/test";
 import { test, expect } from "../../fixtures/test";
 import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
 import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
@@ -27,6 +28,28 @@ async function defaultPolicyID(db: Connection): Promise<number> {
 // A canonical, valid BINARY identifier (64 lowercase hex chars). Reused across the success + invalid tests
 // to make the invalid case's "and now make it wrong" path obvious.
 const VALID_BINARY_IDENTIFIER = "a".repeat(64);
+
+/**
+ * identifierField is the single-rule Identifier input, named exactly.
+ *
+ * A /identifier/i label match used to be unambiguous and is not any more: the dialog gained a "Paste many" textarea whose label
+ * also carries the word, so the loose matcher resolves to two elements and Playwright's strict mode fails the fill. The spec has
+ * never run in CI, so nothing caught the ambiguity when the second control was added.
+ */
+function identifierField(page: Page) {
+  return page.getByRole("textbox", { name: "Identifier", exact: true });
+}
+
+/**
+ * reasonField is the OPEN dialog's audit-reason input.
+ *
+ * PolicyDetail mounts its modals as siblings, so the add, edit and confirm dialogs all have a reason input in the DOM at once and
+ * a getByLabel match resolves to three. A role query is scoped to what is exposed to the accessibility tree, which is the dialog
+ * actually open, so it names the field the spec is typing into rather than whichever happens to be first.
+ */
+function reasonField(page: Page) {
+  return page.getByRole("textbox", { name: /reason \(required for audit log\)/i });
+}
 
 test.describe("application control policy editor", () => {
   let va: VirtualAuthenticator | undefined;
@@ -62,8 +85,8 @@ test.describe("application control policy editor", () => {
     await page.getByRole("button", { name: /^add rule$/i }).click();
     // The modal renders a labelled "Identifier" input + "Reason (required for audit log)" input + a Save
     // button. Default ruleType is BINARY, so the 64-char hex value validates immediately.
-    await page.getByLabel(/identifier/i).fill(VALID_BINARY_IDENTIFIER);
-    await page.getByLabel(/reason \(required for audit log\)/i).fill("qa e2e: stage + save");
+    await identifierField(page).fill(VALID_BINARY_IDENTIFIER);
+    await reasonField(page).fill("qa e2e: stage + save");
 
     // Capture the POST so we can prove the wire+payload contract the spec calls out: rule_type, identifier,
     // reason all reach the server.
@@ -113,13 +136,13 @@ test.describe("application control policy editor", () => {
     // is `busy || reason.trim().length === 0 || identifier.trim().length === 0`, so the spec invariant
     // ("editor refuses to save and surfaces a visible error explaining the reason is required") is satisfied
     // by the disabled control + the operator-visible "Reason (required for audit log)" label.
-    await page.getByLabel(/identifier/i).fill(VALID_BINARY_IDENTIFIER);
+    await identifierField(page).fill(VALID_BINARY_IDENTIFIER);
     await expect(saveBtn).toBeDisabled();
-    await expect(page.getByLabel(/reason \(required for audit log\)/i)).toBeVisible();
+    await expect(reasonField(page)).toBeVisible();
 
     // Fill the reason; the button must enable. Proves the disabled state was specifically the empty reason,
     // not some other gate.
-    await page.getByLabel(/reason \(required for audit log\)/i).fill("any reason");
+    await reasonField(page).fill("any reason");
     await expect(saveBtn).toBeEnabled();
   });
 
@@ -131,8 +154,8 @@ test.describe("application control policy editor", () => {
     // BINARY requires exactly 64 lowercase hex chars. Fill a too-short value that still trips the
     // submitDisabled check off (identifier non-empty + reason non-empty), so submit FIRES but the
     // validator at the top of handleSubmit catches it.
-    await page.getByLabel(/identifier/i).fill("abc123"); // 6 chars, not 64
-    await page.getByLabel(/reason \(required for audit log\)/i).fill("qa e2e: invalid hash");
+    await identifierField(page).fill("abc123"); // 6 chars, not 64
+    await reasonField(page).fill("qa e2e: invalid hash");
 
     // Pin a response listener on the rules endpoint to prove no POST happens. The listener removes itself
     // after firing so a subsequent stage+save (in another test) doesn't double-fire it.

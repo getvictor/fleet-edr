@@ -1,6 +1,6 @@
 import type { Connection } from "mysql2/promise";
 import { test, expect } from "../../fixtures/test";
-import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
+import { resetHostData, signInAsAdminViaBreakGlass } from "../../fixtures/auth";
 import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
 import { openDB, resetDB, seedCriticalAlert } from "../../fixtures/db";
 
@@ -28,6 +28,10 @@ test.describe("alert list filtering and lifecycle", () => {
     const db = await openDB();
     try {
       await resetDB(db);
+      // resetHostData as well as resetDB, because resetDB clears the auth tables only. Without it each test's two seeded alerts
+      // survive into the next one, and the second test's row locator matches four rows rather than two: a strict-mode violation,
+      // not a pass. The spec has never run in CI, so nothing caught that it was only ever green on its first test.
+      await resetHostData(db);
       // Seed two alerts on the same host: one open (the default-status), one acknowledged. The acknowledged
       // alert is created with status='open' (the schema default), then mutated via SQL so the seeded alert
       // doesn't depend on the UI's lifecycle controls (which are themselves under test).
@@ -58,7 +62,8 @@ test.describe("alert list filtering and lifecycle", () => {
   // spec:web-ui/alert-list-filtering-and-lifecycle-controls/default-view-shows-only-open-alerts
   test("default view shows only open alerts", async ({ page }) => {
     await page.goto("/ui/alerts");
-    await expect(page.getByRole("heading", { name: /alerts/i })).toBeVisible({ timeout: 10_000 });
+    // No heading to anchor on: #622 removed the on-page title from the top-nav tab pages. The alert table is what this page is.
+    await expect(page.getByRole("table")).toBeVisible({ timeout: 10_000 });
 
     // The open alert's title is visible; the acknowledged one is not. Match by row to be robust to title text
     // appearing in another cell (defence in depth: the acked title only ever appears in its own row, but the
@@ -116,20 +121,13 @@ test.describe("alert list filtering and lifecycle", () => {
     const row = page.locator("tr", { hasText: openTitle });
     await expect(row).toBeVisible({ timeout: 10_000 });
 
-    // The alert title is the pivot link (per AlertList.tsx: it links to /hosts/<id>?alert=<id>&process=<pid>
-    // &at=<ms>). Click it and verify the destination URL carries all three query params and lands on the
-    // alerted host's process tree page.
+    // The alert title pivots to /alerts/<id>, which #622 added so investigating an alert keeps the top nav on Alerts; it renders
+    // the same ProcessTreeView the host route does. This spec expected the older /hosts/<id>?alert=&process=&at= destination and
+    // has not run in CI since, so the route change went unnoticed here. The host link is a separate control in its own column.
     await row.getByRole("link", { name: openTitle }).click();
-    await page.waitForURL(
-      (url) =>
-        url.pathname === `/ui/hosts/${HOST_ID}` &&
-        url.searchParams.has("alert") &&
-        url.searchParams.has("process") &&
-        url.searchParams.has("at"),
-      { timeout: 10_000 },
-    );
-    // The receiving page must render the host id somewhere so an operator can confirm where they are.
-    // PageHeader renders host_id; matching on the page text is robust to layout tweaks.
+    await page.waitForURL((url) => url.pathname === `/ui/alerts/${openAlertId}`, { timeout: 10_000 });
+
+    // The receiving page must still identify the host, so an operator can confirm where the pivot landed them.
     await expect(page.getByText(HOST_ID)).toBeVisible({ timeout: 10_000 });
   });
 });

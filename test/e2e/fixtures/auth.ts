@@ -14,6 +14,25 @@ import { installVirtualAuthenticator, VirtualAuthenticator } from "./webauthn";
 export const BG_PASSWORD = "qa-l4-break-glass-pw";
 
 /**
+ * SETUP_REFILL_MS is how long to wait for the setup bucket to yield another token, and SETUP_RETRY_LIMIT bounds the waiting.
+ *
+ * `/admin/break-glass/setup` is capped globally at DefaultSetupRatePerMin=5 (server/identity/internal/breakglass/ratelimit.go), a
+ * token bucket that starts full and refills one token every 12s. One sign-in spends TWO tokens, because the begin and finish halves
+ * of the ceremony are both gated, so a freshly started server affords exactly two sign-ins before the third has to wait. Measured,
+ * not inferred: two specs sign in, the third gets 429.
+ *
+ * That is why the CI phases used to name their specs one by one, with a comment that each phase was "intentionally short enough
+ * that the bucket doesn't overflow within the phase". Waiting for budget removes the constraint: a phase can hold as many specs as
+ * its ENV calls for, which is what a phase is actually for, and a spec added to the tree cannot silently exceed a token budget
+ * nobody was tracking.
+ *
+ * 13s rather than 12 leaves room for clock granularity. Six retries is 78s, comfortably longer than any legitimate backlog on a
+ * suite that runs one worker, and short enough that a genuinely stuck bucket fails the run rather than hanging it.
+ */
+const SETUP_REFILL_MS = 13_000;
+const SETUP_RETRY_LIMIT = 6;
+
+/**
  * signInAsAdminViaBreakGlass installs a virtual WebAuthn authenticator, mints a fresh bootstrap-redemption token, walks the
  * /admin/break-glass/setup flow, and returns once the page has redirected to the signed-in admin dashboard. The seeded admin user
  * has super_admin, so any subsequent route the spec navigates to has the broadest possible access.
@@ -28,7 +47,39 @@ export const BG_PASSWORD = "qa-l4-break-glass-pw";
  */
 export async function signInAsAdminViaBreakGlass(page: Page): Promise<VirtualAuthenticator> {
   const va = await installVirtualAuthenticator(page);
+  for (let attempt = 0; ; attempt++) {
+    const rateLimited = watchForSetupRateLimit(page);
+    try {
+      await redeemBootstrapToken(page);
+      return va;
+    } catch (err) {
+      if (!rateLimited.seen) {
+        throw err;
+      }
+      if (attempt >= SETUP_RETRY_LIMIT) {
+        throw new Error(
+          `break-glass setup was rate limited (429) on ${SETUP_RETRY_LIMIT + 1} attempts over ` +
+            `${((SETUP_RETRY_LIMIT * SETUP_REFILL_MS) / 1000).toFixed(0)}s. The global cap is ` +
+            `DefaultSetupRatePerMin=5 with one token refilling every 12s, and one sign-in spends two. ` +
+            `Either this phase signs in far more often than the bucket refills, or the cap regressed.`,
+        );
+      }
+      await page.waitForTimeout(SETUP_REFILL_MS);
+    } finally {
+      rateLimited.stop();
+    }
+  }
+}
 
+/**
+ * redeemBootstrapToken walks one attempt at the redemption ceremony: mint a token, fill the password, register the key, and wait for
+ * the redirect to the signed-in dashboard. Waiting on a URL that contains neither break-glass nor login is robust to small route
+ * shape changes (e.g. ? param suffixes the server may add).
+ *
+ * A fresh token per attempt rather than a reused one. A 429 rejects before redemption so the previous token is still live, but
+ * minting is one INSERT and reusing it would make a retry depend on that ordering holding.
+ */
+async function redeemBootstrapToken(page: Page): Promise<void> {
   const setupDB = await openDB();
   let plaintext: string;
   try {
@@ -40,10 +91,25 @@ export async function signInAsAdminViaBreakGlass(page: Page): Promise<VirtualAut
   await page.goto(`/admin/break-glass/setup?token=${plaintext}`);
   await page.getByLabel(/password/i).fill(BG_PASSWORD);
   await page.getByRole("button", { name: /register security key/i }).click();
-  // The redemption ceremony auto-signs the admin in and lands on the dashboard. Waiting on URL not containing break-glass / login is
-  // robust to small route shape changes (e.g. ? param suffixes the server may add).
   await page.waitForURL((url) => !url.pathname.includes("break-glass") && !url.pathname.includes("login"), { timeout: 15_000 });
-  return va;
+}
+
+/**
+ * watchForSetupRateLimit records whether the setup endpoint answered 429 during one attempt.
+ *
+ * The 429 is why this retry exists and it is invisible from the page: the ceremony simply never redirects, so the failure surfaces
+ * as a waitForURL timeout that reads like a broken sign-in. Watching the response tells a rate limit apart from a real break, so a
+ * genuine sign-in regression still fails on the first attempt instead of being retried into a much slower failure.
+ */
+function watchForSetupRateLimit(page: Page): { readonly seen: boolean; stop: () => void } {
+  const state = { seen: false, stop: () => page.off("response", onResponse) };
+  const onResponse = (response: { url: () => string; status: () => number }) => {
+    if (response.url().includes("/admin/break-glass/setup") && response.status() === 429) {
+      state.seen = true;
+    }
+  };
+  page.on("response", onResponse);
+  return state;
 }
 
 /**
