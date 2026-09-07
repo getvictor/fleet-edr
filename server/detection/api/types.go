@@ -390,9 +390,10 @@ const (
 // The banding is Elastic's, which is the one most operators reading this product will already have a feel for.
 //
 // The value chosen for each band is a point INSIDE it, not its edge, so a delta lands within a band rather than teetering on a
-// boundary. They are not the band midpoints, and review was right to correct that claim: they are spaced 25 apart, so the one
-// delta the catalog uses today advances a finding by exactly one band from any base and reaches critical from high. A future
-// modifier is free to be worth more or less than a band.
+// boundary. They are neither the band midpoints nor evenly spaced, and review corrected both claims in turn. What is true of them
+// is the property they were picked for: adding 25 crosses exactly one band boundary from each of the three non-critical values,
+// so the one delta the catalog uses today advances a finding by one band wherever it starts. A future modifier is free to be
+// worth more or less than a band.
 const (
 	riskScaleMin = 0
 	riskScaleMax = 100
@@ -510,7 +511,9 @@ type Finding struct {
 // rule cannot grow a technique for a condition without also saying what that condition is worth, and an operator retuning the
 // delta is knowingly re-weighting that technique for their environment rather than creating an inconsistency.
 type RiskModifier struct {
-	// Reason names the condition, for the operator reading why a finding outranks its siblings.
+	// Reason names the condition, for whoever is reading the rule. It is NOT served or persisted: an operator sees the severity
+	// it produced and the technique it stamped, not this text, and saying otherwise would document a surface the API does not
+	// have. It is kept because a bare number at a rule's call site says what the escalation is worth and not what it is for.
 	Reason string
 	// Risk is added to the base risk, before clamping to the 0..100 scale.
 	Risk int

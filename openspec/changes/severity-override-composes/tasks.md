@@ -7,6 +7,7 @@
 - [x] 1.3 Apply the operator's setting to the base, then the modifiers, and clamp.
 - [x] 1.4 Stamp a modifier's techniques AFTER a finding's own are resolved, or a rule that declares a set for every finding loses it in favour of the modifier's.
 - [x] 1.5 Convert `dns_c2_beacon`'s DGA escalation, choosing the delta so the untuned rule reports what it always did.
+- [x] 1.8 Use ONE order-preserving string deduplication. The alert store already had one for an alert's event ids, and this grew a second for merging a modifier's techniques; two implementations of one set operation is the semantic duplication this codebase is most prone to, and it fails quietly.
 - [x] 1.7 Make composition an IDENTITY when a finding carries no escalation. The engine calls it for every finding, so without that a severity this package does not recognise would be quietly rewritten as medium, turning the alerts column's loud refusal into a plausible-looking alert.
 - [x] 1.6 Compose in the fixture-replay harness too. It evaluates rules directly, so it would otherwise pin a base no operator ever sees and go green if the composition were removed.
 

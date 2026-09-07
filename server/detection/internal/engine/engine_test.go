@@ -1540,17 +1540,4 @@ func TestEngine_OverrideAdjustsAnEscalationRatherThanErasingIt(t *testing.T) {
 		assert.Equal(t, api.SeverityHigh, severityFor(t, "", nil))
 		assert.Equal(t, api.SeverityCritical, severityFor(t, "", escalated))
 	})
-
-	t.Run("a modifier's techniques are stamped on the finding", func(t *testing.T) {
-		t.Parallel()
-		// Stamped by the engine rather than the rule, which is what keeps a condition's technique and its price from drifting
-		// apart. Asserted through routeFinding by way of the alert path, since the tally carries no techniques.
-		f := api.Finding{
-			HostID: "h1", RuleID: "conditional", Severity: api.SeverityHigh,
-			Techniques: []string{"T1071.004"},
-			Modifiers:  []api.RiskModifier{{Risk: 25, Techniques: []string{"T1568.002", "T1071.004"}}},
-		}
-		assert.Equal(t, []string{"T1071.004", "T1568.002"}, appendMissing(f.Techniques, f.Modifiers[0].Techniques),
-			"the union is a set: a duplicate would inflate the ATT&CK coverage figure read during procurement")
-	})
 }

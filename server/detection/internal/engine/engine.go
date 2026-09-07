@@ -17,6 +17,7 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	detectionslices "github.com/fleetdm/edr/server/detection/internal/slices"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -690,7 +691,7 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 	// (issue #753). After the fallback above and not before it, or a rule that declares no per-finding techniques but earns a
 	// modifier would end up carrying only the modifier's, losing the set it declares for every finding.
 	for _, m := range f.Modifiers {
-		f.Techniques = appendMissing(f.Techniques, m.Techniques)
+		f.Techniques = detectionslices.Deduplicate(append(f.Techniques, m.Techniques...))
 	}
 	source := f.Source
 	if source == "" {
@@ -750,17 +751,4 @@ func (e *Engine) recordEvalStats(ctx context.Context, stats rulesapi.RuleEvalSta
 	if err := e.evalStats.RecordRuleEvalStats(ctx, stats); err != nil {
 		e.logger.ErrorContext(ctx, "record rule eval stats", "err", err, "rules", len(stats))
 	}
-}
-
-// appendMissing adds each of add that dst does not already carry, preserving order.
-//
-// A rule may name a technique its modifier also implies, and the union has to stay a set: a duplicated technique inflates an
-// ATT&CK-coverage figure read during procurement, which is the surface issue #775 exists to keep honest.
-func appendMissing(dst, add []string) []string {
-	for _, a := range add {
-		if !slices.Contains(dst, a) {
-			dst = append(dst, a)
-		}
-	}
-	return dst
 }
