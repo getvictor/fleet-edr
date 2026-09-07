@@ -57,39 +57,14 @@ async function dumpCoverage(page: Page, testId: string): Promise<void> {
   await writeFile(join(COVERAGE_DIR, `${slug}.json`), JSON.stringify(entries));
 }
 
-export const test = base.extend<{ page: Page; signedInAdmin: Page }, { signedInAdminShared: Page }>({
+export const test = base.extend<{ page: Page }, { signedInAdminShared: Page }>({
   page: async ({ page }, use, testInfo) => {
     await startCoverage(page);
     await use(page);
     await dumpCoverage(page, testInfo.testId);
   },
 
-  // signedInAdmin is "an admin looking at a page", which is the precondition of most specs in tests/qa and was being written out
-  // by hand in each of them: reset, sign in through break-glass, hold the virtual authenticator, uninstall it afterwards.
-  //
-  // A fixture rather than another exported helper, because the half that kept getting copied is the LIFECYCLE, not the sign-in.
-  // resetAndSignIn already covers the setup; what every spec then repeated was the beforeEach/afterEach pair around it, including
-  // the `let va` and the undefined-guard on teardown. Declaring the fixture is one word and Playwright owns the unwind.
-  //
-  // Specs that must seed data BEFORE sign-in cannot use this: take resetDB and signInAsAdminViaBreakGlass directly, as
-  // alert-attribution does, since the ordering is the point there.
-  //
-  // resetDB and NOT resetAndSignIn, which also wipes hosts, processes and alerts. A fixture called "an admin looking at a page"
-  // must not silently destroy the data the page is meant to show; a spec that wants an empty fleet says so by calling
-  // resetHostData itself, which is what makes that a stated precondition rather than a side effect of signing in.
-  signedInAdmin: async ({ page }, use) => {
-    const db = await openDB();
-    try {
-      await resetDB(db);
-    } finally {
-      await db.end();
-    }
-    const authenticator = await signInAsAdminViaBreakGlass(page);
-    await use(page);
-    await uninstallVirtualAuthenticator(authenticator);
-  },
-
-  // signedInAdminShared is the same admin, signed in ONCE PER WORKER instead of once per test, for specs whose tests only read.
+  // signedInAdminShared signs the admin in through break-glass ONCE PER WORKER, for specs whose tests only read.
   //
   // The reason is a budget rather than speed. `/admin/break-glass/setup` is capped at 5 submissions per minute GLOBALLY
   // (DefaultSetupRatePerMin), and one sign-in spends TWO of them: gateSetupRequest is shared by the begin and finish handlers and
@@ -98,8 +73,8 @@ export const test = base.extend<{ page: Page; signedInAdmin: Page }, { signedInA
   // read-only presentation specs cannot each take their own ceremony.
   //
   // The contract is the narrow part: tests sharing this page share its cookies, its history and anything one of them leaves
-  // behind. Use it only for tests that navigate and assert. A test that mutates state, or that needs a reset between cases, takes
-  // `signedInAdmin` and pays the two tokens.
+  // behind. Use it only for tests that navigate and assert. A test that mutates page state, or that needs a reset between cases,
+  // signs in for itself with resetDB + signInAsAdminViaBreakGlass, as alert-attribution does, and pays the two submissions.
   //
   // Coverage is dumped once per worker rather than once per test, since the page outlives the test.
   signedInAdminShared: [

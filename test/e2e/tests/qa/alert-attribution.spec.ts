@@ -14,6 +14,7 @@ import { test, expect } from "../../fixtures/agent";
 import { signInAsAdminViaBreakGlass, uninstallVirtualAuthenticator } from "../../fixtures/auth";
 import type { VirtualAuthenticator } from "../../fixtures/webauthn";
 import { openDB, resetDB } from "../../fixtures/db";
+import { waitForRuleMode } from "../../fixtures/detection-config";
 
 // The upstream rule the osascript scenario matches, and the author its file credits. Pinned as literals because they are the
 // artifact the licence is about: a rename upstream should surface here as a failing assertion, not as a silently changed credit.
@@ -71,7 +72,7 @@ test.describe("alert attribution", () => {
     // the REST surface does; the replica picks it up on its 5s refresh tick instead. Posting the scenario before that lands
     // evaluates the rule while it is still in monitor, and the alert is never raised. Wait for the precondition to actually be in
     // force rather than assuming the insert took effect.
-    await waitForPromotion(page);
+    await waitForRuleMode(page, RULE_ID, "alert");
 
     const hostId = crypto.randomUUID();
     await agent.runScenario("osascript-oneliner.yaml", { hostIdOverride: hostId });
@@ -119,19 +120,4 @@ async function waitForAlert(page: import("@playwright/test").Page, hostId: strin
     )
     .toBe(1);
   return alertId;
-}
-
-/** waitForPromotion blocks until the server reports the vendored rule as actually running in alert mode. */
-async function waitForPromotion(page: import("@playwright/test").Page): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const res = await page.request.get("/api/rules");
-        if (!res.ok()) return "";
-        const body = (await res.json()) as { rules?: { id: string; mode?: string }[] };
-        return body.rules?.find((r) => r.id === RULE_ID)?.mode ?? "";
-      },
-      { timeout: 20_000, message: "the seeded promotion never reached the server's config snapshot" },
-    )
-    .toBe("alert");
 }
