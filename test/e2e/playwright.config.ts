@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { assertLaneEnv } from "./fixtures/db";
+import { assertLaneEnv, LANE_SCHEMA } from "./fixtures/db";
 
 // Playwright config for the EDR's E2E suite.
 //
@@ -18,10 +18,6 @@ import { assertLaneEnv } from "./fixtures/db";
 // on 8089, and a hardcoded 8088 there either drives the OTHER lane's server or races its port bind, so the suite was simply not
 // runnable from lane B. E2E_PORT=8089 points it at the lane the developer is actually in.
 const PORT = Number(process.env.E2E_PORT ?? 8088);
-
-// The schema the lane owns, derived the same way fixtures/db.ts derives it so the spawned server and the suite's own connections
-// cannot disagree about which lane they are in.
-const SCHEMA = process.env.E2E_DB ?? "edr";
 
 // Checked here as well as in fixtures/db.ts so a half-configured lane fails before Playwright boots a server or a browser, rather
 // than at the first test that happens to touch the database.
@@ -81,16 +77,26 @@ export default defineConfig({
     // (returns 200 when the DB ping succeeds). /livez only proves
     // the process is up; tests that hit DB-backed endpoints need
     // the readiness guarantee.
-    command: "cd ../.. && task dev:server:qa-oidc",
+    // The schema is created first, because nothing else creates it. docker-compose.yml seeds only `edr` (MYSQL_DATABASE), and
+    // fleet-edr-migrate refuses a missing one outright ("Unknown database"), so a genuinely fresh lane B could not spawn a server
+    // at all: this worked here only because that worktree's schema already existed from earlier by-hand setup. IF NOT EXISTS, so
+    // lane A's existing data is never touched and a rerun is a no-op.
+    // The identifier is NOT backquoted, which is the opposite of the usual advice and is required here: Playwright runs this
+    // through a shell, where backticks inside double quotes are command substitution, so a quoted name is executed as a command
+    // and the CREATE arrives with an empty identifier. A bare name is safe because the schema is no longer arbitrary text: it
+    // comes from the closed lane set assertLaneEnv validates against.
+    command:
+      `mysql -uroot -h127.0.0.1 -P33306 -e ` +
+      `"CREATE DATABASE IF NOT EXISTS ${LANE_SCHEMA} CHARACTER SET utf8mb4" && cd ../.. && task dev:server:qa-oidc`,
     // Every value the task hardcodes to lane A, restated for whichever lane the suite was pointed at. The migrate and seed
     // steps that run before the server read EDR_DSN too, so they land in the same schema the suite will reset.
     env: {
       EDR_LISTEN_ADDR: `0.0.0.0:${PORT}`,
-      EDR_DSN: `root:@tcp(127.0.0.1:33306)/${SCHEMA}?parseTime=true`,
+      EDR_DSN: `root:@tcp(127.0.0.1:33306)/${LANE_SCHEMA}?parseTime=true`,
       // Deferring to an exported value preserves the one escape hatch the task already offered: its own EDR_CLICKHOUSE_DSN is
       // written as a go-task template with a default, so a developer pointing at another ClickHouse keeps doing so. The other
       // four are hardcoded in the task, so there is no existing override to respect.
-      EDR_CLICKHOUSE_DSN: process.env.EDR_CLICKHOUSE_DSN ?? `clickhouse://default:@127.0.0.1:19000/${SCHEMA}`,
+      EDR_CLICKHOUSE_DSN: process.env.EDR_CLICKHOUSE_DSN ?? `clickhouse://default:@127.0.0.1:19000/${LANE_SCHEMA}`,
       EDR_BREAKGLASS_RP_ORIGINS: `https://localhost:${PORT}`,
       EDR_DEMO_OIDC_EXTERNAL_URL: `https://localhost:${PORT}`,
     },
