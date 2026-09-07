@@ -45,7 +45,7 @@ func TestArchiveConstraints_AddedBeforeModified(t *testing.T) {
 
 	sections, err := parseDeltaSections(dir)
 	require.NoError(t, err)
-	constraints := archiveConstraints(sections)
+	constraints := archiveConstraints(sections, nil)
 
 	require.Len(t, constraints, 1)
 	assert.Equal(t, "introduces-it", constraints[0].before)
@@ -78,7 +78,7 @@ func TestArchiveConstraints_RemovalIsSequencedToo(t *testing.T) {
 
 			sections, err := parseDeltaSections(dir)
 			require.NoError(t, err)
-			constraints := archiveConstraints(sections)
+			constraints := archiveConstraints(sections, nil)
 			require.Len(t, constraints, 1)
 			assert.Equal(t, tc.other, constraints[0].before, tc.why)
 			assert.Equal(t, "retires-it", constraints[0].after)
@@ -99,7 +99,7 @@ func TestArchiveConstraints_AddRemoveAndModifyAreAllSequenced(t *testing.T) {
 
 	sections, err := parseDeltaSections(dir)
 	require.NoError(t, err)
-	constraints := archiveConstraints(sections)
+	constraints := archiveConstraints(sections, nil)
 
 	pairs := make(map[string]bool, len(constraints))
 	for _, c := range constraints {
@@ -125,7 +125,7 @@ func TestArchiveConstraints_TwoModifiedNeedNoOrder(t *testing.T) {
 
 	sections, err := parseDeltaSections(dir)
 	require.NoError(t, err)
-	assert.Empty(t, archiveConstraints(sections))
+	assert.Empty(t, archiveConstraints(sections, nil))
 }
 
 // One change that both adds and modifies the same requirement has nothing to sequence against itself.
@@ -138,7 +138,7 @@ func TestArchiveConstraints_OneChangeIsNotConstrainedAgainstItself(t *testing.T)
 
 	sections, err := parseDeltaSections(dir)
 	require.NoError(t, err)
-	assert.Empty(t, archiveConstraints(sections))
+	assert.Empty(t, archiveConstraints(sections, nil))
 }
 
 func TestArchiveOrder_RespectsConstraintsAndIsDeterministic(t *testing.T) {
@@ -234,7 +234,7 @@ func TestPrintArchiveOrder(t *testing.T) {
 	t.Run("still prints the list when nothing is constrained", func(t *testing.T) {
 		t.Parallel()
 		var buf bytes.Buffer
-		assert.True(t, printArchiveOrder(&buf, []string{"b", "a"}, nil))
+		assert.Equal(t, 0, printArchiveOrder(&buf, []string{"b", "a"}, nil))
 		out := buf.String()
 		assert.Contains(t, out, "no ordering constraints")
 		assert.Contains(t, out, "1. a")
@@ -242,11 +242,23 @@ func TestPrintArchiveOrder(t *testing.T) {
 	})
 
 	// A plan truncated by a broken pipe, reported as success, is the one way this tool could cause the loss it exists to prevent.
-	t.Run("a truncated plan is a failure, not a success", func(t *testing.T) {
+	// It exits 2 rather than the 1 a cycle uses, because the usage text and the checklist both define 1 as "reconcile a cycle" and
+	// a full disk reading as one sends the release engineer looking for a cycle that is not there.
+	t.Run("a truncated plan fails, and not as a cycle", func(t *testing.T) {
 		t.Parallel()
 		w := &stubbornWriter{ok: 1, err: errors.New("pipe closed")}
-		assert.False(t, printArchiveOrder(w, []string{"a", "b"}, []archiveConstraint{
+		assert.Equal(t, 2, printArchiveOrder(w, []string{"a", "b"}, []archiveConstraint{
 			{before: "a", after: "b", requirement: "cap/r"},
+		}))
+	})
+
+	// A cycle report that a broken pipe truncated is still a write failure, not a cycle verdict the caller can act on.
+	t.Run("a truncated cycle report fails as a write, not as a cycle", func(t *testing.T) {
+		t.Parallel()
+		w := &stubbornWriter{err: errors.New("pipe closed")}
+		assert.Equal(t, 2, printArchiveOrder(w, []string{"a", "b"}, []archiveConstraint{
+			{before: "a", after: "b", requirement: "cap/one"},
+			{before: "b", after: "a", requirement: "cap/two"},
 		}))
 	})
 
@@ -255,10 +267,9 @@ func TestPrintArchiveOrder(t *testing.T) {
 	t.Run("prints the reason beside the order", func(t *testing.T) {
 		t.Parallel()
 		var buf bytes.Buffer
-		ok := printArchiveOrder(&buf, []string{"introduces-it", "refines-it"}, []archiveConstraint{
+		assert.Equal(t, 0, printArchiveOrder(&buf, []string{"introduces-it", "refines-it"}, []archiveConstraint{
 			{before: "introduces-it", after: "refines-it", requirement: "cap/the-thing"},
-		})
-		assert.True(t, ok)
+		}))
 		out := buf.String()
 		assert.Contains(t, out, "must be archived before refines-it")
 		assert.Contains(t, out, "cap/the-thing")
@@ -268,11 +279,35 @@ func TestPrintArchiveOrder(t *testing.T) {
 	t.Run("reports a cycle as a failure rather than picking an order", func(t *testing.T) {
 		t.Parallel()
 		var buf bytes.Buffer
-		ok := printArchiveOrder(&buf, []string{"a", "b"}, []archiveConstraint{
+		assert.Equal(t, 1, printArchiveOrder(&buf, []string{"a", "b"}, []archiveConstraint{
 			{before: "a", after: "b", requirement: "cap/one"},
 			{before: "b", after: "a", requirement: "cap/two"},
-		})
-		assert.False(t, ok, "no order satisfies it, so the caller must not be told one does")
+		}), "no order satisfies it, so the caller must not be told one does")
 		assert.Contains(t, buf.String(), "No order satisfies all of them")
 	})
+}
+
+// TestArchiveConstraints_AddingWhatAlreadyExistsIsNotOrderable pins the pair review raised. One author retiring a requirement
+// while another re-introduces it wants remove-then-add; the ordinary create-then-retire wants add-then-remove; the two are the
+// same two files, and only the canonical tree separates them.
+//
+// A pending ADDED for a requirement that already exists is malformed rather than ambiguous, so the pair is surfaced through the
+// cycle path instead of being resolved by a guess that leaves one of the two authors with something their delta did not say.
+func TestArchiveConstraints_AddingWhatAlreadyExistsIsNotOrderable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeChange(t, dir, "reintroduces-it", "cap", added("The thing"))
+	writeChange(t, dir, "retires-it", "cap", removed("The thing"))
+	sections, err := parseDeltaSections(dir)
+	require.NoError(t, err)
+
+	// Absent from the canonical tree, this is an ordinary create-then-retire and orders cleanly.
+	order, cycle := archiveOrder([]string{"reintroduces-it", "retires-it"}, archiveConstraints(sections, nil))
+	require.Nil(t, cycle)
+	assert.Equal(t, []string{"reintroduces-it", "retires-it"}, order)
+
+	// Present in it, nothing here says which the authors meant, and the pair is reported rather than ordered.
+	existing := map[string]struct{}{"cap/the-thing": {}}
+	_, cycle = archiveOrder([]string{"reintroduces-it", "retires-it"}, archiveConstraints(sections, existing))
+	assert.Equal(t, []string{"reintroduces-it", "retires-it"}, cycle)
 }

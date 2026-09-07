@@ -100,7 +100,10 @@ Subcommands:
             constraints that shaped it. openspec archive replaces a MODIFIED requirement WHOLE,
             so a change that ADDS a requirement has to be applied before one that modifies or
             retires it, or the later text is discarded with no error (issue #901).
-            Exit code 0 when an order exists, 1 when two changes each have to precede the other.
+            Reads --specs-dir as well, to tell a requirement being created from one that already
+            exists; a pending ADDED for an existing requirement has no safe order and is reported.
+            Exit code 0 when an order exists, 1 when two changes each have to precede the other,
+            2 on a usage or write failure.
   archive-verify
             Run BEFORE archiving and again after, and diff the two. Checks that every scenario
             the last archived restatement of a requirement listed is still in the canonical spec,

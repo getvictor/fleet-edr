@@ -35,15 +35,15 @@ type archivedRestatement struct {
 // that is new is a scenario this archive lost. That comparison needs no ordering and no baseline file, and it is the question a
 // release engineer actually has.
 func verifyArchive(archived map[string][]archivedRestatement, canonical map[string]map[string]struct{},
-	retired map[string]struct{},
+	lifecycle map[string]requirementLifecycle,
 ) []string {
 	var losses []string
 	// Every requirement an archived delta said anything about, not only the ones it restated: a retirement that did not take
 	// effect is a finding, and the change that retired a requirement usually did not also restate it.
-	for _, requirement := range requirementsTouched(archived, retired) {
+	for _, requirement := range requirementsTouched(archived, lifecycle) {
 		entries := archived[requirement]
 		have, stillCanonical := canonical[requirement]
-		_, wasRetired := retired[requirement]
+		life := lifecycle[requirement]
 
 		// A retirement excuses a requirement that is GONE, and the canonical tree is what says whether it took effect.
 		//
@@ -55,12 +55,17 @@ func verifyArchive(archived map[string][]archivedRestatement, canonical map[stri
 		// Neither question needed asking. The end state answers both, and it answers a third the folders could not: a requirement
 		// still in the tree that a change retired and nothing re-added is a retirement the archive dropped, which is as much a
 		// silent archive defect as a lost scenario and is reported as one. Four requirements are in that state today, all retired
-		// by `2026-06-02-add-application-control`.
+		// by `2026-06-02-add-application-control`, and none of them was ever the subject of an ADDED delta.
+		//
+		// "And nothing re-added" is the part review caught missing. A retirement is not the last word on a requirement: a later
+		// change may add it back, legitimately, and then its presence is expected rather than damage. So the retirement has to be
+		// LATER than any addition to mean anything, and a retirement and an addition in the same batch mean nothing at all, which
+		// is silence for the reason everything ambiguous is silence here.
 		switch {
-		case wasRetired && stillCanonical:
+		case life.retiredLast() && stillCanonical:
 			losses = append(losses, requirement+"\n    retired by an archived change and still in the canonical spec")
 			continue
-		case wasRetired:
+		case life.retired != "":
 			continue
 		}
 
@@ -156,9 +161,21 @@ func canonicalScenarios(scenarios []Scenario) map[string]map[string]struct{} {
 	return out
 }
 
-// collectArchivedRestatements walks the archive subtree and returns each requirement's restatements in archive order, plus the
-// requirements some archived change retired.
-func collectArchivedRestatements(changesDir string) (map[string][]archivedRestatement, map[string]struct{}, error) {
+// requirementLifecycle is when the archive last ADDED a requirement and when it last RETIRED it, as archive dates.
+//
+// Dates rather than change names, and empty means never: within a batch the order is not recoverable, so an addition and a
+// retirement stamped the same day say nothing about each other.
+type requirementLifecycle struct {
+	added   string
+	retired string
+}
+
+// retiredLast reports a retirement no later addition undid. Equal dates are the same batch, which is not an answer.
+func (l requirementLifecycle) retiredLast() bool { return l.retired != "" && l.retired > l.added }
+
+// collectArchivedRestatements walks the archive subtree and returns each requirement's restatements in archive order, plus when
+// each requirement was last added and last retired.
+func collectArchivedRestatements(changesDir string) (map[string][]archivedRestatement, map[string]requirementLifecycle, error) {
 	archiveDir := filepath.Join(changesDir, archiveDirName)
 	entries, err := os.ReadDir(archiveDir)
 	if err != nil {
@@ -176,7 +193,7 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 	sort.Strings(names)
 
 	restatements := make(map[string][]archivedRestatement)
-	retired := make(map[string]struct{})
+	lifecycle := make(map[string]requirementLifecycle)
 	for _, name := range names {
 		one := &deltaSections{
 			removedRequirements:  make(map[string]struct{}),
@@ -194,10 +211,17 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 			}
 		}
 		for requirement := range one.removedRequirements {
-			retired[requirement] = struct{}{}
+			life := lifecycle[requirement]
+			life.retired = max(life.retired, archiveDate(name))
+			lifecycle[requirement] = life
+		}
+		for requirement := range one.addedBy {
+			life := lifecycle[requirement]
+			life.added = max(life.added, archiveDate(name))
+			lifecycle[requirement] = life
 		}
 	}
-	return restatements, retired, nil
+	return restatements, lifecycle, nil
 }
 
 // runArchiveVerify is the post-archive half of the release checklist's step 1.
@@ -211,6 +235,10 @@ func runArchiveVerify(args []string) int {
 	setFlags := userSetFlagNames(fs)
 	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
 	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
+	if err := requireDir(*changesDir); err != nil {
+		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
+		return 2
+	}
 
 	scenarios, err := ParseAllSpecs(*specsDir)
 	if err != nil {
@@ -219,13 +247,13 @@ func runArchiveVerify(args []string) int {
 	}
 	canonical := canonicalScenarios(scenarios)
 
-	archived, retired, err := collectArchivedRestatements(*changesDir)
+	archived, lifecycle, err := collectArchivedRestatements(*changesDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
 		return 2
 	}
 
-	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, retired), len(archived))
+	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, lifecycle), len(archived))
 }
 
 // printArchiveVerify renders the report. FINDINGS never gate: the tree carries pre-existing entries this pass cannot classify,
@@ -266,12 +294,12 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 }
 
 // requirementsTouched returns every requirement an archived delta restated or retired, in a stable order.
-func requirementsTouched(archived map[string][]archivedRestatement, retired map[string]struct{}) []string {
-	seen := make(map[string]struct{}, len(archived)+len(retired))
+func requirementsTouched(archived map[string][]archivedRestatement, lifecycle map[string]requirementLifecycle) []string {
+	seen := make(map[string]struct{}, len(archived)+len(lifecycle))
 	for k := range archived {
 		seen[k] = struct{}{}
 	}
-	for k := range retired {
+	for k := range lifecycle {
 		seen[k] = struct{}{}
 	}
 	out := make([]string, 0, len(seen))

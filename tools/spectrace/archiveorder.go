@@ -33,8 +33,8 @@ type archiveConstraint struct {
 //
 // Reported rather than forbidden. Two changes legitimately touching one requirement is ordinary in a batched-archive model, which
 // is the same reasoning findRestatementConflicts gives for not banning concurrent restatements.
-func archiveConstraints(d *deltaSections) []archiveConstraint {
-	out := append(adderBeforeTheRest(d), modifierBeforeRemover(d)...)
+func archiveConstraints(d *deltaSections, canonical map[string]struct{}) []archiveConstraint {
+	out := append(adderBeforeTheRest(d, canonical), modifierBeforeRemover(d)...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].before != out[j].before {
 			return out[i].before < out[j].before
@@ -48,24 +48,50 @@ func archiveConstraints(d *deltaSections) []archiveConstraint {
 }
 
 // adderBeforeTheRest sequences the change that CREATES a requirement ahead of every change that replaces or retires it.
-func adderBeforeTheRest(d *deltaSections) []archiveConstraint {
+//
+// Except when the requirement is ALREADY in the canonical spec, where an `## ADDED` delta for it does not mean what it says and
+// the order cannot be derived from the deltas alone. Review raised the pair: one author retiring a requirement while another
+// re-introduces it wants remove-then-add, and the ordinary create-then-retire wants add-then-remove, and the two are the same two
+// files. What separates them is whether the requirement exists yet, which is why this reads the canonical tree.
+//
+// A pending ADDED for a requirement that already exists is malformed rather than ambiguous: openspec has no "add it again", and
+// whichever order such a pair is archived in, one of the two authors does not get what their delta says. So the edge is emitted in
+// BOTH directions and the pair surfaces through the cycle path, whose message already says to reconcile and whose constraint
+// listing already names the requirement they contend over. No pending pair is in this state today.
+func adderBeforeTheRest(d *deltaSections, canonical map[string]struct{}) []archiveConstraint {
 	var out []archiveConstraint
 	for requirement, adders := range d.addedBy {
-		var laters []string
+		var modifiers []string
 		for change := range d.modifiedRestatements[requirement] {
-			laters = append(laters, change)
+			modifiers = append(modifiers, change)
 		}
-		for change := range d.removedBy[requirement] {
-			laters = append(laters, change)
-		}
+		_, alreadyExists := canonical[requirement]
 		for _, adder := range sortedKeys(adders) {
-			for _, later := range sortedUnique(laters) {
-				// One change that both adds and modifies the same requirement is not an ordering problem: openspec applies its
-				// sections in file order, and there is nothing to sequence against.
-				if adder != later {
-					out = append(out, archiveConstraint{before: adder, after: later, requirement: requirement})
+			// One change that both adds and modifies the same requirement is not an ordering problem: openspec applies its
+			// sections in file order, and there is nothing to sequence against.
+			for _, modifier := range sortedUnique(modifiers) {
+				if adder != modifier {
+					out = append(out, archiveConstraint{before: adder, after: modifier, requirement: requirement})
 				}
 			}
+			out = append(out, adderAgainstRemovers(requirement, adder, sortedKeys(d.removedBy[requirement]), alreadyExists)...)
+		}
+	}
+	return out
+}
+
+// adderAgainstRemovers pairs one adder with the changes retiring the same requirement, in one direction or in both.
+//
+// Both when the requirement already exists, because then the pair has no safe order: see adderBeforeTheRest.
+func adderAgainstRemovers(requirement, adder string, removers []string, alreadyExists bool) []archiveConstraint {
+	var out []archiveConstraint
+	for _, remover := range removers {
+		if adder == remover {
+			continue
+		}
+		out = append(out, archiveConstraint{before: adder, after: remover, requirement: requirement})
+		if alreadyExists {
+			out = append(out, archiveConstraint{before: remover, after: adder, requirement: requirement})
 		}
 	}
 	return out
@@ -247,13 +273,13 @@ func (t *tarjan) closeComponent(v string) {
 //
 // The constraints are printed as well as the order because the order alone is not checkable: a reader following it has no way to
 // tell a real prerequisite from an alphabetical accident, and the whole point is that they can see why two changes are sequenced
-// before they archive 87 of them.
-func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConstraint) bool {
+// before they archive a release's worth of them.
+func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConstraint) int {
 	order, cycle := archiveOrder(changes, constraints)
 
-	// Every write is checked, and a failed one fails the command. The caller is a release engineer following this list to archive
-	// 88 things; a plan truncated by a broken pipe while the exit status says it succeeded is the one way this tool could cause the
-	// loss it exists to prevent.
+	// Every write is checked, and a failed one fails the command with 2 rather than the 1 a cycle uses. The caller is a release
+	// engineer working down this list one change at a time; a plan truncated by a broken pipe while the exit status says it
+	// succeeded is the one way this tool could cause the loss it exists to prevent.
 	var werr error
 	p := func(format string, args ...any) {
 		if werr != nil {
@@ -281,7 +307,10 @@ func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConst
 			p("  %s\n", c)
 		}
 		p("\nSplit one of them, or reconcile the requirements they contend over, before archiving.\n")
-		return false
+		if werr != nil {
+			return writeFailure(werr)
+		}
+		return 1
 	}
 
 	// Printed even when nothing is constrained, because the checklist tells the operator to archive in the order this prints and
@@ -292,7 +321,18 @@ func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConst
 	for i, c := range order {
 		p("  %3d. %s\n", i+1, c)
 	}
-	return werr == nil
+	if werr != nil {
+		return writeFailure(werr)
+	}
+	return 0
+}
+
+// writeFailure separates a broken pipe from a dependency cycle, which review caught sharing exit 1 with no diagnostic. The usage
+// text and the checklist both define 1 as "split or reconcile a cycle", so a full disk reading as one sends the release engineer
+// looking for a cycle that is not there.
+func writeFailure(err error) int {
+	fmt.Fprintf(os.Stderr, "spectrace archive-order: write output: %v\n", err)
+	return 2
 }
 
 // sortedKeys returns a set's keys in a stable order.
@@ -338,11 +378,27 @@ func sortedUnique(in []string) []string {
 func runArchiveOrder(args []string) int {
 	fs := flag.NewFlagSet("archive-order", flag.ContinueOnError)
 	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree holding the pending changes")
+	specsDir := fs.String("specs-dir", defaultSpecsDir,
+		"root of the openspec/specs tree, read to tell a new requirement from an existing one")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	setFlags := userSetFlagNames(fs)
 	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
+	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	if err := requireDir(*changesDir); err != nil {
+		fmt.Fprintf(os.Stderr, "spectrace archive-order: %v\n", err)
+		return 2
+	}
+	scenarios, specErr := ParseAllSpecs(*specsDir)
+	if specErr != nil {
+		fmt.Fprintf(os.Stderr, "spectrace archive-order: %v\n", specErr)
+		return 2
+	}
+	canonical := make(map[string]struct{})
+	for _, sc := range scenarios {
+		canonical[sc.SpecDir+"/"+slugify(sc.Requirement)] = struct{}{}
+	}
 
 	sections, err := parseDeltaSections(*changesDir)
 	if err != nil {
@@ -358,8 +414,5 @@ func runArchiveOrder(args []string) int {
 		return 2
 	}
 
-	if printArchiveOrder(os.Stdout, changes, archiveConstraints(sections)) {
-		return 0
-	}
-	return 1
+	return printArchiveOrder(os.Stdout, changes, archiveConstraints(sections, canonical))
 }

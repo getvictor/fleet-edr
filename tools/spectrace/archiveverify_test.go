@@ -63,11 +63,11 @@ func TestVerifyArchive_TheLastRestatementIsTheAuthority(t *testing.T) {
 	))
 }
 
-// retiredSet is the requirements some archived change marked REMOVED.
-func retiredSet(requirements ...string) map[string]struct{} {
-	out := make(map[string]struct{}, len(requirements))
+// retiredSet is the requirements some archived change marked REMOVED, with nothing having added them since.
+func retiredSet(requirements ...string) map[string]requirementLifecycle {
+	out := make(map[string]requirementLifecycle, len(requirements))
 	for _, r := range requirements {
-		out[r] = struct{}{}
+		out[r] = requirementLifecycle{retired: "2026-09-07"}
 	}
 	return out
 }
@@ -317,4 +317,44 @@ func TestLastBatchRestatement(t *testing.T) {
 		assert.Equal(t, "2026-06-09", archiveDate("2026-06-09-some-change"))
 		assert.Equal(t, "short", archiveDate("short"))
 	})
+}
+
+// TestVerifyArchive_ARetirementALaterChangeUndidIsNotAFinding covers what a flat "was it ever retired" set could not answer: a
+// retirement is not the last word, and a later archived change may legitimately add the requirement back.
+//
+// A retirement and an addition stamped the SAME date are one batch, whose internal order is not recoverable, so they say nothing
+// about each other and the requirement's presence is not claimed as damage.
+func TestVerifyArchive_ARetirementALaterChangeUndidIsNotAFinding(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		life     requirementLifecycle
+		findings int
+	}{
+		{"retired, never added back", requirementLifecycle{retired: "2026-06-02"}, 1},
+		{"added back in a later batch", requirementLifecycle{retired: "2026-06-02", added: "2026-06-09"}, 0},
+		{"added and retired in one batch", requirementLifecycle{retired: "2026-06-02", added: "2026-06-02"}, 0},
+		{"added before it was retired", requirementLifecycle{retired: "2026-06-09", added: "2026-06-02"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Len(t, verifyArchive(nil, canonicalWith("cap/the-thing", "one"),
+				map[string]requirementLifecycle{"cap/the-thing": tc.life}), tc.findings)
+		})
+	}
+}
+
+// TestArchiveCommands_RefuseAChangesDirThatIsNotThere pins what a typo does. Both walkers treat a missing tree as an empty one,
+// which is right for them and would make a mistyped --changes-dir print a clean report with the safeguard switched off, twice, on
+// either side of the release checklist's comparison.
+func TestArchiveCommands_RefuseAChangesDirThatIsNotThere(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "not-there")
+	notADir := filepath.Join(t.TempDir(), "a-file")
+	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
+
+	for _, dir := range []string{missing, notADir} {
+		assert.Equal(t, 2, runArchiveVerify([]string{"--changes-dir", dir}))
+		assert.Equal(t, 2, runArchiveOrder([]string{"--changes-dir", dir}))
+	}
 }

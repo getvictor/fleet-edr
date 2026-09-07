@@ -23,7 +23,7 @@ On a release-prep branch off `main`:
 
    **Archive in that order, not alphabetically and not in whatever order `ls` prints.** `openspec archive` applies a `## MODIFIED Requirements` entry by replacing the canonical requirement WHOLE, so when one pending change adds a requirement and another modifies or retires it, applying them the wrong way round discards the later text with no error and nothing downstream notices: `openspec validate --strict` passes on a truncated requirement, and `spectrace check --strict` passes as long as the surviving scenarios still have markers. This is issue #901, and the v0.4.0 archive lost scenarios to the same class.
 
-   A non-zero exit means two changes each have to precede the other, which no order fixes. Split one or reconcile the requirements they contend over before going further.
+   Exit 1 means two changes each have to precede the other, which no order fixes: split one or reconcile the requirements they contend over before going further. Exit 2 is a usage, path, or write failure, and a mistyped `--changes-dir` is refused rather than read as an empty tree.
 
 2. For each completed change, in that order, run `openspec archive <name> -y` (NO `--skip-specs`). This merges the delta into `openspec/specs/**` and moves the folder to `openspec/changes/archive/<date>-<name>/`. Use `--skip-specs` ONLY for a tooling/doc-only change that shipped no spec delta.
 3. If a merged change is genuinely deferred to a later release (incomplete, intentionally held), it must not ship its delta into the canonical specs yet. Decide explicitly: either finish + archive it, or back its delta out of this release. The release gate (`openspec-archived` in `release.yml`) does not let an un-archived change ride silently into a release.
