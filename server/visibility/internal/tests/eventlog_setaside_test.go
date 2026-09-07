@@ -434,3 +434,30 @@ func TestNackTouchesOnlyTheEventsTheClaimHolds(t *testing.T) {
 		"SELECT processed FROM event_queue WHERE event_id = ?", "e-mine"))
 	assert.Equal(t, 0, mineState, "the owned row is returned to the queue, which is what the nack was for")
 }
+
+// TestNackOwnershipReadFailureIsReturned pins that a failure of the ownership read reaches the caller.
+//
+// It matters because of what the caller does with the result. A nack returns zero when the attempt owns nothing, which is a
+// normal outcome and not an error, and the processor reads that zero as "nothing was withdrawn". A read failure swallowed into
+// the same zero would be indistinguishable from it, so a database outage would read as a routine superseded attempt and the
+// events would sit in flight until their lease expired with nothing saying why.
+func TestNackOwnershipReadFailureIsReturned(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-read-fail"
+
+	enqueue(t, log, host, "e-read-fail", 1_000)
+	claimed, stamp, err := log.ClaimForHost(t.Context(), host, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+
+	// The table is dropped rather than the pool closed, and the difference is the point: a closed pool fails at BeginTxx, which
+	// is a path this already covers, while the ownership read is the first statement inside the transaction. This is scoped to
+	// the per-test database testdb.Open creates, so it touches nothing shared.
+	_, err = db.ExecContext(t.Context(), "DROP TABLE event_queue")
+	require.NoError(t, err)
+
+	setAside, err := log.Nack(t.Context(), []string{"e-read-fail"}, stamp)
+	require.Error(t, err, "a failed read must not be reported as an ordinary superseded attempt")
+	assert.Zero(t, setAside)
+}
