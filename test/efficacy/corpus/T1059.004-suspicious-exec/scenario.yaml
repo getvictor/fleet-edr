@@ -1,4 +1,4 @@
-# T1059 Command and Scripting Interpreter (+ T1105 Ingress Tool Transfer).
+# T1059.004 Command and Scripting Interpreter: Unix Shell.
 #
 # Synthetic shape: non-shell parent (python3) execs /bin/sh, then within
 # the 30s window the shell (or its descendants) execs a binary from /tmp.

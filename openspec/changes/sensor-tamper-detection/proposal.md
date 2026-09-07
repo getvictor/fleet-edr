@@ -1,4 +1,4 @@
-# Detect tampering with the EDR's own sensor (T1562.001)
+# Detect tampering with the EDR's own sensor
 
 ## Why
 
@@ -10,10 +10,10 @@ Issue #685 already ships the producer half: capture-provider transitions are dur
 
 ## What changes
 
-- **A `sensor_tamper` rule**, mapped to T1562.001, fires when a capture provider stops and capture does not resume within a short window.
+- **A `sensor_tamper` rule** fires when a capture provider stops and capture does not resume within a short window. It declares no ATT&CK technique: a crash produces the same state, and Impair Defenses names an actor the rule cannot observe. That was decided in the attribution sweep and is stated here too, since both changes archive together.
 - **The upgrade cutover is separated from tampering by recovery latency, not by the platform's stop reason.** This is the design decision the whole change turns on, and it was settled by measurement rather than argument. See below.
 - **A correlation read on the event archive**, `EventsByTypeForHost`, so a rule can ask what a host's own event stream did next. It is bounded to the archive's sorting-key prefix (host, type, event time), which is what makes a per-stop lookup cheap.
-- **Corpus coverage on both sides**: a T1562.001 attack scenario that must alert, and an upgrade-cutover noise scenario that must not.
+- **Corpus coverage on both sides**: an attack scenario performing T1562.001 that must alert, and an upgrade-cutover noise scenario that must not. The scenario performs the technique; the rule claims none.
 
 ## The discriminator, and why the obvious one is wrong
 

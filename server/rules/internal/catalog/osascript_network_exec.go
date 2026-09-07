@@ -32,7 +32,8 @@ import (
 // temp-exec) to be present, so download-only or temp-exec-only flows do not
 // fire: those overlap with other rules (suspicious_exec, network_exec_*).
 //
-// MITRE ATT&CK: T1059.002 (AppleScript) + T1105 (Ingress Tool Transfer).
+// MITRE ATT&CK: T1059.002 (Command and Scripting Interpreter: AppleScript). See Techniques below for why the transfer
+// sub-technique came off (issue #755).
 type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
@@ -47,11 +48,24 @@ func (r *OsascriptNetworkExec) SupportedExclusionMatchTypes() []api.ExclusionMat
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *OsascriptNetworkExec) DisplayName() string { return "AppleScript dropper" }
 
-// Techniques returns the MITRE ATT&CK IDs this rule covers: T1059.002 (Command and Scripting Interpreter → AppleScript) + T1105
-// (Ingress Tool Transfer). The rule specifically flags osascript invoking a curl/wget that stages an executable to /tmp, which is the
-// exact shape of a T1105 dropper.
+// Techniques returns T1059.002 (Command and Scripting Interpreter: AppleScript), and only that.
+//
+// T1105 (Ingress Tool Transfer) came off in the sweep for issue #755, on a second pass. The first pass kept it, reasoning that a
+// finding is unreachable without a curl or wget among the osascript's descendants, so every alert has a fetch behind it. Review
+// showed that reasoning is about the wrong thing: the descendant check matches a curl or wget by PATH, and nothing more. It never
+// inspects the arguments, the network, what was written, or whether the temp binary that fired the rule is what curl produced. An
+// osascript tree containing `curl --help` and an unrelated exec from /tmp reaches the same finding.
+//
+// So what the rule observes is that a downloader RAN, and a transfer is the inference drawn from that. This is the same shape as
+// suspicious_exec's T1105, which came off in the same sweep for the same reason, and holding the two to different standards
+// because this rule's chain feels more incriminating is how the whole class of unearned mapping got here.
+//
+// It is re-earnable, and cheaply, which is worth writing down: tie the temp-exec to the download, by argument or by output path,
+// and the transfer stops being an inference. That is a change to the predicate, not to this list.
+//
+// T1059.002 stays because it is observed: the ancestor walk matches osascript by path.
 func (r *OsascriptNetworkExec) Techniques() []string {
-	return []string{"T1059.002", "T1105"}
+	return []string{"T1059.002"}
 }
 
 // Doc surfaces the operator-facing description in /api/rules and

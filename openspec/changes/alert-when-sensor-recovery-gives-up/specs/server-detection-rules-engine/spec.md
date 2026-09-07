@@ -26,7 +26,9 @@ The changes from the prior requirement are the addition of `sensor_tamper` and `
 
 ### Requirement: EDR sensor recovery failure detection
 
-A stopped capture provider that the agent cannot restore leaves the host not reporting that telemetry until a person intervenes, and the existing stop finding cannot say so: it is raised seconds after the stop, when the outcome is not yet known, and it therefore reads identically for a host that repaired itself and one that did not. The system SHALL register a `sensor_recovery_failed` rule that raises a finding when the agent reports that its automatic repair of a capture provider has exhausted its attempts, carrying the `T1562.001` technique.
+A stopped capture provider that the agent cannot restore leaves the host not reporting that telemetry until a person intervenes, and the existing stop finding cannot say so: it is raised seconds after the stop, when the outcome is not yet known, and it therefore reads identically for a host that repaired itself and one that did not. The system SHALL register a `sensor_recovery_failed` rule that raises a finding when the agent reports that its automatic repair of a capture provider has exhausted its attempts.
+
+The finding SHALL carry no ATT&CK technique, and its text SHALL name none either. The rule's own documentation sends an analyst to this product's components as the likely cause of what it reports, so there is no actor for it to attribute. Stated here as well as in the change that decided it, because a requirement mandating the technique would archive alongside the one forbidding it.
 
 The finding SHALL carry a higher severity than the stop finding that precedes it, because a stop may already have been repaired by the time an analyst looks whereas this state persists until someone acts.
 
@@ -44,7 +46,8 @@ A provider an operator has deliberately disabled SHALL NOT produce a finding. Th
 
 - **GIVEN** a host whose capture provider stopped
 - **WHEN** the agent reports that its repair attempts for that provider are exhausted
-- **THEN** the engine produces one `sensor_recovery_failed` finding carrying the `T1562.001` technique
+- **THEN** the engine produces one `sensor_recovery_failed` finding
+- **AND** that finding carries no ATT&CK technique
 - **AND** the finding names the provider and reports how many repairs were attempted
 
 #### Scenario: The finding outranks the stop it follows

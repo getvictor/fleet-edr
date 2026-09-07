@@ -62,10 +62,19 @@ func (r *ShellNetworkConnect) SupportedExclusionMatchTypes() []api.ExclusionMatc
 	}
 }
 
+// Techniques returns T1059.004 (Command and Scripting Interpreter: Unix Shell), and only that.
+//
+// This is the question #776 deliberately left open, now decided by the sweep in issue #755. The rule inherited T1059 + T1105 from
+// the rule it was split out of, and neither survived unchanged.
+//
+// T1105 (Ingress Tool Transfer) is dropped. An outbound connection is not a transfer: the rule sees that a shell connected out,
+// not that anything came back, and not what protocol carried it. T1071 would be the same overreach in the other direction, since
+// naming an application-layer protocol means observing one.
+//
+// T1059 becomes T1059.004 for the reason it does on suspicious_exec: the middle link is matched against shellPaths, so the
+// sub-technique is observed rather than inferred.
 func (r *ShellNetworkConnect) Techniques() []string {
-	// Unchanged from the merged rule (issue #776): whether the connect shape warrants its own mapping is a separate
-	// question, deliberately not decided by the split.
-	return []string{"T1059", "T1105"}
+	return []string{"T1059.004"}
 }
 
 func (r *ShellNetworkConnect) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }

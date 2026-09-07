@@ -41,7 +41,7 @@ func TestM12_Smoke(t *testing.T) {
 				QuietScenarioPath: filepath.Join(repoRoot,
 					"test", "fakeagent", "scenarios", "quiet-host.yaml"),
 				ActiveScenarioPaths: []string{
-					filepath.Join(repoRoot, "test", "efficacy", "corpus", "T1059-suspicious-exec", "scenario.yaml"),
+					filepath.Join(repoRoot, "test", "efficacy", "corpus", "T1059.004-suspicious-exec", "scenario.yaml"),
 					filepath.Join(repoRoot, "test", "efficacy", "corpus", "T1543.001-launchagent-persistence", "scenario.yaml"),
 				},
 				QuietIterationGap:  500 * time.Millisecond,

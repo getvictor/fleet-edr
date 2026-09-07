@@ -18,7 +18,6 @@ author: Fleet EDR
 level: critical
 tags:
   - attack.t1059.002
-  - attack.t1105
 logsource:
   product: macos
   category: process_creation
