@@ -4072,9 +4072,12 @@ func TestEngine_ModifierReachesTheAlert(t *testing.T) {
 		id:         "stub-modifier",
 		techniques: api.JSONStringSlice{"T1071.004"},
 		modifiers: []api.RiskModifier{{
-			Reason:     "the resolved domain reads as algorithmically generated",
-			Risk:       25,
-			Techniques: []string{"T1568.002"},
+			Reason: "the resolved domain reads as algorithmically generated",
+			Risk:   25,
+			// Deliberately RE-DECLARES the technique the rule already carries, alongside the one only this condition implies.
+			// That is the shape the requirement names, and it is reachable: a modifier author naming the techniques their
+			// condition implies has no reason to check which of them the rule already declares for every finding.
+			Techniques: []string{"T1071.004", "T1568.002"},
 		}},
 	}
 	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
@@ -4100,5 +4103,6 @@ func TestEngine_ModifierReachesTheAlert(t *testing.T) {
 	assert.Equal(t, api.SeverityCritical, alerts[0].Severity,
 		"the rule's base is high and the modifier is worth 25, which lands in the critical band")
 	assert.Equal(t, api.JSONStringSlice{"T1071.004", "T1568.002"}, alerts[0].Techniques,
-		"the rule's own technique AND the one its modifier implies, since a condition that adds a technique must also price it")
+		"the rule's own technique AND the one its modifier implies, since a condition that adds a technique must also price it; "+
+			"the technique both of them name appears once, because a repeat inflates the coverage figure read during procurement")
 }

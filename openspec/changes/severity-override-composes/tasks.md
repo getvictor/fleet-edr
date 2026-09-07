@@ -17,5 +17,6 @@
 - [x] 2.3 Pin both ends of the clamp and the band boundaries, since every delta is judged against them.
 - [x] 2.4 Drive the ENGINE for the ordering, since what could be wrong there is the order the setting and the modifiers are applied in.
 - [x] 2.5 Drive the whole path to the persisted alert for the techniques, which is the only place they become observable. A unit test on the union helper passed with the engine's call to it removed.
+- [x] 2.8 Have the end-to-end test re-declare a technique the rule already carries, which is the deduplication the requirement names and is reachable: a modifier author listing what their condition implies has no reason to check what the rule declares for every finding.
 - [x] 2.7 Pin the identity case, including for a severity the package does not recognise, and mutate the guard away.
 - [x] 2.6 Mutation-test: the setting as last word, no composition, a delta turned into a destination, no technique stamping, and stamping before the fallback.

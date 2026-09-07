@@ -15,7 +15,7 @@ Nothing was false about any individual field. The defect is that the two populat
 - A modifier declares the techniques its condition implies alongside the risk, and the engine stamps them. A rule cannot then add a technique for a condition without saying what the condition is worth, and an operator retuning the amount is re-weighting that technique knowingly.
 - Risk is bounded to the scale, so escalations on an already-critical finding stay critical rather than running off the end.
 
-The banding is Elastic's, which is the one most operators reading this product already have a feel for: low 0-21, medium 22-47, high 48-73, critical 74-100. Each band's representative value is its mid-point rather than its edge, so a delta lands inside a band instead of teetering on a boundary. `dns_c2_beacon`'s DGA escalation is 25, chosen so the untuned rule reports exactly what it always has.
+The banding is Elastic's, which is the one most operators reading this product already have a feel for: low 0-21, medium 22-47, high 48-73, critical 74-100. Each band is represented by a point inside it rather than its edge, so a delta lands within a band instead of teetering on a boundary. Those points are 15, 35, 60 and 85: spaced 25 apart rather than at the band midpoints, so `dns_c2_beacon`'s DGA escalation of 25 advances a finding by exactly one band from any base, and reaches critical from high, which is what the untuned rule has always reported.
 
 This is the mechanism the declarative rule format specifies as `x-engine.risk_modifiers`, but the engine fix stands alone and does not depend on it.
 

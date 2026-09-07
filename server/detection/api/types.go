@@ -387,8 +387,12 @@ const (
 // DELTA and compose with a base an operator may have changed (#753). Bands alone cannot do that: "critical" is the same answer
 // whatever the base, so escalations either erase the operator's tuning or are erased by it.
 //
-// The banding is Elastic's, which is the one most operators reading this product will already have a feel for. The value chosen
-// for each band is its representative point rather than its edge, so a delta lands mid-band instead of teetering on a boundary.
+// The banding is Elastic's, which is the one most operators reading this product will already have a feel for.
+//
+// The value chosen for each band is a point INSIDE it, not its edge, so a delta lands within a band rather than teetering on a
+// boundary. They are not the band midpoints, and review was right to correct that claim: they are spaced 25 apart, so the one
+// delta the catalog uses today advances a finding by exactly one band from any base and reaches critical from high. A future
+// modifier is free to be worth more or less than a band.
 const (
 	riskScaleMin = 0
 	riskScaleMax = 100
