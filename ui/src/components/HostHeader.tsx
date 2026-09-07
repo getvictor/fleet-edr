@@ -114,9 +114,15 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
     /* eslint-enable react-hooks/set-state-in-effect */
     let cancelled = false;
     getHostHealth(detail.host_id)
-      .then((h) => { if (!cancelled) setHealth(h); })
-      .catch(() => { if (!cancelled) setHealth(null); });
-    return () => { cancelled = true; };
+      .then((h) => {
+        if (!cancelled) setHealth(h);
+      })
+      .catch(() => {
+        if (!cancelled) setHealth(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [detail.host_id]);
 
   const dotClass = healthDotClass(health?.overall_status);
@@ -132,7 +138,9 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         title={dotClass ? "Agent needs attention" : undefined}
-        onClick={() => { setOpen((v) => !v); }}
+        onClick={() => {
+          setOpen((v) => !v);
+        }}
       >
         Details
         {dotClass && <span className={`host-header__health-dot ${dotClass}`} aria-hidden="true" />}
@@ -154,7 +162,7 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
                           message landed depended on how long the component's NAME was: "DNS proxy" is short enough that its
                           message fitted beside it while the three longer names pushed theirs onto the next line, so four
                           components in one panel rendered in two different shapes at the same width. */}
-                      <div className="host-header__health-head">
+                      <div className="host-header__health-item-head">
                         <HealthBadge status={c.status} />
                         <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
                       </div>

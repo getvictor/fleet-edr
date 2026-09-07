@@ -154,7 +154,10 @@
 }
 
 // The status badge and the component's name, always the first line.
-.host-header__health-head {
+//
+// Its own class rather than reusing __health-head, which already wraps the "Agent health" label and the rollup pill higher up:
+// a second rule for that class applied to the rollup too and quietly moved it off `align-items: center`.
+.host-header__health-item-head {
   display: flex;
   align-items: baseline;
   gap: 0.4rem;
