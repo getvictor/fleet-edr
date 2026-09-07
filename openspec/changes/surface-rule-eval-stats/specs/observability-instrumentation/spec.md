@@ -22,6 +22,8 @@ A failure to read SHALL be reported as an error rather than as an empty result, 
 
 What the figures mean, and any caveat on reading them, SHALL be available without a pointer. A native tooltip on an element that cannot take focus reaches neither a keyboard nor a touch user, so the sentence that stops a number being misread is the one they would not get.
 
+A control offered in a column header SHALL still read as that column's header. Making the ordering reachable by keyboard means the header is a real control rather than text, and a control carries a user-agent presentation of its own that overrides what the surrounding header sets; a header that stops matching the row it sits in reads as a stray button and stops naming its column. This is a presentation obligation the layers below the browser cannot check, since neither a component test nor a type checker applies a user-agent stylesheet.
+
 This read and the match-count read SHALL fail independently. They describe different populations over different questions, and a rule that never matches still evaluates, so one failing SHALL NOT suppress the other.
 
 #### Scenario: Statistics are readable per rule over a window
@@ -51,3 +53,9 @@ This read and the match-count read SHALL fail independently. They describe diffe
 - **WHEN** the statistics are read
 - **THEN** the response covers the retained window and states which window it covers
 - **AND** a window that is not a positive whole number is rejected
+
+#### Scenario: The ordering control still reads as a column header
+
+- **GIVEN** a column whose header carries a control for ordering by that column
+- **WHEN** the table is rendered in a browser
+- **THEN** the header is presented the same way as the table's other column headers

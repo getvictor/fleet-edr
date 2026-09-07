@@ -148,6 +148,11 @@
 
 // The Cost header's sort control. Styled to read as the header it replaces rather than as a button in a table head, while staying
 // a real button so it is focusable and announced.
+//
+// text-transform and letter-spacing are inherited EXPLICITLY. They are inherited properties, so this looks redundant, and it is
+// not: the UA stylesheet sets both on form controls, which beats inheritance. Without these two lines the button rendered
+// "Cost (7d)" in title case with no tracking beside RULE, OBSERVED (7D) and MODE, and `font: inherit` does not cover it because
+// the font shorthand resets only the font-* longhands.
 .detection-config__sort-button {
   background: none;
   border: 0;
@@ -156,4 +161,6 @@
   color: inherit;
   cursor: pointer;
   text-align: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
 }
