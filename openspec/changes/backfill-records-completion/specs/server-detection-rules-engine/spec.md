@@ -1,0 +1,79 @@
+# Server detection rules engine: the backfill records that it finished
+
+## MODIFIED Requirements
+
+### Requirement: Alerts from vendored rules are credited
+
+The system SHALL credit alerts that carry no attribution but were raised by a rule this project did not write, so the licence obligation those rules carry is met for alerts raised before attribution was recorded rather than only for later ones.
+
+Two replicas SHALL NOT run the pass concurrently, and a replica SHALL NOT block startup on winning the right to run it.
+
+The pass SHALL run at most once per deployment rather than once per start. A leader lock alone does not give that: it excludes callers that OVERLAP and is released when the work returns, so replicas starting in sequence each acquire it in turn and each run the whole pass. The system SHALL therefore record durably that the pass completed, and a later start SHALL determine from that record that there is nothing to do without reading the alerts it would otherwise credit.
+
+Recording completion SHALL follow a successful pass rather than accompany it. A pass that fails, or that a shutdown cuts short, SHALL record nothing and SHALL be retried on the next start: an unmet licence obligation that no later start will notice is worse than repeating work that is idempotent.
+
+It SHALL touch only alerts whose attribution is absent, so an attribution already recorded is never overwritten and repeating the pass changes nothing.
+
+Three classes of alert SHALL NOT be credited, and each is irreversible if credited wrongly:
+
+- An alert raised by a rule this project wrote. The absence of attribution on those rows is meaningful: it distinguishes an alert raised before attribution existed from one raised by this project, and crediting them collapses the two.
+- An alert raised by a projection of an operator's own configuration, whose rule identifier names the operator's policy entry rather than a detection. Crediting those claims authorship of the operator's configuration.
+- An alert whose rule is now one the operator wrote themselves. A rule's identifier is its file stem, so an operator who writes their own version of a rule that shipped with the product keeps that identifier: the rule running now is theirs, while the historical alerts under that identifier were raised by the rule that shipped. Crediting those to the operator would state permanently that they wrote a detection they did not.
+
+The pass SHALL bound how much it rewrites in a single statement. Alerts carry no index that this predicate can use, so an unbounded rewrite would hold row locks across a full scan at start-up, on a system that may already be serving.
+
+Alerts from a rule the deployment no longer runs SHALL NOT be credited, and that limit is stated rather than worked around: crediting them would require a record of every rule that ever shipped, and guessing an author is worse than leaving the field empty. Tracked as #871, which #768's versioned rule packs would supply the provenance record for. Recording completion does not narrow that limit so much as fix its scope: a rule absent when the pass ran is not revisited if it returns later, and the same record of who wrote a rule that is no longer present is what would let a differently-scoped pass credit those rows.
+
+A failure to credit SHALL NOT prevent the system from starting or from detecting, because an unpaid credit on historical rows is not a reason to stop detecting today, and the next start retries.
+
+Crediting SHALL NOT delay the system becoming able to serve. Its cost scales with alert history rather than with anything bounded, nothing a request can observe depends on it, and a rolling restart would otherwise pay that cost once per replica before each could serve.
+
+#### Scenario: An uncredited alert is credited
+
+- **GIVEN** an alert raised by a rule this project did not write, carrying no attribution
+- **WHEN** the pass runs
+- **THEN** the alert is credited to that rule's author
+
+#### Scenario: Our own rule is left alone
+
+- **GIVEN** an alert raised by a rule this project wrote, carrying no attribution
+- **WHEN** the pass runs
+- **THEN** the alert still carries no attribution, because that absence distinguishes it from one raised before attribution existed
+
+#### Scenario: A projection is left alone
+
+- **GIVEN** an alert raised by a projection of an operator's own configuration, carrying no attribution
+- **WHEN** the pass runs
+- **THEN** the alert still carries no attribution, because its rule identifier names the operator's entry rather than a detection
+
+#### Scenario: A rule the operator has since written themselves is left alone
+
+- **GIVEN** an alert carrying no attribution, raised under an identifier whose rule is now content the operator wrote
+- **WHEN** the pass runs
+- **THEN** the alert still carries no attribution, because those alerts were raised by the rule that shipped under that identifier
+
+#### Scenario: A recorded attribution is not overwritten
+
+- **GIVEN** an alert already carrying an attribution
+- **WHEN** the pass runs
+- **THEN** that attribution is unchanged, and running the pass again changes nothing
+
+#### Scenario: More alerts than one batch are all credited
+
+- **GIVEN** more uncredited alerts from a vendored rule than the pass rewrites in a single statement
+- **WHEN** the pass runs
+- **THEN** every one of them is credited
+
+#### Scenario: A start after a completed pass reads no alerts
+
+- **GIVEN** a pass that has already completed on this deployment
+- **WHEN** the system starts again, on this replica or another
+- **THEN** it determines there is nothing to do from the recorded completion
+- **AND** it does not read the alerts it would otherwise credit
+
+#### Scenario: A pass that fails is retried
+
+- **GIVEN** a pass that fails partway, or that a shutdown cuts short
+- **WHEN** the system starts again
+- **THEN** the pass runs again
+- **AND** the alerts it had not reached are credited

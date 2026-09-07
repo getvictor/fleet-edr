@@ -173,13 +173,178 @@ func TestBackfillAlertOrigins_ThroughTheLeaderLock(t *testing.T) {
 	assert.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, vendored))
 	assert.Empty(t, originOfAlert(t, ctx, d, ours), "a rule this project wrote is out of scope even through the full path")
 
-	// Running again is the second boot, and must change nothing.
+	// Running again is the second boot, and it must not run the pass at all: the first one recorded that it finished (#872).
 	ranAgain, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{
 		stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"},
 	})
 	require.NoError(t, err)
-	assert.True(t, ranAgain, "the lock is free again, so this replica runs the pass")
+	assert.False(t, ranAgain, "the pass is recorded as done, so the second boot skips it rather than taking the lock again")
 	assert.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, vendored))
+}
+
+// soleLeader stands in for the coordinator in the tests below, and it is not laziness about the real one: MySQL GET_LOCK names
+// are global to the SERVER, not to a schema, so every test in this package taking `edr_alert_origin_backfill` from the real
+// coordinator contends with every other one, and with anything else running against the same MySQL. Whichever test loses simply
+// sees "another replica has it" and skips the pass, which reads as a failure of the behaviour under test.
+//
+// TestBackfillAlertOrigins_ThroughTheLeaderLock keeps the real coordinator, because the lock IS its subject. These tests are
+// about what the recorded completion does, so they take the leadership as given and stay independent of each other.
+type soleLeader struct{ leader.Coordinator }
+
+func (soleLeader) DoOnceIfLeader(ctx context.Context, _ string, fn func(context.Context) error) (bool, error) {
+	if err := fn(ctx); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-start-after-a-completed-pass-reads-no-alerts
+//
+// TestBackfillAlertOrigins_ASecondStartReadsNoAlerts pins what durable completion buys, and it needs a probe row to be observable
+// at all. The pass is idempotent, so "it ran again and changed nothing" and "it did not run" look identical from the alerts
+// table. Seeding an uncredited row AFTER the first pass separates them: a pass that ran would credit it.
+//
+// That row is a probe rather than a scenario. It cannot occur in a running deployment, because every alert written since
+// attribution shipped carries an origin, which is exactly why recording completion is sound.
+func TestBackfillAlertOrigins_ASecondStartReadsNoAlerts(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	coord := soleLeader{}
+	rules := []rulesapi.Rule{stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"}}
+
+	first := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":20}`)
+	ran, err := d.BackfillAlertOrigins(ctx, coord, rules)
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, first))
+
+	probe := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":21}`)
+	ranAgain, err := d.BackfillAlertOrigins(ctx, coord, rules)
+	require.NoError(t, err)
+	assert.False(t, ranAgain, "the recorded completion answers without taking the lock")
+	assert.Empty(t, originOfAlert(t, ctx, d, probe),
+		"and without reading alerts: a pass that ran would have credited this row")
+}
+
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-pass-that-fails-is-retried
+//
+// TestBackfillAlertOrigins_AFailedPassIsRetried pins the ordering that makes durable completion safe: the marker follows a
+// successful pass rather than accompanying it. Getting this backwards would turn one transient error into a permanently unmet
+// licence obligation, with nothing to notice it, because no later start would look at those rows again.
+//
+// The failure is injected through the origin column's own width rather than by breaking the schema, so what fails is the pass's
+// own UPDATE, which is the shape a real failure takes.
+func TestBackfillAlertOrigins_AFailedPassIsRetried(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	coord := soleLeader{}
+
+	id := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":30}`)
+
+	tooLong := strings.Repeat("A", 300)
+	_, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{
+		stubOriginRule{id: "proc_creation_macos_applescript", origin: tooLong},
+	})
+	require.Error(t, err, "an origin wider than the column fails the pass")
+	require.Empty(t, originOfAlert(t, ctx, d, id))
+
+	ran, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{
+		stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"},
+	})
+	require.NoError(t, err)
+	assert.True(t, ran, "nothing was recorded, so the next start runs the pass")
+	assert.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, id), "and credits the rows the failed pass did not")
+}
+
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-pass-that-fails-is-retried
+//
+// TestBackfillAlertOrigins_AnInterruptedStartIsRetried covers the other way a pass ends without finishing: the process is going
+// down. It reaches the same return as an error does, before anything is recorded, which is the point being pinned.
+//
+// The context is cancelled before the call rather than during the walk. Cancelling mid-walk would race the batch loop, and it
+// would exercise the same ordering: the store returns the context's error, the caller returns it, and the marker is never
+// reached.
+func TestBackfillAlertOrigins_AnInterruptedStartIsRetried(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	coord := soleLeader{}
+	rules := []rulesapi.Rule{stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"}}
+
+	id := insertAlertWithOrigin(t, t.Context(), d, "proc_creation_macos_applescript", "", `{"pid":40}`)
+
+	stopped, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.BackfillAlertOrigins(stopped, coord, rules)
+	require.Error(t, err)
+
+	ran, err := d.BackfillAlertOrigins(t.Context(), coord, rules)
+	require.NoError(t, err)
+	assert.True(t, ran, "a start that was cut short recorded nothing, so the next one runs")
+	assert.Equal(t, "SigmaHQ", originOfAlert(t, t.Context(), d, id))
+}
+
+// leaderAfterAPeer runs a hook before the callback, standing in for the replica that finished the pass and released the lock
+// while this one was waiting for it. It is the only way to reach that window from a test: the two replicas of a rolling restart
+// start in sequence, so the interesting case is not two callbacks overlapping but one starting after the other has finished.
+type leaderAfterAPeer struct {
+	leader.Coordinator
+	peerFinished func()
+}
+
+func (c leaderAfterAPeer) DoOnceIfLeader(ctx context.Context, _ string, fn func(context.Context) error) (bool, error) {
+	c.peerFinished()
+	return true, fn(ctx)
+}
+
+// TestBackfillAlertOrigins_APeerFinishingFirstIsNotRepeated covers the check INSIDE the lock, which the check outside it cannot
+// stand in for. Both replicas read "not done" before either has run, so the outer check waves both through; only the one that
+// takes the lock second can still see the peer's record, and only if it looks again.
+//
+// Without the second look this is a wasted scan rather than a wrong answer, which is exactly why it needs a test: nothing about
+// the alerts would be incorrect afterwards, so the cost is invisible in every other assertion here.
+func TestBackfillAlertOrigins_APeerFinishingFirstIsNotRepeated(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	id := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":50}`)
+	coord := leaderAfterAPeer{peerFinished: func() {
+		require.NoError(t, d.Store().MarkBackfillCompleted(ctx, "alert_origins"))
+	}}
+
+	ran, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{
+		stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"},
+	})
+	require.NoError(t, err)
+	assert.True(t, ran, "this replica did hold the lock, which is what DoOnceIfLeader reports")
+	assert.Empty(t, originOfAlert(t, ctx, d, id),
+		"but it must look again once it has the lock, and skip the pass a peer already completed")
+}
+
+// TestMarkBackfillCompleted_IsIdempotent covers two replicas that both somehow ran the pass, which the leader lock makes unlikely
+// rather than impossible. The second writer must agree with the first rather than error on a duplicate key, because a pass that
+// did its work and then failed to say so would be repeated forever.
+func TestMarkBackfillCompleted_IsIdempotent(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	done, err := d.Store().BackfillCompleted(ctx, "alert_origins")
+	require.NoError(t, err)
+	require.False(t, done, "nothing has run yet")
+
+	require.NoError(t, d.Store().MarkBackfillCompleted(ctx, "alert_origins"))
+	require.NoError(t, d.Store().MarkBackfillCompleted(ctx, "alert_origins"))
+
+	done, err = d.Store().BackfillCompleted(ctx, "alert_origins")
+	require.NoError(t, err)
+	assert.True(t, done)
+
+	other, err := d.Store().BackfillCompleted(ctx, "something_else")
+	require.NoError(t, err)
+	assert.False(t, other, "completion is per backfill, not a single flag for all of them")
 }
 
 // plainRule declares no origin, so OriginOf reports this project and the scope decision skips it.

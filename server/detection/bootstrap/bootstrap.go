@@ -431,8 +431,22 @@ func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 //   - A rule whose origin is this project is skipped, because filling those rows would erase the distinction migration 00012
 //     preserves between an alert raised before attribution existed and one raised by us.
 //
+// Runs at most once per deployment, not once per boot, and the durable marker rather than the lock is what makes that true
+// (#872). A leader lock excludes callers that OVERLAP: DoOnceIfLeader releases it when the callback returns, so replicas in a
+// rolling restart each acquire it in turn and each ran the whole pass. The pass is an unindexed scan of alerts, so that was a
+// scan per replica, plus one on every boot forever after the work was already done.
+//
+// Recording completion is sound because the population is closed. Every alert written since attribution shipped carries an
+// origin, so no new uncredited row can appear behind a finished pass. The rows that stay uncredited are the ones this pass could
+// not see in the first place: alerts from a rule no longer in the corpus (#871), and, for the same reason, alerts under a stem an
+// operator has taken over with a rule of their own, which are excluded deliberately and would not be credited by a re-run either.
+//
+// The marker is checked TWICE and the difference between the two is worth stating. The first check is the point of the change: it
+// answers from a primary-key lookup and skips the lock and the scan entirely. The second is inside the lock, where it is the
+// authoritative one, and it closes the window where two replicas both read "not done" before either finished.
+//
 // Reports how many rows it credited, so an operator upgrading can see whether the obligation was outstanding at all. Returns
-// (false, nil) when another replica holds the lock, which is a normal outcome and not a failure.
+// (false, nil) when another replica holds the lock or when the work is already recorded as done, neither of which is a failure.
 func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coordinator, rules []rulesapi.Rule) (bool, error) {
 	if d.store == nil || coord == nil {
 		return false, nil
@@ -441,9 +455,25 @@ func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coord
 	if len(origins) == 0 {
 		return false, nil
 	}
+	done, err := d.store.BackfillCompleted(ctx, backfillAlertOrigins)
+	if err != nil {
+		return false, err
+	}
+	if done {
+		return false, nil
+	}
 	return coord.DoOnceIfLeader(ctx, lockAlertOriginBackfill, func(ctx context.Context) error {
+		done, err := d.store.BackfillCompleted(ctx, backfillAlertOrigins)
+		if err != nil || done {
+			return err
+		}
 		updated, err := d.store.BackfillAlertOrigins(ctx, origins)
 		if err != nil {
+			return err
+		}
+		// Marked only after the pass returned, so a failed or cut-short walk leaves nothing recorded and the next boot retries.
+		// A marker written before the work would turn one transient error into a permanently unmet licence obligation, silently.
+		if err := d.store.MarkBackfillCompleted(ctx, backfillAlertOrigins); err != nil {
 			return err
 		}
 		if updated > 0 {
@@ -479,6 +509,10 @@ func vendoredOrigins(rules []rulesapi.Rule) map[string]string {
 	}
 	return origins
 }
+
+// backfillAlertOrigins names the pass in detection_backfills, and it is a DIFFERENT namespace from the lock below rather than a
+// duplicated constant: this one is a row in this deployment's own schema, while a GET_LOCK name is global to the MySQL instance.
+const backfillAlertOrigins = "alert_origins"
 
 // lockAlertOriginBackfill names the one-shot above. MySQL GET_LOCK names are server-global, so this identifies the task across
 // every replica of one deployment, like the periodic tasks' locks.

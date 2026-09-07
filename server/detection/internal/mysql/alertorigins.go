@@ -2,6 +2,8 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -80,9 +82,10 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 	// source and host_id, so `origin = '' AND rule_id IN (...)` cannot be satisfied by a lookup however it is written. Walking the
 	// primary key is what makes the scan happen once.
 	//
-	// So this reads the table once per boot, including the boot after everything is already credited, and once per replica through
-	// a rolling restart: DoOnceIfLeader excludes overlapping callers, not repeated ones, so each replica takes the lock in turn.
-	// Tracked as #872, whose fix is durable completion state rather than an index.
+	// So this reads the table once, and once is the most it may cost: the caller records durable completion afterwards and skips
+	// the pass entirely on every later boot (#872), which is what keeps a leader lock from being mistaken for "once ever". It
+	// excludes overlapping callers, not repeated ones, so without the marker each replica of a rolling restart took it in turn and
+	// scanned again.
 	//
 	// NOT adding an index is deliberate. One on origin would not help: our own rules keep an empty origin permanently and on
 	// purpose, so `origin = ''` stays a high-cardinality match forever rather than emptying out after the first pass. One on
@@ -139,3 +142,37 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 //     The cursor buys ONE forward scan instead of N restarts of a scan, and total scan work is not a thing a test in this
 //     package can observe. The LOOP itself IS covered, by seeding more rows than one batch holds.
 const backfillBatchSize = 1000
+
+// BackfillCompleted reports whether the named one-shot backfill has already finished on this deployment.
+//
+// A primary-key lookup, which is the point: the alert-origin pass has no index it can use and reads the whole table, so the boot
+// after it succeeded has to be answerable without touching alerts at all (#872).
+//
+// A missing row means "not known to have completed", which is the safe direction: the pass is idempotent, so running it again
+// costs a scan, while skipping one that never ran leaves an operator's alerts uncredited and the licence obligation unmet.
+func (s *Store) BackfillCompleted(ctx context.Context, name string) (bool, error) {
+	var one int
+	err := s.db.GetContext(ctx, &one, `SELECT 1 FROM detection_backfills WHERE name = ?`, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read backfill completion %q: %w", name, err)
+	}
+	return true, nil
+}
+
+// MarkBackfillCompleted records that the named backfill finished, so no later boot repeats it.
+//
+// Called only after a pass returns successfully. A pass that fails or is cut short by shutdown records nothing and is retried on
+// the next boot, which is why this is a separate call rather than something the pass does as it goes.
+//
+// INSERT IGNORE rather than an upsert because the first completion is the one that matters and a second writer has nothing new to
+// say. It also makes the concurrent case harmless: two replicas that both somehow ran the pass agree on the outcome instead of
+// one erroring on a duplicate key.
+func (s *Store) MarkBackfillCompleted(ctx context.Context, name string) error {
+	if _, err := s.db.ExecContext(ctx, `INSERT IGNORE INTO detection_backfills (name) VALUES (?)`, name); err != nil {
+		return fmt.Errorf("record backfill completion %q: %w", name, err)
+	}
+	return nil
+}
