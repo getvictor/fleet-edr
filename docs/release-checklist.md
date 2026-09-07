@@ -21,6 +21,7 @@ On a release-prep branch off `main`:
 4. Verify the canonical tree is well-formed and fully traced after archiving:
    - `openspec validate --all --strict`
    - `go run ./tools/spectrace check --strict`
+   - `go run ./tools/spectrace archive-verify`, compared against the same command's output from BEFORE step 2. Neither check above can see a requirement that lost half its text: `validate --strict` passes on a truncated one and `check --strict` passes as long as whatever survived still has markers. This one lists the scenarios an archived restatement named that the canonical spec does not have, and **a line that is new since before the archive is a scenario this archive discarded**. It reports rather than gates, and the comparison is the point: the tree already carries entries this pass cannot classify, because openspec stamps every folder in one batch with the same date and the order within a batch is therefore not recoverable, so an older loss and a scenario a later change deliberately retired look alike. A new line does not.
 5. Confirm nothing un-archived remains: `ls -1 openspec/changes/ | grep -v '^archive$'` prints nothing.
 
 > Note on removed requirements: a change that retires a requirement (a `## REMOVED Requirements` delta) does not need to be archived early to keep CI green. `spectrace check --strict` exempts canonical scenarios whose requirement an in-flight delta marks `## REMOVED`, so the requirement's tests can be deleted on the merging PR and the gate stays honest until this archive step finalizes the removal.

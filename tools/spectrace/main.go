@@ -58,6 +58,8 @@ func main() {
 		os.Exit(runReport(rest))
 	case "archive-order":
 		os.Exit(runArchiveOrder(rest))
+	case "archive-verify":
+		os.Exit(runArchiveVerify(rest))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -76,6 +78,7 @@ Usage:
                      [--marker-line-length] [--gate-inflight] [--base-ref REF]
   spectrace list-ids [--specs-dir DIR] [--normative-only]
   spectrace archive-order [--changes-dir DIR]
+  spectrace archive-verify [--specs-dir DIR] [--changes-dir DIR]
   spectrace report   [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
 Subcommands:
@@ -98,6 +101,10 @@ Subcommands:
             so a change that ADDS a requirement has to be applied before one that modifies or
             retires it, or the later text is discarded with no error (issue #901).
             Exit code 0 when an order exists, 1 when two changes each have to precede the other.
+  archive-verify
+            Run AFTER archiving. Checks that every scenario the last archived restatement of a
+            requirement listed is still in the canonical spec, which is what archiving in the
+            wrong order silently destroys. Exit code 1 when any is missing.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)

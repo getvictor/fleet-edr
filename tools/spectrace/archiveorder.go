@@ -140,35 +140,88 @@ func archiveOrder(changes []string, constraints []archiveConstraint) (order []st
 // Kahn's algorithm stalls with everything that still has a prerequisite, which includes the descendants of a cycle as well as its
 // members. Those descendants are stuck but blameless, and reporting them invites reconciling the wrong delta.
 //
-// A change is on a cycle exactly when it can reach itself, and in the residual graph that is the same as surviving the mirror of
-// Kahn's peel: repeatedly drop whatever nothing left still depends on. A descendant has no dependents inside the set and goes; a
-// cycle member always has one, its predecessor around the loop, and stays.
+// A change is on a cycle exactly when it can reach itself, which is exactly membership of a strongly connected component of more
+// than one node. That is what this computes, by Tarjan.
+//
+// It used to peel sinks instead, on the reasoning that a descendant has no dependents inside the residual and a cycle member
+// always has one. Review showed that is a different property: with two cycles joined by a path, a↔b and d↔e with b to c to d, the
+// node c has both a prerequisite and a dependent and survives the peel, while being on no cycle at all. Having an edge in each
+// direction is not the same as being able to get back.
 func onlyCycles(stalled []string, blockers map[string]map[string]struct{}) []string {
 	inSet := make(map[string]struct{}, len(stalled))
 	for _, c := range stalled {
 		inSet[c] = struct{}{}
 	}
-	for {
-		dependents := make(map[string]int, len(inSet))
-		for c := range inSet {
-			for b := range blockers[c] {
-				if _, ok := inSet[b]; ok {
-					dependents[b]++
-				}
+	// Edges point from a change to the ones that must precede it, which is the direction blockers already holds. Tarjan does not
+	// care which way round they are: a component that is strongly connected one way is strongly connected the other.
+	edges := func(c string) []string {
+		var out []string
+		for b := range blockers[c] {
+			if _, ok := inSet[b]; ok {
+				out = append(out, b)
 			}
 		}
-		dropped := false
-		for c := range inSet {
-			if dependents[c] == 0 {
-				delete(inSet, c)
-				dropped = true
+		sort.Strings(out)
+		return out
+	}
+
+	index := make(map[string]int, len(inSet))
+	low := make(map[string]int, len(inSet))
+	onStack := make(map[string]bool, len(inSet))
+	var stack []string
+	next := 0
+	cyclic := make(map[string]struct{})
+
+	var strongConnect func(v string)
+	strongConnect = func(v string) {
+		index[v] = next
+		low[v] = next
+		next++
+		stack = append(stack, v)
+		onStack[v] = true
+		for _, w := range edges(v) {
+			switch {
+			case func() bool { _, seen := index[w]; return !seen }():
+				strongConnect(w)
+				low[v] = min(low[v], low[w])
+			case onStack[w]:
+				low[v] = min(low[v], index[w])
 			}
 		}
-		if !dropped {
-			break
+		if low[v] != index[v] {
+			return
+		}
+		var component []string
+		for {
+			w := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[w] = false
+			component = append(component, w)
+			if w == v {
+				break
+			}
+		}
+		// A component of one is only a cycle if it points at itself, which a constraint from a change to itself would be. Those
+		// are dropped upstream, so this is belt and braces rather than a reachable case.
+		if len(component) > 1 {
+			for _, c := range component {
+				cyclic[c] = struct{}{}
+			}
+			return
+		}
+		for _, w := range edges(v) {
+			if w == v {
+				cyclic[v] = struct{}{}
+			}
 		}
 	}
-	return sortedKeys(inSet)
+
+	for _, c := range sortedKeys(inSet) {
+		if _, seen := index[c]; !seen {
+			strongConnect(c)
+		}
+	}
+	return sortedKeys(cyclic)
 }
 
 // printArchiveOrder renders the order and the constraints that shaped it.

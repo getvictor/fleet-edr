@@ -192,6 +192,25 @@ func TestArchiveOrder_BlamesOnlyTheCycle(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, cycle, "c is stuck behind the cycle but is not part of it")
 }
 
+// Two cycles joined by a path, which is the counterexample review gave and which the previous sink-peel implementation got
+// wrong: the joining node has a prerequisite and a dependent, so it survived the peel, while being on no cycle at all. Having an
+// edge in each direction is not the same as being able to get back to yourself.
+func TestArchiveOrder_DoesNotBlameANodeBetweenTwoCycles(t *testing.T) {
+	t.Parallel()
+	// a<->b and d<->e, joined by b -> c -> d. Only the four cycle members are at fault; c and the free change are not.
+	order, cycle := archiveOrder([]string{"a", "b", "c", "d", "e", "free"}, []archiveConstraint{
+		{before: "a", after: "b", requirement: "cap/1"},
+		{before: "b", after: "a", requirement: "cap/2"},
+		{before: "b", after: "c", requirement: "cap/3"},
+		{before: "c", after: "d", requirement: "cap/4"},
+		{before: "d", after: "e", requirement: "cap/5"},
+		{before: "e", after: "d", requirement: "cap/6"},
+	})
+	assert.Equal(t, []string{"free"}, order)
+	assert.Equal(t, []string{"a", "b", "d", "e"}, cycle,
+		"c joins the two cycles and is stuck behind one, but reconciling c would not break either")
+}
+
 // stubbornWriter fails after n successful writes, which is what a broken pipe partway through the plan looks like.
 type stubbornWriter struct {
 	ok  int
