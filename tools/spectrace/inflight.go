@@ -188,7 +188,7 @@ func collectScenarioIDs(files []string, read func(file string) (string, error)) 
 		if readErr != nil {
 			return nil, fmt.Errorf("read %s: %w", file, readErr)
 		}
-		scenarios, parseErr := parseSpec(strings.NewReader(blob), filepath.Base(filepath.Dir(file)), file)
+		scenarios, _, parseErr := parseSpec(strings.NewReader(blob), filepath.Base(filepath.Dir(file)), file)
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse %s: %w", file, parseErr)
 		}
