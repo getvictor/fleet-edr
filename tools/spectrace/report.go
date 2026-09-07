@@ -114,21 +114,16 @@ func loadScenariosAndMarkers(specsDir, changesDir, rootDir string) ([]Scenario, 
 // heading (and two proposals may touch the same capability), so collisions are expected and collapse harmlessly into the
 // set. A missing or empty changesDir yields an empty set so a repo with no in-flight proposals behaves exactly as before.
 func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
-	ids := make(map[string]struct{})
-	// Parse each in-flight proposal directory's delta specs. Skip the archive subtree (already applied into the live
-	// specs) and any plain files, so only genuinely in-flight scenario IDs widen the reference-valid set.
-	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
-		scenarios, err := ParseAllSpecs(changeDir)
-		if err != nil {
-			return err
-		}
-		for _, s := range scenarios {
-			ids[s.ID] = struct{}{}
-		}
-		return nil
-	})
+	// Projected from InFlightScenarios rather than walking the tree again. The two used to read the same files through
+	// different roots, which is the semantic duplication that lets a marker be VALID against one traversal and ungated by the
+	// other: exactly the drift the in-flight gate exists to remove.
+	scenarios, err := InFlightScenarios(changesDir)
 	if err != nil {
 		return nil, err
+	}
+	ids := make(map[string]struct{}, len(scenarios))
+	for _, s := range scenarios {
+		ids[s.ID] = struct{}{}
 	}
 	return ids, nil
 }

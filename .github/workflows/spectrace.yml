@@ -116,5 +116,5 @@ jobs:
           else
             base="origin/main"
           fi
-          echo "spectrace: scoping the marker line-length gate against ${base}"
-          go run ./tools/spectrace check --strict --marker-line-length --base-ref "${base}"
+          echo "spectrace: scoping the marker line-length and in-flight scenario gates against ${base}"
+          go run ./tools/spectrace check --strict --marker-line-length --gate-inflight --base-ref "${base}"
