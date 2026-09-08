@@ -104,7 +104,7 @@ func (r *recordingApplicationControlSender) SendApplicationControl(payload []byt
 	return nil
 }
 
-// spec:agent-command-executor/set-blocklist-command/forwarded-successfully
+// spec:agent-command-executor/set-application-control-command/forwarded-successfully
 //
 // Covers the set_application_control command path: server enqueues the command, commander forwards it to
 // the extension, and reports `completed` with policy_id + policy_version. Note: the spec scenario text
@@ -156,7 +156,7 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	assert.EqualValues(t, 42, result["policy_version"])
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
 //
 // Covers the malformed-JSON path: the commander must report `failed` BEFORE handing off to XPC so a
 // future schema tightening on the extension side never sees garbage bytes. One scenario, four invalid
@@ -185,7 +185,7 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: covers the version validation guard. Real
 // server versions start at 1, so a zero or negative payload version is either a hand-queued test command
@@ -217,7 +217,7 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	assert.Empty(t, sender.sent, "payload with invalid version must not reach the extension")
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: symmetric envelope check for policy_id.
 // Zero policy_id never comes from a healthy server fan-out; fail explicitly rather than hand garbage to
@@ -249,7 +249,7 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	assert.Empty(t, sender.sent)
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: envelope check on `rules`. Without this
 // gate, a payload with missing or null rules slips past json.Unmarshal-into-json.RawMessage and only fails
@@ -314,7 +314,7 @@ func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 	require.Len(t, sender.sent, 1, "empty rules array is a valid snapshot push")
 }
 
-// spec:agent-command-executor/set-blocklist-command/extension-bridge-is-not-available
+// spec:agent-command-executor/set-application-control-command/extension-bridge-is-not-available
 //
 // Covers the agent startup case where the XPC bridge has not been wired yet (or has disconnected). The
 // command must fail with a clear reason so the operator's audit log surfaces "no extension" rather than a
