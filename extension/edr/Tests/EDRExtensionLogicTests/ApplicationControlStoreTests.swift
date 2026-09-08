@@ -44,15 +44,15 @@ final class ApplicationControlStoreTests: AppControlStoreTestCase {
 
     // MARK: apply: per-rule-type routing
 
-    // spec:endpoint-event-collection/process-exec-authorization/an-exec-of-a-blocklisted-path-is-denied
+    // spec:extension-application-control/snapshot-persistence-format-is-typed/every-rule-type-routes-into-its-own-map
     //
-    // The exec-authorization decision is "look up the exec's path / cdhash / signing-id / team-id in
-    // the per-rule-type maps the ApplicationControlStore maintains, and DENY if any rule matches."
-    // This test pins the store-side half of that decision: every rule type lands in its own typed map
-    // and is indexed by the identifier the subscriber consults at exec-authorization time. The ESF
-    // ES_AUTH_RESULT_DENY return from the subscriber when the store reports a match is downstream of
-    // this test (subscribed in extension/ESFSubscriber.swift, not unit-tested here), but the data
-    // structure that drives the deny decision is what the assertions below pin.
+    // Every rule lands in the map for its own type, keyed by the identifier the precedence walk consults for that
+    // type. That per-type keying is what makes a walk step a single map hit, and it is why no rule of one type can
+    // be reached through another type's map: a PATH identifier that happens to equal a TEAMID is two different keys
+    // in two different maps, not one ambiguous lookup.
+    //
+    // This marker previously named an exec-authorization scenario about a blocklisted path being denied, which this
+    // test does not exercise: the deny lives in the subscriber's ES_AUTH_RESULT_DENY return, not in the store.
     func testApplyRoutesEveryRuleTypeIntoItsOwnMap() {
         let store = makeStore()
         let payload = document(
@@ -78,17 +78,16 @@ final class ApplicationControlStoreTests: AppControlStoreTestCase {
         XCTAssertEqual(snapshot.pathRules["/usr/local/bin/foo"]?.ruleID, "r6")
     }
 
-    // spec:endpoint-event-collection/process-exec-authorization/an-exec-of-a-non-blocklisted-path-is-allowed
+    // spec:extension-application-control/snapshot-persistence-format-is-typed/every-rule-type-routes-into-its-own-map
     //
-    // The exec-authorization decision is "look up the exec's path / cdhash / signing-id / team-id / binary
-    // hash in the per-rule-type maps the ApplicationControlStore maintains, and DENY if any rule matches;
-    // ALLOW (and emit a notification event) otherwise." The blocklisted-path-is-denied scenario is pinned by
-    // testApplyRoutesEveryRuleTypeIntoItsOwnMap (data structure side of the deny decision); this test pins
-    // the symmetric allow case: a path / identifier that is NOT in the typed maps produces no lookup hit, so
-    // the subscriber's downstream `if storeRule == nil { return ES_AUTH_RESULT_ALLOW }` branch takes the
-    // allow path. The ES_AUTH_RESULT_ALLOW return + the resulting exec notification event are downstream of
-    // this test (subscribed in extension/ESFSubscriber.swift, exercised at the system / VM layer per
-    // docs/testing-strategy.md), but the absence-of-match in the data structure is the unit-testable half.
+    // The other half of the same scenario: an identifier no rule declares is absent from every map, so the walk
+    // finds no match for it. Worth its own test rather than folding into the routing case above, because a store
+    // that returned a spurious hit on an undeclared identifier would still pass a test that only checks the
+    // declared ones are present.
+    //
+    // Like its sibling, this marker previously named an exec-authorization scenario (a non-blocklisted path being
+    // allowed). The ES_AUTH_RESULT_ALLOW return is the subscriber's, exercised at the system / VM layer per
+    // docs/testing-strategy.md; the absence of a match in the snapshot is the part this test can pin.
     func testApplySnapshotMissesUnregisteredIdentifiers() {
         let store = makeStore()
         store.apply(rawJSON: document(

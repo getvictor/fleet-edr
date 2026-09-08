@@ -46,7 +46,11 @@ final class AuthExecDeciderSigningTests: XCTestCase {
         XCTAssertEqual(decision, .deny(rule: rule, matchedIdentifier: "platform:com.apple.curl"))
     }
 
-    func test_spec_extension_application_control_block_event_emission_a_block_emits_a_block_event_whose_matched_identifier_matches_the_rule_type() {
+    // A TEAMID rule keyed on the bare team ID denies a binary whose tuple carries that team ID, and reports the team ID
+    // back as the matched identifier. Carries no spec marker: the denial is pinned by the auth-exec-denial-on-block-match
+    // tests, and the block event's wire shape moved to EventSerializerTests, which asserts the serialized field names
+    // rather than a decision value. Kept because it is the only TEAMID-layer deny case in this file.
+    func testTeamIDRuleDeniesAndReportsTheTeamIDAsMatched() {
         let rule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "ABCDEFGHIJ")
         let tuple = makeTuple(cdhash: nil, signingIDPrefixed: nil, teamID: "ABCDEFGHIJ")
         let decision = decideAuthExec(

@@ -149,6 +149,80 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertFalse(json.contains("cdhash"))
     }
 
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/the-exec-event-carries-cdhash-only-when-the-kernel-reported-one
+    //
+    // Two of the scenario's three cases: a Hardened Runtime binary whose kernel reported a hash carries it, and a
+    // non-hardened binary omits it. The third, a HARDENED binary whose reported hash is all zeros, cannot be reached
+    // from here at all, because this test constructs ExecPayload directly and so can pair the runtime flag with any
+    // hash it likes. testCDHashHexStringRejectsAnAllZeroKernelValue below covers that one against the real helper.
+    // The condition is therefore NOT "present iff hardened": it is present only when the process is hardened AND the
+    // kernel reported a usable hash.
+    //
+    // Both cases live in one test because a test of only the present half would pass against a serializer that emitted
+    // a placeholder for every exec, and that placeholder is the failure that matters. The kernel maps pages lazily on
+    // a non-hardened process and does not re-verify them after load, so a cdhash reported for one is not the identity
+    // of the bytes that will run; emitting it anyway would give a signature-based exclusion a value it must not trust.
+    //
+    // Asserted on the wire bytes, not the decoded struct: the server reads `cdhash` by that literal name, and absence
+    // rather than null is what its decoder relies on.
+    func testExecPayloadCarriesCDHashOnlyForHardenedBinaries() throws {
+        let hardened = ExecPayload(
+            pid: 501, ppid: 1, path: "/usr/bin/ssh", args: ["ssh"], cwd: "/", uid: 0, gid: 0,
+            codeSigning: CodeSigning(teamID: "", signingID: "com.apple.ssh", flags: 0x10000, isPlatformBinary: true),
+            sha256: nil, cdhash: String(repeating: "c", count: 40), snapshot: false
+        )
+        let hardenedJSON = String(data: try encoder.encode(hardened), encoding: .utf8) ?? ""
+        XCTAssertEqual(
+            hardenedJSON,
+            "{\"args\":[\"ssh\"],\"cdhash\":\"cccccccccccccccccccccccccccccccccccccccc\",\"code_signing\":{\"flags\":65536," +
+            "\"is_platform_binary\":true,\"signing_id\":\"com.apple.ssh\",\"team_id\":\"\"}," +
+                "\"cwd\":\"\\/\",\"gid\":0,\"path\":\"\\/usr\\/bin\\/ssh\",\"pid\":501,\"ppid\":1,\"uid\":0}"
+        )
+
+        let notHardened = ExecPayload(
+            pid: 502, ppid: 1, path: "/usr/local/bin/tool", args: ["tool"], cwd: "/", uid: 0, gid: 0,
+            codeSigning: CodeSigning(teamID: "FDG8Q7N4CC", signingID: "com.example.tool", flags: 0, isPlatformBinary: false),
+            sha256: nil, cdhash: nil, snapshot: false
+        )
+        let notHardenedJSON = String(data: try encoder.encode(notHardened), encoding: .utf8) ?? ""
+        XCTAssertEqual(
+            notHardenedJSON,
+            "{\"args\":[\"tool\"],\"code_signing\":{\"flags\":0,\"is_platform_binary\":false," +
+            "\"signing_id\":\"com.example.tool\",\"team_id\":\"FDG8Q7N4CC\"}," +
+                "\"cwd\":\"\\/\",\"gid\":0,\"path\":\"\\/usr\\/local\\/bin\\/tool\",\"pid\":502,\"ppid\":1," +
+                "\"uid\":0}"
+        )
+        XCTAssertFalse(notHardenedJSON.contains("cdhash"), "the key is absent, not null")
+    }
+
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/the-exec-event-carries-cdhash-only-when-the-kernel-reported-one
+    //
+    // The third case, and the one the payload-level test above cannot reach: a HARDENED process whose kernel cdhash is all zeros.
+    // cdhashHexString returns nil for it, so the event omits the field exactly as it does for a non-hardened binary, and the
+    // requirement is not the biconditional "hardened iff present" it first appeared to be.
+    //
+    // This branch had no test at all before now, which is why the gap survived: the payload tests construct ExecPayload directly
+    // and so can pair the Hardened Runtime flag with any hash the author likes, including one the kernel would never report.
+    // Emitting the zeros instead would be worse than omitting them, because a CDHASH rule whose identifier is forty zeros would
+    // then match every such exec by coincidence.
+    // The 20-element tuple is the C surface (es_process_t.cdhash imports as a fixed-size tuple), so the same scoped
+    // disable/enable pair CDHashHex.swift carries around its own signature applies to these two locals.
+    // swiftlint:disable large_tuple
+    func testCDHashHexStringRejectsAnAllZeroKernelValue() {
+        let allZero: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                      UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        XCTAssertNil(cdhashHexString(from: allZero), "an all-zero kernel cdhash means the kernel has none")
+
+        // One non-zero byte in the LAST position: an implementation that checked only the first byte, or only a prefix, would
+        // wrongly reject this real hash and silently drop cdhash from every event carrying one shaped like it.
+        let lastByteSet: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                          UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+        XCTAssertEqual(cdhashHexString(from: lastByteSet), "0000000000000000000000000000000000000001")
+    }
+    // swiftlint:enable large_tuple
+
     func testExecPayloadDecodesLegacyWireWithoutSnapshotKey() throws {
         // A pre-issue-#11 wire payload had no snapshot key. The custom decoder must
         // accept that and default to false rather than rejecting the envelope.
@@ -245,6 +319,53 @@ final class EventSerializerTests: XCTestCase {
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
         XCTAssertFalse(json.contains("custom_msg"))
         XCTAssertFalse(json.contains("custom_url"))
+    }
+
+    // spec:extension-application-control/block-event-emission/a-block-emits-a-block-event-whose-identifier-is-the-matched-value
+    //
+    // Runs the real decision and builds the payload from what it returned, rather than hand-writing the fields, so the
+    // wire assertions are made against values the decider actually produced.
+    //
+    // What this cannot distinguish, and the requirement's "not the rule's own stored identifier" clause can: today every
+    // layer is a map keyed by `rule.identifier`, so a match always returns a value equal to it. The clause is a
+    // constraint on future divergence (a case-folded or glob-matched layer would break the equality), and it matches the
+    // code, since emitBlockEvent is handed the matched identifier and not the rule. No test can separate the two while
+    // the maps are keyed this way; asserting otherwise here would be a test that cannot fail dressed as one that can.
+    //
+    // The marker previously sat on a decideAuthExec test that emits no event at all. The ESF glue in emitBlockEvent
+    // (audit token to pid, es_token to path) needs an es_message_t and stays at the system / VM layer; the mapping
+    // from decision to wire shape is the part that is unit-testable, and it is where the field names live.
+    func testBlockPayloadCarriesTheMatchedIdentifierNotTheRuleIdentifier() throws {
+        let rule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "EQHXZ8M8AV")
+        let decision = decideAuthExec(
+            tuple: makeTuple(teamID: "EQHXZ8M8AV"),
+            snapshot: makeSnapshot(teamIDRules: ["EQHXZ8M8AV": rule]),
+            hashOutcome: .notNeeded
+        )
+        guard case let .deny(matchedRule, matchedIdentifier) = decision else {
+            return XCTFail("a TEAMID BLOCK/PROTECT rule must deny, got \(decision)")
+        }
+        let payload = ApplicationControlBlockPayload(
+            pid: 991, path: "/usr/local/bin/blocked",
+            ruleID: matchedRule.ruleID, ruleType: matchedRule.ruleType, identifier: matchedIdentifier,
+            severity: matchedRule.severity, customMsg: matchedRule.customMsg, customURL: matchedRule.customURL,
+            policyID: 7, policyVersion: 12
+        )
+        let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
+        // One literal rather than a set of `contains` checks. The encoder uses .sortedKeys, so the bytes are deterministic, and
+        // equality is the only assertion that fails when a field is ADDED. That is the direction this PR is about: the canonical
+        // requirement claimed four fields (rule_identifier, matched_identifier, process, ancestry) the wire has never had, and a
+        // substring test cannot notice an extra key. Absence assertions for those four follow, because a literal alone would not
+        // say WHICH four the requirement invented if this ever regresses.
+        XCTAssertEqual(
+            json,
+            "{\"identifier\":\"EQHXZ8M8AV\",\"path\":\"\\/usr\\/local\\/bin\\/blocked\",\"pid\":991," +
+                "\"policy_id\":7,\"policy_version\":12,\"rule_id\":\"app_control:test-EQHXZ8M8AV\"," +
+                "\"rule_type\":\"TEAMID\",\"severity\":\"medium\"}"
+        )
+        for absent in ["rule_identifier", "matched_identifier", "ancestry", "\"process\""] {
+            XCTAssertFalse(json.contains(absent), "\(absent) is not a field of this event")
+        }
     }
 
     // MARK: EventEnvelope
