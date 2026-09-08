@@ -63,7 +63,7 @@ docker compose -f docker-compose.demo.yml up
 
 Open <https://localhost:8088/ui/>, accept the self-signed certificate warning, and sign in through the bundled IdP with the demo account `demo@fleet-edr.local` / `demo`. It signs in as an **admin**: user invitations, policy authoring, and every host and alert action, so you can drive the full operator surface.
 
-You'll see two real macOS hosts (an engineer laptop and a CI build server), each with a deep process graph and correlated network and DNS activity drawn from genuine scrubbed captures. Woven into that ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec, DNS, and outbound connection correlated across all three streams), plus sudoers tampering, launchd persistence, and an application-control block. Every alert comes from the real ingestion and detection pipeline, not hand-inserted rows, and the benign activity raises no false alarms.
+You'll see two real macOS hosts (an engineer laptop and a CI build server), each with a deep process graph and correlated network and DNS activity drawn from genuine scrubbed captures. Woven into that ambient activity are five fired ATT&CK detections: a credential keychain dump and a dropped payload phoning home (exec, DNS, and outbound connection correlated across all three streams), plus sudoers tampering, launchd persistence, and an application-control block. Every alert comes from the real ingestion and detection pipeline, not hand-inserted rows, and the benign activity raises no false alarms.
 
 Notes:
 

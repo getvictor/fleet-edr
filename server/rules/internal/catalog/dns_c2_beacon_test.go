@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,4 +289,35 @@ func TestDNSC2Beacon_OrphanedConnectDoesNotMaskResolvableBeacon(t *testing.T) {
 	assert.Equal(t, api.SeverityCritical, api.ApplyModifiers(findings[0].Severity, findings[0].Modifiers),
 		"and against the rule's own base that escalation still lands on critical, as it always has")
 	assert.Equal(t, []string{"beacon-dns", "beacon-connect"}, findings[0].EventIDs)
+}
+
+// spec:server-detection-rules-engine/canonical-rule-naming/the-canonical-name-may-differ-from-the-identifier
+//
+// The rename from "DNS C2 beacon" (#752), pinned from both sides because each half can regress independently and the
+// consequences differ.
+//
+// The NAME must not claim periodicity. This rule measures none and cannot: it holds no state between event batches, by
+// design, because the server is stateless. A name promising beaconing told operators a behaviour was covered when it was
+// not, and told analysts periodicity had been observed when it had not. It also propagated: the exported rule file was
+// once written from the name rather than the code and claimed an "interval_regularity_and_entropy" algorithm that has
+// never existed.
+//
+// The IDENTIFIER must not change. Alerts, exclusions and detection_rule_settings are all stored against it, so a rename
+// there would strand tuning and orphan alert history. That divergence is deliberate, and this is where it is enforced.
+func TestDNSC2Beacon_NameDescribesWhatItDetectsAndTheIDIsStable(t *testing.T) {
+	t.Parallel()
+	r := &DNSC2Beacon{}
+
+	assert.Equal(t, "dns_c2_beacon", r.ID(),
+		"the identifier is a stored key: exclusions and per-rule settings resolve through it")
+
+	name := r.DisplayName()
+	assert.Equal(t, "Dropped payload phoning home", name)
+	assert.Equal(t, name, r.Doc().Title, "one canonical name across every operator-facing surface")
+
+	// Asserted as a property rather than only as a literal, so a future rename cannot quietly reintroduce the claim.
+	for _, forbidden := range []string{"beacon", "interval", "periodic", "regularity"} {
+		assert.NotContains(t, strings.ToLower(name), forbidden,
+			"the name must not claim a periodicity signal this rule does not compute")
+	}
 }

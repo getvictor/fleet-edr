@@ -43,7 +43,18 @@ func (r *DNSC2Beacon) AlgorithmName() string { return "dns_resolve_then_connect"
 func (r *DNSC2Beacon) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
 
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
-func (r *DNSC2Beacon) DisplayName() string { return "DNS C2 beacon" }
+//
+// It deliberately does NOT match the rule identifier, and that is the point of #752 rather than drift. "DNS C2 beacon"
+// named a behaviour this rule does not detect: it measures no periodicity and cannot, because it holds no state between
+// batches. The name misled in both directions. An operator reading the catalog reasonably assumed beaconing was covered
+// and it was not; an analyst triaging an alert titled "beacon" reasonably assumed periodicity had been observed and it
+// had not. It also misled authors: the exported rule file was once written from the name rather than the code and came
+// out claiming an "interval_regularity_and_entropy" algorithm that has never existed.
+//
+// The identifier stays `dns_c2_beacon`. Alerts, exclusions and detection_rule_settings all key on it, so changing it
+// would strand existing per-rule settings and orphan historical alerts, which is a real cost paid for nothing an
+// operator sees. The identifier is a stable key; the name is what people read, and only the name was wrong.
+func (r *DNSC2Beacon) DisplayName() string { return "Dropped payload phoning home" }
 
 // Techniques is the union the rule can stamp; a given finding narrows this to the subset that actually applied (every
 // finding carries T1071.004; only DGA-domain findings add T1568.002). Procurement and ATT&CK-Navigator export read this

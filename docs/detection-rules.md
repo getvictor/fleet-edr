@@ -36,7 +36,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | alert | T1548.003 |
-| [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon | high | alert | T1071.004, T1568.002 |
+| [`dns_c2_beacon`](#dns_c2_beacon) | Dropped payload phoning home | high | alert | T1071.004, T1568.002 |
 | [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | alert |  |
 | [`proc_creation_macos_applescript`](#proc_creation_macos_applescript) | MacOS Scripting Interpreter AppleScript | medium | monitor | T1059.002 |
 | [`proc_creation_macos_base64_decode`](#proc_creation_macos_base64_decode) | Decode Base64 Encoded Text -MacOs | low | monitor | T1027 |
@@ -395,7 +395,7 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 
 ## dns_c2_beacon
 
-**DNS C2 beacon**  
+**Dropped payload phoning home**  
 Flags a program that looks up a domain name and then connects to the address that lookup returned, when that program was launched from a suspicious location such as a temporary or world-writable folder. This is the classic "malware phoning home" shape, and the alert ties three normally separate signals into one finding: the program launch, the DNS lookup, and the outbound connection.
 
 | | |

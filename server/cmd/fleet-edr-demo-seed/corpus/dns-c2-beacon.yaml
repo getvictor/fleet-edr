@@ -8,7 +8,7 @@
 # domain escalates the finding to Critical and adds T1568.002. The remote IP is
 # in the RFC 5737 TEST-NET-3 documentation block. Woven onto a captured host by
 # the seeder, so it fires inside real ambient activity.
-name: "T1071.004 DNS C2 beacon: temp-path payload resolves + connects"
+name: "T1071.004 dropped payload phoning home: temp-path payload resolves + connects"
 mitre: T1071.004 + T1568.002
 host:
   id: DE300DC2-0000-0000-0000-000000000001
