@@ -58,7 +58,8 @@ func TestEvent_ExtractsMappedFields(t *testing.T) {
 		},
 		{
 			"open TargetFilename is the opened path",
-			event("open", `{"pid":77,"path":"/etc/sudoers","flags":2}`),
+			// O_RDWR|O_TRUNC: a modification, which is the only shape that supplies the path (#801).
+			event("open", `{"pid":77,"path":"/etc/sudoers","flags":1026}`),
 			"TargetFilename", []string{"/etc/sudoers"}, true,
 		},
 		{
@@ -160,14 +161,17 @@ func TestEvent_FieldIsAllocationFree(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/a-read-only-open-supplies-no-target-filename
+// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/a-lock-supplies-no-target-filename
 //
-// TestEvent_FileEventMeansWriteIntent pins that a read-only open supplies no TargetFilename.
+// TestEvent_FileEventMeansACompletedModification pins the two shapes that supply no TargetFilename: a read-only open, and an open
+// that can write but sets no content-changing flag.
 //
-// Sigma's file_event category is file creation or modification (it is Sysmon's FileCreate), not "a file was opened". Our open
-// events include read-only opens, and they are routine rather than signal: the sudoers_tamper rule drops them precisely because
-// cron, sudo itself and various PAM modules read /etc/sudoers constantly. Supplying them here would import that noise into every
-// file_event rule we adopt, as false positives.
-func TestEvent_FileEventMeansWriteIntent(t *testing.T) {
+// Sigma's file_event category is file creation or modification (it is Sysmon's FileCreate), not "a file was opened". Read-only
+// opens of a watched path are routine: cron, sudo itself and various PAM modules read /etc/sudoers constantly. Locks are the same
+// noise wearing write access, and measurably so: sudo opens /etc/sudoers O_WRONLY to take a LOCK_EX flock and never writes, which
+// put 30 sudoers_tamper alerts on one host in 15 minutes during rc.6 QA. Supplying either would present known noise to every
+// file_event rule as a detection, which is why the gate is here rather than in each rule (#801).
+func TestEvent_FileEventMeansACompletedModification(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -176,12 +180,19 @@ func TestEvent_FileEventMeansWriteIntent(t *testing.T) {
 		wantPresent bool
 	}{
 		{"O_RDONLY supplies nothing", 0x0, false},
-		{"O_WRONLY supplies the path", 0x1, true},
-		{"O_RDWR supplies the path", 0x2, true},
+		{"O_WRONLY alone is a lock, not a modification", 0x1, false},
+		{"O_RDWR alone is a lock, not a modification", 0x2, false},
+		{"O_WRONLY|O_TRUNC supplies the path", 0x1 | 0x400, true},
+		{"O_WRONLY|O_APPEND supplies the path", 0x1 | 0x8, true},
+		// Each mutating bit on its own, so dropping one from the mask fails a case rather than hiding behind a sibling. Without
+		// this, removing O_CREAT would leave every test green while a legacy create-only open stopped supplying the path.
+		{"O_WRONLY|O_CREAT supplies the path", 0x1 | 0x200, true},
 		// The flags every real open event in the dev corpus carries: O_WRONLY|O_CREAT|O_TRUNC.
 		{"O_WRONLY|O_CREAT|O_TRUNC supplies the path", 0x601, true},
 		// A read-only open that also sets high bits is still read-only: only bits 0-1 carry the access mode.
 		{"O_RDONLY|O_CLOEXEC is still read-only", 0x1000000, false},
+		// O_APPEND without write access is not a modification either: the mutating bits alone are not enough.
+		{"O_APPEND without write access supplies nothing", 0x8, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,55 +250,7 @@ func FuzzNewEvent(f *testing.F) {
 	})
 }
 
-// spec:server-detection-rules-engine/an-open-event-supplies-the-writer-and-the-meaning-of-the-write/a-write-mode-open-that-changes-nothing-is-distinguished-from-one-that-does
-//
-// TestEvent_OpenSeparatesWriteAccessFromMutatingIntent pins that the two facts about an open's flags are supplied separately.
-//
-// They cannot be one field. sudo opens /etc/sudoers write-mode to take a LOCK_EX flock, so it is a write by access mode with no
-// intent to change the contents, and sudoers_tamper suppresses exactly that shape and only for sudo. A combined boolean would
-// either lose the suppression or apply it to every writer.
-func TestEvent_OpenSeparatesWriteAccessFromMutatingIntent(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name             string
-		flags            int
-		wantWriteIntent  string
-		wantMutatingOpen string
-	}{
-		{"read-only", 0x0, "false", "false"},
-		{"sudo's flock: write access, changes nothing", 0x1, "true", "false"},
-		{"O_RDWR alone changes nothing", 0x2, "true", "false"},
-		{"O_TRUNC changes the contents", 0x1 | 0x400, "true", "true"},
-		{"O_APPEND changes the contents", 0x2 | 0x8, "true", "true"},
-		{"O_CREAT changes the contents", 0x1 | 0x200, "true", "true"},
-		// Each field describes one property of the flags, independently: this is not a reachable open(2) shape (O_TRUNC needs
-		// write access), and it is here to pin that the fields do not gate on each other. Collapsing them is the thing the
-		// two-field design exists to avoid, so MutatingOpen stays a statement about the flags rather than a compound verdict.
-		{"a mutating bit without write access", 0x400, "false", "true"},
-		{"what the extension actually emits", 0x601, "true", "true"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e, err := NewEvent(api.Event{
-				EventID: "e1", EventType: "open",
-				Payload: []byte(fmt.Sprintf(`{"pid":1,"path":"/etc/sudoers","flags":%d}`, tc.flags)),
-			})
-			require.NoError(t, err)
-
-			writeIntent, ok := e.Field("WriteIntent")
-			require.True(t, ok)
-			assert.Equal(t, []string{tc.wantWriteIntent}, writeIntent)
-
-			mutating, ok := e.Field("MutatingOpen")
-			require.True(t, ok)
-			assert.Equal(t, []string{tc.wantMutatingOpen}, mutating)
-		})
-	}
-}
-
-// spec:server-detection-rules-engine/an-open-event-supplies-the-writer-and-the-meaning-of-the-write/the-writing-process-image-is-available-to-a-file-rule
+// spec:server-detection-rules-engine/an-open-event-supplies-the-writer/the-writing-process-image-is-available-to-a-file-rule
 //
 // TestEvent_OpenSuppliesTheWritingProcessImage pins that a file rule can match on who did the opening. The value is resolved
 // lazily, because a rule that never reads Image must not pay for a process lookup on every open event.

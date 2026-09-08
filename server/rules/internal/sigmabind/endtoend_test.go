@@ -71,8 +71,10 @@ condition: selection and not filter_readonly
 `)
 	require.NoError(t, Validate(rule, "open"))
 
+	// flags=1538 is O_RDWR|O_CREAT|O_TRUNC: write access AND a content-changing bit, which is what the adapter requires before
+	// it reports a path at all (#801). A bare O_RDWR is a lock, and no longer reaches a file rule.
 	fires := func(path string) bool {
-		e, err := NewEvent(api.Event{EventID: "e1", EventType: "open", Payload: []byte(`{"pid":1,"path":"` + path + `","flags":2}`)})
+		e, err := NewEvent(api.Event{EventID: "e1", EventType: "open", Payload: []byte(`{"pid":1,"path":"` + path + `","flags":1538}`)})
 		require.NoError(t, err)
 		return rule.Matches(e)
 	}

@@ -7,13 +7,13 @@ title: Sudoers tamper
 id: 21004f8d-258a-5114-a20a-c987446bbf32
 status: stable
 description: |-
-  Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.
+  Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.
 
   Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of `/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as root.
 
   Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.
 
-  `visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the rule does not see them at all.
+  `visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it onto /etc/sudoers is missed.
 author: Fleet EDR
 level: high
 tags:
@@ -22,36 +22,32 @@ logsource:
   product: macos
   category: file_event
 detection:
-  # A sudoers file being written. TargetFilename is supplied only for an open that carries write access (see sigmabind), and
-  # WriteIntent states that requirement in the rule rather than leaving it to the adapter, so widening the adapter cannot silently
-  # widen this rule.
+  # A sudoers file being changed. The adapter supplies TargetFilename only for an event that carries write access, so this one
+  # condition is the whole rule (#801).
+  #
+  # It used to carry two more tests, WriteIntent and a MutatingOpen-based suppression of sudo's LOCK_EX flock, and both were
+  # inert. Since #301 the only source of these events re-emits ESF NOTIFY_CREATE and NOTIFY_WRITE with a CONSTANT synthetic flag
+  # set (1537), against which write access is always set and the mutating bits are always set, so the first test always passed
+  # and the second could never fire. They could not be made real either: real open(2) flags need broad NOTIFY_OPEN, which
+  # ADR-0008 drops because ESF cannot mute it per event type and, in the ADR's own words, it "is not how top EDRs collect file
+  # telemetry".
+  #
+  # Retiring them is what makes this rule plain Sigma. The events it now reads ARE completed creations and modifications, which
+  # is what Sigma's file_event category means, so the rule no longer needs a field this engine computes.
   selection:
     TargetFilename|re: '^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$'
-    WriteIntent: true
-  # sudo itself opens /etc/sudoers write-mode to take a LOCK_EX flock for serialised reads: write by access mode, with no intent to
-  # change the contents. Suppress that one pattern, and ONLY for sudo, so any other writer using bare O_WRONLY still fires.
-  #
-  # This is why a single write-intent boolean cannot express the rule: the second flag test is conditional on who is writing, which
-  # is why the two masks are separate fields and why Image is supplied for open events at all.
-  #
-  # The residual gap this filter opens: a sudo that opens the file with bare O_WRONLY and then writes is suppressed. Scoping the
-  # exception to sudo is what keeps it narrow (any other writer using bare O_WRONLY still fires), but sudo itself is not covered.
-  # Closing it means correlating on NOTIFY_WRITE / NOTIFY_CLOSE_MODIFIED rather than inferring intent from open(2) flags, which is
-  # the same fix the atomic-rename limitation below needs.
-  filter_sudo_lock:
-    Image|re: '^/usr/bin/sudo$'
-    MutatingOpen: false
-  condition: selection and not filter_sudo_lock
+  condition: selection
 falsepositives:
   - Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.
 x-engine:
   rule_id: sudoers_tamper
   type: sigma
-  portable: mapped
-  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads the fields MutatingOpen and WriteIntent, which this engine computes rather than taking from Sigma's own taxonomy, so another engine needs them supplied to evaluate the rule. Sigma has no equivalent because it represents a file event as a completed creation or modification rather than an open with flags.
+  portable: standard
+  portability_note: The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, so any Sigma-compatible engine can evaluate it as it stands.
   event_types:
     - open
   exclusions:
     - path_glob
   limitations:
-    - 'Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn''t fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.'
+    - 'Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule''s largest gap and a trivial evasion.'
+    - 'On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule''s own suppression named sudo alone. sudo''s own lock is still not an alert, and no agent shipping today can produce either shape.'

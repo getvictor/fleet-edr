@@ -53,11 +53,9 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		// The process that did the opening, supplied from the graph the way ParentImage is. Standard Sigma taxonomy: Image
 		// means the acting process, whatever the event type.
 		"Image": func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
-		// Computed from the open flags. Neither is Sigma taxonomy, and neither appears anywhere in the upstream corpus, so a
-		// rule reading them is `portable: mapped`. That is the deliberate trade issue #772 records: it keeps the rule a plain
-		// field match instead of a condition the format cannot express.
-		"WriteIntent":  func(e *Event) ([]string, bool) { return e.writeIntent, e.writeIntent != nil },
-		"MutatingOpen": func(e *Event) ([]string, bool) { return e.mutatingOpen, e.mutatingOpen != nil },
+		// Nothing derived from the open's flags is supplied. Whether an open carried write access, and whether it carried a
+		// content-changing flag, decide whether TargetFilename is supplied at all (see NewEvent); exposing them as fields is
+		// what used to make a file rule `portable: mapped`, and #801 retired them.
 	},
 }
 

@@ -64,7 +64,7 @@ func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 func (r *SudoersTamper) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.",
+		Summary: "Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.",
 		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
 			"`/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as " +
 			"root.\n\n" +
@@ -72,15 +72,17 @@ func (r *SudoersTamper) Doc() api.Documentation {
 			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
 			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +
 			"admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.\n\n" +
-			"`visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the " +
-			"rule does not see them at all.",
+			"`visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both " +
+			"ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it " +
+			"onto /etc/sudoers is missed.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"open"},
 		FalsePositives: []string{
 			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.",
 		},
 		Limitations: []string{
-			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
+			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule's largest gap and a trivial evasion.",
+			"On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.",
 		},
 	}
 }
