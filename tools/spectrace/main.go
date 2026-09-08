@@ -115,9 +115,10 @@ Subcommands:
             tree, and reading MODIFIED alone left it unchecked. Where one batch carries both for
             one requirement, what it CLAIMS is intersected across them, while what it EXCUSES
             from the retirement checks comes from its MODIFIED entries alone, since a MODIFIED
-            replaces the requirement whole and is applied after the ADDED it refines. Findings do NOT gate: the tree carries older ones this cannot classify, so
-            a line that is NEW in the second report is the loss this archive caused. Exit code 2
-            on a usage or write failure.
+            replaces the requirement whole and is applied after the ADDED it refines. Findings
+            do NOT gate: the tree carries older ones this cannot classify, so a line that is NEW
+            in the second report is the loss this archive caused. Exit code 2 on a usage or
+            write failure.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)
