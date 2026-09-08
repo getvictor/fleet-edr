@@ -34,6 +34,12 @@ Deciding this where the field is supplied, rather than in each rule, is what let
 - **WHEN** a file-event rule is evaluated against it
 - **THEN** the rule sees no target filename, and does not match, because taking a lock is not a modification
 
+#### Scenario: A rule is inert against an event type it does not name
+
+- **GIVEN** a rule whose logsource names one event type
+- **WHEN** it is evaluated against an event of a different type
+- **THEN** it does not match, rather than matching on a field that happens to share a name
+
 ## REMOVED Requirements
 
 ### Requirement: A rule suppresses a named exception rather than branching on the writer

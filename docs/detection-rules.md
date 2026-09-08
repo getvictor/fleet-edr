@@ -391,7 +391,7 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 ### Limitations
 
 - Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule's largest gap and a trivial evasion.
-- On an agent predating #301, which sends real open(2) flags, sudo taking its LOCK_EX flock on /etc/sudoers now alerts. The suppression for it was retired with the flag fields (#801) because it was inert on every current agent. Add a path-glob exclusion for /usr/bin/sudo if such agents are still in the fleet.
+- On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.
 
 ## dns_c2_beacon
 

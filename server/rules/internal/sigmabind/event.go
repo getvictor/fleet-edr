@@ -36,9 +36,6 @@ type Event struct {
 	resolveErr   error
 	resolveDone  bool
 
-	// Flag-derived facts about a file open, kept as separate fields because the rule reading them applies them separately: one
-	// gates on write access, the other suppresses one specific writer's lock pattern.
-
 	// pid identifies the process the event is ABOUT, which every mapped type carries under the same key. Kept here so a caller
 	// reads it from the one decode this type already performs rather than unmarshalling the payload a second time to find it.
 	pid    int

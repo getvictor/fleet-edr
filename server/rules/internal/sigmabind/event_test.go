@@ -184,6 +184,9 @@ func TestEvent_FileEventMeansACompletedModification(t *testing.T) {
 		{"O_RDWR alone is a lock, not a modification", 0x2, false},
 		{"O_WRONLY|O_TRUNC supplies the path", 0x1 | 0x400, true},
 		{"O_WRONLY|O_APPEND supplies the path", 0x1 | 0x8, true},
+		// Each mutating bit on its own, so dropping one from the mask fails a case rather than hiding behind a sibling. Without
+		// this, removing O_CREAT would leave every test green while a legacy create-only open stopped supplying the path.
+		{"O_WRONLY|O_CREAT supplies the path", 0x1 | 0x200, true},
 		// The flags every real open event in the dev corpus carries: O_WRONLY|O_CREAT|O_TRUNC.
 		{"O_WRONLY|O_CREAT|O_TRUNC supplies the path", 0x601, true},
 		// A read-only open that also sets high bits is still read-only: only bits 0-1 carry the access mode.
