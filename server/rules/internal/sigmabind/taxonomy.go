@@ -56,8 +56,6 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		// Computed from the open flags. Neither is Sigma taxonomy, and neither appears anywhere in the upstream corpus, so a
 		// rule reading them is `portable: mapped`. That is the deliberate trade issue #772 records: it keeps the rule a plain
 		// field match instead of a condition the format cannot express.
-		"WriteIntent":  func(e *Event) ([]string, bool) { return e.writeIntent, e.writeIntent != nil },
-		"MutatingOpen": func(e *Event) ([]string, bool) { return e.mutatingOpen, e.mutatingOpen != nil },
 	},
 }
 

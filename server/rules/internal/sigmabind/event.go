@@ -38,8 +38,6 @@ type Event struct {
 
 	// Flag-derived facts about a file open, kept as separate fields because the rule reading them applies them separately: one
 	// gates on write access, the other suppresses one specific writer's lock pattern.
-	writeIntent  []string
-	mutatingOpen []string
 
 	// pid identifies the process the event is ABOUT, which every mapped type carries under the same key. Kept here so a caller
 	// reads it from the one decode this type already performs rather than unmarshalling the payload a second time to find it.
@@ -70,13 +68,10 @@ type openPayload struct {
 
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
 // non-zero there means the descriptor can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND) do not affect the access mode.
-//
-// This is now the single derivation: #772 moved the sudoers_tamper rule onto the WriteIntent field below, so the rule no longer
-// carries its own copy of the mask.
 const writeAccessMask = 0x3
 
 // mutatingOpenMask is O_TRUNC | O_APPEND | O_CREAT: the bits a writer that intends to change a file's CONTENT sets, as opposed to
-// one that opens it write-mode only to take a lock. The sudoers rule uses it to suppress exactly that pattern from sudo itself.
+// one that opens write-mode only to take a lock.
 const mutatingOpenMask = 0x400 | 0x8 | 0x200
 
 // NewExecEvent is NewEvent for an exec event whose parent process the caller has already resolved.
@@ -214,15 +209,22 @@ func NewEvent(ev api.Event) (*Event, error) {
 		// Our open events include read-only opens, which are routine: the sudoers_tamper rule drops them for exactly this reason,
 		// noting that cron, sudo itself and various PAM modules read /etc/sudoers constantly. Exposing TargetFilename for those
 		// would import that noise into every file_event rule we adopt, as false positives rather than as a visible error.
-		writable := p.Flags&writeAccessMask != 0
-		if writable {
+		// TargetFilename is supplied only for an open that both CAN write and intends to change the contents, which is what
+		// makes the field mean what Sigma's file_event category says it means: a completed creation or modification.
+		//
+		// Both halves earn their place, and #801 is where they moved here from the rules. Write access alone lets a lock through:
+		// sudo opens /etc/sudoers O_WRONLY with no content-changing bit to take a LOCK_EX flock and never writes, and reporting
+		// that as a modification put 30 sudoers_tamper alerts on one host in 15 minutes during rc.6 QA. The mutating bits alone
+		// let a read-only open through, since O_APPEND can be set without write access.
+		//
+		// Deciding it here rather than in each rule is what lets a file rule be plain Sigma. It costs one narrow case a rule could
+		// once express: a writer using bare O_WRONLY and then writing is now invisible, where the sudoers rule used to suppress
+		// only sudo doing that. No agent shipping today can produce either shape, because since #301 these events are re-emitted
+		// ESF NOTIFY_CREATE/NOTIFY_WRITE with a constant synthetic flag set that has both halves; the distinction only reaches an
+		// agent predating it.
+		if p.Flags&writeAccessMask != 0 && p.Flags&mutatingOpenMask != 0 {
 			e.targetFilename = presentString(p.Path)
 		}
-		// Bound once above so the relationship is visible rather than coincidental: TargetFilename is present exactly when
-		// WriteIntent is true. A rule for another engine still states the write requirement itself, because that engine may
-		// supply TargetFilename unconditionally.
-		e.writeIntent = presentBool(writable)
-		e.mutatingOpen = presentBool(p.Flags&mutatingOpenMask != 0)
 	}
 	return e, nil
 }
@@ -272,13 +274,4 @@ func commandLine(args []string) []string {
 		return nil
 	}
 	return []string{strings.Join(args, " ")}
-}
-
-// presentBool renders a boolean field the way Sigma matches one: as the text a rule writes, `true` or `false`. Always present, since
-// a flag that is not set is a real answer rather than a missing one, unlike a path we could not resolve.
-func presentBool(v bool) []string {
-	if v {
-		return []string{"true"}
-	}
-	return []string{"false"}
 }

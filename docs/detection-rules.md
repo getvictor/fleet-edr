@@ -365,7 +365,7 @@ Notarization is deliberately NOT a trust signal: it is an automated Apple scan, 
 ## sudoers_tamper
 
 **Sudoers tamper**  
-Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.
+Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.
 
 | | |
 | --- | --- |
@@ -382,7 +382,7 @@ Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct
 
 Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.
 
-`visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the rule does not see them at all.
+`visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it onto /etc/sudoers is missed.
 
 ### Known false-positive sources
 
@@ -390,7 +390,8 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 
 ### Limitations
 
-- Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.
+- Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule's largest gap and a trivial evasion.
+- On an agent predating #301, which sends real open(2) flags, sudo taking its LOCK_EX flock on /etc/sudoers now alerts. The suppression for it was retired with the flag fields (#801) because it was inert on every current agent. Add a path-glob exclusion for /usr/bin/sudo if such agents are still in the fleet.
 
 ## dns_c2_beacon
 

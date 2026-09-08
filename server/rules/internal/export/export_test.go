@@ -451,8 +451,8 @@ func TestPortabilityNoteNamesTheComputedFields(t *testing.T) {
 			wantContain: []string{"the field Subcommand"},
 		},
 		{
-			name: "several computed fields", kind: "sigma", portable: "mapped", computed: []string{"MutatingOpen", "WriteIntent"},
-			wantContain: []string{"the fields MutatingOpen and WriteIntent"},
+			name: "several computed fields", kind: "sigma", portable: "mapped", computed: []string{"CommandArguments", "Subcommand"},
+			wantContain: []string{"the fields CommandArguments and Subcommand"},
 		},
 		{
 			name: "three computed fields are comma-joined", kind: "sigma", portable: "mapped",
@@ -466,15 +466,13 @@ func TestPortabilityNoteNamesTheComputedFields(t *testing.T) {
 			wantAbsent:  []string{"open with flags"},
 		},
 		{
-			name: "an open-flag field explains the completed file event", kind: "sigma", portable: "mapped",
-			computed:    []string{"WriteIntent"},
-			wantContain: []string{"completed creation or modification"},
-			wantAbsent:  []string{"argument position"},
-		},
-		{
-			name: "a rule reading both kinds gets both reasons", kind: "sigma", portable: "mapped",
-			computed:    []string{"Subcommand", "WriteIntent"},
-			wantContain: []string{"needs them supplied", "argument position", "completed creation or modification"},
+			// The dedupe, which is what stops a rule reading three argv fields from being told the same sentence three times.
+			// Only one reason exists after #801 retired the open-flag fields, so this is the shape that still exercises it; a
+			// second reason returning means adding a case here that asserts both appear.
+			name: "several fields sharing a reason state it once", kind: "sigma", portable: "mapped",
+			computed:    []string{"CommandArguments", "EnvAssignments", "Subcommand"},
+			wantContain: []string{"needs them supplied", "argument position"},
+			wantAbsent:  []string{"open with flags"},
 		},
 		{
 			// classify returns mapped with no field names when the block does not compile: it cannot know what the rule reads,
@@ -512,15 +510,16 @@ func TestClassifyReportsComputedFieldsSorted(t *testing.T) {
 	t.Parallel()
 
 	// Key order here is deliberately not alphabetical: it is what the note would follow if classify did not sort.
+	// Listed out of alphabetical order on purpose, so a classify that reported them in block order would fail here.
 	const detection = `
 selection:
-  WriteIntent: 'true'
   Subcommand: x
-  MutatingOpen: 'false'
+  EnvAssignments: y
+  CommandArguments: z
 condition: selection
 `
 	kind, portable, computed := classify(detectionNode(t, detection))
 	assert.Equal(t, "sigma", kind)
 	assert.Equal(t, "mapped", portable)
-	assert.Equal(t, []string{"MutatingOpen", "Subcommand", "WriteIntent"}, computed)
+	assert.Equal(t, []string{"CommandArguments", "EnvAssignments", "Subcommand"}, computed)
 }

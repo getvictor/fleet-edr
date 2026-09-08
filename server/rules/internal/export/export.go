@@ -181,14 +181,9 @@ var computedFields = map[string]string{
 	"Subcommand":       reasonFlattenedCommandLine,
 	"CommandArguments": reasonFlattenedCommandLine,
 	"EnvAssignments":   reasonFlattenedCommandLine,
-	"WriteIntent":      reasonCompletedFileEvent,
-	"MutatingOpen":     reasonCompletedFileEvent,
 }
 
-const (
-	reasonFlattenedCommandLine = "it represents a command line as a single string, in which argument position is no longer recoverable"
-	reasonCompletedFileEvent   = "it represents a file event as a completed creation or modification rather than an open with flags"
-)
+const reasonFlattenedCommandLine = "it represents a command line as a single string, in which argument position is no longer recoverable"
 
 // IsComputedField reports whether a Sigma field name is one this engine supplies rather than one from Sigma's own taxonomy.
 func IsComputedField(name string) bool { _, ok := computedFields[name]; return ok }
