@@ -321,8 +321,6 @@ func checkCStyleComments(path string, data []byte) []string {
 	return findings
 }
 
-// cStyleCommentText returns the comment portion of one line and the updated block-comment state. It handles // line comments
-// and /* ... */ blocks (single- or multi-line); code and string-literal content is left out.
 // cStyleState is what a C-style scan carries between lines: whether a block comment is open, and whether a multi-line string is.
 type cStyleState struct {
 	inBlock bool
@@ -332,20 +330,8 @@ type cStyleState struct {
 	inTemplate bool
 }
 
-// cStyleCommentText returns the comment prose on one line and the state to carry to the next.
-//
-// It is a character scan rather than an index search because `/*` and `*/` mean nothing inside a string literal, and treating them
-// as comment delimiters there flips the scanner's state for the rest of the file. Issue #820: a glob written
-// `"*/claude/versions/*"` ends in `/` `*`, which read as opening a block comment, and the state stayed flipped until another glob
-// supplied a `*/`. The visible symptom was a false positive on ordinary arithmetic; the serious direction is the false negative,
-// where real comments are scanned as code and a genuine violation goes unreported with nothing to say the linter stopped looking.
-//
-// Only the NORMAL state opens a string, so an apostrophe in comment prose is inert, and only the string states make the comment
-// delimiters inert. Escapes are honoured inside strings so a trailing `\"` does not leak the string past its close.
-//
-// Regex literals are NOT tracked. Disambiguating `/` as division from `/` as a regex open needs the previous token, which is a
-// tokenizer rather than a scan, and a regex containing `/*` appears nowhere in the tree (checked). If one is ever added, its `/*`
-// would read as a comment open exactly as the glob did, and the fix is the same shape as this one.
+// cStyleCommentText returns the comment prose on one line and the state to carry to the next, dispatching on whether the line
+// begins inside a block comment. The scan itself, and why it tracks string literals, is on scanCode.
 func cStyleCommentText(raw string, st cStyleState) (comment string, next cStyleState) {
 	if st.inBlock {
 		return continueBlock(raw)
