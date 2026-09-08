@@ -16,6 +16,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // fakeEventArchive records the events handed to Insert and can be made to fail, so the fan-out's archive-first ordering and its
@@ -72,8 +73,8 @@ func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]api.Event, 
 	return nil, 0, nil
 }
 func (f *fakeEventLog) Ack(context.Context, []string, int64) (bool, error) { return true, nil }
-func (f *fakeEventLog) Nack(context.Context, []string, int64) (int64, bool, error) {
-	return 0, true, nil
+func (f *fakeEventLog) Nack(context.Context, []string, int64, []byte) (visibilityapi.NackResult, error) {
+	return visibilityapi.NackResult{Held: true}, nil
 }
 func (f *fakeEventLog) CountPending(context.Context) (int64, error)            { return 0, nil }
 func (f *fakeEventLog) PruneProcessed(context.Context, int) (int64, error)     { return 0, nil }

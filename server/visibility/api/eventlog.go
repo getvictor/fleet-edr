@@ -83,7 +83,19 @@ type EventLog interface {
 	//
 	// Serialized against that host's claimers by the caller, exactly as Ack is and for the same reason: this statement takes row
 	// locks the same way, so an unserialized requeue opens the same window (issue #863).
-	Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, held bool, err error)
+	//
+	// tally is opaque to this interface: a caller that has resolved something about the batch worth surviving its own failure
+	// hands the bytes over, and an implementation SHALL keep them with the returned events and give them back to whoever WITHDRAWS
+	// the batch (NackResult.CarriedTally). That is the only way the value can survive, because the attempt that resolved it is by
+	// definition the one that failed, and the attempt that withdraws the batch may be a later one that never got far enough to
+	// resolve anything (issue #893). An implementation SHALL NOT let a nack with no tally discard one an earlier attempt supplied,
+	// for exactly that reason. Nothing here interprets the bytes; see MonitorTally in the rules API for what the detection
+	// pipeline puts in them.
+	//
+	// A caller MUST keep the tally within MaxNackTallyBytes, and MUST hand over none rather than an oversized one. Returning the
+	// batch is the important half of this call and the tally is the incidental half, so a value too large to store has to cost the
+	// value rather than the nack.
+	Nack(ctx context.Context, eventIDs []string, claimStampNs int64, tally []byte) (result NackResult, err error)
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)
@@ -102,4 +114,31 @@ type EventLog interface {
 	// window rather than deleted when they are created; that window doubles as the time an operator has to look at them
 	// (issue #836).
 	PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error)
+}
+
+// MaxNackTallyBytes bounds what Nack will carry for a batch.
+//
+// The storage this rides in is finite, and a write that exceeds it is REFUSED rather than truncated, which would fail the nack and
+// leave the batch in flight until its claim lease expired. That is a real input rather than a hypothetical one: a tally carries an
+// entry per matching rule, and an imported rule pack is operator-sized and defaults to monitor mode.
+//
+// 32KiB against a 64KiB column, so a caller that respects the bound cannot reach the ceiling by a margin it has to compute
+// exactly. On the pipeline's own encoding this is several hundred rules' worth for one host.
+const MaxNackTallyBytes = 32 * 1024
+
+// NackResult is what Nack reports back about the events it returned.
+type NackResult struct {
+	// SetAside counts the events Nack WITHDREW rather than returning to the queue, because they passed their retry bounds. It is
+	// exact rather than merely non-zero: a caller decides whether a WHOLE batch was withdrawn by comparing it against the events
+	// it handed over, so an under-count reads as a partial withdrawal.
+	SetAside int64
+
+	// Held reports whether this attempt still owned the claim. Without it, "withdrew nothing" is the same answer for a superseded
+	// attempt and for a held batch that simply had no event reach its bounds.
+	Held bool
+
+	// CarriedTally is the tally an earlier attempt on these same events supplied, returned to whoever withdraws them and empty
+	// otherwise. A batch that is coming back will be processed again and resolve its own, so handing this out before the batch's
+	// last word would count it twice.
+	CarriedTally []byte
 }
