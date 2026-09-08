@@ -109,7 +109,8 @@ var sigmaCategory = map[string]string{
 	"exec": "process_creation",
 	"open": "file_event",
 	// Sigma's own category for a rename, carrying SourceFilename and TargetFilename. A genuine equivalence, not a self-map,
-	// which is what keeps sudoers_tamper `portable: standard` after it starts reading renames (#917).
+	// so the FIELDS a rename rule reads stay standard taxonomy. That is a statement about fields only: a rule combining this
+	// category with another is downgraded below, because one logsource cannot route two categories.
 	"file_rename":     "file_rename",
 	"dns_query":       "dns_query",
 	"network_connect": "network_connection",

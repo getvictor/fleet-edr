@@ -57,7 +57,9 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		// content-changing flag, decide whether TargetFilename is supplied at all (see NewEvent); exposing them as fields is
 		// what used to make a file rule `portable: mapped`, and #801 retired them.
 	},
-	// Sigma calls this category file_rename, and defines both of these fields, so a rule reading them stays `portable: standard`.
+	// Sigma calls this category file_rename, and defines both of these fields, so the FIELDS a rule reads here are standard
+	// taxonomy. Whether the RULE exports as portable is a separate question the exporter answers: one combining this category
+	// with another cannot be routed by an external engine, because Sigma permits one logsource per rule.
 	//
 	// TargetFilename is the DESTINATION. That is the field a file rule already reads, and for a rename the destination is what
 	// decides whether the file is now policy: promoting a scratch file into /etc/sudoers.d/evil is the escalation whether it

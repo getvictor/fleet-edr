@@ -16,7 +16,11 @@ Two defects, and they have to be fixed together because either one alone makes t
 
 Collection gains the one event that makes the escalation observable, confirmed deliverable under the existing inverted target-path muting: `NOTIFY_RENAME`, carrying **both** paths. Muting matches on either side, so a rename into, within, or out of the watched set is delivered.
 
-It ships as its own event type rather than as a field bolted onto `open`, because Sigma already has the shape: the `file_rename` category carries `SourceFilename` and `TargetFilename`. Reusing it keeps the rule `portable: standard` instead of demoting it to `mapped` for a field only we supply, and it stops `open` from accumulating another meaning it does not have.
+It ships as its own event type rather than as a field bolted onto `open`, because Sigma already has the shape: the `file_rename` category carries `SourceFilename` and `TargetFilename`. Reusing it keeps every field the rule reads inside Sigma's own taxonomy, rather than inventing one only we supply, and it stops `open` from accumulating another meaning it does not have.
+
+This supersedes a claim in the pending `retire-vestigial-open-flag-fields` change, which recorded that `sudoers_tamper` had become plain Sigma (`portable: standard`). That was true when it was written and is not after this change; both folders archive together, so the resolution is recorded here rather than by rewriting what that change did.
+
+The combined rule is nonetheless exported as `portable: mapped`, and that is a separate limitation worth stating plainly: Sigma permits one logsource category per rule, so a rule reading both `open` and `file_rename` cannot be routed correctly by an external engine whatever its fields. Review caught this claim being made the other way round. The exporter now derives it, so the file says which category another engine would not route rather than promising coverage it cannot deliver.
 
 Detection changes from "a write touched a sudoers path" to "a file sudo will load was created or changed":
 

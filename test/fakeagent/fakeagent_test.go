@@ -184,6 +184,7 @@ func TestEnvelopes_PayloadShapePerEventType(t *testing.T) {
 			{At: 0, Type: "exec", PID: 11, PPID: 1, Path: "/bin/ls", Args: []string{"ls"}, CWD: "/", UID: 501, GID: 20},
 			{At: 0, Type: "exit", PID: 11, ExitCode: 0},
 			{At: 0, Type: "open", PID: 11, Path: "/etc/passwd", Flags: 1},
+			{At: 0, Type: "file_rename", PID: 11, SourcePath: "/tmp/staged", Path: "/etc/sudoers.d/evil"},
 			{At: 0, Type: "network_connect", PID: 11, Protocol: "tcp", Direction: "outbound", RemoteAddress: "10.0.0.1", RemotePort: 443},
 			{At: 0, Type: "dns_query", PID: 11, QueryName: "x.y", QueryType: "A"},
 			{At: 0, Type: "snapshot_heartbeat", PID: 11},
@@ -192,12 +193,15 @@ func TestEnvelopes_PayloadShapePerEventType(t *testing.T) {
 	require.NoError(t, scenario.Validate())
 	envs, err := scenario.Envelopes(WithStartTime(time.Unix(0, 0)))
 	require.NoError(t, err)
-	require.Len(t, envs, 7)
+	require.Len(t, envs, 8)
 
 	required := map[string][]string{
-		"fork":               {"child_pid", "parent_pid"},
-		"exec":               {"pid", "ppid", "path", "args", "cwd", "uid", "gid"},
-		"exit":               {"pid", "exit_code"},
+		"fork": {"child_pid", "parent_pid"},
+		"exec": {"pid", "ppid", "path", "args", "cwd", "uid", "gid"},
+		"exit": {"pid", "exit_code"},
+		// Both paths are required on the wire: the server binds source_path to Sigma's SourceFilename and path to
+		// TargetFilename, so an omission would silently change which path a detection judges.
+		"file_rename":        {"pid", "source_path", "path"},
 		"open":               {"pid", "path", "flags"},
 		"network_connect":    {"pid", "protocol", "direction", "remote_address", "remote_port"},
 		"dns_query":          {"pid", "query_name", "query_type"},

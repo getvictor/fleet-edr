@@ -202,17 +202,18 @@ func (r *SudoersTamper) evalEvent(
 // analyst triaging that would look for a write that never occurred, and the distinction is the whole point of the detection:
 // the file became live sudo policy without its contents ever being written on this host.
 //
-// The rename form names both paths, because where it came from is what an analyst needs next: a promotion out of /tmp reads
-// very differently from an editor committing its own temp file.
+// The source path is deliberately NOT interpolated, though an earlier version of this did. `An alert from a converted rule
+// names what fired` requires that attacker-controlled content stay out of the description where naming the matched element is
+// sufficient, and the detection matches on TargetFilename alone: the source is a path an attacker chose, rendered into an alert
+// feed, identifying nothing the destination does not already say. That it was a rename rather than a write is the part that
+// changes triage, and that is carried by the verb. The source remains on the event for anyone drilling in.
 func sudoersDescription(eventType, writerPath string, se *sigmabind.Event) string {
+	// The path the detection matched on, in both forms, read back from the field the condition used.
 	target := firstField(se, "TargetFilename")
 	if eventType == "file_rename" {
-		return fmt.Sprintf(
-			"%s renamed %s onto %s, making it sudo policy: escalation surface (MITRE T1548.003)",
-			writerPath, firstField(se, "SourceFilename"), target,
-		)
+		return fmt.Sprintf("%s renamed a file onto %s, making it sudo policy: escalation surface (MITRE T1548.003)",
+			writerPath, target)
 	}
-	// The path the detection matched on, which is present exactly because it required write intent to get here.
 	return fmt.Sprintf("%s opened %s for writing: sudo escalation surface (MITRE T1548.003)", writerPath, target)
 }
 

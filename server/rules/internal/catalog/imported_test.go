@@ -871,3 +871,22 @@ func TestLoadImported_ARuleRefusedForCostDoesNotStopTheOthers(t *testing.T) {
 	assert.Contains(t, rejected[0].File, "costly", "the refusal must name the file so an author can find it")
 	assert.Contains(t, rejected[0].Reason, "Image", "and the field within it")
 }
+
+// The file_rename refusal added by #917, which without a test could disappear and let imported rename rules register against
+// telemetry that will never reach them.
+//
+// The reasoning matches the file_event refusal exactly: the rename subscription lives on the same FileTamperSubscriber client
+// and inherits its inverted target-path muting, so a rename event exists for no path outside /etc/sudoers*. Adding file_rename
+// to the export mapping is what made these rules loadable in the first place, so the refusal is a direct consequence of this
+// change rather than a pre-existing gap.
+func TestCategoryIsInert_RefusesAnImportedRenameRule(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("title: Launch agent renamed into place\nlevel: high\n" +
+		"logsource: {category: file_rename, product: macos}\n" +
+		"detection: {sel: {TargetFilename|endswith: '.plist'}, condition: sel}\n")
+	_, err := parseImported("rename.yml", body, false)
+	require.Error(t, err, "the agent emits renames only for sudoers paths, so this rule could never fire")
+	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the refusal auditable")
+	assert.Contains(t, err.Error(), "file_rename")
+}

@@ -1,5 +1,39 @@
 # Server detection rules engine
 
+## MODIFIED Requirements
+
+### Requirement: Portability is derived from the rule rather than declared
+
+The system SHALL derive a rule's kind and portability from the rule itself: whether it carries a detection block, whether the fields that block reads come from Sigma's own taxonomy or are computed by this engine, and whether the event types it consumes can be expressed as one Sigma logsource.
+
+The system SHALL report a rule reading only taxonomy fields as portable to any Sigma-compatible engine, one reading a computed field as valid Sigma that needs fields only this engine supplies, and one with no detection block as not portable at all. Each rule file SHALL state the reason, so a reader of one file in isolation learns why it will or will not run elsewhere.
+
+A rule may also be unportable for a reason that has nothing to do with its fields. Sigma permits exactly one logsource category per rule, so a rule consuming event types that map to different categories cannot be expressed as one Sigma rule: an engine routing by category would deliver the declared category's events and silently never deliver the rest. The system SHALL NOT report such a rule as portable to any Sigma-compatible engine even when every field it reads is taxonomy-standard, and SHALL name the categories that would not be routed, because the failure is silent partial coverage rather than an error.
+
+A rule with no detection block SHALL remain not portable at all whatever its event types, since there is nothing in the file to route events to.
+
+Portability is a promise made to whoever reads the file about whether they can run the rule, so it is derived rather than asserted by hand.
+
+#### Scenario: Portability is derived from the rule rather than declared
+
+- **GIVEN** a rule whose detection block reads a field this engine computes
+- **WHEN** its file is generated
+- **THEN** the file reports it as valid Sigma requiring fields only this engine supplies, and explains why
+
+#### Scenario: Two Sigma categories are not portable
+
+- **GIVEN** a rule whose detection block reads only taxonomy fields
+- **AND** whose event types map to more than one Sigma logsource category
+- **WHEN** its file is generated
+- **THEN** the file does not report it as portable to any Sigma-compatible engine
+- **AND** it names the category another engine would not route events from
+
+#### Scenario: A Go rule stays unportable
+
+- **GIVEN** a rule with no detection block whose event types map to more than one Sigma category
+- **WHEN** its file is generated
+- **THEN** the file still reports it as not portable at all, rather than as a rule needing fields this engine supplies
+
 ## ADDED Requirements
 
 ### Requirement: Sudoers tampering matches the files sudo loads

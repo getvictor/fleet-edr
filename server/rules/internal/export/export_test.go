@@ -524,6 +524,8 @@ condition: selection
 	assert.Equal(t, []string{"CommandArguments", "EnvAssignments", "Subcommand"}, computed)
 }
 
+// spec:server-detection-rules-engine/portability-is-derived-from-the-rule-rather-than-declared/two-sigma-categories-are-not-portable
+//
 // A rule whose event types span more than one Sigma category cannot be one standard Sigma rule, because Sigma allows exactly
 // one logsource category. Exporting it as `portable: standard` would promise an engine coverage the file cannot deliver: it
 // would route the declared category's events and silently never deliver the rest.
@@ -555,6 +557,8 @@ func TestRule_MultiCategoryEventTypesAreNotStandardPortable(t *testing.T) {
 	assert.Equal(t, "file_event", logsource["category"], "the declared category is still the first event type's")
 }
 
+// spec:server-detection-rules-engine/portability-is-derived-from-the-rule-rather-than-declared/a-go-rule-stays-unportable
+//
 // The same check must NOT touch a Go rule. `portable: none` says there is no detection block in the file at all, which is a
 // stronger statement than "the logsource cannot express this"; dns_c2_beacon reads two event types and an earlier version of
 // this check promoted it from `none` to `mapped`, which reads as though the file gained something to run.

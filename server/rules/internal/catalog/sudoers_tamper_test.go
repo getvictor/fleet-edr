@@ -271,9 +271,12 @@ func TestSudoersTamper_DescriptionSaysWhatHappened(t *testing.T) {
 
 	rename := sudoersDescription("file_rename", "/bin/mv",
 		boundRenameEvent(t, "/tmp/staged", "/etc/sudoers.d/evil", "/bin/mv"))
-	assert.Contains(t, rename, "renamed /tmp/staged onto /etc/sudoers.d/evil", "both paths, in the right order")
+	assert.Contains(t, rename, "renamed a file onto /etc/sudoers.d/evil", "the matched element, and the verb that changes triage")
 	assert.Contains(t, rename, "making it sudo policy")
 	assert.NotContains(t, rename, "opened", "a rename opens nothing, and saying so sends an analyst looking for a write")
+	// The source is attacker-chosen and is not what the detection matched on, so it stays out of the alert feed.
+	assert.NotContains(t, rename, "/tmp/staged",
+		"attacker-controlled content is withheld where naming the matched element is sufficient")
 
 	write := sudoersDescription("open", "/usr/bin/tee",
 		boundOpenEvent(t, "/etc/sudoers", 0x1|0x200|0x400, "/usr/bin/tee"))
