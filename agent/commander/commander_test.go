@@ -154,6 +154,10 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(gotResult, &result))
 	assert.EqualValues(t, 7, result["policy_id"])
 	assert.EqualValues(t, 42, result["policy_version"])
+	// The count is what makes this convergence evidence rather than just an acknowledgement: a host that took the right version
+	// with the wrong number of rules is the case an operator reconciling a rollout needs to see. Restored alongside the
+	// requirement that asks for it (#905), which the archive had dropped.
+	assert.EqualValues(t, 1, result["rules"], "the result reports how many rules were forwarded")
 }
 
 // spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version

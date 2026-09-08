@@ -268,9 +268,20 @@ func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (s
 	if err := e.sender.SendApplicationControl([]byte(cmd.Payload)); err != nil {
 		return StatusFailed, marshalResult("xpc send: " + err.Error())
 	}
+	// The rule COUNT rides along because the version alone is not convergence evidence: it says which policy the host took, not
+	// how much of it. An operator reconciling a rollout wants "policy 42, 137 rules on this host", and a host that took the right
+	// version with the wrong number of rules is exactly the case worth seeing. Counting here rather than in the extension keeps it
+	// on the acknowledgement the server already stores.
+	//
+	// Counted rather than decoded: the entries stay json.RawMessage, so the agent still does not need to know the rule shape, and
+	// a count is the one property it can report without taking a position on it. A payload whose array does not decode has already
+	// been rejected by the isJSONArray check above.
+	var rules []json.RawMessage
+	_ = json.Unmarshal(payload.Rules, &rules)
 	result, _ := json.Marshal(map[string]any{
 		"policy_id":      payload.PolicyID,
 		"policy_version": payload.PolicyVersion,
+		"rules":          len(rules),
 	})
 	return StatusCompleted, result
 }
