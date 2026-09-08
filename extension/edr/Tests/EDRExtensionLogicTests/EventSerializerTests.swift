@@ -370,7 +370,12 @@ final class EventSerializerTests: XCTestCase {
 
     // MARK: FileRenamePayload
 
-    // spec:endpoint-event-collection/sensitive-path-file-modification-capture/a-rename-onto-a-sensitive-path-carries-both-paths
+    // spec:endpoint-event-collection/sensitive-path-file-modification-capture/a-rename-event-carries-both-of-its-paths
+    //
+    // The event's SHAPE, which is all this layer can reach: FileTamperSubscriber imports EndpointSecurity and so is outside
+    // the SwiftPM logic target, which means the subscription and handleRename's reading of the rename union are NOT covered
+    // here and are verified at the system / VM layer. Saying so rather than letting the marker imply otherwise, since this
+    // test passes unchanged if RENAME is never subscribed at all.
     //
     // The wire shape the server's file_rename decoder reads. Pinned as a whole literal for the same reason the block event is:
     // a substring check cannot fail when a field is ADDED, and the server binds these two keys to Sigma's SourceFilename and

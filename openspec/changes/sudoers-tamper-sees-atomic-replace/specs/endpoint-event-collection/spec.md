@@ -17,9 +17,11 @@ Renames SHALL be collected under the same inverted target-path muting as creatio
 - **THEN** a write-mode `open` event is emitted carrying the writing process PID, the file path, and the write-mode access flags
 - **AND** the event reaches the server and is available to the detection pipeline
 
-#### Scenario: A rename onto a sensitive path carries both paths
+#### Scenario: A rename event carries both of its paths
 
-- **GIVEN** the extension is running with the sensitive-path file-modification client active
-- **WHEN** a process renames a file from outside the sensitive set onto a path inside it
-- **THEN** a `file_rename` event is emitted carrying the renaming process PID, the source path, and the destination path
-- **AND** the event reaches the server and is available to the detection pipeline
+- **GIVEN** a rename touching the sensitive set has been observed
+- **WHEN** the extension serializes it
+- **THEN** the `file_rename` event carries the renaming process PID, the source path, and the destination path
+- **AND** the destination is carried under the same field name every other file event uses for its target, so one detection can read both
+
+Note on verification: this scenario pins the event's SHAPE, which is what the extension's unit tests can reach. That the ESF client is subscribed and that `handleRename` reads both halves of the rename union are exercised at the system / VM layer per `docs/testing-strategy.md`, because `FileTamperSubscriber` imports EndpointSecurity and is outside the unit-testable target.

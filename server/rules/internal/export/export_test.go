@@ -493,7 +493,7 @@ func TestPortabilityNoteNamesTheComputedFields(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			note := portabilityNote(tc.kind, tc.portable, tc.computed)
+			note := portabilityNote(tc.kind, tc.portable, tc.computed, nil, "file_event")
 			for _, want := range tc.wantContain {
 				assert.Contains(t, note, want)
 			}
@@ -522,4 +522,53 @@ condition: selection
 	assert.Equal(t, "sigma", kind)
 	assert.Equal(t, "mapped", portable)
 	assert.Equal(t, []string{"CommandArguments", "EnvAssignments", "Subcommand"}, computed)
+}
+
+// A rule whose event types span more than one Sigma category cannot be one standard Sigma rule, because Sigma allows exactly
+// one logsource category. Exporting it as `portable: standard` would promise an engine coverage the file cannot deliver: it
+// would route the declared category's events and silently never deliver the rest.
+//
+// Found on sudoers_tamper (#917), which reads `open` and `file_rename`. Declaring `file_event` alone routes the writes and
+// drops every rename, which is the atomic-replace detection the rule exists for. classify() inspects only the FIELDS a
+// detection reads, so it cannot see this.
+func TestRule_MultiCategoryEventTypesAreNotStandardPortable(t *testing.T) {
+	t.Parallel()
+
+	md := metadata()
+	md.Doc.EventTypes = []string{"open", "file_rename"}
+	body, err := Rule(md, Authored{Detection: detectionNode(t, "selection:\n  TargetFilename: /etc/sudoers\ncondition: selection\n")})
+	require.NoError(t, err)
+
+	doc := decode(t, body)
+	engine, ok := doc["x-engine"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "mapped", engine["portable"],
+		"one logsource cannot route two categories, so this is not standard-portable")
+	note, _ := engine["portability_note"].(string)
+	assert.Contains(t, note, "file_rename", "the note must name the category another engine would not route")
+	assert.Contains(t, note, "one logsource category per rule")
+	assert.NotContains(t, note, "this engine computes",
+		"nothing is wrong with the FIELDS here, and saying so sends a reader looking for a computed field that does not exist")
+
+	logsource, ok := doc["logsource"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "file_event", logsource["category"], "the declared category is still the first event type's")
+}
+
+// The same check must NOT touch a Go rule. `portable: none` says there is no detection block in the file at all, which is a
+// stronger statement than "the logsource cannot express this"; dns_c2_beacon reads two event types and an earlier version of
+// this check promoted it from `none` to `mapped`, which reads as though the file gained something to run.
+func TestRule_MultiCategoryDoesNotPromoteAGoRule(t *testing.T) {
+	t.Parallel()
+
+	md := metadata()
+	md.Doc.EventTypes = []string{"dns_query", "network_connect"}
+	body, err := Rule(md, Authored{}) // no detection block: a graph rule
+	require.NoError(t, err)
+
+	engine, ok := decode(t, body)["x-engine"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "none", engine["portable"], "a Go rule has nothing to port, whatever its event types")
+	note, _ := engine["portability_note"].(string)
+	assert.Contains(t, note, "Go implementation")
 }

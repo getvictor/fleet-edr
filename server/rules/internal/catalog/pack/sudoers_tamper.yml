@@ -54,8 +54,8 @@ falsepositives:
 x-engine:
   rule_id: sudoers_tamper
   type: sigma
-  portable: standard
-  portability_note: The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, so any Sigma-compatible engine can evaluate it as it stands.
+  portable: mapped
+  portability_note: The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, but it consumes event types spanning more than one Sigma category. Sigma allows one logsource category per rule, so this file declares file_event and another engine would never route file_rename events to it. Evaluating the rule as written therefore covers only part of what it detects here; the full set is in x-engine.event_types.
   event_types:
     - open
     - file_rename

@@ -292,6 +292,22 @@ func Rule(md api.RuleMetadata, authored Authored) ([]byte, error) {
 	if !mapped {
 		category = md.Doc.EventTypes[0]
 	}
+	// Sigma allows exactly ONE logsource category per rule, so a rule consuming event types that map to different categories
+	// cannot be expressed as one standard Sigma rule: an engine routing by category would feed it the first category's events
+	// and silently never deliver the rest. Exporting that as `portable: standard` promises coverage the file cannot provide.
+	//
+	// Caught on sudoers_tamper (#917), which reads `open` and `file_rename`: category `file_event` alone would route the writes
+	// and drop every rename, which is the atomic-replace detection the rule exists for. classify() only inspects the FIELDS a
+	// detection reads, so it cannot see this on its own.
+	// Only a Sigma rule can be downgraded by this. A `graph` rule is `portable: none` because there is no detection block in
+	// the file for another engine to run at all, and the logsource it cannot express is beside that point; dns_c2_beacon read
+	// two event types and was briefly promoted from `none` to `mapped` by an earlier version of this check.
+	unroutable := extraCategories(md.Doc.EventTypes, category)
+	if len(unroutable) > 0 && kind == "sigma" {
+		portable = "mapped"
+	} else if kind != "sigma" {
+		unroutable = nil
+	}
 
 	doc := file{
 		Title:          md.Doc.Title,
@@ -308,7 +324,7 @@ func Rule(md api.RuleMetadata, authored Authored) ([]byte, error) {
 			RuleID:          md.ID,
 			Type:            kind,
 			Portable:        portable,
-			PortabilityNote: portabilityNote(kind, portable, computed),
+			PortabilityNote: portabilityNote(kind, portable, computed, unroutable, category),
 			EventTypes:      md.Doc.EventTypes,
 			Algorithm:       algorithmFor(kind, md.Algorithm),
 			Params:          authored.Params,
@@ -337,12 +353,40 @@ func marshal(doc file) ([]byte, error) {
 
 // portabilityNote explains, in the file itself, why a rule will or will not run in another engine. Written out per file rather than
 // left implicit so a reader of one rule in isolation learns the reason without going looking for it.
-func portabilityNote(kind, portable string, computed []string) string {
+// extraCategories returns the Sigma categories a rule's event types need BEYOND the one its logsource can declare, in first-seen
+// order. Empty when every event type maps to the same category, which is the ordinary case.
+//
+// An event type with no Sigma equivalent maps to itself (see sigmaCategory), and those are counted too: a rule mixing `open` with
+// a Fleet-only event type is no more routable by a standard engine than one mixing two real categories.
+func extraCategories(eventTypes []string, declared string) []string {
+	var extra []string
+	for _, et := range eventTypes {
+		c, ok := sigmaCategory[et]
+		if !ok {
+			c = et
+		}
+		if c != declared && !slices.Contains(extra, c) {
+			extra = append(extra, c)
+		}
+	}
+	return extra
+}
+
+func portabilityNote(kind, portable string, computed, unroutable []string, declared string) string {
 	switch {
 	case kind != "sigma":
 		return "The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, " +
 			"so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being " +
 			"converted separately; until a rule's logic lives in its file, this stays the honest answer."
+	case len(unroutable) > 0:
+		// Named separately from the computed-field case because the reason is different in kind: nothing is wrong with the
+		// FIELDS here, and a reader told "it reads a field we compute" would go looking for one that does not exist. What
+		// cannot be expressed is the logsource, since Sigma permits one category per rule.
+		return "The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, but it " +
+			"consumes event types spanning more than one Sigma category. Sigma allows one logsource category per rule, so " +
+			"this file declares " + declared + " and another engine would never route " + strings.Join(unroutable, ", ") +
+			" events to it. Evaluating the rule as written therefore covers only part of what it detects here; the full set " +
+			"is in x-engine.event_types."
 	case portable == "mapped":
 		// The note names the fields rather than giving one canned reason for every mapped rule. The reasons genuinely differ:
 		// the argv fields exist because Sigma flattens a command line into one string, the open-intent fields because Sigma

@@ -23,7 +23,7 @@
 
 ## 4. Verification
 
-- [x] 4.1 Swift tests for the rename payload wire shape and the emission path.
+- [x] 4.1 Swift tests for the rename payload wire shape, plus the corpus envelope round trip. NOT the emission path: `FileTamperSubscriber` imports EndpointSecurity and is outside the SwiftPM logic target, so the subscription and `handleRename` are verified at the VM layer only.
 - [x] 4.2 Go tests for the narrowed pattern, including the `.tmp` and `~` cases, and for the rename match.
 - [x] 4.3 Mutation-test the narrowing and the rename match.
 - [x] 4.4 Efficacy corpus scenario for the atomic-replace evasion.

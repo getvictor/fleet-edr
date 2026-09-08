@@ -1,0 +1,1 @@
+{"event_id":"77777777-7777-7777-7777-777777777777","event_type":"file_rename","host_id":"AAAAAAAA-0000-0000-0000-000000000000","payload":{"path":"\/etc\/sudoers.d\/evil","pid":4242,"source_path":"\/tmp\/staged"},"platform":"darwin","timestamp_ns":1700000000000000000}
