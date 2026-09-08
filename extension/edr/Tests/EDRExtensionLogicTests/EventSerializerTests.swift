@@ -151,13 +151,19 @@ final class EventSerializerTests: XCTestCase {
 
     // spec:endpoint-event-collection/process-lifecycle-event-capture/the-exec-event-carries-cdhash-only-when-the-kernel-reported-one
     //
-    // Both halves in one test because the scenario is a biconditional: present for a Hardened Runtime binary, absent
-    // otherwise. A test of only the present half would pass against a serializer that emitted a placeholder for every
-    // exec, and that placeholder is the failure that matters. The kernel maps pages lazily on a non-hardened process
-    // and does not re-verify them after load, so a cdhash reported for one is not the identity of the bytes that will
-    // run; emitting it anyway would give a signature-based exclusion a value it must not trust.
+    // Two of the scenario's three cases: a Hardened Runtime binary whose kernel reported a hash carries it, and a
+    // non-hardened binary omits it. The third, a HARDENED binary whose reported hash is all zeros, cannot be reached
+    // from here at all, because this test constructs ExecPayload directly and so can pair the runtime flag with any
+    // hash it likes. testCDHashHexStringRejectsAnAllZeroKernelValue below covers that one against the real helper.
+    // The condition is therefore NOT "present iff hardened": it is present only when the process is hardened AND the
+    // kernel reported a usable hash.
     //
-    // Asserted on the wire keys, not the decoded struct: the server reads `cdhash` by that literal name, and absence
+    // Both cases live in one test because a test of only the present half would pass against a serializer that emitted
+    // a placeholder for every exec, and that placeholder is the failure that matters. The kernel maps pages lazily on
+    // a non-hardened process and does not re-verify them after load, so a cdhash reported for one is not the identity
+    // of the bytes that will run; emitting it anyway would give a signature-based exclusion a value it must not trust.
+    //
+    // Asserted on the wire bytes, not the decoded struct: the server reads `cdhash` by that literal name, and absence
     // rather than null is what its decoder relies on.
     func testExecPayloadCarriesCDHashOnlyForHardenedBinaries() throws {
         let hardened = ExecPayload(
