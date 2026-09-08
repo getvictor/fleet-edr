@@ -313,8 +313,17 @@ func (s *Store) Ack(ctx context.Context, eventIDs []string, claimStampNs int64) 
 	if len(eventIDs) == 0 {
 		return true, nil
 	}
+	// The tally columns are cleared here for the same reason the withdrawal clears them: an acknowledged row is terminal, nothing
+	// reads a carried tally again (the read is scoped to a nack's owned rows, and Nack's reset requires processed = 2), and a batch
+	// that was nacked WITH a tally before it succeeded would otherwise leave up to MaxNackTallyBytes on the row.
+	//
+	// PruneProcessed deletes acked rows outright, so this is bounded rather than a permanent leak; it matters while that sweep is
+	// behind, during an outage or on a replica not winning the prune lock, where acked rows accumulate anyway and each one would
+	// carry an extra blob on top of its payload. It rides in the statement the ack already runs, so it costs no additional write
+	// (issue #923).
 	query, args, err := sqlx.In(
-		"UPDATE event_queue SET processed = 1 WHERE event_id IN (?) AND processed = 2 AND claimed_at_ns = ?", eventIDs, claimStampNs)
+		"UPDATE event_queue SET processed = 1, monitor_tally = NULL, monitor_tally_batch = NULL"+
+			" WHERE event_id IN (?) AND processed = 2 AND claimed_at_ns = ?", eventIDs, claimStampNs)
 	if err != nil {
 		return false, fmt.Errorf("ack build query: %w", err)
 	}

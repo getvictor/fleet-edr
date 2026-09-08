@@ -478,3 +478,50 @@ func TestNackFindsTheValueWhereverTheStoringAttemptPutIt(t *testing.T) {
 	assert.Equal(t, string(carry), string(withdrawing.CarriedTally),
 		"the digest matches this batch, so the value must be found wherever it was stored")
 }
+
+// Deliberately carries NO spec marker. It asserts the value is CLEARED, while the scenario it would otherwise be filed under is
+// about a value SURVIVING, and anchoring it there would claim coverage the test does not provide. Only normative scenarios need
+// markers; a regression test for storage hygiene does not need one, and inventing a scenario to hold it would put a SHALL in the
+// spec for something no caller can observe.
+//
+// A batch that was returned WITH a value and then succeeded leaves nothing behind. The withdrawal path already cleared the columns
+// because a withdrawn row is retained for the deployment's window, or indefinitely where retention is disabled; the acknowledged
+// path did not, and an acked row carries its value until PruneProcessed deletes it (issue #923).
+//
+// Bounded rather than a permanent leak, which is why this is storage and not behaviour: nothing reads the value again, since the
+// read is scoped to a nack's owned rows and Nack's reset requires the in-flight state. It matters while the sweep is behind, where
+// acked rows accumulate anyway and each would carry an extra blob on top of its payload.
+func TestAckClearsACarriedValue(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-acked"
+	const batch = 2
+
+	enqueue(t, log, host, "acked-1", 1_000)
+	enqueue(t, log, host, "acked-2", 1_001)
+
+	// One attempt evaluates, fails, and hands its value over; the batch goes back on the queue carrying it.
+	require.Zero(t, nackOnce(t, log, host, batch, []byte(`{"v":1,"matches":[{"count":6}]}`)).SetAside)
+	var carrying int
+	require.NoError(t, db.GetContext(t.Context(), &carrying,
+		"SELECT COUNT(*) FROM event_queue WHERE host_id = ? AND monitor_tally IS NOT NULL", host))
+	require.Equal(t, 1, carrying, "the premise: the batch is carrying a value when it comes back")
+
+	// The next attempt succeeds.
+	claimed, stamp, err := log.ClaimForHost(t.Context(), host, batch)
+	require.NoError(t, err)
+	require.Len(t, claimed, batch)
+	ids := make([]string, 0, len(claimed))
+	for _, e := range claimed {
+		ids = append(ids, e.EventID)
+	}
+	held, err := log.Ack(t.Context(), ids, stamp)
+	require.NoError(t, err)
+	require.True(t, held)
+
+	var left int
+	require.NoError(t, db.GetContext(t.Context(), &left,
+		"SELECT COUNT(*) FROM event_queue WHERE host_id = ? AND (monitor_tally IS NOT NULL OR monitor_tally_batch IS NOT NULL)",
+		host))
+	assert.Zero(t, left, "an acknowledged row is terminal, so it keeps nothing the queue will never read again")
+}
