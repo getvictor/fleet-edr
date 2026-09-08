@@ -301,7 +301,7 @@ func goCommentTokenFindings(path string, startLine int, lit string, ignored map[
 // checkCStyleComments flags em-dash use inside // line comments and /* block comments */, ignoring code and string literals.
 func checkCStyleComments(path string, data []byte) []string {
 	var findings []string
-	inBlock := false
+	var st cStyleState
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	lineNo := 0
@@ -309,7 +309,7 @@ func checkCStyleComments(path string, data []byte) []string {
 		lineNo++
 		raw := sc.Text()
 		var commentText string
-		commentText, inBlock = cStyleCommentText(raw, inBlock)
+		commentText, st = cStyleCommentText(raw, st)
 		if strings.Contains(raw, ignoreDirective) {
 			continue
 		}
@@ -323,43 +323,113 @@ func checkCStyleComments(path string, data []byte) []string {
 
 // cStyleCommentText returns the comment portion of one line and the updated block-comment state. It handles // line comments
 // and /* ... */ blocks (single- or multi-line); code and string-literal content is left out.
-func cStyleCommentText(raw string, inBlock bool) (comment string, stillInBlock bool) {
-	if inBlock {
-		if before, _, closed := strings.Cut(raw, "*/"); closed {
-			return before, false
-		}
-		return raw, true
-	}
-	lineIdx := lineCommentStart(raw)
-	blockIdx := strings.Index(raw, "/*")
-	// A // line comment that starts before any /* swallows the rest of the line, so a "/*" sitting inside it (e.g. a
-	// "/*.json" glob written in comment prose) is NOT a block-comment open. Without this ordering check the scanner would
-	// treat the unterminated "/*" as opening a block and mis-scan the rest of the file as comment text.
-	if lineIdx >= 0 && (blockIdx < 0 || lineIdx < blockIdx) {
-		return raw[lineIdx:], false
-	}
-	if blockIdx >= 0 {
-		afterOpen := raw[blockIdx+2:]
-		if inner, _, closed := strings.Cut(afterOpen, "*/"); closed {
-			return inner, false
-		}
-		return afterOpen, true
-	}
-	return "", false
+// cStyleState is what a C-style scan carries between lines: whether a block comment is open, and whether a multi-line string is.
+type cStyleState struct {
+	inBlock bool
+	// inTemplate tracks a backtick template literal, which is the only string form in these languages that legally spans lines.
+	// A ' or " string is closed at end of line rather than carried, because an unterminated one is a syntax error and carrying it
+	// would let one typo silence the rest of the file, which is the failure mode this whole change is about.
+	inTemplate bool
 }
 
-// lineCommentStart returns the index of a // line comment that is not part of a "://" scheme (a crude but effective guard
-// against matching inside URLs in string literals); -1 if there is none.
-func lineCommentStart(line string) int {
-	for i := 0; i+1 < len(line); i++ {
-		if line[i] == '/' && line[i+1] == '/' {
-			if i > 0 && line[i-1] == ':' {
-				continue // e.g. https://
+// cStyleCommentText returns the comment prose on one line and the state to carry to the next.
+//
+// It is a character scan rather than an index search because `/*` and `*/` mean nothing inside a string literal, and treating them
+// as comment delimiters there flips the scanner's state for the rest of the file. Issue #820: a glob written
+// `"*/claude/versions/*"` ends in `/` `*`, which read as opening a block comment, and the state stayed flipped until another glob
+// supplied a `*/`. The visible symptom was a false positive on ordinary arithmetic; the serious direction is the false negative,
+// where real comments are scanned as code and a genuine violation goes unreported with nothing to say the linter stopped looking.
+//
+// Only the NORMAL state opens a string, so an apostrophe in comment prose is inert, and only the string states make the comment
+// delimiters inert. Escapes are honoured inside strings so a trailing `\"` does not leak the string past its close.
+//
+// Regex literals are NOT tracked. Disambiguating `/` as division from `/` as a regex open needs the previous token, which is a
+// tokenizer rather than a scan, and a regex containing `/*` appears nowhere in the tree (checked). If one is ever added, its `/*`
+// would read as a comment open exactly as the glob did, and the fix is the same shape as this one.
+func cStyleCommentText(raw string, st cStyleState) (comment string, next cStyleState) {
+	if st.inBlock {
+		return continueBlock(raw)
+	}
+	return scanCode(raw, st.inTemplate)
+}
+
+// continueBlock handles a line that begins inside a block comment: everything up to the close is comment prose, and whatever
+// follows the close is code that may open a string or another comment of its own.
+func continueBlock(raw string) (string, cStyleState) {
+	before, rest, closed := strings.Cut(raw, "*/")
+	if !closed {
+		return raw, cStyleState{inBlock: true}
+	}
+	tail, tailState := scanCode(rest, false)
+	if tail != "" {
+		return before + " " + tail, tailState
+	}
+	return before, tailState
+}
+
+// scanCode walks a line that starts in code, returning the comment prose it contains and the state to carry on.
+//
+// A character scan rather than an index search, because `/*` and `*/` mean nothing inside a string literal and treating them as
+// comment delimiters there flips the scanner for the rest of the file. Issue #820: a glob written `"*/claude/versions/*"` ends in
+// `/` `*`, which read as opening a block comment, and the state stayed flipped until another glob supplied a `*/`. The visible
+// symptom was a false positive on ordinary arithmetic; the serious direction is the false negative, where real comments are then
+// scanned as code and a genuine violation goes unreported with nothing to say the linter stopped looking.
+//
+// Regex literals are NOT tracked. Telling `/` as division from `/` as a regex open needs the previous token, which is a tokenizer
+// rather than a scan, and no regex in the tree contains `/*` (checked). One that did would read as a comment open exactly as the
+// glob did, and the fix would be the same shape as this.
+func scanCode(raw string, inTemplate bool) (string, cStyleState) {
+	var b strings.Builder
+	i := 0
+	if inTemplate {
+		next, closed := skipString(raw, 0, '`')
+		if !closed {
+			return "", cStyleState{inTemplate: true}
+		}
+		i = next
+	}
+	for ; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case c == '"' || c == '\'' || c == '`':
+			// Only code opens a string, so an apostrophe in comment prose never reaches here. An unterminated ' or " is dropped
+			// at end of line: it is a syntax error, and carrying it would let one typo silence the rest of the file.
+			next, closed := skipString(raw, i+1, c)
+			if !closed {
+				return b.String(), cStyleState{inTemplate: c == '`'}
 			}
-			return i
+			i = next - 1
+		case c == '/' && i+1 < len(raw) && raw[i+1] == '/':
+			return raw[i:], cStyleState{}
+		case c == '/' && i+1 < len(raw) && raw[i+1] == '*':
+			inner, after, closed := strings.Cut(raw[i+2:], "*/")
+			if !closed {
+				return inner, cStyleState{inBlock: true}
+			}
+			b.WriteString(inner)
+			b.WriteString(" ")
+			tail, tailState := scanCode(after, false)
+			b.WriteString(tail)
+			return b.String(), tailState
 		}
 	}
-	return -1
+	return b.String(), cStyleState{}
+}
+
+// skipString advances past a string literal's body, starting just after its opening quote. It reports the index following the
+// closing quote, and whether the string closed on this line at all.
+//
+// Escapes are honoured so a trailing `\"` does not leak the string past its close, which would put the rest of the line back into
+// code and re-expose the comment delimiters this exists to make inert.
+func skipString(raw string, from int, quote byte) (int, bool) {
+	for i := from; i < len(raw); i++ {
+		switch raw[i] {
+		case '\\':
+			i++
+		case quote:
+			return i + 1, true
+		}
+	}
+	return len(raw), false
 }
 
 // commentProse reduces comment text to the prose that should be scanned: inline `code spans` are blanked (a CLI example with a
