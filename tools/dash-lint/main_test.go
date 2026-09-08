@@ -112,6 +112,40 @@ func TestCheckCStyleComments(t *testing.T) {
 		// swallow the rest of the file. With the bug, line 2's "count - 1" code was scanned as comment text and flagged.
 		{"slash-star inside line comment not a block open", "// the glob is /*.json here\nlet x = count - 1\n", 0},
 		{"em dash in line comment with slash-star still flagged", "// glob /*.json maps - to dashes\nlet x = 1\n", 1},
+
+		// Issue #820: `/*` and `*/` inside a STRING are not comment delimiters. The reproducer is a glob ending in `/` `*`,
+		// which read as opening a block comment and left the scanner mis-stated for the rest of the file.
+		{"slash-star inside a string is not a block open",
+			"let g = \"*/claude/versions/*\"\nlet x = count - 1\n", 0},
+		{"star-slash inside a string does not close a block",
+			"/* prose */\nlet g = \"a*/b\"\nlet x = count - 1\n", 0},
+		// The half that matters more, and the one the false positive hid: after such a string, a REAL violation must still be
+		// reported. With the bug the scanner was inside a phantom comment, treated the following comment as code, and said
+		// nothing at all.
+		{"a real violation after a glob string is still reported",
+			"let g = \"*/claude/versions/*\"\n// the order -- rotate then ack -- matters\n", 1},
+		{"a real violation between two glob strings is still reported",
+			"let a = \"*/x/*\"\n// the rule - high severity - fires\nlet b = \"*/y/*\"\n", 1},
+		{"an escaped quote does not leak the string past its close",
+			"let s = \"he said \\\"/*\\\"\"\nlet x = count - 1\n", 0},
+		{"a template literal spanning lines keeps its contents inert",
+			"let t = `\n  /* not a comment\n`\nlet x = count - 1\n", 0},
+		{"a single-quoted string is inert too",
+			"let g = '*/a/*'\nlet x = count - 1\n", 0},
+		// A string opened on one line and never closed must not silence the next line: an unterminated ' or " is a syntax
+		// error, and carrying it would let one typo stop the linter for the rest of the file.
+		{"an unterminated quote does not carry to the next line",
+			"let broken = \"oops\n// the order -- rotate then ack -- matters\n", 1},
+		{"code after a block comment closes on the same line is still scanned",
+			"/* prose */ let g = \"*/a/*\"\nlet x = count - 1\n", 0},
+		// The tail after a same-line close is comment text in its own right, so a violation there must still be reported.
+		{"a line comment after a same-line block close is still scanned",
+			"/* prose */ // the order -- rotate then ack -- matters\n", 1},
+		// Same, for a block that OPENED on an earlier line: the code after its close is scanned rather than discarded with it.
+		{"a line comment after a multi-line block closes is still scanned",
+			"/*\n prose\n*/ // the order -- rotate then ack -- matters\n", 1},
+		{"a glob after a multi-line block closes is still inert",
+			"/*\n prose\n*/ let g = \"*/a/*\"\nlet x = count - 1\n", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

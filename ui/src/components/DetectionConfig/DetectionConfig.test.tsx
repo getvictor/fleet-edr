@@ -1204,10 +1204,7 @@ describe("DetectionConfig observed column", () => {
 
   // Recency is the third signal the column promises: heavy-but-quiet and heavy-and-current are different promotion cases.
   it("shows how recently a rule last matched", async () => {
-    // Plain arithmetic, flagged only because dash-lint's C-style scanner has no string-literal state: an exclusion glob near the
-    // top of this file ends in the two characters that open a block comment, so the scanner reads much of the file as commented
-    // prose. Identical arithmetic in HostList.test.tsx passes. Issue #820.
-    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3_600_000).toISOString(); // dash-lint:ignore
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3_600_000).toISOString();
     stubReads({
       rules: [makeRuleEntry()],
       matchCounts: [{ rule_id: "suspicious_exec", matches: 5, hosts: 1, last_seen: twoDaysAgo }],
