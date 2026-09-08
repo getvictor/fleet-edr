@@ -311,6 +311,15 @@ func TestEnvAssignments(t *testing.T) {
 			// env really made. It is not well-formed, so it is not reported, but the run must continue past it.
 			[]string{"env", "-S", "A#B=1 DYLD_INSERT_LIBRARIES=/tmp/x prog"},
 			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a newline separates arguments even though the man page says space or tab", "/usr/bin/env",
+			// Measured against the binary, which disagrees with its own documentation: a newline and a vertical tab both separate
+			// arguments, so the split is C isspace. Narrowing to the documented pair would merge tokens env split apart and lose
+			// the assignment behind one.
+			[]string{"env", "-S", "A=1\nDYLD_INSERT_LIBRARIES=/tmp/x prog"},
+			[]string{"A=1", "DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a vertical tab separates arguments too", "/usr/bin/env",
+			[]string{"env", "-S", "A=1\vDYLD_INSERT_LIBRARIES=/tmp/x prog"},
+			[]string{"A=1", "DYLD_INSERT_LIBRARIES=/tmp/x"}},
 		{"a non-ASCII space is part of the name, not a separator", "/usr/bin/env",
 			// Measured: env's split is byte-oriented C isspace and never calls setlocale, so `env -S "<NBSP>A=1 cmd"` sets a
 			// variable whose NAME starts with the NBSP bytes. Splitting on it would report a plain DYLD assignment env never

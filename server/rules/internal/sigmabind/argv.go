@@ -234,6 +234,24 @@ const (
 //
 // Embedded options need no special handling: the split tokens go through the same option walk as any argument list, so `-i` is
 // skipped and a nested `-S` ends the run exactly as it does outside.
+// splitEnvPayload splits a -S value the way env does, or refuses it.
+//
+// Every construct env(1) documents under "Details of -S (split-string) processing" is accounted for, which is the point: three
+// separate bypasses in this change came from inferring the grammar from shapes rather than enumerating it, so the list is now
+// closed and each entry says handled or refused.
+//
+//   - Separation on whitespace: HANDLED, on the bytes the binary actually separates on (see isEnvPayloadSpace).
+//   - An argument starting with '#' ends the value: HANDLED by truncateAtComment.
+//   - Single and double quotes, which group and are stripped: REFUSED.
+//   - Backslash escapes (\c \f \n \r \t \v \# \$ \_ \" \' \\): REFUSED, including \# which would otherwise let an
+//     argument legitimately start with '#'.
+//   - ${VAR} substitution from env's ORIGINAL environment: REFUSED.
+//   - An unterminated quote, which env treats as an error and runs nothing: REFUSED with everything else quoted.
+//
+// Refusing means reporting no assignments for the whole invocation. That is a miss, and it is the direction to err: emulating any
+// of these approximately would report an assignment env did not apply, which sends a responder after an injection that did not
+// happen. The refusals are also why those constructs have produced no findings, while the constructs inferred rather than
+// enumerated produced three.
 func splitEnvPayload(payload string) (fields []string, ok bool) {
 	if strings.ContainsAny(payload, "'\"\\$") {
 		return nil, false
@@ -261,6 +279,11 @@ func truncateAtComment(fields []string) []string {
 }
 
 // isEnvPayloadSpace reports the bytes env's split treats as separators: the six C isspace characters, and no others.
+//
+// The man page says "any space or <tab> characters", and the binary does more than that. Measured: a newline and a vertical tab
+// both separate arguments, which is C isspace rather than the documented pair. The BINARY is ground truth here, because what the
+// rule must model is what actually ran; narrowing this to space and tab to match the prose would merge tokens env split and lose
+// an assignment behind one. Written down because the next reader to check the documentation will otherwise "fix" it.
 //
 // ASCII only, deliberately. strings.Fields splits on all Unicode whitespace, and env does not: its split is byte-oriented and
 // never calls setlocale, so a non-breaking space is an ordinary byte and part of whatever token it sits in. Measured:
