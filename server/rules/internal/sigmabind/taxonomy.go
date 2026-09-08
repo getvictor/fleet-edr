@@ -57,6 +57,17 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		// content-changing flag, decide whether TargetFilename is supplied at all (see NewEvent); exposing them as fields is
 		// what used to make a file rule `portable: mapped`, and #801 retired them.
 	},
+	// Sigma calls this category file_rename, and defines both of these fields, so a rule reading them stays `portable: standard`.
+	//
+	// TargetFilename is the DESTINATION. That is the field a file rule already reads, and for a rename the destination is what
+	// decides whether the file is now policy: promoting a scratch file into /etc/sudoers.d/evil is the escalation whether it
+	// came from /tmp or from a sibling. SourceFilename is supplied alongside it so a rule can say where it came from, which is
+	// the only thing separating an editor committing its own temp file from an attacker promoting one.
+	"file_rename": {
+		"TargetFilename": func(e *Event) ([]string, bool) { return e.targetFilename, e.targetFilename != nil },
+		"SourceFilename": func(e *Event) ([]string, bool) { return e.sourceFilename, e.sourceFilename != nil },
+		"Image":          func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
+	},
 }
 
 // EventTypeForCategory maps a Sigma logsource category onto the event type this package supplies fields for.

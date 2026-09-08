@@ -106,8 +106,11 @@ type engine struct {
 // regardless, and inventing a plausible-looking Sigma category for a Background Task Management registration would misrepresent
 // the file to any tool that read it.
 var sigmaCategory = map[string]string{
-	"exec":            "process_creation",
-	"open":            "file_event",
+	"exec": "process_creation",
+	"open": "file_event",
+	// Sigma's own category for a rename, carrying SourceFilename and TargetFilename. A genuine equivalence, not a self-map,
+	// which is what keeps sudoers_tamper `portable: standard` after it starts reading renames (#917).
+	"file_rename":     "file_rename",
 	"dns_query":       "dns_query",
 	"network_connect": "network_connection",
 }

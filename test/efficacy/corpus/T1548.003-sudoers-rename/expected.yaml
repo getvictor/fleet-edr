@@ -1,0 +1,10 @@
+# Expected detection assertions for the atomic-replace variant of T1548.003.
+# Same rule and severity as the direct-write scenario: the evasion is a different route to the same escalation, so a
+# divergence in either field here would mean the rename path is being credited differently from the write path.
+scenario_id: T1548.003-sudoers-rename
+mitre: T1548.003
+within_seconds: 30
+rules:
+  - rule_id: sudoers_tamper
+    severity: high
+    expect: alert

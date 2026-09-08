@@ -211,6 +211,30 @@ struct ApplicationControlBlockPayload: Codable, Sendable {
     }
 }
 
+/// FileRenamePayload is the wire shape of a `file_rename` event: a rename where either path falls inside the sensitive
+/// target set the file-tamper client watches.
+///
+/// It is a separate payload from OpenPayload rather than an extra field on it because a rename is the only watched
+/// operation carrying TWO paths, and because Sigma already models it: the `file_rename` category reads SourceFilename
+/// and TargetFilename, so a rule over these events stays portable standard Sigma instead of needing a field only we
+/// supply. Field names are the server's: `server/rules/internal/sigmabind` binds `source_path` to SourceFilename and
+/// `path` to TargetFilename.
+struct FileRenamePayload: Codable, Sendable {
+    let pid: pid_t
+    /// Where the file came from. Required, and the reason this event exists: a rename can make a file become sudo
+    /// policy without any write to the destination, and the source is what separates a promotion out of /tmp from a
+    /// move within the watched directory.
+    let sourcePath: String
+    /// Where the file landed. Named `path` on the wire to match every other file event's target field.
+    let path: String
+
+    enum CodingKeys: String, CodingKey {
+        case pid
+        case sourcePath = "source_path"
+        case path
+    }
+}
+
 /// ApplicationControlResyncPayload is the wire shape of the event the extension emits when it accepts a snapshot whose
 /// policy_version regressed below the active snapshot's but whose policy_epoch advanced (#322). That pairing is the signature
 /// of a server database restore-from-backup or reset: policy_version restarts low while the host retains a higher persisted

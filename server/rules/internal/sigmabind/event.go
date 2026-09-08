@@ -26,6 +26,9 @@ type Event struct {
 	image          []string
 	commandLine    []string
 	targetFilename []string
+	// Only a rename carries this: where the file came from. Kept separate from targetFilename rather than overloading it,
+	// because a rename supplies BOTH and a rule that reads one must not silently receive the other.
+	sourceFilename []string
 
 	// An image the caller supplies rather than the payload carrying it, because the graph knows it and this package does not.
 	// One slot serves both uses, since an event has at most one: an exec resolves its PARENT's image, an open resolves the image
@@ -61,6 +64,16 @@ type openPayload struct {
 	Path  string `json:"path"`
 	Flags int    `json:"flags"`
 	PID   *int   `json:"pid"`
+}
+
+// fileRenamePayload is the wire shape the file-tamper client emits for a rename touching the sensitive path set.
+//
+// Both paths are required on the wire, so neither is a pointer: an event missing either is malformed rather than partial,
+// and the decode below reports it that way instead of matching on half a rename.
+type fileRenamePayload struct {
+	SourcePath string `json:"source_path"`
+	Path       string `json:"path"`
+	PID        *int   `json:"pid"`
 }
 
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
@@ -222,6 +235,17 @@ func NewEvent(ev api.Event) (*Event, error) {
 		if p.Flags&writeAccessMask != 0 && p.Flags&mutatingOpenMask != 0 {
 			e.targetFilename = presentString(p.Path)
 		}
+	case "file_rename":
+		var p fileRenamePayload
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			return nil, fmt.Errorf("decode file_rename payload for event %q: %w", ev.EventID, err)
+		}
+		e.setPID(p.PID)
+		// Supplied unconditionally, unlike an open's TargetFilename. The write-access and mutating-flag gate exists because an
+		// open can be a read or a lock and neither is a modification; a rename has no such shapes. Every rename that reaches
+		// here completed and changed which name the file answers to, which is exactly what Sigma's file_rename category means.
+		e.targetFilename = presentString(p.Path)
+		e.sourceFilename = presentString(p.SourcePath)
 	}
 	return e, nil
 }

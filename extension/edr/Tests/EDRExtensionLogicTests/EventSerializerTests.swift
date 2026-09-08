@@ -368,6 +368,29 @@ final class EventSerializerTests: XCTestCase {
         }
     }
 
+    // MARK: FileRenamePayload
+
+    // spec:endpoint-event-collection/sensitive-path-file-modification-capture/a-rename-onto-a-sensitive-path-carries-both-paths
+    //
+    // The wire shape the server's file_rename decoder reads. Pinned as a whole literal for the same reason the block event is:
+    // a substring check cannot fail when a field is ADDED, and the server binds these two keys to Sigma's SourceFilename and
+    // TargetFilename, so a rename or a swap here silently changes which path the detection judges.
+    //
+    // `source_path` and `path` rather than a symmetric pair of names: `path` is the DESTINATION, matching every other file
+    // event's target field, which is what lets one detection ask the right question of both an open and a rename.
+    func testFileRenamePayloadPinsItsWireShape() throws {
+        let payload = FileRenamePayload(pid: 4242, sourcePath: "/tmp/staged", path: "/etc/sudoers.d/evil")
+        let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
+        XCTAssertEqual(
+            json,
+            "{\"path\":\"\\/etc\\/sudoers.d\\/evil\"," +
+                "\"pid\":4242,\"source_path\":\"\\/tmp\\/staged\"}"
+        )
+        let decoded = try decoder.decode(FileRenamePayload.self, from: try encoder.encode(payload))
+        XCTAssertEqual(decoded.sourcePath, "/tmp/staged")
+        XCTAssertEqual(decoded.path, "/etc/sudoers.d/evil")
+    }
+
     // MARK: EventEnvelope
 
     // spec:endpoint-event-collection/canonical-event-envelope/an-event-envelope-is-well-formed

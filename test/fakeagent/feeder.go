@@ -220,6 +220,12 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 			Path  string `json:"path"`
 			Flags int    `json:"flags"`
 		}{ev.PID, ev.Path, ev.Flags})
+	case "file_rename":
+		return json.Marshal(struct {
+			PID        int    `json:"pid"`
+			SourcePath string `json:"source_path"`
+			Path       string `json:"path"`
+		}{ev.PID, ev.SourcePath, ev.Path})
 	case "network_connect":
 		out := struct {
 			PID           int    `json:"pid"`

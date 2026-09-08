@@ -31,19 +31,28 @@ import (
 // write-mode `open` event, so this rule's match logic is unchanged while the
 // host no longer forwards every file open.
 //
-// Why visudo doesn't need to be in the default allowlist: visudo writes
-// to /etc/sudoers.tmp (or $TMPDIR) and atomically renames it onto
-// /etc/sudoers, so the file-tamper client (which watches CREATE/WRITE on
-// /etc/sudoers but deliberately NOT rename) never sees visudo's flow.
-// Same is true for sudoedit. The rule only trips when something creates
-// or writes /etc/sudoers* directly.
+// The rule matches only the files sudo will actually PARSE. sudoers(5) says sudo
+// reads each file in /etc/sudoers.d "skipping file names that end in '~' or
+// contain a '.' character", so a name carrying a dot grants nothing no matter
+// what is written into it. Verified on macOS 26.3 with three files of identical
+// content differing only in name: zzdotless loaded, zz.dotted and zztilde~ did
+// not.
 //
-// Known limitation: an attacker with root could write a temp file and rename
-// it onto /etc/sudoers without ever firing CREATE/WRITE on /etc/sudoers.
-// Subscribing to NOTIFY_RENAME would catch that, but it would also fire on
-// every legitimate visudo/sudoedit edit, so the atomic-replace gap is left
-// documented (same class as the privilege_launchd_plist_write atomic-rename
-// gap, which BTM registration now covers).
+// That narrowing fixed a live false positive (#933). The previous pattern
+// matched any direct child, and one `visudo -f /etc/sudoers.d/<name>` writes
+// `<name>.tmp` as a SIBLING inside the watched prefix, so every legitimate
+// fragment edit raised a Critical escalation alert on a file sudo ignores. The
+// old comment here claimed the opposite, that the client "never sees visudo's
+// flow"; that holds for /etc/sudoers, whose temp file lands outside the watched
+// set, and not for /etc/sudoers.d.
+//
+// Renames are read too, as of #917. The atomic-replace evasion (write a temp
+// file, rename it onto a sudoers path) produced no CREATE and no WRITE on a
+// watched path and was invisible. It is now caught on the rename's DESTINATION,
+// which is what decides whether the file is policy. The two changes ship
+// together deliberately: narrowing alone would have removed the detection that
+// caught write-then-rename by accident, via the same over-broad pattern that
+// caused the false positive.
 type SudoersTamper struct {
 	// Exclusions is the per-host false-positive resolver. The rule silently accepts a write whose writer-process path matches an
 	// exclusion (match type path_glob). Nil excludes nothing (the empty-config default): every direct write to sudoers fires.
@@ -72,16 +81,18 @@ func (r *SudoersTamper) Doc() api.Documentation {
 			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
 			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +
 			"admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.\n\n" +
-			"`visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both " +
-			"ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it " +
-			"onto /etc/sudoers is missed.",
+			"The rule reads renames as well as writes, so an attacker who writes a temp file and renames it onto a sudoers " +
+			"path is caught at the moment the file becomes policy. It matches only the names sudo will actually parse: " +
+			"sudoers(5) skips files in /etc/sudoers.d whose names contain a `.` or end in `~`, and a file sudo skips grants " +
+			"nothing.",
 		Severity:   api.SeverityHigh,
-		EventTypes: []string{"open"},
+		EventTypes: []string{"open", "file_rename"},
 		FalsePositives: []string{
 			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.",
 		},
 		Limitations: []string{
-			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule's largest gap and a trivial evasion.",
+			"Truncation and deletion are not detected: `: > /etc/sudoers` destroys the policy and emits nothing at all, because open(O_TRUNC) is a different kernel path from the CREATE/WRITE/RENAME this rule reads. Tracked as #934.",
+			"A rename whose destination sudo will load fires whoever performed it, so an administrator committing a legitimate visudo edit of a /etc/sudoers.d/ fragment is reported alongside an attacker promoting a file into place. From the endpoint's view the two are the same operation on the same path, and the rule deliberately does not filter on platform-binary status (see the description). Operators tune with a path-glob exclusion on the writer.",
 			"On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.",
 		},
 	}
@@ -119,7 +130,10 @@ func (r *SudoersTamper) EvaluateScoped(
 func (r *SudoersTamper) evalEvent(
 	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
 ) (*api.Finding, error) {
-	if evt.EventType != "open" {
+	// A rename is read the same way a write is: the adapter supplies the DESTINATION as TargetFilename, so one detection asks
+	// the right question of both. An open asks whether a policy file was written; a rename asks whether a file just became
+	// policy, which is the escalation the write-then-rename evasion used to slip past entirely (#917).
+	if evt.EventType != "open" && evt.EventType != "file_rename" {
 		return nil, nil
 	}
 	// Checked before the adapter, and deliberately still a byte scan: it costs nothing and it keeps every open of some other path

@@ -13,7 +13,7 @@ description: |-
 
   Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.
 
-  `visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it onto /etc/sudoers is missed.
+  The rule reads renames as well as writes, so an attacker who writes a temp file and renames it onto a sudoers path is caught at the moment the file becomes policy. It matches only the names sudo will actually parse: sudoers(5) skips files in /etc/sudoers.d whose names contain a `.` or end in `~`, and a file sudo skips grants nothing.
 author: Fleet EDR
 level: high
 tags:
@@ -34,8 +34,20 @@ detection:
   #
   # Retiring them is what makes this rule plain Sigma. The events it now reads ARE completed creations and modifications, which
   # is what Sigma's file_event category means, so the rule no longer needs a field this engine computes.
+  #
+  # The pattern matches only the files sudo will actually PARSE. sudoers(5): sudo reads each file in /etc/sudoers.d
+  # "skipping file names that end in '~' or contain a '.' character", so `[^/.]*[^/.~]` is that rule written as a regex: no dot
+  # anywhere, and not ending in a tilde. Verified on macOS 26.3 with three files of identical content differing only in name:
+  # zzdotless loaded, zz.dotted and zztilde~ did not.
+  #
+  # Narrowing matters because the old `[^/]+` matched names sudo ignores, so the rule raised a Critical escalation alert on a
+  # file that grants nothing. That was not theoretical: one `visudo -f /etc/sudoers.d/<name>` writes `<name>.tmp`, a sibling
+  # inside the watched prefix, and the rule fired on it every time (#933).
+  #
+  # For a `file_rename` event TargetFilename is the DESTINATION, so the same condition asks the right question of both event
+  # types: an open asks "was a policy file written", a rename asks "did a file just become policy".
   selection:
-    TargetFilename|re: '^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$'
+    TargetFilename|re: '^(?:/private)?/etc/sudoers(?:\.d/[^/.]*[^/.~])?$'
   condition: selection
 falsepositives:
   - Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.
@@ -46,8 +58,10 @@ x-engine:
   portability_note: The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, so any Sigma-compatible engine can evaluate it as it stands.
   event_types:
     - open
+    - file_rename
   exclusions:
     - path_glob
   limitations:
-    - 'Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule''s largest gap and a trivial evasion.'
+    - 'Truncation and deletion are not detected: `: > /etc/sudoers` destroys the policy and emits nothing at all, because open(O_TRUNC) is a different kernel path from the CREATE/WRITE/RENAME this rule reads. Tracked as #934.'
+    - A rename whose destination sudo will load fires whoever performed it, so an administrator committing a legitimate visudo edit of a /etc/sudoers.d/ fragment is reported alongside an attacker promoting a file into place. From the endpoint's view the two are the same operation on the same path, and the rule deliberately does not filter on platform-binary status (see the description). Operators tune with a path-glob exclusion on the writer.
     - 'On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule''s own suppression named sudo alone. sudo''s own lock is still not an alert, and no agent shipping today can produce either shape.'
