@@ -370,7 +370,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
 			p.reportLostClaim(lockedCtx, nackErr, nacked.Held, host, len(claimed))
-			p.reportSetAside(lockedCtx, host, nacked.SetAside, stageBuilder)
+			p.reportSetAside(lockedCtx, host, nacked.SetAside, stageBuilder, err)
 			carried = nacked.CarriedTally
 		}
 		return nil
@@ -498,7 +498,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
 			p.reportLostClaim(ctx, nackErr, nacked.Held, hostOf(events), len(eventIDs))
-			p.reportSetAside(ctx, hostOf(events), nacked.SetAside, stageDetection)
+			p.reportSetAside(ctx, hostOf(events), nacked.SetAside, stageDetection, err)
 			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
 			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
 			//
@@ -672,7 +672,7 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 // is carried on the consequence attribute rather than stated here.
 //
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
-func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage setAsideStage) {
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage setAsideStage, cause error) {
 	if setAside <= 0 {
 		return
 	}
@@ -680,8 +680,20 @@ func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside 
 	// of the stage it came from. It previously claimed a process-graph gap for both, which is false for the detection stage:
 	// processHost completes the builder before evaluating, so a batch withdrawn there IS in the graph, and the claim sent an
 	// operator to inspect a process tree that was intact.
-	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure",
-		"host_id", hostID, "events", setAside, "stage", stage.name, "consequence", stage.consequence)
+	//
+	// The cause is carried because this record is the ONLY one an operator sees for the condition. Every attempt before it is
+	// logged at DEBUG on purpose, so that a fifteen-minute outage does not write a line per retry (issue #631 measured ~130 a
+	// minute from one host), which leaves this line as the single place the reason can appear. Without it the record says a host
+	// stopped contributing and not why, and the retries that would have said are the ones deliberately kept quiet.
+	//
+	// It is the error from the attempt that withdrew the batch, which is the one whose failure ran out the retries. Engine
+	// evaluation joins distinct retry causes rather than keeping only the first (see retryCause), so a read failure is named here
+	// even when another rule in the same batch was merely waiting.
+	attrs := []any{"host_id", hostID, "events", setAside, "stage", stage.name, "consequence", stage.consequence}
+	if cause != nil {
+		attrs = append(attrs, "cause", cause.Error())
+	}
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure", attrs...)
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}

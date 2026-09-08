@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -15,6 +16,49 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-read-is-not-logged-per-attempt
+//
+// TestSetAsideRecordNamesTheFailureThatRanOutTheRetries drives a read failure through terminal withdrawal and asserts the record
+// an operator actually sees.
+//
+// This is the only record they get. Every attempt before it is logged at DEBUG deliberately, so a fifteen-minute outage does not
+// write a line per retry, which leaves this line as the single place the reason can appear. Review found the scenario specified
+// the cause and the code did not carry it: the record said a host had stopped contributing and not why, with the retries that
+// would have said kept quiet by design.
+func TestSetAsideRecordNamesTheFailureThatRanOutTheRetries(t *testing.T) {
+	t.Parallel()
+	handler := &capturingLogHandler{}
+	// The batch is withdrawn whole at the DETECTION stage, which is the path that has an evaluation error to name.
+	log := &scriptedEventLog{batch: oneEventBatch(), setAside: 1}
+	readFailed := fmt.Errorf("graph read GetProcessByPID: %w: %w",
+		errors.New("dial tcp: connection refused"), rulesapi.ErrRuleReadUnavailable)
+	p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: readFailed}, singleCycleOpts(handler))
+
+	p.ProcessOnce(t.Context())
+
+	msg, _, _ := setAsideRecord(t, handler)
+	require.Contains(t, msg, "set aside")
+
+	var cause string
+	handler.mu.Lock()
+	for _, r := range handler.records {
+		if r.Level != slog.LevelError || !strings.Contains(r.Message, "set aside") {
+			continue
+		}
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "cause" {
+				cause = a.Value.String()
+			}
+			return true
+		})
+	}
+	handler.mu.Unlock()
+
+	require.NotEmpty(t, cause, "the one record an operator sees must say why, or the reason is nowhere")
+	assert.Contains(t, cause, "connection refused",
+		"and it must name the underlying failure, not just the sentinel that classified it")
+}
 
 // spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/setting-events-aside-is-counted-and-logged
 //
@@ -42,7 +86,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-wedged", 7, stageDetection)
+		p.reportSetAside(t.Context(), "host-wedged", 7, stageDetection, nil)
 
 		require.Len(t, rec.setAside, 1, "the counter is what an operator alerts on")
 		assert.Equal(t, "host-wedged", rec.setAside[0].hostID,
@@ -60,7 +104,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-fine", 0, stageBuilder)
+		p.reportSetAside(t.Context(), "host-fine", 0, stageBuilder, nil)
 
 		assert.Empty(t, rec.setAside, "an ordinary retryable nack must not touch the counter")
 		assert.Empty(t, logged.String(),
@@ -74,7 +118,7 @@ func TestReportSetAside(t *testing.T) {
 
 		// The recorder is installed after construction (the two-phase setup cmd/main uses), so a nil one is a real state and not
 		// a defensive hypothetical.
-		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, stageDetection) })
+		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, stageDetection, nil) })
 		assert.Contains(t, logged.String(), "host-x", "the log still fires, since it is the half that needs no wiring")
 	})
 }
