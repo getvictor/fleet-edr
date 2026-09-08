@@ -8,7 +8,9 @@
 package eventlog
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -393,6 +395,23 @@ const (
 // stamp since issue #817, so the replacement's acknowledgement was REJECTED and its work redone by whoever claimed the rows next.
 // It also counted a failure the replacement had not had against a bound that lives on the ROW and ends in the row being withdrawn,
 // so it needed no repetition: ordinary failures can leave a row one attempt short, and a stale nack supplied the last one.
+// batchDigest identifies the exact set of events a tally was resolved over, so a stored tally is only ever handed to a withdrawal
+// of that same set.
+//
+// Needed because a stored tally can outlive the batch it describes. The claim orders by timestamp_ns and the carrier row is the
+// smallest event_id, two unrelated orderings, so a late-arriving older event can shift the claimable prefix to one that OVERLAPS
+// the previous batch while excluding its carrier. The new batch cannot clear a row it does not hold, so the old tally survives
+// there covering an event the two batches share, and the stranded row's own later withdrawal would report it a second time.
+//
+// Sorted so the digest does not depend on the order the caller listed its events, and NUL-joined because an event id is an opaque
+// string: joining on a character an id could contain would let two different batches collide.
+func batchDigest(eventIDs []string) []byte {
+	sorted := slices.Clone(eventIDs)
+	slices.Sort(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
+	return sum[:]
+}
+
 func (s *Store) Nack(
 	ctx context.Context, eventIDs []string, claimStampNs int64, tally []byte,
 ) (result api.NackResult, err error) {
@@ -462,14 +481,19 @@ func (s *Store) Nack(
 	// not erase what an earlier attempt did. Only an attempt that DOES supply one clears the others, and it supersedes them.
 	// Expressed in the statement rather than by assembling the statement from pieces, so there is one query to read here and one
 	// prepared shape for the server.
+	// The digest is of the CALLER's batch, not of the subset still owned: that is the set the tally was resolved over, and it is
+	// what a later withdrawal has to match to be handed it.
+	digest := batchDigest(eventIDs)
 	query, args, err := sqlx.In(`
 		UPDATE event_queue
 		SET monitor_tally = IF(? IS NULL, monitor_tally, IF(event_id = ?, ?, NULL)),
+		    monitor_tally_batch = IF(? IS NULL, monitor_tally_batch, IF(event_id = ?, ?, NULL)),
 		    attempts = attempts + 1,
 		    first_failed_at_ns = IF(first_failed_at_ns = 0, ?, first_failed_at_ns),
 		    processed = 0,
 		    claimed_at_ns = 0
-		WHERE processed = 2 AND event_id IN (?)`, tally, carrier, tally, now, owned)
+		WHERE processed = 2 AND event_id IN (?)`,
+		tally, carrier, tally, tally, carrier, digest, now, owned)
 	if err != nil {
 		return api.NackResult{}, fmt.Errorf("nack build query: %w", err)
 	}
@@ -525,12 +549,21 @@ func (s *Store) Nack(
 	// other events produce on their own attempt. len(owned) reads as the same thing only while ownership is total.
 	var carried []byte
 	if setAside == int64(len(eventIDs)) {
-		var stored []byte
+		var stored struct {
+			Tally []byte `db:"monitor_tally"`
+			Batch []byte `db:"monitor_tally_batch"`
+		}
 		if err := tx.GetContext(ctx, &stored,
-			"SELECT monitor_tally FROM event_queue WHERE event_id = ?", carrier); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			"SELECT monitor_tally, monitor_tally_batch FROM event_queue WHERE event_id = ?",
+			carrier); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return api.NackResult{}, fmt.Errorf("nack read carried tally: %w", err)
 		}
-		carried = stored
+		// Only when the stored tally was resolved over THIS batch. A batch whose membership moved gets nothing rather than a
+		// tally covering events it does not contain, which loses those counts instead of attributing them to events that did not
+		// produce them. bytes.Equal rather than a length check: two batches differ by content, not by size.
+		if bytes.Equal(stored.Batch, digest) {
+			carried = stored.Tally
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return api.NackResult{}, fmt.Errorf("commit nack: %w", err)

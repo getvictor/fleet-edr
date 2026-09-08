@@ -324,3 +324,101 @@ func TestNackKeepsEachBatchsValueAcrossAPrefixShift(t *testing.T) {
 	assert.Equal(t, string(older), string(late.CarriedTally),
 		"and the displaced batch is handed its own, so no batch is counted with another's matches")
 }
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-value-is-withheld-from-a-batch-it-was-not-supplied-for
+//
+// An OVERLAPPING prefix shift, and the reproducer for the double count review found. The prefix-shift test above replaces a batch
+// wholesale, so the two batches share no event and nothing CAN be double counted; that shape passed while this one failed.
+//
+// The mechanism is two unrelated orderings. The claim takes a timestamp-ordered prefix while the carrier row is the smallest
+// event_id, so a late-arriving older event can shift the prefix to one that overlaps the previous batch on a SHARED event while
+// excluding its carrier. The new batch cannot clear a row it does not hold, so the old tally survives there, and the stranded
+// row's own later withdrawal would report the shared event a second time. Measured: before the digest, this returned the stale
+// tally.
+func TestNackWithholdsAStrandedTallyFromADifferentBatch(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-overlap"
+	const batch = 2
+
+	// ids chosen so min(event_id) of the first claim is the LATER event by timestamp.
+	enqueue(t, log, host, "z-shared", 1_001)
+	enqueue(t, log, host, "a-carrier", 1_002)
+
+	first := []byte(`{"v":1,"matches":[{"count":77}]}`)
+	require.Zero(t, nackOnce(t, log, host, batch, first).SetAside)
+
+	var carryingRow string
+	require.NoError(t, db.GetContext(t.Context(), &carryingRow,
+		"SELECT event_id FROM event_queue WHERE monitor_tally IS NOT NULL AND host_id = ?", host))
+	require.Equal(t, "a-carrier", carryingRow, "premise: the carrier is the LATER event by timestamp")
+
+	// A late-arriving OLDER event. The next prefix is {m-late, z-shared}: it overlaps the first batch on z-shared and excludes
+	// the carrier, so it cannot clear it.
+	enqueue(t, log, host, "m-late", 1_000)
+	second := []byte(`{"v":1,"matches":[{"count":88}]}`)
+	require.Zero(t, nackOnce(t, log, host, batch, second).SetAside)
+
+	// Withdraw the overlapping batch {m-late, z-shared}.
+	for range 19 {
+		require.Zero(t, nackOnce(t, log, host, batch, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"m-late", "z-shared"}, 16*time.Minute)
+	overlapping := nackOnce(t, log, host, batch, nil)
+	require.Equal(t, int64(2), overlapping.SetAside)
+	require.Equal(t, string(second), string(overlapping.CarriedTally), "z-shared's matches are counted here")
+
+	// Now the stranded carrier is the whole remaining batch. Its stored tally covers {z-shared, a-carrier}.
+	for range 20 {
+		require.Zero(t, nackOnce(t, log, host, 1, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"a-carrier"}, 16*time.Minute)
+	stranded := nackOnce(t, log, host, 1, nil)
+	require.Equal(t, int64(1), stranded.SetAside)
+
+	assert.Empty(t, stranded.CarriedTally,
+		"this batch is {a-carrier} and the stored tally covers {z-shared, a-carrier}, so returning it counts z-shared TWICE")
+}
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-value-is-withheld-from-a-batch-it-was-not-supplied-for
+//
+// The digest records the batch the tally was RESOLVED over, which is the caller's list, not the subset the claim happens to still
+// own. Mixed ownership is where those differ: an attempt whose lease expired for part of its batch still evaluated the whole
+// batch, so its tally covers events it no longer holds. Digesting the owned subset instead would make the tally match a later
+// withdrawal of exactly that subset, and hand it matches belonging to the events it lost.
+func TestNackDigestsTheBatchTheTallyCoversNotTheSubsetItOwns(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-digest"
+
+	enqueue(t, log, host, "dig-kept", 1_000)
+	enqueue(t, log, host, "dig-lost", 1_001)
+
+	// One claim over both, then the second event is taken by a replacement, so this attempt owns only the first while its tally
+	// still covers both.
+	claimed, myStamp, err := log.ClaimForHost(t.Context(), host, 2)
+	require.NoError(t, err)
+	require.Len(t, claimed, 2)
+	_, err = db.ExecContext(t.Context(),
+		"UPDATE event_queue SET claimed_at_ns = claimed_at_ns + 1 WHERE event_id = ?", "dig-lost")
+	require.NoError(t, err)
+
+	wholeBatch := []byte(`{"v":1,"matches":[{"count":33}]}`)
+	nacked, err := log.Nack(t.Context(), []string{"dig-kept", "dig-lost"}, myStamp, wholeBatch)
+	require.NoError(t, err)
+	require.True(t, nacked.Held, "it held one of them, which is the premise")
+
+	// The lost event is acknowledged by whoever owns it, so what remains is exactly the subset the storing attempt owned.
+	_, err = db.ExecContext(t.Context(), "UPDATE event_queue SET processed = 1 WHERE event_id = ?", "dig-lost")
+	require.NoError(t, err)
+
+	for range 20 {
+		require.Zero(t, nackOnce(t, log, host, 1, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"dig-kept"}, 16*time.Minute)
+
+	withdrawing := nackOnce(t, log, host, 1, nil)
+	require.Equal(t, int64(1), withdrawing.SetAside)
+	assert.Empty(t, withdrawing.CarriedTally,
+		"the tally covers dig-lost too, and dig-lost was accounted for by the attempt that acknowledged it")
+}

@@ -145,5 +145,10 @@ type NackResult struct {
 	// is permitted here, so an attempt can own one event of its batch, withdraw it, and leave the rest to whoever claimed them;
 	// the tally covers the whole batch, so returning it there would count it alongside what those events resolve on their own
 	// attempt.
+	//
+	// It is also returned only when the withdrawing batch is EXACTLY the batch the tally was resolved over. A stored tally can
+	// outlive its batch's membership, and one covering an event that some other batch has since counted would report that event
+	// twice. A batch whose membership moved is therefore handed nothing, which loses those counts rather than attributing them to
+	// events that did not produce them.
 	CarriedTally []byte
 }

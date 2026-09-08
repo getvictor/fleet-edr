@@ -19,11 +19,19 @@
 -- clears the column on the other rows it holds, so at most one row per BATCH carries a value and the reader cannot pick up one an
 -- earlier attempt left on a row this one does not write.
 --
--- Per batch, not per host: two pending rows CAN hold two batches' values at once, because the claim is a timestamp-ordered prefix
--- and a late-arriving older event can push an earlier carrier out of it. That is harmless, and the claim's shape is why. A row
--- still holding a value is either inside the prefix its own batch forms, where the next attempt to supply one overwrites or clears
--- it, or has left the pending pool for good: acked rows are pruned, and a withdrawn row is never claimed or nacked again. So a
--- withdrawal is only ever handed the value resolved over the events being withdrawn.
+-- Two pending rows CAN hold two batches' values at once, and the second column is what makes that safe. The claim orders by
+-- timestamp_ns while the carrier is the smallest event_id, two unrelated orderings, so a late-arriving older event can shift the
+-- prefix to one that OVERLAPS the previous batch while excluding its carrier. The new batch cannot clear a row it does not hold,
+-- so the old value survives there, covering an event the two batches SHARE. Measured before the fix: the stranded row's later
+-- withdrawal returned a tally covering an event the overlapping batch had already recorded, counting it twice.
+--
+-- So a tally is valid only for a withdrawal of EXACTLY the batch it was resolved over, and monitor_tally_batch records which batch
+-- that was: the SHA-256 of the caller's event ids, sorted and NUL-joined. A withdrawal is handed the tally only when that digest
+-- matches the batch being withdrawn. A batch whose membership moved gets nothing, which loses those counts rather than attributing
+-- them to events that did not produce them, and losing is the direction this whole column is arranged to err in.
+--
+-- This is also what makes mixed ownership safe. An attempt whose lease expired for part of its batch resolved its tally over the
+-- WHOLE batch, so the digest is the whole batch's, and a later withdrawal of only the part it kept does not match it.
 --
 -- NULL is the ordinary state and means "no attempt has evaluated this batch yet". A nack with no tally leaves the column alone
 -- rather than clearing it: a later attempt that fails at the fold must not erase what an earlier one resolved, which is the whole
@@ -43,6 +51,7 @@
 -- +goose StatementBegin
 ALTER TABLE event_queue
     ADD COLUMN monitor_tally BLOB DEFAULT NULL,
+    ADD COLUMN monitor_tally_batch BINARY(32) DEFAULT NULL,
     ALGORITHM=INPLACE, LOCK=NONE;
 -- +goose StatementEnd
 
