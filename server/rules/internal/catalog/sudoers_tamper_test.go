@@ -279,3 +279,27 @@ func TestSudoersTamper_DescriptionSaysWhatHappened(t *testing.T) {
 		boundOpenEvent(t, "/etc/sudoers", 0x1|0x200|0x400, "/usr/bin/tee"))
 	assert.Contains(t, write, "/usr/bin/tee opened /etc/sudoers for writing", "the write wording is unchanged")
 }
+
+// The byte prefilter depends on an invariant that is invisible from this package, and review is what surfaced it.
+//
+// Swift's JSONEncoder escapes forward slashes, so the real extension puts `"\/etc\/sudoers.d\/evil"` on the wire and the
+// agent uploads those bytes unchanged. A raw scan for `/etc/sudoers` finds NOTHING in that form, which this pins directly.
+//
+// What makes the rule work anyway is `event_queue.payload` being a MySQL JSON column: MySQL normalizes `\/` to `/` on storage,
+// so the bytes the rule receives have already been unescaped. Every other test in this file marshals with Go's encoding/json,
+// which does not escape slashes, so none of them can tell whether that invariant holds.
+//
+// The end-to-end guard lives in the detection context, where event_queue is a real table
+// (TestSudoersRenameSurvivesSlashEscapingThroughTheQueue). What belongs HERE is the hazard itself: if someone reads the
+// prefilter and assumes it matches wire bytes, this test is the correction.
+func TestSudoersTamper_PrefilterDoesNotMatchTheExtensionsWireBytes(t *testing.T) {
+	t.Parallel()
+
+	wire := []byte(`{"pid":6021,"source_path":"\/tmp\/staged","path":"\/etc\/sudoers.d\/evil"}`)
+	assert.NotContains(t, string(wire), "/etc/sudoers",
+		"the extension's own encoding does not contain the magic substring; the prefilter relies on storage normalizing it")
+
+	normalized := []byte(`{"pid":6021,"source_path":"/tmp/staged","path":"/etc/sudoers.d/evil"}`)
+	assert.Contains(t, string(normalized), "/etc/sudoers",
+		"what the JSON column hands back does contain it, which is the form the rule is written against")
+}

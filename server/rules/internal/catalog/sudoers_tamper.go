@@ -103,6 +103,16 @@ func (r *SudoersTamper) Doc() api.Documentation {
 // file open in the kernel (thousands per second) and writes to sudoers happen on a stable host literally never. Skipping the JSON
 // decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal per open" to "one bytes.Contains per
 // open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
+//
+// This depends on an invariant that is NOT visible from here, and that is worth naming because breaking it would silently disable
+// the rule rather than fail anything. Swift's JSONEncoder escapes forward slashes, so the extension puts `"\/etc\/sudoers"` on
+// the wire and the agent uploads those bytes unchanged. A raw scan for `/etc/sudoers` would miss every real event. What saves it
+// is `event_queue.payload` being a MySQL JSON column: MySQL normalizes `\/` to `/` on storage, so the bytes this rule receives
+// have already been unescaped. Verified against the running database, and pinned by
+// TestSudoersTamper_PrefilterSurvivesTheExtensionsSlashEscaping.
+//
+// Changing that column to BLOB (which is the right choice for genuinely opaque bytes, and has been made elsewhere for that
+// reason) would break this filter and every rule that scans raw payload bytes. Match on the escaped form too, or decode first.
 var sudoersBytes = []byte("/etc/sudoers")
 
 // SupportedExclusionMatchTypes lists the match types this rule consults: the sudoers writer path glob (issue #520).
