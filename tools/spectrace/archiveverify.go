@@ -11,9 +11,12 @@ import (
 	"strings"
 )
 
-// archivedRestatement is one archived change's MODIFIED entry for one requirement, with the folder it came from.
+// archivedRestatement is one archived change's ADDED or MODIFIED entry for one requirement, with the folder it came from.
 type archivedRestatement struct {
-	change    string
+	change string
+	// added distinguishes an entry that INTRODUCED the requirement from one that restated it, which the two directions of the
+	// check need differently. See lastBatchRestatement for why the retirement direction cannot treat them alike.
+	added     bool
 	scenarios []string
 	// text is the entry's prose as comparable logical lines, which is what a scenario heading cannot tell you: a restatement can
 	// refine a requirement's normative wording, or one scenario's THEN clause, while listing exactly the scenario names the body
@@ -281,6 +284,26 @@ func lastBatchRestatement(entries []archivedRestatement, addedOn string) winning
 		}
 	}
 
+	// everListed and everKept are the EXCUSE set: the canonical-side checks read them as "some delta in this batch kept this, so
+	// its presence in the tree is not an unapplied retirement". Widening that set weakens those checks, which is the opposite of
+	// what widening the CLAIM set does, and is why the two directions cannot read the same entries.
+	//
+	// So the excuse set is built from the batch's MODIFIED entries whenever it has any. A MODIFIED replaces the requirement whole
+	// and is sequenced after the ADDED it refines (see archive-order), so what the MODIFIED omits is retired even if the ADDED
+	// listed it. Review caught this as a regression the fold introduced: for a same-date ADDED listing {shared, retired} beside a
+	// MODIFIED listing {shared}, letting the ADDED excuse `retired` silenced a finding the MODIFIED-only input used to report,
+	// which is exactly the out-of-order damage this command exists to catch.
+	//
+	// A batch of ADDED entries alone is its own authority, which is the case issue #909 added and where there is nothing else to
+	// read. The LOSS direction is unaffected and still intersects every entry: claiming less can only miss a finding, never invent
+	// one.
+	excuseFrom := func(e archivedRestatement) bool { return !e.added }
+	if !slices.ContainsFunc(entries, func(e archivedRestatement) bool {
+		return archiveDate(e.change) == last && !e.added
+	}) {
+		excuseFrom = func(archivedRestatement) bool { return true }
+	}
+
 	shared := map[string]int{}
 	sharedText := map[[2]string]int{}
 	batch := 0
@@ -292,13 +315,17 @@ func lastBatchRestatement(entries []archivedRestatement, addedOn string) winning
 		out.changes = append(out.changes, e.change)
 		for _, s := range e.scenarios {
 			shared[s]++
-			out.everListed[s] = struct{}{}
+			if excuseFrom(e) {
+				out.everListed[s] = struct{}{}
+			}
 		}
 		// Counted per ENTRY, not per occurrence, which review caught: a restatement repeating an identical bullet would push its
 		// count past the batch size and drop the line out of the intersection, so losing every copy would go unreported.
 		for key := range textKeys(e.text) {
 			sharedText[key]++
-			appendText(&out.everKept, key)
+			if excuseFrom(e) {
+				appendText(&out.everKept, key)
+			}
 		}
 		// The written ORDER is recorded only for a batch of ONE, which is the batch the sequence check can speak for. Where two
 		// restatements are in the batch, which of them the archive applied is exactly what is not recoverable, so neither of
@@ -446,14 +473,22 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 		//
 		// They are folded into one list rather than compared separately, so the existing winner selection applies unchanged: the
 		// latest batch wins, and within a batch the claims are INTERSECTED. An ADDED and a MODIFIED of one requirement in one
-		// batch therefore claim only what both list, which under-claims when the MODIFIED refined the requirement, and cannot
-		// over-claim. That is the direction this file errs in everywhere, and it is why the fold needs no ordering it does not
-		// have: the batch's internal order stays unrecoverable and nothing here pretends otherwise.
-		for _, section := range []map[string]map[string]restatement{one.modifiedRestatements, one.addedStatements} {
-			for requirement, byChange := range section {
+		// batch therefore claim only what both list, which under-claims when the MODIFIED refined the requirement and can only
+		// miss a finding, never invent one. The batch's internal order stays unrecoverable and nothing here pretends otherwise.
+		//
+		// The entry's SECTION is kept, because the excuse set the canonical-side checks read cannot be widened the same way. See
+		// lastBatchRestatement: an earlier version of this fold read both directions from all entries and silenced a real
+		// finding.
+		for _, section := range []struct {
+			entries map[string]map[string]restatement
+			added   bool
+		}{{one.modifiedRestatements, false}, {one.addedStatements, true}} {
+			for requirement, byChange := range section.entries {
 				for _, r := range byChange {
-					restatements[requirement] = append(restatements[requirement],
-						archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios), text: splitRequirementText(r.lines)})
+					restatements[requirement] = append(restatements[requirement], archivedRestatement{
+						change: name, added: section.added,
+						scenarios: sortedKeys(r.scenarios), text: splitRequirementText(r.lines),
+					})
 				}
 			}
 		}

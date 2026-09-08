@@ -861,3 +861,35 @@ func TestCollectChange_FilesTheLastAddedRequirementUnderAdded(t *testing.T) {
 	assert.Contains(t, d.modifiedRestatements, "cap/refined")
 	assert.NotContains(t, d.addedStatements, "cap/refined")
 }
+
+// TestVerifyArchive_AnAddedDoesNotExcuseAModifiedsRetirement is the regression review caught in the #909 fold, and it is the case
+// that shows the two directions of this check cannot read the same entries.
+//
+// The claim set and the EXCUSE set pull opposite ways. Widening what the batch claims can only miss a finding: the loss direction
+// intersects, so an extra entry claims less. Widening what the batch EXCUSES makes the canonical-side checks weaker, because they
+// read everListed as "some delta here kept this, so its presence is not an unapplied retirement". Folding ADDED entries into both
+// silenced a finding the MODIFIED-only input reported, which is exactly the out-of-order damage this command exists to catch.
+//
+// A MODIFIED replaces the requirement whole and is sequenced after the ADDED it refines, so what the MODIFIED omits is retired
+// even when the ADDED listed it.
+func TestVerifyArchive_AnAddedDoesNotExcuseAModifiedsRetirement(t *testing.T) {
+	t.Parallel()
+
+	sameBatch := map[string][]archivedRestatement{
+		"cap/the-thing": {
+			{change: "2026-06-02-introduces-it", added: true, scenarios: []string{"shared", "retired"}},
+			{change: "2026-06-02-refines-it", scenarios: []string{"shared"}},
+		},
+	}
+	findings := verifyArchive(sameBatch, canonicalWith("cap/the-thing", "shared", "retired"), nil, nil)
+	require.Len(t, findings, 1, "the MODIFIED retired it, so the canonical copy is a retirement the archive did not apply")
+	assert.Contains(t, findings[0], "cap/the-thing/retired")
+
+	// A batch of ADDED entries alone IS its own authority: there is no restatement to say otherwise, and this is the shape #909
+	// added. Here the scenario is genuinely part of the requirement, so its presence is not damage.
+	addedOnly := map[string][]archivedRestatement{
+		"cap/the-thing": {{change: "2026-06-02-introduces-it", added: true, scenarios: []string{"shared", "kept"}}},
+	}
+	assert.Empty(t, verifyArchive(addedOnly, canonicalWith("cap/the-thing", "shared", "kept"), nil, nil),
+		"an ADDED-only batch excuses what it listed, or every requirement introduced once would report its own scenarios")
+}
