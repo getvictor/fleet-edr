@@ -63,10 +63,21 @@ func (c readOnlyCorpus) Version(ctx context.Context) (int64, error) { return c.i
 
 // AuditOutbox exposes the audit outbox for the rules context to drain (issue #886).
 //
-// The store satisfies it directly: the entries are written by the same transactions the store already runs, so there is nothing
-// to wrap. Exposed as the narrow interface rather than the store so the caller gets the two methods a drain needs and not the
-// corpus write surface alongside them.
-func (r *RuleContent) AuditOutbox() api.AuditOutbox { return r.store }
+// Wrapped rather than returned directly, for the reason readOnlyCorpus is wrapped: returning the store behind a narrow interface
+// narrows what the caller SEES and not what it HAS, so a consumer could type-assert the handle back to the write surface and
+// bypass the validated authoring lifecycle. The wrapper has only the two methods a drain needs, so there is nothing to assert to.
+func (r *RuleContent) AuditOutbox() api.AuditOutbox { return auditOutbox{inner: r.store} }
+
+// auditOutbox is the drain's view of the store: the two methods it needs and nothing else.
+type auditOutbox struct{ inner *rulecontentmysql.Store }
+
+func (o auditOutbox) PendingAuditEntries(ctx context.Context, limit int) ([]api.PendingAuditEntry, error) {
+	return o.inner.PendingAuditEntries(ctx, limit)
+}
+
+func (o auditOutbox) DeleteAuditEntries(ctx context.Context, ids []int64) error {
+	return o.inner.DeleteAuditEntries(ctx, ids)
+}
 
 // Author builds the authoring lifecycle over this context's storage, validated by v.
 //

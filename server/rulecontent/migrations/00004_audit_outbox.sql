@@ -29,10 +29,11 @@ CREATE TABLE IF NOT EXISTS rule_content_audit_outbox (
 	kind       VARCHAR(64)  NOT NULL,
 	payload    JSON         NOT NULL,
 	created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-	PRIMARY KEY (id),
-	-- The drain reads oldest-first so audit rows land in the order the changes did, and deletes what it delivered. Both are
-	-- covered by the primary key, so no second index earns its place on a table that is empty in the steady state.
-	INDEX idx_rule_content_audit_outbox_created (created_at)
+	-- The drain reads oldest-first, by id rather than by created_at: the timestamps have microsecond resolution and two changes
+	-- inside one microsecond would order arbitrarily, while the auto-increment is the sequence the rows were written in. It then
+	-- deletes what it delivered, by id. Both are the primary key, so there is no second index: nothing queries created_at, and an
+	-- index on a table that is empty in the steady state would be cost with no reader.
+	PRIMARY KEY (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 -- +goose StatementEnd
 

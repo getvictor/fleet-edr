@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 )
@@ -28,11 +30,17 @@ const DrainBatch = 100
 // make a field rename in another context silently change a persisted format, which is the kind of coupling a durable encoding must
 // not have. The tags are what AuditOutboxKind names: change either and the kind changes with it.
 //
-// Only the fields a rule-content audit row carries. TraceID and RemoteAddr are not among them: the recorder fills the trace id
-// from the call's context, and the drain's context is the sweep's rather than the operator's request, so carrying one would
-// attribute the row to the wrong call. That is a real loss against the old synchronous write and is the trade the outbox makes.
+// TraceID is carried EXPLICITLY, which review corrected and which matters more than it looks. The recorder falls back to the trace
+// on the context of the Record call when the event carries none, and the drain's context is whichever caller happened to run it: a
+// request that changes one document also drains entries other requests left behind, so an empty trace here would stamp THIS
+// request's trace onto somebody else's audit row. Carrying the writer's own trace, or none at all, is the only honest answer, and
+// the drain detaches its context so the fallback cannot fire.
+//
+// RemoteAddr is not carried: nothing in a rule-content row uses it, and adding a field to a persisted format for a value no reader
+// asks for is not free.
 type auditEntryV1 struct {
 	ActorID    string         `json:"actor_id"`
+	TraceID    string         `json:"trace_id,omitempty"`
 	ActorType  string         `json:"actor_type"`
 	ActorLabel string         `json:"actor_label"`
 	Action     string         `json:"action"`
@@ -49,6 +57,7 @@ type auditEntryV1 struct {
 func encodeAuditEntry(e identityapi.AuditEvent) (rulecontentapi.AuditOutboxEntry, error) {
 	payload, err := json.Marshal(auditEntryV1{
 		ActorID:    e.Actor.ID,
+		TraceID:    e.TraceID,
 		ActorType:  string(e.Actor.Type),
 		ActorLabel: e.Actor.Label,
 		Action:     string(e.Action),
@@ -74,6 +83,7 @@ func decodeAuditEntry(payload []byte) (identityapi.AuditEvent, error) {
 			Type:  identityapi.PrincipalType(stored.ActorType),
 			Label: stored.ActorLabel,
 		},
+		TraceID:    stored.TraceID,
 		Action:     identityapi.AuditAction(stored.Action),
 		TargetType: stored.TargetType,
 		TargetID:   stored.TargetID,
@@ -112,6 +122,10 @@ func NewAuditDrain(
 // are a sequence of changes to what a fleet detects, and delivering a later one over a failed earlier one would produce a trail
 // whose order disagrees with the changes it records. A stalled entry is retried on the next pass.
 func (d *AuditDrain) Drain(ctx context.Context) (int, error) {
+	// Detached from the caller's trace, deliberately. The recorder falls back to the trace on this context when an event carries
+	// none, and a request that changes one document also drains entries other requests left behind: without this, request B would
+	// stamp its own trace onto request A's audit row. Cancellation still propagates, so a shutting-down caller stops promptly.
+	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
 	pending, err := d.outbox.PendingAuditEntries(ctx, DrainBatch)
 	if err != nil {
 		return 0, err
@@ -119,22 +133,29 @@ func (d *AuditDrain) Drain(ctx context.Context) (int, error) {
 	delivered := make([]int64, 0, len(pending))
 	var stopErr error
 	for _, entry := range pending {
+		// An entry this replica cannot READ is skipped, not stopped on, and never deleted. Review caught the difference: stopping
+		// meant one entry a replica could not decode stalled every audit row written after it, indefinitely, which trades a
+		// delayed row for a stalled log. Skipping costs ordering for the entries around it and nothing else, and the entry stays
+		// for a replica that can read it. Ordering is best-effort under version skew; delivery is not.
 		if entry.Kind != AuditOutboxKind {
-			// A kind this build does not know is left in place rather than dropped. During a rolling deployment the writer may
-			// be a version ahead; deleting what it wrote would lose the audit row it was careful to make durable.
+			// During a rolling deployment the writer may be a version ahead. Deleting what it wrote would lose the audit row it
+			// was careful to make durable, so this waits for the replica that understands it.
 			d.logger.WarnContext(ctx, "rule content audit entry has an unknown encoding; leaving it for a newer replica",
 				"id", entry.ID, "kind", entry.Kind)
-			break
+			continue
 		}
 		e, err := decodeAuditEntry(entry.Payload)
 		if err != nil {
-			// Also left in place, and this one is louder: an entry that cannot be decoded by the version that wrote its kind is
-			// a defect, and dropping it would hide the defect by removing its evidence.
+			// Louder, because an entry that cannot be decoded by the version that wrote its kind is a defect rather than skew.
+			// Still not deleted: dropping it would hide the defect by removing its evidence.
 			d.logger.ErrorContext(ctx, "rule content audit entry could not be decoded; leaving it in the outbox",
 				"id", entry.ID, "err", err)
 			stopErr = fmt.Errorf("decode audit outbox entry %d: %w", entry.ID, err)
-			break
+			continue
 		}
+		// A recorder failure DOES stop the pass, and that asymmetry is deliberate. The two skips above are about one entry this
+		// replica cannot read; this is the audit store being unavailable, which the next entry would hit too. Continuing would
+		// turn one outage into a burst of failed writes and deliver later entries ahead of earlier ones for no gain.
 		if err := d.audit.Record(ctx, e); err != nil {
 			stopErr = fmt.Errorf("record audit entry %d: %w", entry.ID, err)
 			break

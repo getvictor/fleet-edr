@@ -85,22 +85,6 @@ func TestDrain_StopsAtTheFirstFailureRatherThanSkippingIt(t *testing.T) {
 	assert.Len(t, outbox.entries, 2, "and neither entry is cleared")
 }
 
-// TestDrain_LeavesAnEntryItCannotDecode covers a rolling deployment, where the replica that wrote an entry may be a version ahead
-// of the one draining it. Dropping what it could not read would lose the audit row that writer was careful to make durable.
-func TestDrain_LeavesAnEntryItCannotDecode(t *testing.T) {
-	t.Parallel()
-	outbox := &fakeOutbox{}
-	outbox.add(rulecontentapi.AuditOutboxEntry{Kind: "identity.audit_event.v2", Payload: []byte(`{}`)})
-	outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
-	audit := &recordingAudit{}
-
-	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
-	require.NoError(t, err)
-	assert.Zero(t, delivered, "an unknown kind stops the drain rather than being skipped")
-	assert.Empty(t, audit.events)
-	assert.Len(t, outbox.entries, 2, "and it is left for a replica that understands it")
-}
-
 // TestDrain_RequiresItsCollaborators: a drain missing either half silently loses every audit row, which is the failure the outbox
 // exists to prevent arriving through wiring instead.
 func TestDrain_RequiresItsCollaborators(t *testing.T) {
@@ -161,4 +145,88 @@ func TestAuditEntry_KeysAreTheFormat(t *testing.T) {
 		"target_type": "rule_content_pack",
 		"target_id": "sha256:abc"
 	}`, string(entry.Payload), "changing a key changes the on-disk format, so it changes AuditOutboxKind too")
+}
+
+// TestDrain_SkipsAnEntryItCannotReadRatherThanStalling is the fix for a defect review found in the first version: stopping at an
+// entry this replica cannot decode meant ONE bad entry stalled every audit row written after it, indefinitely. Skipping costs the
+// ordering of the entries around it and nothing else, and the entry stays for a replica that can read it.
+func TestDrain_SkipsAnEntryItCannotReadRatherThanStalling(t *testing.T) {
+	t.Parallel()
+	outbox := &fakeOutbox{}
+	outbox.add(rulecontentapi.AuditOutboxEntry{Kind: AuditOutboxKind, Payload: []byte(`{not json`)})
+	outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
+	audit := &recordingAudit{}
+
+	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
+	require.Error(t, err, "the undecodable entry is reported")
+	assert.Equal(t, 1, delivered, "and the entry behind it still lands")
+	require.Len(t, audit.events, 1)
+	require.Len(t, outbox.entries, 1, "only the poison entry is left")
+	assert.Equal(t, AuditOutboxKind, outbox.entries[0].Kind)
+}
+
+// TestDrain_AnUnknownKindDoesNotBlockTheOnesBehindIt is the same property for version skew rather than corruption: an entry a
+// newer replica wrote waits for that replica, and does not hold up entries this one can deliver.
+func TestDrain_AnUnknownKindDoesNotBlockTheOnesBehindIt(t *testing.T) {
+	t.Parallel()
+	outbox := &fakeOutbox{}
+	outbox.add(rulecontentapi.AuditOutboxEntry{Kind: "identity.audit_event.v2", Payload: []byte(`{}`)})
+	outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
+	audit := &recordingAudit{}
+
+	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
+	require.NoError(t, err, "skew is not an error, it resolves itself")
+	assert.Equal(t, 1, delivered)
+	require.Len(t, outbox.entries, 1, "the unreadable entry is kept for a replica that understands it")
+	assert.Equal(t, "identity.audit_event.v2", outbox.entries[0].Kind)
+}
+
+// TestDrain_AReadFailureDeliversNothing covers the outbox being unreadable: there is nothing to deliver and nothing to clear, and
+// the caller is told rather than seeing a quiet zero.
+func TestDrain_AReadFailureDeliversNothing(t *testing.T) {
+	t.Parallel()
+	outbox := &fakeOutbox{readErr: errors.New("outbox unreadable")}
+	audit := &recordingAudit{}
+
+	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
+	require.Error(t, err)
+	assert.Zero(t, delivered)
+	assert.Empty(t, audit.events)
+}
+
+// TestDrain_ADeleteFailureRedeliversRatherThanLosing is the at-least-once guarantee at its sharpest point. The rows were recorded
+// and the entries were not cleared, so the next pass records them again: a duplicate audit row, which is visible, rather than a
+// missing one, which is not.
+func TestDrain_ADeleteFailureRedeliversRatherThanLosing(t *testing.T) {
+	t.Parallel()
+	outbox := &fakeOutbox{deleteErr: errors.New("cannot clear")}
+	outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
+	audit := &recordingAudit{}
+
+	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
+	require.Error(t, err, "the caller learns the entries were not cleared")
+	assert.Equal(t, 1, delivered, "the row WAS recorded, which is what makes the next pass a duplicate rather than a loss")
+	require.Len(t, outbox.entries, 1, "the entry survives")
+
+	outbox.deleteErr = nil
+	_, err = newDrain(t, outbox, audit).Drain(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, audit.events, 2, "redelivered, which is the at-least-once this trades for never losing a row")
+	assert.Empty(t, outbox.entries)
+}
+
+// TestDrain_LimitsOnePass pins that a pass is bounded, so a backlog is drained over several passes rather than in one statement
+// whose size nothing controls.
+func TestDrain_LimitsOnePass(t *testing.T) {
+	t.Parallel()
+	outbox := &fakeOutbox{}
+	for range DrainBatch + 5 {
+		outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
+	}
+	audit := &recordingAudit{}
+
+	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, DrainBatch, delivered)
+	assert.Len(t, outbox.entries, 5, "the rest waits for the next pass")
 }
