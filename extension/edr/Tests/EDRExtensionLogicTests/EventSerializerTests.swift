@@ -149,6 +149,38 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertFalse(json.contains("cdhash"))
     }
 
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/an-exec-carries-the-code-directory-hash-only-for-a-hardened-binary
+    //
+    // Both halves in one test because the scenario is a biconditional: present for a Hardened Runtime binary, absent
+    // otherwise. A test of only the present half would pass against a serializer that emitted a placeholder for every
+    // exec, and that placeholder is the failure that matters. The kernel maps pages lazily on a non-hardened process
+    // and does not re-verify them after load, so a cdhash reported for one is not the identity of the bytes that will
+    // run; emitting it anyway would give a signature-based exclusion a value it must not trust.
+    //
+    // Asserted on the wire keys, not the decoded struct: the server reads `cdhash` by that literal name, and absence
+    // rather than null is what its decoder relies on.
+    func testExecPayloadCarriesCDHashOnlyForHardenedBinaries() throws {
+        let hardened = ExecPayload(
+            pid: 501, ppid: 1, path: "/usr/bin/ssh", args: ["ssh"], cwd: "/", uid: 0, gid: 0,
+            codeSigning: CodeSigning(teamID: "", signingID: "com.apple.ssh", flags: 0x10000, isPlatformBinary: true),
+            sha256: nil, cdhash: String(repeating: "c", count: 40), snapshot: false
+        )
+        let hardenedJSON = String(data: try encoder.encode(hardened), encoding: .utf8) ?? ""
+        XCTAssertTrue(
+            hardenedJSON.contains("\"cdhash\":\"\(String(repeating: "c", count: 40))\""),
+            "hardened exec must carry cdhash, got: \(hardenedJSON)"
+        )
+
+        let notHardened = ExecPayload(
+            pid: 502, ppid: 1, path: "/usr/local/bin/tool", args: ["tool"], cwd: "/", uid: 0, gid: 0,
+            codeSigning: CodeSigning(teamID: "FDG8Q7N4CC", signingID: "com.example.tool", flags: 0, isPlatformBinary: false),
+            sha256: nil, cdhash: nil, snapshot: false
+        )
+        let notHardenedJSON = String(data: try encoder.encode(notHardened), encoding: .utf8) ?? ""
+        XCTAssertFalse(notHardenedJSON.contains("cdhash"), "non-hardened exec must omit the key entirely")
+        XCTAssertTrue(notHardenedJSON.contains("\"code_signing\""), "the rest of the payload is unaffected")
+    }
+
     func testExecPayloadDecodesLegacyWireWithoutSnapshotKey() throws {
         // A pre-issue-#11 wire payload had no snapshot key. The custom decoder must
         // accept that and default to false rather than rejecting the envelope.
@@ -245,6 +277,51 @@ final class EventSerializerTests: XCTestCase {
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
         XCTAssertFalse(json.contains("custom_msg"))
         XCTAssertFalse(json.contains("custom_url"))
+    }
+
+    // spec:extension-application-control/block-event-emission/a-block-emits-a-block-event-whose-identifier-is-the-matched-value
+    //
+    // Runs the real decision and builds the payload from what it returned, rather than hand-writing the fields, so the
+    // wire assertions are made against values the decider actually produced.
+    //
+    // What this canNOT distinguish, and the requirement's "not the rule's own stored identifier" clause can: today every
+    // layer is a map keyed by `rule.identifier`, so a match always returns a value equal to it. The clause is a
+    // constraint on future divergence (a case-folded or glob-matched layer would break the equality), and it matches the
+    // code, since emitBlockEvent is handed the matched identifier and not the rule. No test can separate the two while
+    // the maps are keyed this way; asserting otherwise here would be a test that cannot fail dressed as one that can.
+    //
+    // The marker previously sat on a decideAuthExec test that emits no event at all. The ESF glue in emitBlockEvent
+    // (audit token to pid, es_token to path) needs an es_message_t and stays at the system / VM layer; the mapping
+    // from decision to wire shape is the part that is unit-testable, and it is where the field names live.
+    func testBlockPayloadCarriesTheMatchedIdentifierNotTheRuleIdentifier() throws {
+        let rule = makeRule(ruleType: ApplicationControlRuleType.teamID, identifier: "EQHXZ8M8AV")
+        let decision = decideAuthExec(
+            tuple: makeTuple(teamID: "EQHXZ8M8AV"),
+            snapshot: makeSnapshot(teamIDRules: ["EQHXZ8M8AV": rule]),
+            hashOutcome: .notNeeded
+        )
+        guard case let .deny(matchedRule, matchedIdentifier) = decision else {
+            return XCTFail("a TEAMID BLOCK/PROTECT rule must deny, got \(decision)")
+        }
+        let payload = ApplicationControlBlockPayload(
+            pid: 991, path: "/usr/local/bin/blocked",
+            ruleID: matchedRule.ruleID, ruleType: matchedRule.ruleType, identifier: matchedIdentifier,
+            severity: matchedRule.severity, customMsg: matchedRule.customMsg, customURL: matchedRule.customURL,
+            policyID: 7, policyVersion: 12
+        )
+        let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"identifier\":\"EQHXZ8M8AV\""), "identifier is the matched value, got: \(json)")
+        XCTAssertTrue(json.contains("\"rule_type\":\"TEAMID\""))
+        XCTAssertTrue(json.contains("\"rule_id\":\"app_control:test-EQHXZ8M8AV\""))
+        XCTAssertTrue(json.contains("\"pid\":991"))
+        XCTAssertTrue(json.contains("\"path\":\"\\/usr\\/local\\/bin\\/blocked\""))
+        XCTAssertTrue(json.contains("\"severity\":\"medium\""))
+        XCTAssertTrue(json.contains("\"policy_id\":7"))
+        XCTAssertTrue(json.contains("\"policy_version\":12"))
+        // Four field names the canonical requirement carried that the wire has never had.
+        for absent in ["rule_identifier", "matched_identifier", "ancestry", "\"process\""] {
+            XCTAssertFalse(json.contains(absent), "\(absent) is not a field of this event")
+        }
     }
 
     // MARK: EventEnvelope
