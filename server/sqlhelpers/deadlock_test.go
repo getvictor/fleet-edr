@@ -60,12 +60,12 @@ func TestWithDeadlockRetry(t *testing.T) {
 		assert.Equal(t, 3, calls)
 	})
 
-	// The case that protects every additive caller (issue #868). Lock wait timeout is deadlock's obvious sibling and is the error
-	// most likely to be added to the predicate by someone making this "more robust", and it is precisely the one that must not be:
-	// 1205 rolls back the statement rather than guaranteeing the transaction left nothing behind, so retrying an additive upsert on
-	// it can add the same window twice. A generic error does not cover this, because nobody would widen the predicate to include a
-	// syntax error.
-	t.Run("does not retry a lock wait timeout, which is not a rollback", func(t *testing.T) {
+	// The case that keeps the predicate honest (issue #868). Lock wait timeout is deadlock's obvious sibling and is the error most
+	// likely to be added here by someone making this "more robust", and it is the one that must not be: with
+	// innodb_rollback_on_timeout OFF, the default, 1205 rolls back only the timed-out STATEMENT and leaves the rest of its
+	// transaction intact, so a callback spanning a transaction would be re-run on top of what its earlier statements had already
+	// done. A generic error does not cover this, because nobody would widen the predicate to include a syntax error.
+	t.Run("does not retry a lock wait timeout, which rolls back only the statement", func(t *testing.T) {
 		t.Parallel()
 		lockWait := &mysql.MySQLError{Number: 1205}
 		calls := 0
@@ -74,7 +74,7 @@ func TestWithDeadlockRetry(t *testing.T) {
 			return lockWait
 		})
 		require.ErrorIs(t, err, lockWait)
-		assert.Equal(t, 1, calls, "retrying this would double an additive write")
+		assert.Equal(t, 1, calls, "the helper cannot know whether its callback spans a transaction, so it does not retry this")
 	})
 
 	t.Run("returns non-deadlock error immediately", func(t *testing.T) {

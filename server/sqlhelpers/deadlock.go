@@ -29,13 +29,16 @@ func IsDeadlockErr(err error) bool {
 //
 // fn must be safe to RE-RUN AFTER A ROLLBACK. That is weaker than idempotent, and the difference matters because most callers here
 // are not idempotent: the statistics and match-count writes are additive upserts, and running one twice against a row that kept the
-// first attempt's effect would double it (issue #868). They are safe anyway, because 1213 is the one error that guarantees the
-// attempt left nothing behind: InnoDB rolls the victim transaction back entirely before returning it, so the retry adds once.
+// first attempt's effect would double it (issue #868). They are safe anyway, because 1213 rolls the victim TRANSACTION back
+// entirely before returning, so whatever fn did is gone and the retry adds once.
 //
-// This is why the predicate is 1213 ALONE and must stay that way. Lock wait timeout (1205) is its obvious sibling and is NOT the
-// same thing: it rolls back the statement, not necessarily the transaction, so retrying an additive write on it could add twice.
-// Widening this predicate to "looks like contention" would break every additive caller silently, which is a change to their
-// correctness rather than to this helper's robustness.
+// This is why the predicate is 1213 ALONE and must stay that way, and lock wait timeout (1205) is the instructive counter-example
+// rather than an oversight. With innodb_rollback_on_timeout OFF, which is the default, 1205 rolls back only the STATEMENT that
+// timed out and leaves the rest of its transaction intact. For a callback that is a single autocommit statement that comes to the
+// same thing; for one that spans a transaction it does not, and re-running it would compound what the earlier statements had
+// already done. Both shapes are in use here: the counter writes are single statements, and ClaimForHost's callback wraps a
+// multi-statement transaction. Restricting the predicate to 1213 is what lets this helper stay ignorant of which shape it was
+// handed.
 func WithDeadlockRetry(ctx context.Context, maxAttempts int, step time.Duration, fn func() error) error {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
