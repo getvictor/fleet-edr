@@ -53,7 +53,7 @@ func TestPutDocument_RecordsTheDocumentAsTheOperators(t *testing.T) {
 
 	base, err := s.Version(ctx)
 	require.NoError(t, err)
-	_, err = s.PutDocument(ctx, api.Document{Path: "imported/looks_vendored.yml", Content: []byte("mine")}, base)
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/looks_vendored.yml", Content: []byte("mine")}, base, api.AuditOutboxEntry{})
 	require.NoError(t, err)
 
 	docs, err := s.Documents(ctx)
@@ -77,7 +77,7 @@ func TestPutDocument_OverwritingAShippedDocumentMakesItTheOperators(t *testing.T
 	require.NoError(t, err)
 	require.True(t, seeded)
 
-	_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("edited by me")}, version)
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("edited by me")}, version, api.AuditOutboxEntry{})
 	require.NoError(t, err)
 
 	docs, err := s.Documents(ctx)
@@ -187,7 +187,7 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 			name: "overwriting a shipped document",
 			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
 				_, err := s.PutDocument(t.Context(),
-					api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version)
+					api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
 				require.NoError(t, err)
 			},
 			packMoved: true,
@@ -195,7 +195,7 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 		{
 			name: "deleting a shipped document",
 			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
-				_, err := s.DeleteDocument(t.Context(), "imported/a.yml", version)
+				_, err := s.DeleteDocument(t.Context(), "imported/a.yml", version, api.AuditOutboxEntry{})
 				require.NoError(t, err)
 			},
 			packMoved: true,
@@ -206,7 +206,7 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 			name: "adding a rule of the operator's own",
 			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
 				_, err := s.PutDocument(t.Context(),
-					api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version)
+					api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
 				require.NoError(t, err)
 			},
 			packMoved: false,
@@ -344,7 +344,7 @@ func TestProvenanceMigration_LeavesExistingDocumentsIntact(t *testing.T) {
 	// than a confusing failure inside ApplySchema.
 	files, err := fs.Glob(rulecontentmigrations.FS, "*.sql")
 	require.NoError(t, err)
-	require.Len(t, files, 3,
+	require.Len(t, files, 4,
 		"a migration was added: extend the rewind below to undo it too, or this test fails inside goose with an out-of-order error")
 
 	_, err = s.Replace(ctx, []api.Document{
@@ -361,6 +361,7 @@ func TestProvenanceMigration_LeavesExistingDocumentsIntact(t *testing.T) {
 		"ALTER TABLE rule_corpus_meta DROP COLUMN previous_pack_digest",
 		"ALTER TABLE rule_corpus_meta DROP COLUMN declined_pack_digest",
 		"ALTER TABLE rule_corpus_meta DROP COLUMN installed_pack_digest",
+		"DROP TABLE IF EXISTS rule_content_audit_outbox",
 		"DELETE FROM rulecontent_goose_db_version WHERE version_id >= 2",
 	} {
 		_, err := db.ExecContext(ctx, stmt)

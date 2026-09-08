@@ -19,14 +19,15 @@ import (
 // is deliberate: a reason is required exactly where something is being changed.
 type PackService struct {
 	packs  rulecontentapi.PackLifecycle
-	audit  identityapi.AuditRecorder
+	drain  *AuditDrain
 	logger *slog.Logger
 }
 
 // NewPackService builds a PackService. Every collaborator is required, the recorder included: a rollback that replaced every
 // shipped rule without leaving an audit row is the one change here least acceptable to lose.
 func NewPackService(
-	packs rulecontentapi.PackLifecycle, audit identityapi.AuditRecorder, logger *slog.Logger,
+	packs rulecontentapi.PackLifecycle, outbox rulecontentapi.AuditOutbox,
+	audit identityapi.AuditRecorder, logger *slog.Logger,
 ) (*PackService, error) {
 	if packs == nil || audit == nil {
 		return nil, errors.New("rule pack service: a pack lifecycle and an audit recorder are both required")
@@ -34,7 +35,11 @@ func NewPackService(
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &PackService{packs: packs, audit: audit, logger: logger}, nil
+	drain, err := NewAuditDrain(outbox, audit, logger)
+	if err != nil {
+		return nil, err
+	}
+	return &PackService{packs: packs, drain: drain, logger: logger}, nil
 }
 
 // Status reports which generation of shipped rules is installed and how it differs from the one this build carries.
@@ -53,46 +58,50 @@ func (s *PackService) Rollback(
 	if strings.TrimSpace(reason) == "" {
 		return rulecontentapi.PackRollback{}, ErrReasonRequired
 	}
-	rolled, err := s.packs.Rollback(ctx)
+	// The audit entry is built from the rollback's own result and written in the transaction that performs it (issue #886), so
+	// the two commit together. It used to be written afterwards, with a failure logged rather than returned, which left a window
+	// in which every shipped rule changed durably and nothing named who did it. That was the lesser of the two outcomes then
+	// available, since returning the error would have reported failure for a change that had already happened; the outbox is
+	// what makes a third outcome available.
+	rolled, err := s.packs.Rollback(ctx, func(r rulecontentapi.PackRollback) (rulecontentapi.AuditOutboxEntry, error) {
+		payload := map[string]any{
+			"reason":         reason,
+			"restored_pack":  r.Restored,
+			"corpus_version": r.Version,
+		}
+		if len(r.Withheld) > 0 {
+			// Recorded because the deployment is deliberately not running shipped rules it was offered, and a reviewer asking
+			// why a detection is absent wants that visible at the point the decision was made.
+			payload["withheld"] = r.Withheld
+		}
+		e := identityapi.AuditEvent{
+			Action:     identityapi.AuditRuleContentPackRollback,
+			TargetType: "rule_content_pack",
+			TargetID:   r.Restored,
+			Payload:    payload,
+		}
+		if actor != nil {
+			e.Actor = actor.Principal
+		}
+		return encodeAuditEntry(e)
+	})
 	if err != nil {
-		// Not audited: nothing happened to the thing being audited. A refused rollback leaves the corpus exactly as it was.
+		// Not audited: nothing happened to the thing being audited. A refused rollback leaves the corpus exactly as it was, and
+		// a builder error fails the rollback rather than completing it unrecorded.
 		return rulecontentapi.PackRollback{}, err
 	}
-
-	payload := map[string]any{
-		"reason":         reason,
-		"restored_pack":  rolled.Restored,
-		"corpus_version": rolled.Version,
-	}
-	if len(rolled.Withheld) > 0 {
-		// Recorded because the deployment is deliberately not running shipped rules it was offered, and a reviewer asking why a
-		// detection is absent wants that visible at the point the decision was made.
-		payload["withheld"] = rolled.Withheld
-	}
-	e := identityapi.AuditEvent{
-		Action:     identityapi.AuditRuleContentPackRollback,
-		TargetType: "rule_content_pack",
-		TargetID:   rolled.Restored,
-		Payload:    payload,
-	}
-	if actor != nil {
-		e.Actor = actor.Principal
-	}
-	// The row is written AFTER the rollback commits, and a failure to write it is logged rather than returned. Review flagged
-	// that this leaves a window where every shipped rule changed durably and no audit event names it, which is true and is the
-	// lesser of the two available outcomes.
-	//
-	// The alternative is not "roll back only if the audit succeeds": the corpus change has already committed by the time this
-	// runs, in its own transaction, so returning an error here would report failure for a change that DID happen. An operator
-	// told their rollback failed, whose rules have in fact been replaced, is worse off than one whose rollback is missing a
-	// record: the first acts on a false belief, the second has a gap that the error log names.
-	//
-	// Making them one transaction is the real fix and is not available here: the audit store is behind an interface that the
-	// identity context owns, deliberately, so this service cannot enlist it in rulecontent's transaction. That is the same
-	// trade the authoring service beside this one makes, and it is worth revisiting for both together rather than diverging.
-	if err := s.audit.Record(ctx, e); err != nil {
-		s.logger.ErrorContext(ctx, "rule pack rollback committed but its audit row was not written",
-			"err", err, "pack", rolled.Restored)
-	}
+	s.deliver(ctx)
 	return rolled, nil
+}
+
+// deliver turns the entry this rollback just committed into an audit row, now rather than on the next sweep. Best effort: the
+// entry is already durable, so a failure delays the row rather than losing it.
+func (s *PackService) deliver(ctx context.Context) {
+	if s.drain == nil {
+		return
+	}
+	if _, err := s.drain.Drain(ctx); err != nil {
+		s.logger.WarnContext(ctx, "rule pack audit entry is committed but not yet delivered; the sweep will retry it",
+			"err", err)
+	}
 }

@@ -20,7 +20,7 @@ import (
 type Service struct {
 	author   rulecontentapi.Author
 	validate rulecontentapi.Validator
-	audit    identityapi.AuditRecorder
+	drain    *AuditDrain
 	logger   *slog.Logger
 }
 
@@ -32,7 +32,7 @@ type Service struct {
 // loses its audit row. "Every authoring change is attributable" is a contract this change introduces, and a construction that can
 // silently violate it is not a convenience.
 func New(
-	author rulecontentapi.Author, validate rulecontentapi.Validator,
+	author rulecontentapi.Author, validate rulecontentapi.Validator, outbox rulecontentapi.AuditOutbox,
 	audit identityapi.AuditRecorder, logger *slog.Logger,
 ) (*Service, error) {
 	if author == nil || validate == nil || audit == nil {
@@ -41,7 +41,11 @@ func New(
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{author: author, validate: validate, audit: audit, logger: logger}, nil
+	drain, err := NewAuditDrain(outbox, audit, logger)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{author: author, validate: validate, drain: drain, logger: logger}, nil
 }
 
 // ErrReasonRequired reports that a change arrived without a stated reason.
@@ -61,7 +65,7 @@ func (s *Service) Put(
 	if strings.TrimSpace(reason) == "" {
 		return 0, nil, ErrReasonRequired
 	}
-	version, found, err := s.author.Put(ctx, doc)
+	version, found, err := s.author.Put(ctx, doc, s.auditEntry(actor, reason, identityapi.AuditRuleContentDocumentPut, doc.Path))
 	// Flattened to messages here, and this is the right boundary for it. The lifecycle narrowed the findings to the document
 	// under change, so the path is no longer carrying information: both consumers downstream, the HTTP response and the audit
 	// row, are already about that one document.
@@ -69,7 +73,7 @@ func (s *Service) Put(
 	if err != nil {
 		return 0, warnings, err
 	}
-	s.record(ctx, actor, reason, identityapi.AuditRuleContentDocumentPut, doc.Path, version, warnings)
+	s.deliver(ctx)
 	return version, warnings, nil
 }
 
@@ -80,12 +84,12 @@ func (s *Service) Delete(
 	if strings.TrimSpace(reason) == "" {
 		return 0, nil, ErrReasonRequired
 	}
-	version, found, err := s.author.Delete(ctx, path)
+	version, found, err := s.author.Delete(ctx, path, s.auditEntry(actor, reason, identityapi.AuditRuleContentDocumentDelete, path))
 	warnings := rulecontentapi.WarningMessages(found)
 	if err != nil {
 		return 0, warnings, err
 	}
-	s.record(ctx, actor, reason, identityapi.AuditRuleContentDocumentDelete, path, version, warnings)
+	s.deliver(ctx)
 	return version, warnings, nil
 }
 
@@ -101,35 +105,53 @@ func (s *Service) Check(ctx context.Context, doc rulecontentapi.Document) ([]str
 	return rulecontentapi.WarningMessages(found), err
 }
 
-// record writes the audit row for a change that took effect.
+// auditEntry returns the builder rulecontent calls inside the transaction that makes the change (issue #886).
 //
-// Synchronous, following the AuditRecorder contract: this is a write action, so a row that is still in flight when the process
-// dies is not a useful trail. A failure is logged rather than returned, because the change is already durable and telling the
-// operator it failed would be false; the log line is what a reviewer finding a gap in the trail has to work from.
-func (s *Service) record(
-	ctx context.Context, actor *identityapi.Actor, reason string,
-	action identityapi.AuditAction, docPath string, version int64, warnings []string,
-) {
-	payload := map[string]any{
-		"reason":         reason,
-		"corpus_version": version,
+// The audit row used to be written AFTER that transaction committed, and a failure was logged rather than returned. The ordering
+// was the lesser of two bad outcomes rather than an oversight: returning the error would report failure for a change that had
+// already happened. It still left a window in which a fleet's detections changed and nothing named who did it or why.
+//
+// A builder rather than a value because the facts worth recording, the version the change produces and the warnings narrowed to
+// this document, are computed inside that call. Passing an entry in would mean either duplicating that logic here or recording a
+// weaker row than the one this replaces.
+func (s *Service) auditEntry(
+	actor *identityapi.Actor, reason string, action identityapi.AuditAction, docPath string,
+) rulecontentapi.AuditEntryFunc {
+	return func(version int64, warnings []rulecontentapi.ContentWarning) (rulecontentapi.AuditOutboxEntry, error) {
+		payload := map[string]any{
+			"reason":         reason,
+			"corpus_version": version,
+		}
+		if messages := rulecontentapi.WarningMessages(warnings); len(messages) > 0 {
+			// Recorded because a warning is the operator being told their rule will not fire, and a reviewer asking why a
+			// detection never matched wants to know that was said at the time rather than discovering it later.
+			payload["warnings"] = messages
+		}
+		e := identityapi.AuditEvent{
+			Action:     action,
+			TargetType: "rule_content_document",
+			TargetID:   docPath,
+			Payload:    payload,
+		}
+		if actor != nil {
+			e.Actor = actor.Principal
+		}
+		return encodeAuditEntry(e)
 	}
-	if len(warnings) > 0 {
-		// Recorded because a warning is the operator being told their rule will not fire, and a reviewer asking why a detection
-		// never matched wants to know that was said at the time rather than discovering it later.
-		payload["warnings"] = warnings
+}
+
+// deliver turns the entry this change just committed into an audit row, now rather than on the next sweep.
+//
+// Best effort by design, and that is the whole point of the outbox: the entry is already durable, committed with the change, so a
+// failure here delays the audit row rather than losing it. The sweep delivers what this could not, which is why the error is
+// logged and not returned: the operator's change succeeded and so did its record, and telling them otherwise would be the false
+// report the old ordering was trying to avoid.
+func (s *Service) deliver(ctx context.Context) {
+	if s.drain == nil {
+		return
 	}
-	e := identityapi.AuditEvent{
-		Action:     action,
-		TargetType: "rule_content_document",
-		TargetID:   docPath,
-		Payload:    payload,
-	}
-	if actor != nil {
-		e.Actor = actor.Principal
-	}
-	if err := s.audit.Record(ctx, e); err != nil {
-		s.logger.ErrorContext(ctx, "rule content change committed but its audit row was not written",
-			"err", err, "action", string(action), "document", docPath)
+	if _, err := s.drain.Drain(ctx); err != nil {
+		s.logger.WarnContext(ctx, "rule content audit entry is committed but not yet delivered; the sweep will retry it",
+			"err", err)
 	}
 }

@@ -186,6 +186,7 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 		RuleAuthor: ruleAuthor,
 		RulePacks: ruleContentCtx.Packs(rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
 			rulesbootstrap.EmbeddedCorpusIncludes, rulesbootstrap.RuleIdentityForPath),
+		AuditOutbox:          ruleContentCtx.AuditOutbox(),
 		AuthZ:                identityCtx.AuthZ(),
 		Audit:                identityCtx.AuditRecorder(),
 		CommandBatchInserter: responseCtx.Service().InsertBatch,

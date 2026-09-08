@@ -77,7 +77,7 @@ func TestUpgradePack_ReplacesTheShippedHalfOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	// The operator's own rule, stored the way the authoring surface stores one.
-	_, err = s.PutDocument(ctx, api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version)
+	_, err = s.PutDocument(ctx, api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
 	require.NoError(t, err)
 
 	installed, err := s.UpgradeVendoredTo(ctx, []api.Document{
@@ -116,7 +116,7 @@ func TestUpgradePack_LeavesAPathTheOperatorTookOver(t *testing.T) {
 	require.NoError(t, err)
 
 	// The operator writes their own version of a shipped rule. It keeps the path, and the row becomes theirs.
-	_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("my version")}, version)
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("my version")}, version, api.AuditOutboxEntry{})
 	require.NoError(t, err)
 
 	_, err = s.UpgradeVendoredTo(ctx, []api.Document{shippedDoc("imported/a.yml", "shipped v2")}, stemIdentity)
@@ -171,7 +171,7 @@ func TestUpgradePack_IsIdempotent(t *testing.T) {
 
 		version, err := s.Replace(ctx, pack)
 		require.NoError(t, err)
-		_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version)
+		_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
 		require.NoError(t, err)
 		before, err := s.Version(ctx)
 		require.NoError(t, err)
@@ -272,7 +272,7 @@ func TestUpgradePack_DoesNotCollideWithAnOperatorsRuleIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	// The operator writes their own rule, under their own path. Its identity is "foo".
-	_, err = s.PutDocument(ctx, api.Document{Path: "authored/foo.yml", Content: []byte("mine")}, version)
+	_, err = s.PutDocument(ctx, api.Document{Path: "authored/foo.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
 	require.NoError(t, err)
 
 	// A newer pack ships a rule of the same identity at a DIFFERENT path.
@@ -319,7 +319,7 @@ func TestUpgradePack_CollisionIsCaseInsensitive(t *testing.T) {
 
 	version, err := s.Replace(ctx, []api.Document{shippedDoc("imported/other.yml", "other")})
 	require.NoError(t, err)
-	_, err = s.PutDocument(ctx, api.Document{Path: "authored/Foo.yml", Content: []byte("mine")}, version)
+	_, err = s.PutDocument(ctx, api.Document{Path: "authored/Foo.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
 	require.NoError(t, err)
 
 	installed, err := s.UpgradeVendoredTo(ctx, []api.Document{

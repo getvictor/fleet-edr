@@ -61,6 +61,24 @@ func (c readOnlyCorpus) Documents(ctx context.Context) ([]api.Document, error) {
 }
 func (c readOnlyCorpus) Version(ctx context.Context) (int64, error) { return c.inner.Version(ctx) }
 
+// AuditOutbox exposes the audit outbox for the rules context to drain (issue #886).
+//
+// Wrapped rather than returned directly, for the reason readOnlyCorpus is wrapped: returning the store behind a narrow interface
+// narrows what the caller SEES and not what it HAS, so a consumer could type-assert the handle back to the write surface and
+// bypass the validated authoring lifecycle. The wrapper has only the two methods a drain needs, so there is nothing to assert to.
+func (r *RuleContent) AuditOutbox() api.AuditOutbox { return auditOutbox{inner: r.store} }
+
+// auditOutbox is the drain's view of the store: the two methods it needs and nothing else.
+type auditOutbox struct{ inner *rulecontentmysql.Store }
+
+func (o auditOutbox) PendingAuditEntries(ctx context.Context, limit int) ([]api.PendingAuditEntry, error) {
+	return o.inner.PendingAuditEntries(ctx, limit)
+}
+
+func (o auditOutbox) DeleteAuditEntries(ctx context.Context, ids []int64) error {
+	return o.inner.DeleteAuditEntries(ctx, ids)
+}
+
 // Author builds the authoring lifecycle over this context's storage, validated by v.
 //
 // The validator is INJECTED rather than constructed here, which is what keeps the ADR-0021 seam intact: the only honest validator
@@ -188,8 +206,8 @@ func (b boundPacks) Status(ctx context.Context) (api.PackStatus, error) {
 	return b.rc.PackStatusFrom(ctx, b.fsys, b.root, b.include, b.identity)
 }
 
-func (b boundPacks) Rollback(ctx context.Context) (api.PackRollback, error) {
-	return b.rc.RollbackPackTo(ctx, b.identity)
+func (b boundPacks) Rollback(ctx context.Context, mkAudit api.PackAuditEntryFunc) (api.PackRollback, error) {
+	return b.rc.RollbackPackTo(ctx, b.identity, mkAudit)
 }
 
 // RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
@@ -201,8 +219,10 @@ func (b boundPacks) Rollback(ctx context.Context) (api.PackRollback, error) {
 //
 // identity is needed for the same reason the install path needs it: a rule the operator has taken over since the upgrade must not
 // be taken back by the restore.
-func (r *RuleContent) RollbackPackTo(ctx context.Context, identity api.RuleIdentity) (api.PackRollback, error) {
-	rolled, err := r.store.RollbackPack(ctx, identity)
+func (r *RuleContent) RollbackPackTo(
+	ctx context.Context, identity api.RuleIdentity, mkAudit api.PackAuditEntryFunc,
+) (api.PackRollback, error) {
+	rolled, err := r.store.RollbackPack(ctx, identity, mkAudit)
 	if err != nil {
 		return api.PackRollback{}, err
 	}
