@@ -274,8 +274,14 @@ func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (s
 	// on the acknowledgement the server already stores.
 	//
 	// Counted rather than decoded: the entries stay json.RawMessage, so the agent still does not need to know the rule shape, and
-	// a count is the one property it can report without taking a position on it. A payload whose array does not decode has already
-	// been rejected by the isJSONArray check above.
+	// a count is the one property it can report without taking a position on it.
+	//
+	// The error is discarded because no input reaches here that can produce one, and it takes BOTH guards above to say that.
+	// The outer json.Unmarshal of cmd.Payload rules out syntactically invalid JSON: encoding/json validates the whole document
+	// before it assigns a RawMessage field, so `{"rules":[{"a":` fails there and never gets this far. isJSONArray then rules out
+	// the one shape that IS valid JSON and still would not decode into a slice, a `rules` that is a string, object or number.
+	// isJSONArray alone would not be enough, since it only inspects the first non-whitespace byte and would accept a truncated
+	// array; the outer decode is what makes that unreachable.
 	var rules []json.RawMessage
 	_ = json.Unmarshal(payload.Rules, &rules)
 	result, _ := json.Marshal(map[string]any{
