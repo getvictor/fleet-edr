@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alerts a rule had already found survive a database outage.** When a lookup a rule depends on fails, the batch is retried rather than dropped. Until now the retry discarded whatever that rule had already found, so if the outage lasted long enough for the batch to be given up on, those detections were lost rather than delayed. They are now kept and raised. The retry also stops re-reading a dependency that has just failed once per event, which removed a burst of load landing on a database that is already in trouble.
+
 ## [0.5.0] (2026-09-07)
 
 Feature release on top of 0.4.0. The headline is rule content: the detection rules a deployment runs move out of the binary and into the database, so an upgrade delivers new rules, you can write your own through an audited API, and a rule set that turns out wrong can be rolled back. Also in this release: per-rule match counts and cost in the detection-tuning table, capture-provider health per host, and a long list of detection-accuracy fixes.

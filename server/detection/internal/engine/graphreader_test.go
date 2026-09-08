@@ -270,3 +270,49 @@ func TestRetryCause_KeepsEveryDistinctCause(t *testing.T) {
 			"the common case stays one error naming the rule that started the wait, rather than accumulating noise")
 	})
 }
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-read-spares-the-other-rules
+//
+// TestEngine_Evaluate_FailedReadStillRunsLaterRules pins the limit of the amplification fix, which the first cut overshot.
+//
+// Stopping the whole batch on the first failed read looks right and is wrong, because GraphReader is not one dependency.
+// GetNetworkEventsForProcess and GetHostEventsByType delegate to the ClickHouse event archive; the process and exec-chain lookups
+// read MySQL. So an archive outage would have skipped every rule that reads only MySQL, and those rules could have decided
+// perfectly well. Delay would have been the least of it: once the queue sets a permanently failing batch aside, the skipped rules'
+// detections are gone rather than late.
+//
+// The expensive factor is removed in the per-event loops instead, which is where the batch-size multiplier lives.
+func TestEngine_Evaluate_FailedReadStillRunsLaterRules(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	e.ruleReader = &retryableGraphReader{inner: stubGraphReader{err: errors.New("connection refused")}}
+	downstream := &readerCapturingRule{stubRule: stubRule{id: "downstream_rule"}}
+	e.Register(&readingRule{stubRule: stubRule{id: "reading_rule"}})
+	e.Register(downstream)
+
+	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
+
+	require.ErrorIs(t, err, rulesapi.ErrRuleReadUnavailable, "the batch is still retried")
+	assert.NotNil(t, downstream.got,
+		"but a rule registered after the failing one still runs: it may read the other dependency, which is healthy")
+}
+
+// TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop is the sibling case, kept because the two must not diverge here.
+//
+// A rule that is deliberately waiting (sensor_tamper waits out its recovery window) must let the batch's other rules run, or one
+// waiting rule suppresses every other rule's findings, which is issue #661 one level up. A failed read must too, for the separate
+// reason in the test above. Asserting both keeps a future change from re-introducing a stop on either path.
+func TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	downstream := &readerCapturingRule{stubRule: stubRule{id: "downstream_rule"}}
+	e.Register(&failingRule{stubRule: stubRule{id: "waiting_rule"}, err: fmt.Errorf("waiting: %w", rulesapi.ErrRetryBatch)})
+	e.Register(downstream)
+
+	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
+
+	require.ErrorIs(t, err, rulesapi.ErrRetryBatch, "the batch is still retried")
+	assert.NotNil(t, downstream.got, "but a deliberate wait must not suppress the rules registered after it")
+}
