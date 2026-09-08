@@ -298,6 +298,14 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 // held is false when the rows are no longer in this claim: either another claimer took them (claimed_at_ns moved) or they are no
 // longer in flight at all. A caller that has lost the claim must skip whatever it does after acknowledging, because the attempt
 // that now owns the rows will do it.
+//
+// This does NOT serialise itself against a concurrent claimer, and the caller must (issue #863). The statement below takes row
+// locks as it scans, so an earlier event of the batch can be locked while a later one is not; a claim arriving in that window
+// finds the locked row through FOR UPDATE SKIP LOCKED, skips it, and takes the later one, which is then folded without its
+// predecessor. Rolling back a partial acknowledgement, which is what makes this conditional, is what leaves the earlier row
+// claimable rather than acknowledged. The in-flight floor does not cover it: the floor counts only claims that are still live,
+// and this window is reached precisely when the claim has outlived its lease. The processor closes it by holding the host's
+// claim lock across this call, which is where the per-host ordering guarantee already lives.
 func (s *Store) Ack(ctx context.Context, eventIDs []string, claimStampNs int64) (held bool, err error) {
 	if len(eventIDs) == 0 {
 		return true, nil

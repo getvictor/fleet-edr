@@ -782,3 +782,47 @@ func TestEventLog_AckOfAPartlyReclaimedBatchCountsAsLost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), pending, "a partial ack must advance nothing, or the batch is half-acknowledged")
 }
+
+// TestEventLog_AClaimSkipsALockedEarlierRowAndTakesALaterOne is the mechanism behind issue #863, pinned against real MySQL.
+//
+// It is deliberately NOT a test of the fix. The fix is that the processor holds the host's claim lock across an acknowledgement,
+// which is asserted where that decision lives, in the pipeline package. This test answers the question that fix rests on: what
+// actually happens when a claim arrives while an earlier row of a batch is locked. The answer is the whole reason the lock is
+// needed, and it is a property of MySQL's SKIP LOCKED rather than of our code, so an argument that the lock is unnecessary should
+// have to contend with a measurement instead of a claim.
+//
+// The setup models the moment inside an unserialized Ack: its UPDATE takes row locks as it scans, so an earlier event of the batch
+// is locked while a later one is not yet. Holding a row lock on the earlier event in another transaction is that state.
+func TestEventLog_AClaimSkipsALockedEarlierRowAndTakesALaterOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log, db := newEventLogWithDB(t)
+
+	// Two events for one host, earlier first, both claimed and both past their lease. Past the lease is what makes them
+	// claimable at all, and it is exactly the state the race needs: the in-flight floor bounds only claims that are still live.
+	require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+		ev("race-earlier", "race-host", 100, "fork"),
+		ev("race-later", "race-host", 200, "exec"),
+	}))
+	claimed, _, err := log.ClaimForHost(ctx, "race-host", 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 2, "both events are claimed by the first worker")
+	_, err = db.ExecContext(ctx, "UPDATE event_queue SET claimed_at_ns = 1 WHERE host_id = ?", "race-host")
+	require.NoError(t, err)
+
+	// The row lock an in-progress acknowledgement of that batch would be holding on the EARLIER event.
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	var lockedID string
+	require.NoError(t, tx.QueryRowContext(ctx,
+		"SELECT event_id FROM event_queue WHERE event_id = ? FOR UPDATE", "race-earlier").Scan(&lockedID))
+	require.Equal(t, "race-earlier", lockedID)
+
+	// A claimer arriving now. SKIP LOCKED passes over the locked earlier row rather than waiting for it, and returns the later
+	// one, which is the inversion: the later event would be folded with its predecessor still unfolded.
+	racing, _, err := log.ClaimForHost(ctx, "race-host", 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"race-later"}, ids(racing),
+		"SKIP LOCKED takes the later event while the earlier one is locked, which is why the acknowledgement must hold the host lock")
+}

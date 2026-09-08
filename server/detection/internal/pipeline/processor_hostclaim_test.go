@@ -28,8 +28,11 @@ func (stubCoordinator) DoOnceIfLeader(context.Context, string, func(context.Cont
 	return false, nil
 }
 
-func (stubCoordinator) WithLock(context.Context, string, func(context.Context) error) error {
-	return nil
+// WithLock runs fn, because a coordinator that returns without running it is not mutual exclusion, it is a silent skip: the
+// acknowledgement now runs under this call (#863), and a stub that swallowed it would make every test using this coordinator
+// pass against a processor that never acknowledged anything.
+func (stubCoordinator) WithLock(ctx context.Context, _ string, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 func (stubCoordinator) Lock(context.Context, string) (func(), error) { return func() {}, nil }
@@ -39,7 +42,10 @@ func (stubCoordinator) Lock(context.Context, string) (func(), error) { return fu
 // lock's lifetime, so "inside the lock" means "before this callback returned".
 type releaseRecordingCoordinator struct {
 	nackedAtRelease []string
-	log             *scriptedEventLog
+	// ackedAtRelease and nackedInLock are the same observation for the ACKNOWLEDGEMENT window, which #863 moved under this lock.
+	ackedAtRelease []string
+	nackedInLock   []string
+	log            *scriptedEventLog
 }
 
 func (c *releaseRecordingCoordinator) DoOnceIfLeader(ctx context.Context, _ string, fn func(context.Context) error) (bool, error) {
@@ -51,8 +57,14 @@ func (c *releaseRecordingCoordinator) DoOnceIfLeader(ctx context.Context, _ stri
 func (c *releaseRecordingCoordinator) RunIfLeader(context.Context, string, func(context.Context) error) error {
 	return nil
 }
-func (c *releaseRecordingCoordinator) WithLock(context.Context, string, func(context.Context) error) error {
-	return nil
+
+// WithLock runs fn and records what the event log had been told by the time it returned, which is the instant the lock is
+// released. Same observation the DoOnceIfLeader path makes, for the acknowledgement window rather than the claim window.
+func (c *releaseRecordingCoordinator) WithLock(ctx context.Context, _ string, fn func(context.Context) error) error {
+	err := fn(ctx)
+	c.ackedAtRelease = append([]string(nil), c.log.acked...)
+	c.nackedInLock = append([]string(nil), c.log.nacked...)
+	return err
 }
 func (c *releaseRecordingCoordinator) Lock(context.Context, string) (func(), error) {
 	return func() {}, nil
@@ -82,6 +94,63 @@ func TestProcessor_FailedBatchIsRequeuedInsideTheHostLock(t *testing.T) {
 	assert.Equal(t, []string{"evt-1"}, coordinator.nackedAtRelease,
 		"the Nack must already have landed when the host lock is released, or the next claimer can fold past the retried events")
 	assert.Empty(t, log.acked, "a failed batch is never acked")
+}
+
+// spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/an-acknowledgement-holds-the-host-lock
+//
+// TestProcessor_AcknowledgementHappensInsideTheHostLock pins the fix for issue #863.
+//
+// The acknowledgement used to run with no lock held at all. `Ack`'s conditional update takes row locks as it scans, so an earlier
+// event of a batch can be locked while a later one is not, and a claimer arriving in that window finds the locked row through
+// `FOR UPDATE SKIP LOCKED`, skips it, and takes the later one. Nothing bounds that: the in-flight floor counts only claims that
+// are still live, and this window is reached precisely when the claim has outlived its lease. The later event is then folded
+// without its predecessor, which is the ordering guarantee the floor exists to protect.
+//
+// Observed the way the requeue test observes its own window: the coordinator records what the event log had been told by the time
+// the locked callback returned. An acknowledgement that landed outside the lock leaves this empty.
+func TestProcessor_AcknowledgementHappensInsideTheHostLock(t *testing.T) {
+	t.Parallel()
+
+	log := &scriptedEventLog{batch: oneEventBatch()}
+	coordinator := &releaseRecordingCoordinator{log: log}
+	proc, err := NewProcessor(log, stubBuilder{}, stubEvaluator{}, ProcessorOptions{
+		Logger:      discardLogger(),
+		Batch:       1,
+		Concurrency: 1,
+		Coordinator: coordinator,
+	})
+	require.NoError(t, err)
+
+	proc.ProcessOnce(context.Background())
+
+	require.Equal(t, []string{"evt-1"}, log.acked, "the batch is acknowledged")
+	assert.Equal(t, []string{"evt-1"}, coordinator.ackedAtRelease,
+		"the Ack must land while the host lock is held, or a claimer can skip its row locks and fold a later event first")
+}
+
+// TestProcessor_DetectionFailureRequeuesInsideTheHostLock is the same property on the other exit from evaluation.
+//
+// A detection failure requeues through Nack, whose statement takes row locks the same way Ack's does, so it opens the same window
+// for the same reason. The builder-stage requeue was already inside the lock; this is the detection-stage one, which was not.
+func TestProcessor_DetectionFailureRequeuesInsideTheHostLock(t *testing.T) {
+	t.Parallel()
+
+	log := &scriptedEventLog{batch: oneEventBatch()}
+	coordinator := &releaseRecordingCoordinator{log: log}
+	proc, err := NewProcessor(log, stubBuilder{}, stubEvaluator{err: errors.New("rule read failed")}, ProcessorOptions{
+		Logger:      discardLogger(),
+		Batch:       1,
+		Concurrency: 1,
+		Coordinator: coordinator,
+	})
+	require.NoError(t, err)
+
+	proc.ProcessOnce(context.Background())
+
+	require.Equal(t, []string{"evt-1"}, log.nacked, "a detection failure requeues the batch")
+	assert.Equal(t, []string{"evt-1"}, coordinator.nackedInLock,
+		"the Nack must land while the host lock is held, for the same reason the Ack must")
+	assert.Empty(t, log.acked, "a batch that failed detection is never acked")
 }
 
 // spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/worker-count-is-bounded-by-the-connection-pool
@@ -269,8 +338,8 @@ func (c *recordingCoordinator) lockCount() int {
 func (*recordingCoordinator) DoOnceIfLeader(context.Context, string, func(context.Context) error) (bool, error) {
 	return false, nil
 }
-func (*recordingCoordinator) WithLock(context.Context, string, func(context.Context) error) error {
-	return nil
+func (*recordingCoordinator) WithLock(ctx context.Context, _ string, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 func (*recordingCoordinator) Lock(context.Context, string) (func(), error) {
 	return func() {}, nil
