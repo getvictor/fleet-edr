@@ -111,6 +111,10 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 			first_seen       = LEAST(first_seen, VALUES(first_seen)),
 			last_seen        = GREATEST(last_seen, VALUES(last_seen))`
 
+	// Retried on a deadlock even though the statement is ADDITIVE, which is safe for one reason and only one: 1213 guarantees the
+	// attempt was rolled back entirely, so the retry adds once (issue #868). The buffer above this does not retry a failed flush
+	// at all, precisely because a general retry of an additive write is at-least-once; this is the narrow exception, and it holds
+	// on the rollback rather than on the statement being idempotent, which it is not. See sqlhelpers.WithDeadlockRetry.
 	err := sqlhelpers.WithDeadlockRetry(ctx, matchCountDeadlockAttempts, matchCountDeadlockStep, func() error {
 		_, execErr := s.db.ExecContext(ctx, query, args...)
 		return execErr

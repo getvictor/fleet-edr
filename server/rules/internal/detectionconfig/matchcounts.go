@@ -89,6 +89,9 @@ func (s *Store) RecordMonitorMatches(ctx context.Context, tally api.MonitorTally
 
 	// Sorting makes a deadlock unlikely rather than impossible: InnoDB can still deadlock two statements against gap or index
 	// locks. Retried because the addition is the same on every attempt.
+	// Additive, and retried only on a deadlock, which is safe because 1213 rolls the attempt back entirely so the retry adds once
+	// (issue #868). Not because the statement is idempotent: it is not, and a retry on any error that does NOT guarantee a
+	// rollback would double a window. See sqlhelpers.WithDeadlockRetry.
 	err := sqlhelpers.WithDeadlockRetry(ctx, matchCountDeadlockAttempts, matchCountDeadlockStep, func() error {
 		_, execErr := s.db.ExecContext(ctx, query, args...)
 		return execErr
