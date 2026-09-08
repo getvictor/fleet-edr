@@ -365,7 +365,7 @@ Notarization is deliberately NOT a trust signal: it is an automated Apple scan, 
 ## sudoers_tamper
 
 **Sudoers tamper**  
-Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.
+Flags any non-allowlisted writer that changes a sudoers file sudo will load.
 
 | | |
 | --- | --- |
@@ -378,7 +378,7 @@ Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.
 
 ### Description
 
-Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of `/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as root.
+Detects an instant escalation primitive: writing, or renaming a file onto, `/etc/sudoers` or a child of `/etc/sudoers.d/` that sudo will parse. A successful tamper grants future shell sessions arbitrary command execution as root.
 
 Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.
 

@@ -11,10 +11,16 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
-// SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
-// or any direct child of `/etc/sudoers.d/`. Editing those files grants
-// future shell sessions arbitrary command execution as root, so a
-// successful tamper is an instant escalation primitive (T1548.003).
+// SudoersTamper fires when a file sudo will parse as policy is written, or
+// renamed into place. That is `/etc/sudoers` itself, and those children of
+// `/etc/sudoers.d/` whose names sudo does not skip. Editing one grants future
+// shell sessions arbitrary command execution as root, so a successful tamper is
+// an instant escalation primitive (T1548.003).
+//
+// "A file sudo will parse" is doing real work in that sentence, and the two
+// halves below are why: the name test is what stops the rule alerting on files
+// that grant nothing, and reading renames is what stops the write test being
+// trivially evadable.
 //
 // The rule deliberately does NOT key on code-signing platform-binary
 // status the way persistence_launchagent / privilege_launchd_plist_write
@@ -74,10 +80,10 @@ func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 func (r *SudoersTamper) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.",
-		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
-			"`/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as " +
-			"root.\n\n" +
+		Summary: "Flags any non-allowlisted writer that changes a sudoers file sudo will load.",
+		Description: "Detects an instant escalation primitive: writing, or renaming a file onto, `/etc/sudoers` or a " +
+			"child of `/etc/sudoers.d/` that sudo will parse. A successful tamper grants future shell sessions " +
+			"arbitrary command execution as root.\n\n" +
 			"Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: " +
 			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
 			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +

@@ -576,3 +576,32 @@ func TestRule_MultiCategoryDoesNotPromoteAGoRule(t *testing.T) {
 	note, _ := engine["portability_note"].(string)
 	assert.Contains(t, note, "Go implementation")
 }
+
+// spec:server-detection-rules-engine/portability-is-derived-from-the-rule-rather-than-declared/two-sigma-categories-are-not-portable
+//
+// Both unportability reasons at once: a rule that reads a computed field AND spans two Sigma categories.
+//
+// The combined case is the one an earlier version got wrong. The logsource branch was checked first and returned only its own
+// sentence, which asserts the rule "reads only fields from Sigma's own taxonomy" while it was in fact reading a computed one.
+// A note that states a falsehood about a rule is worse than one that omits a reason, so both are reported.
+func TestRule_MultiCategoryAndComputedFieldReportsBoth(t *testing.T) {
+	t.Parallel()
+
+	md := metadata()
+	md.Doc.EventTypes = []string{"exec", "file_rename"}
+	// Subcommand is computed from argv, so this rule is `mapped` on field grounds before the logsource is considered.
+	body, err := Rule(md, Authored{Detection: detectionNode(t, "selection:\n  Subcommand: load\ncondition: selection\n")})
+	require.NoError(t, err)
+
+	engine, ok := decode(t, body)["x-engine"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "mapped", engine["portable"])
+
+	note, _ := engine["portability_note"].(string)
+	assert.Contains(t, note, "Subcommand", "the computed field must still be named")
+	assert.Contains(t, note, "this engine computes")
+	assert.Contains(t, note, "one logsource category per rule", "and the logsource reason must survive alongside it")
+	assert.Contains(t, note, "file_rename", "naming the category that would not be routed")
+	assert.NotContains(t, note, "reads only fields from Sigma's own taxonomy",
+		"that claim is false for this rule, and asserting it is worse than omitting a reason")
+}

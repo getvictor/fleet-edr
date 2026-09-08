@@ -380,11 +380,22 @@ func portabilityNote(kind, portable string, computed, unroutable []string, decla
 			"so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being " +
 			"converted separately; until a rule's logic lives in its file, this stays the honest answer."
 	case len(unroutable) > 0:
-		// Named separately from the computed-field case because the reason is different in kind: nothing is wrong with the
-		// FIELDS here, and a reader told "it reads a field we compute" would go looking for one that does not exist. What
-		// cannot be expressed is the logsource, since Sigma permits one category per rule.
-		return "The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, but it " +
-			"consumes event types spanning more than one Sigma category. Sigma allows one logsource category per rule, so " +
+		// Named separately from the computed-field case because the reason is different in kind: an unroutable logsource says
+		// nothing about the FIELDS, and a reader told "it reads a field we compute" would go looking for one that may not
+		// exist. Sigma permits one category per rule, and that is what cannot be expressed.
+		//
+		// The two reasons can BOTH hold, and an earlier version of this returned only the logsource sentence when they did,
+		// which asserted the rule "reads only fields from Sigma's own taxonomy" while it was in fact reading a computed one.
+		// A note that states a falsehood about a rule is worse than a note that omits a reason, so the field clause is
+		// conditional and both are reported when both apply.
+		fields := "reads only fields from Sigma's own taxonomy, but it"
+		if len(computed) > 0 {
+			field, them := computedFieldPhrase(computed)
+			fields = "reads " + field + ", which this engine computes rather than taking from Sigma's own taxonomy, so " +
+				"another engine needs " + them + " supplied. It also"
+		}
+		return "The rule's logic is the detection block in this file and " + fields +
+			" consumes event types spanning more than one Sigma category. Sigma allows one logsource category per rule, so " +
 			"this file declares " + declared + " and another engine would never route " + strings.Join(unroutable, ", ") +
 			" events to it. Evaluating the rule as written therefore covers only part of what it detects here; the full set " +
 			"is in x-engine.event_types."
