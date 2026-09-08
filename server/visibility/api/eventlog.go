@@ -52,6 +52,12 @@ type EventLog interface {
 	// re-offered, so an evaluation that outlives its lease runs alongside its own reclaimer; an unconditional ack let both attempts
 	// succeed and neither learn it had lost, so anything additive done after acknowledging counted the batch twice. A caller told
 	// held=false MUST skip whatever it does after the ack, because the attempt that owns the rows now will do it.
+	//
+	// The caller MUST serialize this against that host's claimers, and this interface does not do it (issue #863). The statement
+	// takes row locks as it scans, so an earlier event of a batch can be locked while a later one is not; a claim arriving in that
+	// window skips the locked row through FOR UPDATE SKIP LOCKED and takes the later one, which is then folded without its
+	// predecessor. The in-flight bound does not cover it, because it counts only claims that are still live and the window is
+	// reached precisely when the claim has outlived its lease. Nack carries the same requirement, for the same reason.
 	Ack(ctx context.Context, eventIDs []string, claimStampNs int64) (held bool, err error)
 
 	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost, counting the
@@ -74,6 +80,9 @@ type EventLog interface {
 	//
 	// The count SHALL be exact rather than merely non-zero. A caller decides whether a WHOLE batch was withdrawn by comparing it
 	// against the events it handed over, so an under-count reads as a partial withdrawal.
+	//
+	// Serialized against that host's claimers by the caller, exactly as Ack is and for the same reason: this statement takes row
+	// locks the same way, so an unserialized requeue opens the same window (issue #863).
 	Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, held bool, err error)
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
