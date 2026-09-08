@@ -525,3 +525,49 @@ func TestAckClearsACarriedValue(t *testing.T) {
 		host))
 	assert.Zero(t, left, "an acknowledged row is terminal, so it keeps nothing the queue will never read again")
 }
+
+// A PARTIAL acknowledgement clears nothing, which review raised as a way to lose a carried value.
+//
+// It cannot, and the reason is worth pinning rather than reasoning about: Ack treats a subset match as LOST, returns false, and
+// its deferred rollback undoes the rows that did match. Clearing the tally rides in that same statement, so it is undone with
+// everything else. This change made that rollback load-bearing for the tally as well, and nothing covered it.
+func TestPartialAckClearsNothing(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-partial-ack"
+	const batch = 2
+
+	enqueue(t, log, host, "pack-1", 1_000)
+	enqueue(t, log, host, "pack-2", 1_001)
+
+	carry := []byte(`{"v":1,"matches":[{"count":12}]}`)
+	require.Zero(t, nackOnce(t, log, host, batch, carry).SetAside)
+
+	claimed, stamp, err := log.ClaimForHost(t.Context(), host, batch)
+	require.NoError(t, err)
+	require.Len(t, claimed, batch)
+	ids := make([]string, 0, len(claimed))
+	for _, e := range claimed {
+		ids = append(ids, e.EventID)
+	}
+
+	// A replacement takes one of the two, so this attempt owns half of what it is about to acknowledge.
+	_, err = db.ExecContext(t.Context(),
+		"UPDATE event_queue SET claimed_at_ns = claimed_at_ns + 1 WHERE event_id = ?", "pack-2")
+	require.NoError(t, err)
+
+	held, err := log.Ack(t.Context(), ids, stamp)
+	require.NoError(t, err)
+	require.False(t, held, "a subset match is lost, not won")
+
+	var carrying int
+	require.NoError(t, db.GetContext(t.Context(), &carrying,
+		"SELECT COUNT(*) FROM event_queue WHERE host_id = ? AND monitor_tally IS NOT NULL", host))
+	assert.Equal(t, 1, carrying,
+		"the rollback undoes the clearing too, so the attempt that does own these events still finds the value")
+
+	var acked int
+	require.NoError(t, db.GetContext(t.Context(), &acked,
+		"SELECT COUNT(*) FROM event_queue WHERE host_id = ? AND processed = 1", host))
+	assert.Zero(t, acked, "and nothing was acknowledged, which is what makes the clearing safe to ride along")
+}
