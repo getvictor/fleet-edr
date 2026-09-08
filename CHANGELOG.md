@@ -6,7 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
-- **The `dns_c2_beacon` rule is now called "Dropped payload phoning home".** It never detected beaconing: it looks for a program launched from a temporary or world-writable folder that resolves a domain and then connects to the address that lookup returned, with no measurement of periodicity. The old name suggested beaconing was covered, and that alerts had observed a repeating pattern; neither was true. The rule identifier is unchanged, so existing exclusions and per-rule settings keep working and historical alerts are unaffected. Alert titles raised from now on carry the new name.
+- **The `dns_c2_beacon` rule is now called "Suspicious process phoning home".** It never detected beaconing: it looks for a program launched from a temporary or world-writable folder that resolves a domain and then connects to the address that lookup returned, with no measurement of periodicity. The old name suggested beaconing was covered, and that alerts had observed a repeating pattern; neither was true. The rule identifier is unchanged, so existing exclusions and per-rule settings keep working and historical alerts are unaffected. Alert titles raised from now on carry the new name.
 
 ### Fixed
 

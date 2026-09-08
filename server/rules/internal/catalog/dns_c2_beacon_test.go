@@ -312,12 +312,13 @@ func TestDNSC2Beacon_NameDescribesWhatItDetectsAndTheIDIsStable(t *testing.T) {
 		"the identifier is a stored key: exclusions and per-rule settings resolve through it")
 
 	name := r.DisplayName()
-	assert.Equal(t, "Dropped payload phoning home", name)
+	assert.Equal(t, "Suspicious process phoning home", name)
 	assert.Equal(t, name, r.Doc().Title, "one canonical name across every operator-facing surface")
 
 	// Asserted as a property rather than only as a literal, so a future rename cannot quietly reintroduce the claim.
-	for _, forbidden := range []string{"beacon", "interval", "periodic", "regularity"} {
+	for _, forbidden := range []string{"beacon", "interval", "periodic", "regularity", "dropped"} {
 		assert.NotContains(t, strings.ToLower(name), forbidden,
-			"the name must not claim a periodicity signal this rule does not compute")
+			"the name must not claim an observation this rule does not make: it measures no periodicity, and it sees no "+
+				"file creation, so it cannot say a payload was dropped")
 	}
 }

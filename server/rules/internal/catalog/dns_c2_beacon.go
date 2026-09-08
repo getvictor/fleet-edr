@@ -51,10 +51,15 @@ func (r *DNSC2Beacon) SupportedExclusionMatchTypes() []api.ExclusionMatchType { 
 // had not. It also misled authors: the exported rule file was once written from the name rather than the code and came
 // out claiming an "interval_regularity_and_entropy" algorithm that has never existed.
 //
+// "Suspicious process", not "dropped payload", and the distinction is the same one that made the old name wrong. The rule
+// checks that the exec path is under a temporary or world-writable prefix, or contains "..". It sees no file creation and
+// no download, so it cannot say the binary was DROPPED there; a tool that legitimately lives in /tmp trips the same gate.
+// "Suspicious" is a judgement about the path, which is what the rule actually makes.
+//
 // The identifier stays `dns_c2_beacon`. Alerts, exclusions and detection_rule_settings all key on it, so changing it
 // would strand existing per-rule settings and orphan historical alerts, which is a real cost paid for nothing an
 // operator sees. The identifier is a stable key; the name is what people read, and only the name was wrong.
-func (r *DNSC2Beacon) DisplayName() string { return "Dropped payload phoning home" }
+func (r *DNSC2Beacon) DisplayName() string { return "Suspicious process phoning home" }
 
 // Techniques is the union the rule can stamp; a given finding narrows this to the subset that actually applied (every
 // finding carries T1071.004; only DGA-domain findings add T1568.002). Procurement and ATT&CK-Navigator export read this

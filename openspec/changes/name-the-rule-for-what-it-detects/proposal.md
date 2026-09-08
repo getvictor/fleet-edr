@@ -12,7 +12,9 @@ It also misled authors, which is how it was caught. The exported rule file for t
 
 ## What changes
 
-The canonical name becomes "Dropped payload phoning home", which describes the chain the rule actually joins: launch, lookup, connect.
+The canonical name becomes "Suspicious process phoning home", which describes what the rule actually observes: a process whose exec path is suspicious, looking a domain up and then connecting to what it resolved.
+
+"Dropped payload" was the first choice and is also wrong, for the same reason the old name was. The rule checks that the exec path sits under a temporary or world-writable prefix, or contains `..`. It sees no file creation and no download, so it cannot say the binary was dropped there; a tool that legitimately lives in `/tmp` trips the same gate. Naming an observation the evaluator does not make is precisely the defect this change exists to fix, and review caught it being reintroduced.
 
 **The identifier stays `dns_c2_beacon`.** Alerts, exclusions and `detection_rule_settings` all key on it, so changing it would strand existing per-rule settings and orphan historical alerts: a real cost paid for nothing an operator sees. The identifier is a stable key; the name is what people read, and only the name was wrong. That divergence is now stated in the rule's doc comment so a later reader finds a decision rather than apparent drift.
 
