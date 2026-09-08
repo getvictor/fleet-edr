@@ -122,7 +122,9 @@ func buildAdapted(evt api.Event, gr api.GraphReader) *adaptedEvent {
 	// SAME row, so they share one accessor and a finding cannot name a different process than the detection matched. On an exec
 	// they are genuinely different rows, the parent's and the subject's, so each gets its own memo.
 	subject := subjectProcessOf(evt, gr, pid)
-	if evt.EventType == "open" {
+	// A rename resolves the same way an open does: the acting process IS the subject, so Image and the finding's subject are
+	// one row and a finding cannot name a process the detection did not match on.
+	if evt.EventType == "open" || evt.EventType == "file_rename" {
 		return &adaptedEvent{core: core, pid: pid, hasPID: true, image: subjectImageOf(subject), subject: subject}
 	}
 	return &adaptedEvent{core: core, pid: pid, hasPID: true, image: parentImageOf(evt, gr, pid), subject: subject}

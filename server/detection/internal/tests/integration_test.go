@@ -4147,3 +4147,67 @@ func TestEngine_ModifierReachesTheAlert(t *testing.T) {
 		"the rule's own technique AND the one its modifier implies, since a condition that adds a technique must also price it; "+
 			"the technique both of them name appears once, because a repeat inflates the coverage figure read during procurement")
 }
+
+// payloadCapturingRule records the raw payload bytes the pipeline hands a rule, so a test can assert what the queue actually
+// delivers rather than what the caller enqueued.
+type payloadCapturingRule struct {
+	stubRule
+	mu   sync.Mutex
+	seen [][]byte
+}
+
+func (r *payloadCapturingRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range events {
+		if e.EventType == "file_rename" {
+			r.seen = append(r.seen, append([]byte(nil), e.Payload...))
+		}
+	}
+	return nil, nil
+}
+
+func (r *payloadCapturingRule) captured() [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]byte(nil), r.seen...)
+}
+
+// The event queue hands rules payload bytes with JSON string escapes already normalized, which sudoers_tamper's byte prefilter
+// silently depends on. Review surfaced this on #917 and no test reached it.
+//
+// Swift's JSONEncoder escapes forward slashes, so the real extension puts `"\/etc\/sudoers.d\/evil"` on the wire and the agent
+// uploads those bytes unchanged. A raw scan for `/etc/sudoers` finds nothing in that form. What saves it is `event_queue.payload`
+// being a MySQL JSON column: MySQL normalizes `\/` to `/` on storage.
+//
+// The rules package cannot test this. Its fixtures marshal with Go's encoding/json, which never escapes slashes, so every test
+// there passes whether or not the invariant holds, and the bounded-context rule stops this package importing the rule anyway.
+// What CAN be asserted here is the property the rule relies on, against the real table.
+//
+// If `payload` is ever changed to BLOB, every rule scanning raw payload bytes stops matching, and this fails.
+func TestEventQueueNormalizesJSONStringEscapes(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	rule := &payloadCapturingRule{stubRule: stubRule{id: "payload-capture"}}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+	// Byte-for-byte what the extension's encoder emits. Asserted so a future edit cannot un-escape the fixture and leave the
+	// test passing for the wrong reason.
+	escaped := `{"pid":6021,"source_path":"\/tmp\/staged","path":"\/etc\/sudoers.d\/evil"}`
+	require.Contains(t, escaped, `\/etc\/sudoers`, "fixture must carry the extension's escaping")
+	require.NotContains(t, escaped, `"/etc/sudoers`, "and must not also carry the unescaped form")
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "esc-rename", HostID: "host-a", TimestampNs: 3000, EventType: "file_rename", Payload: json.RawMessage(escaped)},
+	})
+
+	require.Eventually(t, func() bool { return len(rule.captured()) > 0 }, 10*time.Second, 50*time.Millisecond,
+		"the file_rename event must reach a rule")
+
+	got := string(rule.captured()[0])
+	assert.Contains(t, got, "/etc/sudoers.d/evil",
+		"the queue must hand rules unescaped slashes, which is what sudoers_tamper's byte prefilter scans for")
+	assert.NotContains(t, got, `\/etc`, "the wire escaping must not survive to the rule")
+}

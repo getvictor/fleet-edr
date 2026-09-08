@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
+      "enum": ["exec", "fork", "exit", "open", "file_rename", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
       "description": "Type of endpoint security event"
     },
     "platform": {
@@ -33,6 +33,7 @@
         { "$ref": "#/definitions/fork_payload" },
         { "$ref": "#/definitions/exit_payload" },
         { "$ref": "#/definitions/open_payload" },
+        { "$ref": "#/definitions/file_rename_payload" },
         { "$ref": "#/definitions/network_connect_payload" },
         { "$ref": "#/definitions/dns_query_payload" },
         { "$ref": "#/definitions/application_control_block_payload" },
@@ -150,6 +151,21 @@
         "pid": { "type": "integer" },
         "path": { "type": "string" },
         "flags": { "type": "integer" }
+      }
+    },
+    "file_rename_payload": {
+      "type": "object",
+      "required": ["pid", "source_path", "path"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "source_path": {
+          "type": "string",
+          "description": "Absolute path the file was renamed FROM. Required: a rename is the only watched operation that can make a file become sudo policy without any write to the destination, and the source is what distinguishes a promotion from a scratch path elsewhere from a move within the watched directory."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute path the file was renamed TO. Named `path` rather than `destination_path` so it lines up with every other file event's target field, which is what the detection layer reads as TargetFilename."
+        }
       }
     },
     "network_connect_payload": {

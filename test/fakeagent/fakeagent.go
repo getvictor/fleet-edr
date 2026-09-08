@@ -71,6 +71,10 @@ type Event struct {
 	ChildPID  int `json:"child_pid,omitempty"`
 	ParentPID int `json:"parent_pid,omitempty"`
 
+	// file_rename specifics. Path carries the DESTINATION for a rename, the same way it carries the target for an open, so
+	// only the origin needs a field of its own.
+	SourcePath string `json:"source_path,omitempty"`
+
 	// exec specifics.
 	Path string   `json:"path,omitempty"`
 	Args []string `json:"args,omitempty"`
@@ -216,10 +220,13 @@ func (s *Scenario) Validate() error {
 // knownEventTypes mirrors the enum in schema/events.json. application_control_block is omitted: those are emitted reactively by the
 // agent in response to server-pushed app-control rules, not produced by attack-corpus scenarios.
 var knownEventTypes = map[string]bool{
-	"exec":                true,
-	"fork":                true,
-	"exit":                true,
-	"open":                true,
+	"exec": true,
+	"fork": true,
+	"exit": true,
+	"open": true,
+	// A rename touching the sensitive path set (issue #917). Carries two paths, which is what lets a corpus scenario express
+	// the atomic-replace evasion: writing a temp file elsewhere and renaming it onto a sudoers path produces no open at all.
+	"file_rename":         true,
 	"network_connect":     true,
 	"dns_query":           true,
 	"snapshot_heartbeat":  true,

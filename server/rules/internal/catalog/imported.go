@@ -401,9 +401,17 @@ func parseImported(name string, raw []byte, authored bool) (*importedRule, error
 // rule that does not exist. TestCategoryIsInert_RefusesEvenASudoersRule pins the false refusal so it is a known trade rather than
 // a surprise, and it is the test to delete when a sudoers-watching rule appears.
 func categoryIsInert(category string) (string, bool) {
-	if category == "file_event" {
+	switch category {
+	case "file_event":
 		return "category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), " +
 			"so a file_event rule watching anything else could never fire", true
+	case "file_rename":
+		// Same client, same watched set, same conclusion. The rename subscription added by #917 lives on
+		// FileTamperSubscriber alongside CREATE/WRITE and inherits its inverted target-path muting, so a rename event
+		// exists for no path outside /etc/sudoers*. Adding file_rename to the export mapping made these rules loadable,
+		// which is what makes this refusal necessary rather than theoretical.
+		return "category file_rename maps to file_rename, but this agent emits renames only for /etc/sudoers paths " +
+			"(#917), so a file_rename rule watching anything else could never fire", true
 	}
 	return "", false
 }

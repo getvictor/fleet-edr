@@ -14,11 +14,19 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 ///
 /// Subscriptions: NOTIFY_CREATE (new sudoers.d drop) and NOTIFY_WRITE (in-place edit / overwrite of an existing sudoers
 /// file). Each is re-emitted as an `open` event with synthetic write-mode flags so the server's sudoers_tamper rule consumes
-/// them unchanged (the same division of labour handleCreate used before #301). NOTIFY_OPEN is deliberately NOT used: ESF
-/// silently ignores per-event-type muting for it, so it cannot be target-scoped and was the open/create firehose #301
-/// removes. NOTIFY_RENAME is deliberately NOT subscribed: visudo/sudoedit write via temp-file + atomic rename onto
-/// /etc/sudoers, so watching rename would fire on every legitimate sudoers edit; the atomic-replace gap stays documented on
-/// the sudoers_tamper rule (unchanged from before #301).
+/// them unchanged (the same division of labour handleCreate used before #301).
+///
+/// NOTIFY_RENAME is subscribed as of #917, and emitted as its own `file_rename` event carrying both paths. It was previously
+/// declined on the grounds that watching rename would fire on every legitimate visudo edit. That reasoning did not hold, and
+/// measurement on macOS 26.3 is what settled it: one `visudo -f /etc/sudoers.d/<name>` already produces CREATE, WRITE and
+/// UNLINK on `<name>.tmp`, a SIBLING inside the watched `/etc/sudoers.d/` prefix, so the visudo traffic this client sees
+/// exists with or without rename (it was firing the rule; see #933). What rename adds is the only event carrying a source
+/// path, which is what finally lets the server tell a promotion into live policy from a move that changes nothing.
+///
+/// NOTIFY_OPEN is not subscribed here, but the reason recorded until #917 was wrong and is worth not repeating: the claim was
+/// that ESF ignores muting for it. Measured with THIS client's configuration on 26.3, target-path mute inversion is honoured
+/// for NOTIFY_OPEN (zero events across two seconds of unrelated filesystem traffic). It stays unsubscribed only because the
+/// destructive-open case it would cover is #934, not because it cannot be scoped.
 final class FileTamperSubscriber: Sendable {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private nonisolated(unsafe) var client: OpaquePointer!
@@ -71,13 +79,14 @@ final class FileTamperSubscriber: Sendable {
 
         let events: [es_event_type_t] = [
             ES_EVENT_TYPE_NOTIFY_CREATE,
-            ES_EVENT_TYPE_NOTIFY_WRITE
+            ES_EVENT_TYPE_NOTIFY_WRITE,
+            ES_EVENT_TYPE_NOTIFY_RENAME
         ]
         guard es_subscribe(client, events, UInt32(events.count)) == ES_RETURN_SUCCESS else {
             logger.error("file-tamper subscribe failed")
             exit(EXIT_FAILURE)
         }
-        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers* - CREATE/WRITE only")
+        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers* - CREATE/WRITE/RENAME")
     }
 
     func stop() {
@@ -87,6 +96,10 @@ final class FileTamperSubscriber: Sendable {
 
     private func handleMessage(_ message: UnsafePointer<es_message_t>) {
         let msg = message.pointee
+        if msg.event_type == ES_EVENT_TYPE_NOTIFY_RENAME {
+            handleRename(msg)
+            return
+        }
         guard let path = Self.targetPath(of: msg) else {
             return
         }
@@ -99,6 +112,35 @@ final class FileTamperSubscriber: Sendable {
             // path is .private: exec/file paths can carry usernames or project tokens, and the "no PII in logs" guideline
             // applies on this hot path. The full path still flows to the server in the event payload for the rule.
             logger.debug("file-tamper type=\(msg.event_type.rawValue, privacy: .public) pid=\(pid, privacy: .public) path=\(path, privacy: .private)")
+            onEvent?(data)
+        }
+    }
+
+    /// handleRename emits a `file_rename` event for a rename where EITHER path falls in the watched set, which is what the
+    /// inverted target-path muting delivers (measured on macOS 26.3: a rename into, within, and out of the set all arrive).
+    ///
+    /// Renames are emitted whole, both paths, and the server decides. The extension does not try to tell a legitimate editor
+    /// commit from an attacker's promotion, because it cannot: the discriminator is whether the DESTINATION is a name sudo
+    /// will parse, and that is policy knowledge (`sudoers(5)`'s dot and tilde skipping) which belongs with the rule, not in
+    /// the hot path of an ESF callback.
+    private func handleRename(_ msg: es_message_t) {
+        let rename = msg.event.rename
+        let source = esTokenString(rename.source.pointee.path)
+        let destination: String
+        switch rename.destination_type {
+        case ES_DESTINATION_TYPE_NEW_PATH:
+            destination = Self.joinDir(rename.destination.new_path.dir, rename.destination.new_path.filename)
+        case ES_DESTINATION_TYPE_EXISTING_FILE:
+            destination = esTokenString(rename.destination.existing_file.pointee.path)
+        default:
+            return
+        }
+        let pid = audit_token_to_pid(msg.process.pointee.audit_token)
+        let payload = FileRenamePayload(pid: pid, sourcePath: source, path: destination)
+        if let data = serializer.serialize(eventType: "file_rename", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
+            // Both paths are .private for the same reason the CREATE/WRITE path's is: a file path can carry a username or a
+            // project token, and the full values still reach the server in the payload.
+            logger.debug("file-tamper rename pid=\(pid, privacy: .public) src=\(source, privacy: .private) dst=\(destination, privacy: .private)")
             onEvent?(data)
         }
     }

@@ -56,6 +56,9 @@ export interface ScenarioEvent {
   exit_code?: number;
   exit_reason?: string; // schema/events.json exit_payload.exit_reason, matches the Go ScenarioEvent struct.
   flags?: number;
+  // file_rename: `path` carries the DESTINATION, the same way it carries the target for an open, so only the origin needs a
+  // field of its own. Mirrors the Go ScenarioEvent struct in test/fakeagent/fakeagent.go.
+  source_path?: string;
   protocol?: string;
   direction?: string;
   local_address?: string;
@@ -286,6 +289,8 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
     }
     case "open":
       return { pid: ev.pid ?? 0, path: ev.path ?? "", flags: ev.flags ?? 0 };
+    case "file_rename":
+      return { pid: ev.pid ?? 0, source_path: ev.source_path ?? "", path: ev.path ?? "" };
     case "network_connect": {
       const p: Record<string, unknown> = {
         pid: ev.pid ?? 0,

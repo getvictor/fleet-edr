@@ -99,6 +99,9 @@ func TestSupportedFields(t *testing.T) {
 	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "ParentImage", "Subcommand"},
 		SupportedFields("exec"))
 	assert.Equal(t, []string{"Image", "TargetFilename"}, SupportedFields("open"))
+	// A rename supplies both of Sigma's file_rename fields. Enumerated here rather than left to the round-trip test because
+	// dropping SourceFilename would leave a rename indistinguishable from a write to the same path.
+	assert.Equal(t, []string{"Image", "SourceFilename", "TargetFilename"}, SupportedFields("file_rename"))
 	assert.Empty(t, SupportedFields("dns_query"))
 	assert.Empty(t, SupportedFields("nonexistent"))
 }
@@ -114,6 +117,10 @@ func TestEventTypeForCategory(t *testing.T) {
 	et, ok = EventTypeForCategory("file_event")
 	assert.True(t, ok)
 	assert.Equal(t, "open", et)
+
+	et, ok = EventTypeForCategory("file_rename")
+	assert.True(t, ok)
+	assert.Equal(t, "file_rename", et, "the category and the event type share a name, which is a real equivalence not a self-map")
 
 	_, ok = EventTypeForCategory("registry_set")
 	assert.False(t, ok, "a category we cannot supply fields for must not resolve")

@@ -8,12 +8,19 @@ import (
 
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
-// SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
-// or any direct child of `/etc/sudoers.d/`. Editing those files grants
-// future shell sessions arbitrary command execution as root, so a
-// successful tamper is an instant escalation primitive (T1548.003).
+// SudoersTamper fires when a file sudo will parse as policy is written, or
+// renamed into place. That is `/etc/sudoers` itself, and those children of
+// `/etc/sudoers.d/` whose names sudo does not skip. Editing one grants future
+// shell sessions arbitrary command execution as root, so a successful tamper is
+// an instant escalation primitive (T1548.003).
+//
+// "A file sudo will parse" is doing real work in that sentence, and the two
+// halves below are why: the name test is what stops the rule alerting on files
+// that grant nothing, and reading renames is what stops the write test being
+// trivially evadable.
 //
 // The rule deliberately does NOT key on code-signing platform-binary
 // status the way persistence_launchagent / privilege_launchd_plist_write
@@ -31,19 +38,28 @@ import (
 // write-mode `open` event, so this rule's match logic is unchanged while the
 // host no longer forwards every file open.
 //
-// Why visudo doesn't need to be in the default allowlist: visudo writes
-// to /etc/sudoers.tmp (or $TMPDIR) and atomically renames it onto
-// /etc/sudoers, so the file-tamper client (which watches CREATE/WRITE on
-// /etc/sudoers but deliberately NOT rename) never sees visudo's flow.
-// Same is true for sudoedit. The rule only trips when something creates
-// or writes /etc/sudoers* directly.
+// The rule matches only the files sudo will actually PARSE. sudoers(5) says sudo
+// reads each file in /etc/sudoers.d "skipping file names that end in '~' or
+// contain a '.' character", so a name carrying a dot grants nothing no matter
+// what is written into it. Verified on macOS 26.3 with three files of identical
+// content differing only in name: zzdotless loaded, zz.dotted and zztilde~ did
+// not.
 //
-// Known limitation: an attacker with root could write a temp file and rename
-// it onto /etc/sudoers without ever firing CREATE/WRITE on /etc/sudoers.
-// Subscribing to NOTIFY_RENAME would catch that, but it would also fire on
-// every legitimate visudo/sudoedit edit, so the atomic-replace gap is left
-// documented (same class as the privilege_launchd_plist_write atomic-rename
-// gap, which BTM registration now covers).
+// That narrowing fixed a live false positive (#933). The previous pattern
+// matched any direct child, and one `visudo -f /etc/sudoers.d/<name>` writes
+// `<name>.tmp` as a SIBLING inside the watched prefix, so every legitimate
+// fragment edit raised a Critical escalation alert on a file sudo ignores. The
+// old comment here claimed the opposite, that the client "never sees visudo's
+// flow"; that holds for /etc/sudoers, whose temp file lands outside the watched
+// set, and not for /etc/sudoers.d.
+//
+// Renames are read too, as of #917. The atomic-replace evasion (write a temp
+// file, rename it onto a sudoers path) produced no CREATE and no WRITE on a
+// watched path and was invisible. It is now caught on the rename's DESTINATION,
+// which is what decides whether the file is policy. The two changes ship
+// together deliberately: narrowing alone would have removed the detection that
+// caught write-then-rename by accident, via the same over-broad pattern that
+// caused the false positive.
 type SudoersTamper struct {
 	// Exclusions is the per-host false-positive resolver. The rule silently accepts a write whose writer-process path matches an
 	// exclusion (match type path_glob). Nil excludes nothing (the empty-config default): every direct write to sudoers fires.
@@ -64,24 +80,26 @@ func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 func (r *SudoersTamper) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.",
-		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
-			"`/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as " +
-			"root.\n\n" +
+		Summary: "Flags any non-allowlisted writer that changes a sudoers file sudo will load.",
+		Description: "Detects an instant escalation primitive: writing, or renaming a file onto, `/etc/sudoers` or a " +
+			"child of `/etc/sudoers.d/` that sudo will parse. A successful tamper grants future shell sessions " +
+			"arbitrary command execution as root.\n\n" +
 			"Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: " +
 			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
 			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +
 			"admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.\n\n" +
-			"`visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both " +
-			"ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it " +
-			"onto /etc/sudoers is missed.",
+			"The rule reads renames as well as writes, so an attacker who writes a temp file and renames it onto a sudoers " +
+			"path is caught at the moment the file becomes policy. It matches only the names sudo will actually parse: " +
+			"sudoers(5) skips files in /etc/sudoers.d whose names contain a `.` or end in `~`, and a file sudo skips grants " +
+			"nothing.",
 		Severity:   api.SeverityHigh,
-		EventTypes: []string{"open"},
+		EventTypes: []string{"open", "file_rename"},
 		FalsePositives: []string{
 			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.",
 		},
 		Limitations: []string{
-			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule's largest gap and a trivial evasion.",
+			"Truncation and deletion are not detected: `: > /etc/sudoers` destroys the policy and emits nothing at all, because open(O_TRUNC) is a different kernel path from the CREATE/WRITE/RENAME this rule reads. Tracked as #934.",
+			"A rename whose destination sudo will load fires whoever performed it, so an administrator committing a legitimate visudo edit of a /etc/sudoers.d/ fragment is reported alongside an attacker promoting a file into place. From the endpoint's view the two are the same operation on the same path, and the rule deliberately does not filter on platform-binary status (see the description). Operators tune with a path-glob exclusion on the writer.",
 			"On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.",
 		},
 	}
@@ -91,6 +109,16 @@ func (r *SudoersTamper) Doc() api.Documentation {
 // file open in the kernel (thousands per second) and writes to sudoers happen on a stable host literally never. Skipping the JSON
 // decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal per open" to "one bytes.Contains per
 // open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
+//
+// This depends on an invariant that is NOT visible from here, and that is worth naming because breaking it would silently disable
+// the rule rather than fail anything. Swift's JSONEncoder escapes forward slashes, so the extension puts `"\/etc\/sudoers"` on
+// the wire and the agent uploads those bytes unchanged. A raw scan for `/etc/sudoers` would miss every real event. What saves it
+// is `event_queue.payload` being a MySQL JSON column: MySQL normalizes `\/` to `/` on storage, so the bytes this rule receives
+// have already been unescaped. Verified against the running database, and pinned by
+// TestSudoersTamper_PrefilterSurvivesTheExtensionsSlashEscaping.
+//
+// Changing that column to BLOB (which is the right choice for genuinely opaque bytes, and has been made elsewhere for that
+// reason) would break this filter and every rule that scans raw payload bytes. Match on the escaped form too, or decode first.
 var sudoersBytes = []byte("/etc/sudoers")
 
 // SupportedExclusionMatchTypes lists the match types this rule consults: the sudoers writer path glob (issue #520).
@@ -119,7 +147,10 @@ func (r *SudoersTamper) EvaluateScoped(
 func (r *SudoersTamper) evalEvent(
 	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
 ) (*api.Finding, error) {
-	if evt.EventType != "open" {
+	// A rename is read the same way a write is: the adapter supplies the DESTINATION as TargetFilename, so one detection asks
+	// the right question of both. An open asks whether a policy file was written; a rename asks whether a file just became
+	// policy, which is the escalation the write-then-rename evasion used to slip past entirely (#917).
+	if evt.EventType != "open" && evt.EventType != "file_rename" {
 		return nil, nil
 	}
 	// Checked before the adapter, and deliberately still a byte scan: it costs nothing and it keeps every open of some other path
@@ -160,18 +191,36 @@ func (r *SudoersTamper) evalEvent(
 	}
 
 	return &api.Finding{
-		HostID:   evt.HostID,
-		RuleID:   r.ID(),
-		Severity: api.SeverityHigh,
-		Title:    r.DisplayName(),
-		Description: fmt.Sprintf(
-			"%s opened %s for writing: sudo escalation surface (MITRE T1548.003)",
-			// The path the detection matched on, which is present exactly because it required write intent to get here.
-			proc.Path, firstField(se, "TargetFilename"),
-		),
-		ProcessID: proc.ID,
-		EventIDs:  []string{evt.EventID},
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    api.SeverityHigh,
+		Title:       r.DisplayName(),
+		Description: sudoersDescription(evt.EventType, proc.Path, se),
+		ProcessID:   proc.ID,
+		EventIDs:    []string{evt.EventID},
 	}, nil
+}
+
+// sudoersDescription writes the operator-facing sentence for a finding, and says what actually happened.
+//
+// It exists because the single "opened X for writing" wording became wrong the moment renames were read: a rename opens
+// nothing, and live QA on the dev server surfaced an alert claiming `/bin/mv opened /etc/sudoers.d/evil for writing`. An
+// analyst triaging that would look for a write that never occurred, and the distinction is the whole point of the detection:
+// the file became live sudo policy without its contents ever being written on this host.
+//
+// The source path is deliberately NOT interpolated, though an earlier version of this did. `An alert from a converted rule
+// names what fired` requires that attacker-controlled content stay out of the description where naming the matched element is
+// sufficient, and the detection matches on TargetFilename alone: the source is a path an attacker chose, rendered into an alert
+// feed, identifying nothing the destination does not already say. That it was a rename rather than a write is the part that
+// changes triage, and that is carried by the verb. The source remains on the event for anyone drilling in.
+func sudoersDescription(eventType, writerPath string, se *sigmabind.Event) string {
+	// The path the detection matched on, in both forms, read back from the field the condition used.
+	target := firstField(se, "TargetFilename")
+	if eventType == "file_rename" {
+		return fmt.Sprintf("%s renamed a file onto %s, making it sudo policy: escalation surface (MITRE T1548.003)",
+			writerPath, target)
+	}
+	return fmt.Sprintf("%s opened %s for writing: sudo escalation surface (MITRE T1548.003)", writerPath, target)
 }
 
 func (r *SudoersTamper) excluded(writerPath, hostID string) bool {

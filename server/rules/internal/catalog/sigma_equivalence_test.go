@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -729,6 +730,24 @@ func isLockWithoutSudo(flags int, subjectPath string) bool {
 	return subjectPath != "/usr/bin/sudo" && flags&legacySudoersWriteMask != 0 && flags&legacySudoersIntent == 0
 }
 
+// isNameSudoSkips is the second documented divergence from the frozen oracle, added by #917.
+//
+// The oracle's pattern matched any direct child of /etc/sudoers.d/. sudoers(5) says sudo reads each file there "skipping file
+// names that end in '~' or contain a '.' character", so the oracle fired on files sudo will never parse, which grant nothing.
+// Verified on macOS 26.3: three files of identical content differing only in name, and only the one without a dot loaded.
+//
+// That over-match was a live false positive, not a hypothetical: visudo writes `<name>.tmp` as a sibling inside the watched
+// prefix, so every legitimate fragment edit raised a Critical escalation alert (#933).
+//
+// Like the lock carve-out, the divergence is one-directional and asserted as such: the narrowing can only REMOVE a finding.
+func isNameSudoSkips(path string) bool {
+	base, ok := strings.CutPrefix(strings.TrimPrefix(path, "/private"), "/etc/sudoers.d/")
+	if !ok || base == "" || strings.Contains(base, "/") {
+		return false
+	}
+	return strings.Contains(base, ".") || strings.HasSuffix(base, "~")
+}
+
 // TestEquivalence_SudoersTamper compares the shipped detection against the frozen oracle across paths, flag combinations and
 // writers, with ONE documented exception (#801).
 //
@@ -748,6 +767,11 @@ func TestEquivalence_SudoersTamper(t *testing.T) {
 	paths := []string{
 		"/etc/sudoers", "/private/etc/sudoers", "/etc/sudoers.d/evil", "/private/etc/sudoers.d/edr-uat",
 		"/etc/sudoers.d/", "/etc/sudoersX", "/etc/passwd", "/etc/sudoers.d/a/b",
+		// Names sudo SKIPS, and the whole point of the #917 narrowing. Without these the oracle and the rule agree on every
+		// input and this test would pass while saying nothing about the change that motivated it.
+		"/etc/sudoers.d/zz-visudo.tmp", "/private/etc/sudoers.d/backup.old", "/etc/sudoers.d/fragment~",
+		// A tilde that is not the LAST character: sudo loads this one, so it guards the narrowing against over-reach.
+		"/etc/sudoers.d/foo~bar",
 	}
 	flagSets := []int{
 		0x0,                 // O_RDONLY
@@ -760,7 +784,21 @@ func TestEquivalence_SudoersTamper(t *testing.T) {
 	}
 	subjects := []string{"/usr/bin/sudo", "/usr/bin/tee", "/bin/cp", ""}
 
+	// Counted, because a carve-out that is never REACHED makes this test vacuous in exactly the direction it is meant to guard:
+	// revert the narrowing and the oracle agrees with the rule everywhere, so the comparison passes while proving nothing. The
+	// assertions after the loop are what force each documented divergence to actually occur.
+	var lockDivergences, skipDivergences atomic.Int64
 	checked := 0
+	// The counter assertions live in Cleanup, not after the loop. A loop that spawns t.Parallel() children returns before any
+	// of them runs, so assertions written after it execute against zero counts; that is how the first version of these read
+	// zero on a run where both carve-outs were in fact reached. Cleanup runs once every child has finished.
+	t.Cleanup(func() {
+		assert.Positive(t, lockDivergences.Load(),
+			"the #801 lock carve-out must be reached, or it is excusing a divergence that no input produces")
+		assert.Positive(t, skipDivergences.Load(),
+			"the #917 narrowing must be reached: if no path in the table is one sudo skips, reverting the narrowing would "+
+				"leave this test passing and the regression invisible")
+	})
 	for _, path := range paths {
 		for _, flags := range flagSets {
 			for _, subject := range subjects {
@@ -781,10 +819,20 @@ func TestEquivalence_SudoersTamper(t *testing.T) {
 					goFires := legacySudoersFires(path, flags, subject)
 					sigmaFires := sudoersDetection().Matches(ev)
 					if goFires != sigmaFires {
-						require.True(t, isLockWithoutSudo(flags, subject),
+						require.True(t, isLockWithoutSudo(flags, subject) || isNameSudoSkips(path),
 							"undocumented divergence: path=%q flags=%#x writer=%q go=%v sigma=%v", path, flags, writer, goFires, sigmaFires)
 						require.True(t, goFires && !sigmaFires,
-							"moving the decision to the adapter can only REMOVE this finding, never add one: path=%q flags=%#x", path, flags)
+							"both carve-outs can only REMOVE a finding, never add one: path=%q flags=%#x", path, flags)
+						// Attribution order matters, and getting it wrong made this counter meaningless. A `.tmp`
+						// path opened with lock-shaped flags satisfies BOTH carve-outs, so crediting the narrowing
+						// first counted lock divergences as narrowing ones: reverting the narrowing left the
+						// counter positive and the mutation survived. The lock is checked first because it
+						// explains the divergence on its own, whatever the path happens to be called.
+						if isLockWithoutSudo(flags, subject) {
+							lockDivergences.Add(1)
+						} else {
+							skipDivergences.Add(1)
+						}
 						return
 					}
 					require.Equal(t, goFires, sigmaFires)

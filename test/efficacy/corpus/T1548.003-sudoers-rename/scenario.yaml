@@ -1,0 +1,36 @@
+# spec:server-detection-rules-engine/sudoers-tampering-matches-the-files-sudo-loads/a-rename-that-makes-a-file-loadable-fires
+# T1548.003 Abuse Elevation Control Mechanism: Sudo and Sudo Caching.
+#
+# The atomic-replace evasion (#917), which the rule missed entirely until renames were read.
+#
+# The point of this scenario is what it does NOT contain: there is no `open` event on a sudoers path. The attacker writes to
+# /tmp, which the file-tamper client does not watch, and then renames the result onto /etc/sudoers.d/. Nothing creates or
+# writes a watched path at any point, so before #917 the whole sequence was silent while granting passwordless root.
+#
+# The destination name carries no dot, which is what makes it policy sudo will actually parse (sudoers(5) skips names
+# containing a '.' or ending in '~'). The companion negative fixture for a skipped name lives in the rule's unit tests, since
+# the efficacy harness asserts alerts rather than their absence.
+name: "T1548.003 sudoers tamper via write-to-tmp then rename onto /etc/sudoers.d"
+host:
+  id: AAAA1548-0003-0000-0000-000000000917
+  hostname: efficacy-t1548-003-rename.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4917
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4917
+    ppid: 1
+    path: /bin/mv
+    args: ["mv", "/tmp/staged", "/etc/sudoers.d/evil"]
+    cwd: /tmp
+    uid: 0
+    gid: 0
+  - at: 20ms
+    type: file_rename
+    pid: 4917
+    source_path: /tmp/staged
+    path: /etc/sudoers.d/evil

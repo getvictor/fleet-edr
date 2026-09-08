@@ -365,7 +365,7 @@ Notarization is deliberately NOT a trust signal: it is an automated Apple scan, 
 ## sudoers_tamper
 
 **Sudoers tamper**  
-Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.
+Flags any non-allowlisted writer that changes a sudoers file sudo will load.
 
 | | |
 | --- | --- |
@@ -374,15 +374,15 @@ Flags any non-allowlisted writer that changes /etc/sudoers or /etc/sudoers.d/*.
 | Default mode | `alert` |
 | Source | Fleet EDR |
 | ATT&CK | [`T1548.003`](https://attack.mitre.org/techniques/T1548/003/) |
-| Event types | `open` |
+| Event types | `open`, `file_rename` |
 
 ### Description
 
-Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of `/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as root.
+Detects an instant escalation primitive: writing, or renaming a file onto, `/etc/sudoers` or a child of `/etc/sudoers.d/` that sudo will parse. A successful tamper grants future shell sessions arbitrary command execution as root.
 
 Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.
 
-`visudo` and `sudoedit` use atomic-rename semantics, so the rule does not see them at all. That cuts both ways: it is why legitimate edits are quiet, and it is why an attacker who writes a temp file and renames it onto /etc/sudoers is missed.
+The rule reads renames as well as writes, so an attacker who writes a temp file and renames it onto a sudoers path is caught at the moment the file becomes policy. It matches only the names sudo will actually parse: sudoers(5) skips files in /etc/sudoers.d whose names contain a `.` or end in `~`, and a file sudo skips grants nothing.
 
 ### Known false-positive sources
 
@@ -390,7 +390,8 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 
 ### Limitations
 
-- Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: the extension does not subscribe to ESF NOTIFY_RENAME today, though ADR-0008 decided it should. This is the rule's largest gap and a trivial evasion.
+- Truncation and deletion are not detected: `: > /etc/sudoers` destroys the policy and emits nothing at all, because open(O_TRUNC) is a different kernel path from the CREATE/WRITE/RENAME this rule reads. Tracked as #934.
+- A rename whose destination sudo will load fires whoever performed it, so an administrator committing a legitimate visudo edit of a /etc/sudoers.d/ fragment is reported alongside an attacker promoting a file into place. From the endpoint's view the two are the same operation on the same path, and the rule deliberately does not filter on platform-binary status (see the description). Operators tune with a path-glob exclusion on the writer.
 - On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.
 
 ## dns_c2_beacon

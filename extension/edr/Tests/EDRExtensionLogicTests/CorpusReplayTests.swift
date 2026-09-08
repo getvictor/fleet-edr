@@ -72,6 +72,7 @@ final class CorpusReplayTests: XCTestCase {
         ("fork.json", encodeFork),
         ("exit.json", encodeExit),
         ("open.json", encodeOpen),
+        ("file_rename.json", encodeFileRename),
         ("application_control_block.json", encodeApplicationControlBlock)
     ]
 
@@ -191,6 +192,8 @@ final class CorpusReplayTests: XCTestCase {
             return try encoder.encode(decoder.decode(EventEnvelope<ExitPayload>.self, from: bytes))
         case "open":
             return try encoder.encode(decoder.decode(EventEnvelope<OpenPayload>.self, from: bytes))
+        case "file_rename":
+            return try encoder.encode(decoder.decode(EventEnvelope<FileRenamePayload>.self, from: bytes))
         case "application_control_block":
             return try encoder.encode(decoder.decode(EventEnvelope<ApplicationControlBlockPayload>.self, from: bytes))
         default:
@@ -319,6 +322,18 @@ final class CorpusReplayTests: XCTestCase {
         return try encodeEnvelope(
             eventID: "66666666-6666-6666-6666-666666666666",
             eventType: "open",
+            payload: payload
+        )
+    }
+
+    // The atomic-replace shape (#917): a promotion out of a scratch path onto a name sudo will load. Both paths are on the
+    // envelope, which is the property the round trip is protecting, since the server binds them to two different Sigma fields
+    // and a swap would silently change which path the detection judges.
+    private static func encodeFileRename() throws -> Data {
+        let payload = FileRenamePayload(pid: 4242, sourcePath: "/tmp/staged", path: "/etc/sudoers.d/evil")
+        return try encodeEnvelope(
+            eventID: "77777777-7777-7777-7777-777777777777",
+            eventType: "file_rename",
             payload: payload
         )
     }
