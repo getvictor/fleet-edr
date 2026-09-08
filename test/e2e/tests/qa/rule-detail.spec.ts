@@ -1,6 +1,5 @@
 import { test, expect } from "../../fixtures/test";
-import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
-import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
+import { signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB } from "../../fixtures/db";
 
 // Per-rule documentation page reachable from the coverage page and from any UI surface that links a rule id.
@@ -13,8 +12,6 @@ import { openDB, resetDB } from "../../fixtures/db";
 // assert against THAT entry's fields. The page only needs to render any registered rule's documentation;
 // pinning to a specific rule's copy would make the test fragile when catalog content moves.
 test.describe("per-rule documentation page", () => {
-  let va: VirtualAuthenticator | undefined;
-
   test.beforeEach(async ({ page }) => {
     const db = await openDB();
     try {
@@ -22,20 +19,11 @@ test.describe("per-rule documentation page", () => {
     } finally {
       await db.end();
     }
-    va = await signInAsAdminViaBreakGlass(page);
-  });
-
-  test.afterEach(async () => {
-    if (va) {
-      await uninstallVirtualAuthenticator(va);
-      va = undefined;
-    }
+    await signInAsAdminViaForgedSession(page);
   });
 
   // spec:web-ui/per-rule-documentation-page/rule-detail-renders-documented-fields
-  test("rule detail renders title, summary, severity, ATT&CK techniques, event types, and description", async ({
-    page,
-  }) => {
+  test("rule detail renders title, summary, severity, ATT&CK techniques, event types, and description", async ({ page }) => {
     // Pick the first registered rule from the server's docs endpoint. The catalog has at least one entry in
     // every build (release-packaging gates ensure the rules table is non-empty), so we can rely on it.
     const docs = await page.request.get("/api/rules");
@@ -58,8 +46,7 @@ test.describe("per-rule documentation page", () => {
     // Summary, severity, and the per-section headings always render for any registered rule. Severity case
     // varies (Badge renders lowercase) so match case-insensitively.
     await expect(page.getByText(target.doc.summary, { exact: false })).toBeVisible();
-    await expect(page.getByRole("row", { name: new RegExp(String.raw`severity\s+${target.doc.severity}`, "i") }))
-      .toBeVisible();
+    await expect(page.getByRole("row", { name: new RegExp(String.raw`severity\s+${target.doc.severity}`, "i") })).toBeVisible();
     await expect(page.getByRole("row", { name: /att&ck/i })).toBeVisible();
     await expect(page.getByRole("row", { name: /event types/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /description/i })).toBeVisible();

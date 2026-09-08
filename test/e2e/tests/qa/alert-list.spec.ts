@@ -1,7 +1,6 @@
 import type { Connection } from "mysql2/promise";
 import { test, expect } from "../../fixtures/test";
-import { resetHostData, signInAsAdminViaBreakGlass } from "../../fixtures/auth";
-import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
+import { resetHostData, signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB, seedCriticalAlert } from "../../fixtures/db";
 
 // Alert list page (/ui/alerts). Four scenarios in one file because they share the same setup shape (sign in
@@ -18,7 +17,6 @@ async function ackAlertInDB(db: Connection, alertId: number): Promise<void> {
 }
 
 test.describe("alert list filtering and lifecycle", () => {
-  let va: VirtualAuthenticator | undefined;
   let openAlertId: number;
   let ackedAlertId: number;
   const openTitle = "qa-alert-list-open-alert";
@@ -49,14 +47,7 @@ test.describe("alert list filtering and lifecycle", () => {
     } finally {
       await db.end();
     }
-    va = await signInAsAdminViaBreakGlass(page);
-  });
-
-  test.afterEach(async () => {
-    if (va) {
-      await uninstallVirtualAuthenticator(va);
-      va = undefined;
-    }
+    await signInAsAdminViaForgedSession(page);
   });
 
   // spec:web-ui/alert-list-filtering-and-lifecycle-controls/default-view-shows-only-open-alerts
@@ -105,10 +96,10 @@ test.describe("alert list filtering and lifecycle", () => {
     // Read it back to make sure the UI's optimistic update wasn't masking a server-side failure.
     const verifyDB = await openDB();
     try {
-      const [rows] = (await verifyDB.query(
-        "SELECT status FROM alerts WHERE id = ?",
-        [openAlertId],
-      )) as [Array<{ status: string }>, unknown];
+      const [rows] = (await verifyDB.query("SELECT status FROM alerts WHERE id = ?", [openAlertId])) as [
+        Array<{ status: string }>,
+        unknown,
+      ];
       expect(rows[0].status).toBe("acknowledged");
     } finally {
       await verifyDB.end();

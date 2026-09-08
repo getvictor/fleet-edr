@@ -4,7 +4,7 @@
 // the break-glass ceremony from reauth-modal-retry.spec.ts so the M6 host-list + process-tree specs don't each carry a 30-LOC copy.
 
 import { Page } from "@playwright/test";
-import { openDB, resetDB, mintBootstrapToken } from "./db";
+import { openDB, resetDB, mintBootstrapToken, forgeAdminSession } from "./db";
 import { installVirtualAuthenticator, VirtualAuthenticator } from "./webauthn";
 
 /**
@@ -183,3 +183,63 @@ export async function resetHostData(db: import("mysql2/promise").Connection): Pr
 
 // Re-export from the source module (Sonar S7763: `export { X }` of an imported name should use `export { X } from`).
 export { uninstallVirtualAuthenticator } from "./webauthn";
+
+/**
+ * signInAsAdminViaForgedSession puts the page into a signed-in super_admin session without walking any ceremony: it inserts the
+ * session row the server would have inserted and sets the cookie the server would have set.
+ *
+ * Use this for a spec that needs "any signed-in admin" and asserts nothing about HOW the session was obtained. That is most of
+ * them. Specs whose SUBJECT is authentication keep the real path: `tests/auth/break-glass-setup.spec.ts` and
+ * `break-glass-login.spec.ts` walk the ceremony end to end, and `reauth-modal-retry` and `session-lifecycle` depend on genuine
+ * session state. Nothing here replaces those, and it must not: the ceremony has to stay exercised somewhere or forging would
+ * silently become the only thing tested.
+ *
+ * Why it is worth the fixture: `/admin/break-glass/setup` is capped at five submissions per minute globally and one sign-in
+ * spends two, so a suite that signs in ten times waits on a token bucket rather than on the product. Measured on a lane-B dev
+ * server, about three of Phase 8's 4.8 minutes was that wait.
+ *
+ * The verification is the point of the last few lines, not a formality. A forged row that authenticates but carries the wrong
+ * shape (no CSRF token, a stale `last_auth_at`, a missing role binding) would let a spec pass against a session the product never
+ * issues, and the failure would surface later as an unrelated-looking authorization bug. Reading `/api/session` once costs one
+ * request and checks the whole chain: cookie encoding, digest agreement, expiry, and that the session resolves to a principal
+ * carrying a CSRF token.
+ */
+export async function signInAsAdminViaForgedSession(page: Page): Promise<void> {
+  const db = await openDB();
+  try {
+    const token = await forgeAdminSession(db);
+    // Scoped by URL rather than by a hardcoded domain: the suite runs against whichever lane E2E_PORT names, and a cookie set on
+    // the wrong origin would simply not be sent, surfacing as an unauthenticated page rather than as a fixture error.
+    await page.context().addCookies([
+      {
+        name: "edr_session",
+        value: token,
+        url: baseURLFor(),
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax",
+      },
+    ]);
+  } finally {
+    await db.end();
+  }
+
+  const resp = await page.request.get("/api/session");
+  if (resp.status() !== 200) {
+    throw new Error(`signInAsAdminViaForgedSession: /api/session returned ${resp.status()}, so the forged session is not usable`);
+  }
+  const body = (await resp.json()) as { csrf_token?: string };
+  if (!body.csrf_token) {
+    throw new Error("signInAsAdminViaForgedSession: session resolved but carries no CSRF token; state-changing requests would fail");
+  }
+}
+
+/**
+ * baseURLFor recovers the origin the suite is running against. Playwright resolves relative navigations against the config's
+ * baseURL but does not expose it on Page, and `page.url()` is `about:blank` before the first navigation, which is exactly when
+ * this fixture runs. E2E_PORT is the same variable the config reads, and assertLaneEnv already requires it to be set together
+ * with E2E_DB, so reading it here cannot point the cookie at a different lane from the database the row was written to.
+ */
+function baseURLFor(): string {
+  return `https://localhost:${process.env.E2E_PORT ?? "8088"}`;
+}

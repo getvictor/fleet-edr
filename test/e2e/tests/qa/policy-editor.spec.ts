@@ -1,8 +1,7 @@
 import type { Connection } from "mysql2/promise";
 import type { Page } from "@playwright/test";
 import { test, expect } from "../../fixtures/test";
-import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
-import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
+import { signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB } from "../../fixtures/db";
 
 // Application Control policy editor (/ui/app-control/policies/<id>). The spec calls out three lifecycle
@@ -16,9 +15,10 @@ import { openDB, resetDB } from "../../fixtures/db";
 // seed survives every test. We resolve the policy id by name (the auto-increment column may not be 1 on a
 // long-lived dev DB; querying by name keeps the test portable).
 async function defaultPolicyID(db: Connection): Promise<number> {
-  const [rows] = (await db.query(
-    "SELECT id FROM app_control_policies WHERE name = 'Default' LIMIT 1",
-  )) as [Array<{ id: number | string }>, unknown];
+  const [rows] = (await db.query("SELECT id FROM app_control_policies WHERE name = 'Default' LIMIT 1")) as [
+    Array<{ id: number | string }>,
+    unknown,
+  ];
   if (rows.length === 0) {
     throw new Error("defaultPolicyID: the seed 'Default' policy is missing - bootstrap did not run");
   }
@@ -52,7 +52,6 @@ function reasonField(page: Page) {
 }
 
 test.describe("application control policy editor", () => {
-  let va: VirtualAuthenticator | undefined;
   let policyID: number;
 
   test.beforeEach(async ({ page }) => {
@@ -67,14 +66,7 @@ test.describe("application control policy editor", () => {
     } finally {
       await db.end();
     }
-    va = await signInAsAdminViaBreakGlass(page);
-  });
-
-  test.afterEach(async () => {
-    if (va) {
-      await uninstallVirtualAuthenticator(va);
-      va = undefined;
-    }
+    await signInAsAdminViaForgedSession(page);
   });
 
   // spec:web-ui/policy-editor-with-audit-reason-gate/operator-stages-and-saves-a-policy-change
@@ -92,9 +84,7 @@ test.describe("application control policy editor", () => {
     // reason all reach the server.
     const [resp] = await Promise.all([
       page.waitForResponse(
-        (r) =>
-          r.url().includes(`/api/v1/app-control/policies/${String(policyID)}/rules`) &&
-          r.request().method() === "POST",
+        (r) => r.url().includes(`/api/v1/app-control/policies/${String(policyID)}/rules`) && r.request().method() === "POST",
         { timeout: 10_000 },
       ),
       page.getByRole("button", { name: /save rule/i }).click(),
@@ -111,10 +101,10 @@ test.describe("application control policy editor", () => {
     // server persisted (vs. the UI just optimistically rendering it).
     const db = await openDB();
     try {
-      const [rows] = (await db.query(
-        "SELECT identifier, rule_type FROM app_control_rules WHERE policy_id = ?",
-        [policyID],
-      )) as [Array<{ identifier: string; rule_type: string }>, unknown];
+      const [rows] = (await db.query("SELECT identifier, rule_type FROM app_control_rules WHERE policy_id = ?", [policyID])) as [
+        Array<{ identifier: string; rule_type: string }>,
+        unknown,
+      ];
       expect(rows).toHaveLength(1);
       expect(rows[0].identifier).toBe(VALID_BINARY_IDENTIFIER);
       expect(rows[0].rule_type).toBe("BINARY");
@@ -161,10 +151,7 @@ test.describe("application control policy editor", () => {
     // after firing so a subsequent stage+save (in another test) doesn't double-fire it.
     let unexpectedPOST = false;
     const onResponse = (r: { url: () => string; request: () => { method: () => string } }) => {
-      if (
-        r.url().includes(`/api/v1/app-control/policies/${String(policyID)}/rules`) &&
-        r.request().method() === "POST"
-      ) {
+      if (r.url().includes(`/api/v1/app-control/policies/${String(policyID)}/rules`) && r.request().method() === "POST") {
         unexpectedPOST = true;
       }
     };
@@ -183,10 +170,10 @@ test.describe("application control policy editor", () => {
     // The DB still has zero rules on the policy.
     const db = await openDB();
     try {
-      const [rows] = (await db.query(
-        "SELECT COUNT(*) AS n FROM app_control_rules WHERE policy_id = ?",
-        [policyID],
-      )) as [Array<{ n: number | string }>, unknown];
+      const [rows] = (await db.query("SELECT COUNT(*) AS n FROM app_control_rules WHERE policy_id = ?", [policyID])) as [
+        Array<{ n: number | string }>,
+        unknown,
+      ];
       expect(Number(rows[0].n)).toBe(0);
     } finally {
       await db.end();
