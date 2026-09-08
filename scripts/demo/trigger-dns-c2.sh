@@ -36,7 +36,7 @@ BEACON=$(mktemp /tmp/beacon.XXXXXX)
 cleanup() { rm -f "$BEACON"; }
 trap cleanup EXIT
 
-say "DNS C2 beacon demo  (mode: ${MODE})"
+say "Suspicious process phoning home demo  (mode: ${MODE})"
 sub "Simulating the classic 'malware phones home' chain on this host."
 sub "Fleet EDR should correlate three separate signals into ONE alert:"
 sub "  exec (Endpoint Security) + dns_query (DNS proxy) + network_connect (network filter)."
@@ -119,7 +119,7 @@ sub "Removed ${BEACON} (typical of malware covering its tracks)."
 
 say "Done. Now watch Fleet EDR."
 sub "Within a few seconds an alert should appear in the EDR UI:"
-sub "  Title:    DNS C2 beacon"
+sub "  Title:    Suspicious process phoning home"
 if [[ "$MODE" = "critical" ]]; then
   sub "  Severity: Critical   ATT&CK: T1071.004 + T1568.002"
 else

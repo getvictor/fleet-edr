@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **The `dns_c2_beacon` rule is now called "Suspicious process phoning home".** It never detected beaconing: it looks for a program launched from a temporary or world-writable folder that resolves a domain and then connects to the address that lookup returned, with no measurement of periodicity. The old name suggested beaconing was covered, and that alerts had observed a repeating pattern; neither was true. The rule identifier is unchanged, so existing exclusions and per-rule settings keep working and historical alerts are unaffected. Alert titles raised from now on carry the new name.
+
 ### Fixed
 
 - **The precise figures in the detection-tuning table are reachable without a mouse.** The Observed and Cost columns abbreviate, and the exact counts, the evaluation window and the worst-case duration were in a hover tooltip only, so they could not be read by keyboard or on a touch device. Both columns now open on click, tap or keyboard, and the columns stay abbreviated while collapsed.
