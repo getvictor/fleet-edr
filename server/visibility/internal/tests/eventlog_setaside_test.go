@@ -54,9 +54,9 @@ func nackUntilBound(t *testing.T, log visibilityapi.EventLog, db *sqlx.DB, hostI
 		for _, e := range claimed {
 			ids = append(ids, e.EventID)
 		}
-		setAside, _, err := log.Nack(t.Context(), ids, stamp)
+		nacked, err := log.Nack(t.Context(), ids, stamp, nil)
 		require.NoError(t, err)
-		require.Zero(t, setAside, "nothing should be set aside before both bounds are passed")
+		require.Zero(t, nacked.SetAside, "nothing should be set aside before both bounds are passed")
 	}
 	return ids
 }
@@ -95,12 +95,12 @@ func TestSetAside_UnblocksTheHost(t *testing.T) {
 	for _, e := range claimed {
 		again = append(again, e.EventID)
 	}
-	setAside, _, err := log.Nack(t.Context(), again, stamp)
+	nacked, err := log.Nack(t.Context(), again, stamp, nil)
 	require.NoError(t, err)
 	// EXACTLY the batch, not merely positive. A caller decides whether a whole batch was withdrawn by comparing this against the
 	// number of events it handed over (#843), so an under-count here reads as a partial withdrawal and silently discards what
 	// that batch matched. "Positive" cannot see that, and every test above stays green while it happens.
-	assert.Equal(t, int64(len(again)), setAside,
+	assert.Equal(t, int64(len(again)), nacked.SetAside,
 		"past both bounds the whole batch must be set aside, and the count must say so exactly")
 
 	next, _, err := log.ClaimForHost(t.Context(), host, batch)
@@ -164,9 +164,9 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 	claimed, stamp, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	setAside, _, err := log.Nack(t.Context(), []string{"quiet-1"}, stamp)
+	nacked, err := log.Nack(t.Context(), []string{"quiet-1"}, stamp, nil)
 	require.NoError(t, err)
-	require.Zero(t, setAside)
+	require.Zero(t, nacked.SetAside)
 
 	// Then the host goes quiet for an hour, so the duration bound is well past.
 	ageFirstFailure(t, db, []string{"quiet-1"}, time.Hour)
@@ -174,9 +174,9 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 	claimed, stamp, err = log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1, "the event is still claimable, since one failure is not a deterministic failure")
-	setAside, _, err = log.Nack(t.Context(), []string{"quiet-1"}, stamp)
+	nacked, err = log.Nack(t.Context(), []string{"quiet-1"}, stamp, nil)
 	require.NoError(t, err)
-	assert.Zero(t, setAside,
+	assert.Zero(t, nacked.SetAside,
 		"two attempts is not enough to call this deterministic, however long ago the first one was: the duration bound alone "+
 			"would withdraw events over a single failure the next attempt might have processed")
 
@@ -203,9 +203,9 @@ func TestSetAside_RetainsTheEntry(t *testing.T) {
 	claimed, stamp, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
-	setAside, _, err := log.Nack(t.Context(), []string{"retained-1"}, stamp)
+	nacked, err := log.Nack(t.Context(), []string{"retained-1"}, stamp, nil)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), setAside)
+	require.Equal(t, int64(1), nacked.SetAside)
 
 	var row struct {
 		Processed    int    `db:"processed"`
@@ -348,10 +348,10 @@ func TestNackRequiresStillHoldingTheClaim(t *testing.T) {
 	require.NotEqual(t, firstStamp, secondStamp, "the re-claim must stamp its own identity, or nothing can tell them apart")
 
 	// The stale attempt nacks the row it no longer owns.
-	setAside, held, err := log.Nack(t.Context(), []string{"e-840"}, firstStamp)
+	nacked, err := log.Nack(t.Context(), []string{"e-840"}, firstStamp, nil)
 	require.NoError(t, err)
-	assert.Zero(t, setAside, "it withdrew nothing, because it owned nothing")
-	assert.False(t, held,
+	assert.Zero(t, nacked.SetAside, "it withdrew nothing, because it owned nothing")
+	assert.False(t, nacked.Held,
 		"and it must be TOLD so: zero is also what a held batch gets when no event reached its bounds, so without this the "+
 			"only silent way to lose a claim would be the one this change created")
 
@@ -411,10 +411,10 @@ func TestNackTouchesOnlyTheEventsTheClaimHolds(t *testing.T) {
 	ageFirstFailure(t, db, []string{"e-pending"}, time.Hour)
 
 	// One nack naming all three, from the claim that holds only the first.
-	setAside, held, err := log.Nack(t.Context(), []string{"e-mine", "e-theirs", "e-pending"}, myStamp)
+	nacked, err := log.Nack(t.Context(), []string{"e-mine", "e-theirs", "e-pending"}, myStamp, nil)
 	require.NoError(t, err)
-	assert.Zero(t, setAside, "only e-mine was withdrawn-eligible, and it is nowhere near its bounds")
-	assert.True(t, held, "it held one of them, so it did not lose its claim and must not be warned about")
+	assert.Zero(t, nacked.SetAside, "only e-mine was withdrawn-eligible, and it is nowhere near its bounds")
+	assert.True(t, nacked.Held, "it held one of them, so it did not lose its claim and must not be warned about")
 
 	var theirState struct {
 		Processed int   `db:"processed"`
@@ -462,10 +462,10 @@ func TestNackOwnershipReadFailureIsReturned(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), "DROP TABLE event_queue")
 	require.NoError(t, err)
 
-	setAside, held, err := log.Nack(t.Context(), []string{"e-read-fail"}, stamp)
+	nacked, err := log.Nack(t.Context(), []string{"e-read-fail"}, stamp, nil)
 	require.Error(t, err, "a failed read must not be reported as an ordinary superseded attempt")
-	assert.Zero(t, setAside)
-	assert.False(t, held, "and must not claim the attempt held a claim it could not check")
+	assert.Zero(t, nacked.SetAside)
+	assert.False(t, nacked.Held, "and must not claim the attempt held a claim it could not check")
 }
 
 // TestNackRequeueFailureIsReturned covers the failure of the statement that returns the events, which is the one place a nack can
@@ -491,8 +491,8 @@ func TestNackRequeueFailureIsReturned(t *testing.T) {
 		"UPDATE event_queue SET attempts = ? WHERE event_id = ?", math.MaxInt32, "e-requeue-fail")
 	require.NoError(t, err)
 
-	setAside, held, err := log.Nack(t.Context(), []string{"e-requeue-fail"}, stamp)
+	nacked, err := log.Nack(t.Context(), []string{"e-requeue-fail"}, stamp, nil)
 	require.Error(t, err, "the increment overflows, and a write the queue refused must not be reported as success")
-	assert.Zero(t, setAside)
-	assert.False(t, held, "a failed nack reports no claim, and the caller must not read that as a lease overrun")
+	assert.Zero(t, nacked.SetAside)
+	assert.False(t, nacked.Held, "a failed nack reports no claim, and the caller must not read that as a lease overrun")
 }

@@ -339,6 +339,10 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		events      []visibilityapi.Event
 		claimStamp  int64
 		buildFailed bool
+		// carried is what the queue handed back when a fold-stage nack withdrew the whole batch: matches an EARLIER attempt
+		// resolved and this one never saw. Recorded after the lock is released rather than inside the section, so a fleet-visible
+		// host lock is not held across a telemetry write (issue #893).
+		carried []byte
 	)
 	claimAndBuild := func(lockedCtx context.Context) error {
 		claimed, stamp, err := p.eventLog.ClaimForHost(lockedCtx, host, p.batch)
@@ -357,12 +361,17 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			// host first would let the next claimer take this host's LATER events and fold them ahead of these, so the retry would
 			// arrive behind generations it precedes. The claim's in-flight bound makes that window harmless even if this Nack
 			// fails, but closing the window is cheaper than relying on the bound to cover it.
-			setAside, held, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed), stamp)
+			//
+			// No tally is handed over: this attempt failed before detection ran, so it resolved nothing. Nack keeps whatever an
+			// EARLIER attempt supplied rather than clearing it, which is what lets the withdrawal below report matches this
+			// attempt never saw (issue #893).
+			nacked, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed), stamp, nil)
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportLostClaim(lockedCtx, nackErr, held, host, len(claimed))
-			p.reportSetAside(lockedCtx, host, setAside, stageBuilder)
+			p.reportLostClaim(lockedCtx, nackErr, nacked.Held, host, len(claimed))
+			p.reportSetAside(lockedCtx, host, nacked.SetAside, stageBuilder)
+			carried = nacked.CarriedTally
 		}
 		return nil
 	}
@@ -392,6 +401,15 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		return 0, true
 	}
 	if buildFailed {
+		// A whole withdrawal at the fold is the batch's last word too, and the matches it reports were resolved by an EARLIER
+		// attempt: this one never evaluated (issue #893). Out here rather than in the locked section above, because the lock spans
+		// claim, fold and flush and nothing else, and a telemetry write is not one of them.
+		//
+		// Unconditional, unlike the detection path's own tally, because the queue already made this decision. It hands a carried
+		// tally back only for a batch it withdrew in full, and nothing otherwise, so a whole-batch comparison here would re-check
+		// what the contract guarantees. Exactly-once comes from the same place: the 0 -> 3 transition happens once for a row in
+		// its life, so only the caller whose statement performed it is handed the tally.
+		p.recordCarriedMatches(ctx, carried)
 		// Already requeued inside the lock. Stop draining so a persistently failing batch cannot hot-spin.
 		return 0, true
 	}
@@ -461,26 +479,33 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		tally, err = p.detection.Evaluate(ctx, events)
 		if err != nil {
 			p.logDetectionRetry(ctx, err)
-			var setAside int64
-			var held bool
+			// This attempt DID evaluate, so it hands its matches to Nack to be kept with the events. They are discarded for this
+			// attempt either way, which is right: the batch comes back and produces them again. What changes is that a LATER
+			// attempt failing at the fold, which resolves nothing of its own, can still report them when it withdraws the batch
+			// (issue #893). An encoding failure costs only that carry, so it is logged and the nack proceeds: withdrawing the
+			// batch matters more than the counter, and this attempt still records its own tally below.
+			carry, encodeErr := encodeMonitorTally(tally)
+			if encodeErr != nil {
+				p.logger.ErrorContext(ctx, "encode monitor tally for retry", "err", encodeErr, "entries", len(tally))
+			}
+			var nacked visibilityapi.NackResult
 			nackErr := p.withHostLock(ctx, hostOf(events), func(lockedCtx context.Context) error {
 				var innerErr error
-				setAside, held, innerErr = p.eventLog.Nack(lockedCtx, eventIDs, claimStamp)
+				nacked, innerErr = p.eventLog.Nack(lockedCtx, eventIDs, claimStamp, carry)
 				return innerErr
 			})
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportLostClaim(ctx, nackErr, held, hostOf(events), len(eventIDs))
-			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection)
+			p.reportLostClaim(ctx, nackErr, nacked.Held, hostOf(events), len(eventIDs))
+			p.reportSetAside(ctx, hostOf(events), nacked.SetAside, stageDetection)
 			// A withdrawn batch has no later attempt to be counted by, so this one is the last word on what it matched. Every
 			// other nack discards the tally, and must: the batch comes back and produces the same matches again.
 			//
-			// This covers a withdrawal HERE and not one at the fold, which is a residual rather than an oversight. A batch can
-			// evaluate and fail on one attempt, then fail its fold on the attempt that withdraws it, and that attempt resolved
-			// no matches while the earlier one's were discarded when it was retried. Carrying them across attempts would mean
-			// telemetry state in the work queue or per-replica state a stateless app tier cannot keep, so the limit is stated
-			// in the requirement and pinned by a test rather than closed here.
+			// A withdrawal at the FOLD is covered too, since #893: the tally handed to Nack above is kept with the events and
+			// returned to whoever withdraws them, so an attempt that never evaluated still reports what an earlier one matched.
+			// It rides in the queue rather than in the replica because ADR-0010 rules out in-process state a peer would need,
+			// and it costs no additional write, because the nack that has a tally is already updating those rows.
 			//
 			// Only a WHOLE batch counts, and the comparison is against the batch rather than against zero. The withdrawal
 			// predicate is per row, so a partial withdrawal leaves rows that are re-claimed and re-evaluated, and this tally
@@ -498,8 +523,24 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			// Per claim as well as per row, since #840: a nack acts only on the events the claim it names still holds, so an
 			// attempt that outran its lease withdraws nothing and is told so, rather than withdrawing a replacement's events and
 			// being rejected here for a count short of its own batch.
-			if setAside == int64(len(eventIDs)) {
-				p.recordMonitorMatches(ctx, tally)
+			if nacked.SetAside == int64(len(eventIDs)) {
+				// What the queue carried, not this attempt's own tally, whenever the encoding above succeeded. The two differ in
+				// a case that is ordinary rather than exotic: Evaluate returns the matches it accumulated UP TO the failure, so
+				// an attempt that fails on an earlier rule than a previous one returns FEWER matches, and possibly none. Rules
+				// are also skipped per replica once a rule exceeds its evaluation budget, and the active rule set is reloaded
+				// between attempts. Recording this attempt's tally would then discard what an earlier one resolved on the very
+				// path #893 exists to fix, just reached through detection rather than the fold.
+				//
+				// The queue holds whichever is authoritative: this attempt's, since a non-empty tally was handed over above and
+				// supersedes; or an earlier attempt's, when this one resolved nothing and handed over nothing.
+				//
+				// The fallback is for an encoding failure alone, where the queue could NOT have this attempt's tally, so the
+				// value in hand is the only one that reflects this attempt.
+				if encodeErr != nil {
+					p.recordMonitorMatches(ctx, tally)
+				} else {
+					p.recordCarriedMatches(ctx, nacked.CarriedTally)
+				}
 			}
 			return 0
 		}
@@ -570,6 +611,23 @@ func (p *Processor) recordMonitorMatches(ctx context.Context, tally rulesapi.Mon
 	if err := p.monitorMatches.RecordMonitorMatches(ctx, tally); err != nil {
 		p.logger.ErrorContext(ctx, "record monitor matches", "err", err, "entries", len(tally))
 	}
+}
+
+// recordCarriedMatches records the tally Nack carried across a batch's attempts, for a withdrawal reached by an attempt that never
+// evaluated (issue #893).
+//
+// A decode failure loses the counts and is logged rather than failing anything, matching what recordMonitorMatches does with a
+// write failure and for the same reason: the batch has been withdrawn and is not coming back, so there is nothing left to fail.
+func (p *Processor) recordCarriedMatches(ctx context.Context, carried []byte) {
+	if len(carried) == 0 {
+		return
+	}
+	tally, err := decodeMonitorTally(carried)
+	if err != nil {
+		p.logger.ErrorContext(ctx, "decode carried monitor tally", "err", err)
+		return
+	}
+	p.recordMonitorMatches(ctx, tally)
 }
 
 // logDetectionRetry accounts for a detection batch failure the caller is about to nack. A not-yet-materialized subject or flow

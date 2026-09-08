@@ -1,0 +1,70 @@
+-- +goose Up
+-- Carry a batch's monitor-mode matches across its own retries, so a withdrawal records them whichever attempt evaluated (#893).
+--
+-- Monitor matches are recorded on whichever transition ends a batch's life: an acknowledgement, or a withdrawal (#891). That
+-- covers a withdrawal at the DETECTION stage, where the withdrawing attempt evaluated the batch and has matches of its own. It does
+-- not cover a withdrawal at the FOLD, because retry bounds accrue on the queue entry and count every attempt whichever stage
+-- failed. So one attempt can evaluate, resolve matches and fail at detection, and a LATER attempt can fail at the fold and be the
+-- one that withdraws: the withdrawing attempt never evaluated, and the evaluating attempt's tally was discarded when it was nacked.
+--
+-- The bias is one-directional and lands on the hosts that had trouble. A rule whose recorded volume is too low reads as quiet,
+-- which is what persuades an operator to promote it, and promoting a noisy rule is the alert flood monitor mode exists to prevent.
+--
+-- Here rather than in the replica, because ADR-0010 rules out in-process state a peer would need, and this is exactly that: it
+-- would be lost on the restarts that produce the failures it exists to survive. Here rather than in a table of its own, because the
+-- nack that has a tally is already updating these rows, so this costs no additional write on the drain path.
+--
+-- Written on ONE row of a batch rather than all of them. The value is a property of the batch and the batch has no row of its own,
+-- so writing it to every row would multiply a blob by the batch size on a hot path to store one fact. An attempt that writes one
+-- clears the column on the other rows it holds, so a batch does not accumulate copies of what it has superseded.
+--
+-- WHICH row does not matter, and the reader does not assume it. The writer picks the smallest id of the set it OWNED, and ownership
+-- varies between attempts, so an attempt holding part of its batch writes to a row a later full withdrawal would not pick. The read
+-- searches the rows the withdrawing claim holds for a matching digest instead of recomputing that choice, which is why the column
+-- below is what the read keys on.
+--
+-- Two pending rows CAN hold two batches' values at once, and the second column is what makes that safe. The claim orders by
+-- timestamp_ns while the carrier is the smallest event_id, two unrelated orderings, so a late-arriving older event can shift the
+-- prefix to one that OVERLAPS the previous batch while excluding its carrier. The new batch cannot clear a row it does not hold,
+-- so the old value survives there, covering an event the two batches SHARE. Measured before the fix: the stranded row's later
+-- withdrawal returned a tally covering an event the overlapping batch had already recorded, counting it twice.
+--
+-- So a tally is valid only for a withdrawal of EXACTLY the batch it was resolved over, and monitor_tally_batch records which batch
+-- that was: the SHA-256 of the caller's event ids, sorted, with each id's length written as eight big-endian bytes before the id
+-- itself. A withdrawal is handed the tally only when that digest matches the batch being withdrawn. A batch whose membership moved
+-- gets nothing, which loses those counts rather than attributing them to events that did not produce them, and losing is the
+-- direction this whole column is arranged to err in.
+--
+-- Length-prefixed rather than joined on a separator, because no separator is safe: ingest rejects only an EMPTY event id, so an id
+-- can hold any byte, NUL included. The first version NUL-joined and was not injective (measured: {"a", "b", "c\0d"} and
+-- {"a", "b\0c", "d"} digested identically), which would let one batch be handed another's tally. The format is pinned against
+-- literal bytes by a golden test, because a build that changes it stops matching what earlier builds wrote here.
+--
+-- This is also what makes mixed ownership safe. An attempt whose lease expired for part of its batch resolved its tally over the
+-- WHOLE batch, so the digest is the whole batch's, and a later withdrawal of only the part it kept does not match it.
+--
+-- NULL is the ordinary state and means "no attempt has evaluated this batch yet". A nack with no tally leaves the column alone
+-- rather than clearing it: a later attempt that fails at the fold must not erase what an earlier one resolved, which is the whole
+-- case this exists for.
+--
+-- BLOB rather than JSON, though what the pipeline writes here today happens to be JSON. The queue does not interpret the value,
+-- and a JSON column does: it parses and validates on write, and normalizes what it stores, so bytes handed to the queue do not
+-- come back as the same bytes. Measured, not assumed. MySQL returned `{"v": 1, "matches": [{"count": 2, "rule_id": "imported"}]}`
+-- for a write of `{"v":1,"matches":[{"rule_id":"imported","count":2}]}`, reordering the object's keys and respacing it. The
+-- pipeline's decoder does not care, but "opaque" would then be a claim the storage does not keep, and the next caller to store
+-- something the column cannot parse would have its write REFUSED, which fails the nack and leaves the batch in flight.
+--
+-- BLOB's 64KB is a real ceiling rather than a generous one: a tally has an entry per matching rule, and an imported rule pack is
+-- operator-sized and defaults to monitor mode, so it is the population this whole column exists for. The caller is bounded against
+-- api.MaxNackTallyBytes and drops an oversized carry rather than handing over a write the column would refuse.
+
+-- +goose StatementBegin
+ALTER TABLE event_queue
+    ADD COLUMN monitor_tally BLOB DEFAULT NULL,
+    ADD COLUMN monitor_tally_batch BINARY(32) DEFAULT NULL,
+    ALGORITHM=INPLACE, LOCK=NONE;
+-- +goose StatementEnd
+
+-- +goose Down
+-- Forward-only migrations (ADR-0009). Dropping this would discard tallies for batches still in flight, which is the loss the
+-- column exists to prevent.

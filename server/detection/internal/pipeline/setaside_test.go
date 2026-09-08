@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -196,6 +197,8 @@ type replayingEventLog struct {
 	batch      []visibilityapi.Event
 	withdrawOn int
 	nacks      int
+	// carried stands in for the queue column that keeps one attempt's tally for whichever attempt withdraws the batch (#893).
+	carried []byte
 }
 
 func (l *replayingEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
@@ -207,12 +210,18 @@ func (l *replayingEventLog) ClaimForHost(context.Context, string, int) ([]visibi
 	return l.batch, scriptedClaimStamp, nil
 }
 func (l *replayingEventLog) Ack(context.Context, []string, int64) (bool, error) { return true, nil }
-func (l *replayingEventLog) Nack(context.Context, []string, int64) (int64, bool, error) {
+func (l *replayingEventLog) Nack(_ context.Context, ids []string, _ int64, tally []byte) (visibilityapi.NackResult, error) {
 	l.nacks++
-	if l.nacks < l.withdrawOn {
-		return 0, true, nil
+	// Keeps a supplied tally and returns it only to the attempt that withdraws the batch, which is the queue behaviour issue #893
+	// added. A nack with no tally leaves what is kept alone: an attempt that failed at the fold resolved nothing, and must not
+	// erase what an earlier attempt evaluated.
+	if len(tally) > 0 {
+		l.carried = tally
 	}
-	return int64(len(l.batch)), true, nil
+	if l.nacks < l.withdrawOn {
+		return visibilityapi.NackResult{Held: true}, nil
+	}
+	return visibilityapi.NackResult{SetAside: int64(len(ids)), Held: true, CarriedTally: l.carried}, nil
 }
 func (l *replayingEventLog) CountPending(context.Context) (int64, error)            { return 0, nil }
 func (l *replayingEventLog) PruneProcessed(context.Context, int) (int64, error)     { return 0, nil }
@@ -310,7 +319,7 @@ func setAsideRecord(t *testing.T, h *capturingLogHandler) (msg, stage, consequen
 
 // spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-withdrawn-batch-is-counted-once-not-lost
 // spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-partly-withdrawn-batch-is-not-counted-yet
-// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-withdrawal-before-evaluation-records-nothing
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/an-earlier-attempt-s-matches-reach-the-withdrawal
 //
 // TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn covers the gap #842 left and #843 names: a monitor-mode match resolved before
 // a batch failed was recorded nowhere if that batch was ultimately set aside.
@@ -324,6 +333,35 @@ func setAsideRecord(t *testing.T, h *capturingLogHandler) (msg, stage, consequen
 // The partial case is asserted alongside, because it is the reason the condition compares against the batch rather than against
 // zero. The withdrawal predicate is per ROW, so a partially withdrawn batch leaves rows that are claimed and evaluated again,
 // while the tally covers all of them.
+// tallyPerCycle returns a different tally on each cycle, so a test can drive the case where a later attempt resolves FEWER matches
+// than an earlier one. Evaluate accumulates up to the failure, so this is what a batch failing on an earlier rule looks like.
+//
+// The last entry repeats once the list is exhausted, so a test states only the cycles it cares about.
+type tallyPerCycle struct {
+	tallies []rulesapi.MonitorTally
+	err     error
+	cycles  int
+}
+
+func (e *tallyPerCycle) Evaluate(context.Context, []visibilityapi.Event) (rulesapi.MonitorTally, error) {
+	t := e.tallies[min(e.cycles, len(e.tallies)-1)]
+	e.cycles++
+	return t, e.err
+}
+
+// oversizedTally builds a tally past what the queue will carry, sized from the bound rather than from a guessed count so it stays
+// a just-over-the-line input if the bound moves.
+func oversizedTally() rulesapi.MonitorTally {
+	const perEntry = 64
+	tally := make(rulesapi.MonitorTally, 0, visibilityapi.MaxNackTallyBytes/perEntry+2)
+	for i := range cap(tally) {
+		tally = append(tally, rulesapi.MonitorMatch{
+			RuleID: "imported-rule-" + strconv.Itoa(i), HostID: "host-a", Severity: "medium", Count: 1,
+		})
+	}
+	return tally
+}
+
 func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 	t.Parallel()
 
@@ -355,9 +393,14 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 		assert.Equal(t, 2, metrics.total, "the counter moves on the same path as the durable record")
 		assert.Equal(t, []string{"evt-1"}, log.nacked, "and it really was the withdrawal path, not the ack")
 		assert.Empty(t, log.acked)
+		// The matches also go INTO the queue with the returned events, which is what lets a later attempt that fails before
+		// evaluation still report them (#893). Nothing about this attempt needs that, so only asserting on what it recorded
+		// would pass against a processor that handed over nothing.
+		require.Len(t, log.nackTallies, 1)
+		assert.NotEmpty(t, log.nackTallies[0], "an attempt that evaluated hands its matches to the queue to be kept")
 	})
 
-	t.Run("a withdrawal before evaluation records nothing, and does not reach back", func(t *testing.T) {
+	t.Run("a withdrawal before evaluation records what an earlier attempt matched", func(t *testing.T) {
 		t.Parallel()
 		rec := &recordingMonitorRecorder{}
 		metrics := &countingMonitorMetrics{}
@@ -372,9 +415,102 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 		p.ProcessOnce(t.Context())
 
 		require.Equal(t, 1, builder.folded, "cycle 1 must have folded and reached detection, or this proves nothing")
-		assert.Empty(t, rec.calls,
-			"the withdrawing attempt never evaluated, and cycle 1's matches were discarded when cycle 1 was retried")
-		assert.Zero(t, metrics.total)
+		// The gap #843 documented as a residual and #893 closed. Retry bounds accrue on the queue entry and count every attempt
+		// whichever stage failed, so the attempt that withdraws a batch need not be the one that evaluated it. Cycle 2 resolved
+		// nothing of its own; what it records is what cycle 1 handed to its own nack to be kept with the events.
+		require.Len(t, rec.calls, 1, "the withdrawing attempt reports what the evaluating attempt matched")
+		assert.Equal(t, tally, rec.calls[0])
+		assert.Equal(t, 2, metrics.total, "the counter moves on the same path as the durable record")
+	})
+
+	// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/an-oversized-value-is-dropped-rather-than-failing
+	//
+	// Returning the batch is what the nack is for and the carry is incidental to it, so a tally the queue could not store costs
+	// the tally. The queue REFUSES an oversized write rather than truncating it, and a refused write fails the nack and leaves the
+	// batch in flight until its claim lease expires, so handing one over would trade the batch for the counter.
+	t.Run("a tally too large to carry does not cost the nack", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		log := &scriptedEventLog{batch: oneEventBatch(), setAside: 1}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: oversizedTally(), err: errors.New("db down")},
+			singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+
+		p.ProcessOnce(t.Context())
+
+		require.Equal(t, []string{"evt-1"}, log.nacked, "the batch is returned, which is what the nack is for")
+		require.Len(t, log.nackTallies, 1)
+		assert.Nil(t, log.nackTallies[0], "and nothing is handed over, so the queue keeps whatever an earlier attempt supplied")
+		// The attempt still records what IT resolved: the encoding failed, not the evaluation, and this attempt withdrew the
+		// whole batch.
+		require.Len(t, rec.calls, 1, "an unstorable carry must not also lose this attempt's own matches")
+	})
+
+	// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/an-empty-result-does-not-displace-earlier-matches
+	t.Run("a withdrawal at detection reports what an earlier attempt matched, not its own emptier tally", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		// Both attempts reach detection and fail there, and the SECOND resolves nothing before failing. That is ordinary rather
+		// than exotic: Evaluate returns the matches it accumulated UP TO the failure, so an attempt that fails on an earlier rule
+		// than its predecessor returns fewer, and one that fails on the first rule returns none.
+		log := &replayingEventLog{batch: oneEventBatch(), withdrawOn: 2}
+		evaluator := &tallyPerCycle{
+			tallies: []rulesapi.MonitorTally{tally, nil},
+			err:     errors.New("persist detection alert: db down"),
+		}
+		p := newTestProcessor(t, log, stubBuilder{}, evaluator, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(t.Context())
+		p.ProcessOnce(t.Context())
+
+		require.Equal(t, 2, evaluator.cycles, "both cycles must have reached detection, or this proves nothing")
+		require.Len(t, rec.calls, 1, "the withdrawal is the batch's last word and must report what the batch matched")
+		assert.Equal(t, tally, rec.calls[0],
+			"cycle 2 resolved nothing, so recording ITS tally would discard cycle 1's on the very path #893 exists to fix")
+		assert.Equal(t, 2, metrics.total)
+	})
+
+	t.Run("a carry this build cannot read is logged, not recorded and not fatal", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		handler := &capturingLogHandler{}
+		// The carry was written by another attempt, possibly in another process running another build, so bytes this one cannot
+		// read are a state that has to have an answer. The batch has already been withdrawn by the time they are read, so there
+		// is nothing left to fail: it is logged and dropped, exactly as a recorder failure is.
+		log := &scriptedEventLog{batch: oneEventBatch(), setAside: 1, carried: []byte(`{"v":99,"matches":[]}`)}
+		p := newTestProcessor(t, log, stubBuilder{err: errors.New("fold failed")}, failing, singleCycleOpts(handler))
+		p.SetMonitorMatchRecorder(rec)
+
+		p.ProcessOnce(t.Context())
+
+		assert.Empty(t, rec.calls, "unreadable bytes are not a tally, and inventing one would be worse than losing it")
+		level, found := handler.levelOf("decode carried monitor tally")
+		require.True(t, found,
+			"and the loss must be visible, or a build that cannot read its predecessor's carries loses them silently")
+		assert.Equal(t, slog.LevelError, level)
+	})
+
+	t.Run("the carry is not counted twice when the withdrawing attempt evaluated too", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		// Both cycles reach detection and fail there; cycle 2 is the one that withdraws. Cycle 2 has a tally of its OWN and is
+		// ALSO handed cycle 1's back, and the two are the same matches. Recording both would double the very figure this exists
+		// to keep honest.
+		log := &replayingEventLog{batch: oneEventBatch(), withdrawOn: 2}
+		p := newTestProcessor(t, log, stubBuilder{}, failing, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(t.Context())
+		p.ProcessOnce(t.Context())
+
+		require.Len(t, rec.calls, 1, "the batch is withdrawn once, so its matches are recorded once")
+		assert.Equal(t, tally, rec.calls[0])
+		assert.Equal(t, 2, metrics.total)
 	})
 
 	t.Run("a partly withdrawn batch records nothing, and its survivor is counted by the attempt that finishes it", func(t *testing.T) {

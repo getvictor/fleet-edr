@@ -46,6 +46,11 @@ type scriptedEventLog struct {
 	// fake that drops it cannot tell a processor threading the claim through from one passing a zero, and threading it through is
 	// the entire fix.
 	nackStamps []int64
+	// nackTallies records what each Nack was handed to carry across the batch's attempts (issue #893), including the nils, so a
+	// test can assert which stage supplied one.
+	nackTallies [][]byte
+	// carried is what this fake is keeping for the batch, standing in for the queue column the real store writes.
+	carried []byte
 }
 
 // scriptedClaimStamp is the stamp the scripted claim hands out. Non-zero so a test can tell it apart from an unset field.
@@ -80,13 +85,23 @@ func (s *scriptedEventLog) Ack(_ context.Context, ids []string, stamp int64) (bo
 	s.acked = append(s.acked, ids...)
 	return true, nil
 }
-func (s *scriptedEventLog) Nack(_ context.Context, ids []string, stamp int64) (int64, bool, error) {
+func (s *scriptedEventLog) Nack(_ context.Context, ids []string, stamp int64, tally []byte) (visibilityapi.NackResult, error) {
 	s.nacked = append(s.nacked, ids...)
 	s.nackStamps = append(s.nackStamps, stamp)
+	s.nackTallies = append(s.nackTallies, tally)
 	if s.nackErr != nil {
-		return 0, false, s.nackErr
+		return visibilityapi.NackResult{}, s.nackErr
 	}
-	return s.setAside, !s.nackLostClaim, nil
+	// Keeps a supplied tally and hands it back on a withdrawal, as the real queue does. A nack with none leaves what is kept
+	// alone, which is the distinction issue #893 turns on, so a fixture that cleared it here would let a broken store pass.
+	if len(tally) > 0 {
+		s.carried = tally
+	}
+	result := visibilityapi.NackResult{SetAside: s.setAside, Held: !s.nackLostClaim}
+	if s.setAside == int64(len(ids)) {
+		result.CarriedTally = s.carried
+	}
+	return result, nil
 }
 func (s *scriptedEventLog) CountPending(context.Context) (int64, error)        { return 0, nil }
 func (s *scriptedEventLog) PruneProcessed(context.Context, int) (int64, error) { return 0, nil }

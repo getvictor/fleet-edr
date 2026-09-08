@@ -9,10 +9,13 @@ package eventlog
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -392,14 +395,53 @@ const (
 // stamp since issue #817, so the replacement's acknowledgement was REJECTED and its work redone by whoever claimed the rows next.
 // It also counted a failure the replacement had not had against a bound that lives on the ROW and ends in the row being withdrawn,
 // so it needed no repetition: ordinary failures can leave a row one attempt short, and a stale nack supplied the last one.
-func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64) (setAside int64, held bool, err error) {
+// batchDigest identifies the exact set of events a tally was resolved over, so a stored tally is only ever handed to a withdrawal
+// of that same set.
+//
+// Needed because a stored tally can outlive the batch it describes. The claim orders by timestamp_ns and the carrier row is the
+// smallest event_id, two unrelated orderings, so a late-arriving older event can shift the claimable prefix to one that OVERLAPS
+// the previous batch while excluding its carrier. The new batch cannot clear a row it does not hold, so the old tally survives
+// there covering an event the two batches share, and the stranded row's own later withdrawal would report it a second time.
+//
+// Sorted so the digest does not depend on the order the caller listed its events.
+//
+// LENGTH-PREFIXED rather than joined on a separator, because no separator is safe here: ingest rejects only an EMPTY event id, and
+// the intake fuzz corpus seeds one containing a NUL deliberately, so an id can hold any byte. Review caught this on the first
+// version, which NUL-joined; measured, {"a", "b", "c\x00d"} and {"a", "b\x00c", "d"} produced an identical digest. A collision is
+// not cosmetic here: two different batches would compare equal, and the whole point of the digest is that they do not, so one
+// batch could be handed the other's tally. Writing each id's length before its bytes makes the preimage unambiguous whatever the
+// ids contain.
+func batchDigest(eventIDs []string) []byte {
+	sorted := slices.Clone(eventIDs)
+	slices.Sort(sorted)
+	h := sha256.New()
+	var lengthPrefix [8]byte
+	for _, id := range sorted {
+		binary.BigEndian.PutUint64(lengthPrefix[:], uint64(len(id)))
+		h.Write(lengthPrefix[:])
+		h.Write([]byte(id))
+	}
+	return h.Sum(nil)
+}
+
+func (s *Store) Nack(
+	ctx context.Context, eventIDs []string, claimStampNs int64, tally []byte,
+) (result api.NackResult, err error) {
 	if len(eventIDs) == 0 {
 		// Vacuously held, matching Ack: there was nothing to hold and nothing to lose.
-		return 0, true, nil
+		return api.NackResult{Held: true}, nil
+	}
+	// "No tally" has two spellings in Go and only one of them reaches SQL as NULL: an empty but non-nil []byte binds as an empty
+	// BLOB, which is not NULL, so the statement below would take its overwrite branch and clear what an earlier attempt supplied.
+	// That is the defect this whole column exists to prevent, reached by a caller spelling "nothing" the other way. The type cannot
+	// rule it out, so the boundary normalizes once and everything below trusts it (measured: `SELECT ? IS NULL` returns true for a
+	// nil []byte and false for []byte{}).
+	if len(tally) == 0 {
+		tally = nil
 	}
 	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return 0, false, fmt.Errorf("begin tx for nack: %w", err)
+		return api.NackResult{}, fmt.Errorf("begin tx for nack: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -415,11 +457,11 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 		WHERE processed = 2 AND event_id IN (?) AND claimed_at_ns = ?
 		FOR UPDATE`, eventIDs, claimStampNs)
 	if err != nil {
-		return 0, false, fmt.Errorf("nack build ownership query: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack build ownership query: %w", err)
 	}
 	var owned []string
 	if err := tx.SelectContext(ctx, &owned, ownedQuery, ownedArgs...); err != nil {
-		return 0, false, fmt.Errorf("nack ownership: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack ownership: %w", err)
 	}
 	if len(owned) == 0 {
 		// This attempt no longer owns any of these rows: its claim lease expired and a replacement took them, or they have
@@ -427,22 +469,48 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 		// alone, so a superseded worker reset a claim it did not hold, counted an attempt against it, and could push the batch
 		// past its retry bounds; the replacement's own acknowledgement then failed, because Ack has been conditional on the
 		// stamp since issue #817, and its work was redone by whoever claimed the rows next.
-		return 0, false, nil
+		return api.NackResult{}, nil
 	}
 
+	// One row carries the batch's tally. The batch has no row of its own, and writing the value to every row would multiply it by
+	// the batch size on the drain path to store one fact.
+	//
+	// The row is chosen deterministically AND the write clears every other owned row, which is belt and braces on purpose. A stable
+	// choice alone is not enough, because the set to choose from is not stable: each attempt claims a fresh pending prefix, so
+	// consecutive attempts can own different sets and pick different carriers, leaving two rows holding two attempts' values. The
+	// read below takes one row, so which value comes back would then depend on which set the WITHDRAWING attempt happened to own,
+	// and an older value could come back after a newer one. Clearing makes "one row holds the batch's tally" an invariant of the
+	// write rather than a consequence of the carrier never moving.
+	//
+	// sqlx.In expands a slice argument into one placeholder per element, and deliberately excludes []byte, so the tally is passed
+	// as a single value rather than exploded into bytes.
+	slices.Sort(owned)
+	carrier := owned[0]
+
 	now := time.Now().UnixNano()
+	// The outer IF is what decides whether this attempt HAS a tally, and a nack with none leaves every row's column alone rather
+	// than clearing it. That is the whole case #893 exists for: an attempt that fails before evaluation resolved nothing, and must
+	// not erase what an earlier attempt did. Only an attempt that DOES supply one clears the others, and it supersedes them.
+	// Expressed in the statement rather than by assembling the statement from pieces, so there is one query to read here and one
+	// prepared shape for the server.
+	// The digest is of the CALLER's batch, not of the subset still owned: that is the set the tally was resolved over, and it is
+	// what a later withdrawal has to match to be handed it.
+	digest := batchDigest(eventIDs)
 	query, args, err := sqlx.In(`
 		UPDATE event_queue
-		SET attempts = attempts + 1,
+		SET monitor_tally = IF(? IS NULL, monitor_tally, IF(event_id = ?, ?, NULL)),
+		    monitor_tally_batch = IF(? IS NULL, monitor_tally_batch, IF(event_id = ?, ?, NULL)),
+		    attempts = attempts + 1,
 		    first_failed_at_ns = IF(first_failed_at_ns = 0, ?, first_failed_at_ns),
 		    processed = 0,
 		    claimed_at_ns = 0
-		WHERE processed = 2 AND event_id IN (?)`, now, owned)
+		WHERE processed = 2 AND event_id IN (?)`,
+		tally, carrier, tally, tally, carrier, digest, now, owned)
 	if err != nil {
-		return 0, false, fmt.Errorf("nack build query: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack build query: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		return 0, false, fmt.Errorf("nack: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack: %w", err)
 	}
 
 	// The processed = 0 guard keeps a row that is not PENDING out of state 3: an event id in this batch that another worker already
@@ -462,27 +530,76 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string, claimStampNs int64)
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
 	// hyphen in prose reads SQL subtraction the same way, which is a nudge worth taking rather than suppressing.
+	// Read BEFORE the withdrawal, because the withdrawal clears it. A withdrawn row is terminal and is retained for the
+	// deployment's set-aside window, or forever where retention is disabled, so leaving up to MaxNackTallyBytes on every withdrawn
+	// batch would accumulate in the work queue with nothing ever reading it again. Clearing rides in the statement that is already
+	// updating those rows, so it costs no additional write, and reading first is what preserves the bytes this call still returns.
+	//
+	// Found by DIGEST across the rows this claim holds, not by recomputing the carrier. The carrier is the smallest id of the set
+	// an attempt OWNED, and ownership varies between attempts, so a value stored by an attempt that held part of its batch sits on
+	// a row a later full withdrawal does not compute as its carrier. Review found that; measured, the carry was simply lost.
+	// Matching on the digest makes which row holds it irrelevant, and the digest is what decides validity anyway, so this is the
+	// predicate rather than a check applied after the fact.
+	//
+	// ORDER BY keeps the choice deterministic in the one case where two rows can carry the same digest: two live attempts holding
+	// DISJOINT parts of one batch, each writing to its own subset's smallest id and neither able to clear the other's. Both values
+	// were resolved over the same events, so either is a legitimate answer and only reproducibility is at stake.
+	//
+	// Read unconditionally rather than under the whole-batch test below: the test needs setAside, which the statement that clears
+	// has not produced yet. It is bounded by the batch size and every row is already locked by this transaction.
+	var stored []byte
+	storedQuery, storedArgs, err := sqlx.In(`
+		SELECT monitor_tally FROM event_queue
+		WHERE event_id IN (?) AND monitor_tally_batch = ?
+		ORDER BY event_id
+		LIMIT 1`, owned, digest)
+	if err != nil {
+		return api.NackResult{}, fmt.Errorf("nack build carried tally query: %w", err)
+	}
+	if err := tx.GetContext(ctx, &stored, storedQuery, storedArgs...); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return api.NackResult{}, fmt.Errorf("nack read carried tally: %w", err)
+	}
+
 	failingSince := now - setAsideWindow.Nanoseconds()
 	query, args, err = sqlx.In(`
 		UPDATE event_queue
-		SET processed = 3, set_aside_at_ns = ?
+		SET processed = 3, set_aside_at_ns = ?, monitor_tally = NULL, monitor_tally_batch = NULL
 		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
 		now, owned, setAsideAttempts, failingSince)
 	if err != nil {
-		return 0, false, fmt.Errorf("nack set-aside build query: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack set-aside build query: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, false, fmt.Errorf("nack set aside: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack set aside: %w", err)
 	}
-	setAside, err = res.RowsAffected()
+	setAside, err := res.RowsAffected()
 	if err != nil {
-		return 0, false, fmt.Errorf("nack set-aside rows: %w", err)
+		return api.NackResult{}, fmt.Errorf("nack set-aside rows: %w", err)
+	}
+
+	// Read back the tally only for a WITHDRAWAL, and only a whole one. A batch that is coming back will evaluate again and record
+	// its own matches, so carrying them out here would count them twice; a partial withdrawal leaves rows that are re-claimed and
+	// re-evaluated, and the tally covers all of them, so reporting it would count the survivors twice (the same reasoning the
+	// processor applies to its own tally). A whole withdrawal is the batch's last word, which is what makes this the moment to
+	// hand the matches back.
+	//
+	// Whole is measured against what the CALLER handed over, not against the subset this claim still owns, and the difference is
+	// not academic: this call permits mixed ownership, so an attempt whose lease expired for part of its batch can own one row,
+	// have that row pass its bounds, and withdraw "all" of what it owns while the rest of its batch is being reprocessed by
+	// whoever claimed it. The tally covers the whole batch, so handing it back there would count it alongside the matches those
+	// other events produce on their own attempt. len(owned) reads as the same thing only while ownership is total.
+	var carried []byte
+	if setAside == int64(len(eventIDs)) {
+		// The read above already matched the digest, so anything it returned was resolved over exactly this batch. A batch whose
+		// membership moved matches nothing and gets nothing, which loses those counts rather than attributing them to events that
+		// did not produce them.
+		carried = stored
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, false, fmt.Errorf("commit nack: %w", err)
+		return api.NackResult{}, fmt.Errorf("commit nack: %w", err)
 	}
-	return setAside, true, nil
+	return api.NackResult{SetAside: setAside, Held: true, CarriedTally: carried}, nil
 }
 
 // CountPending counts events still waiting to be processed or in flight (processed 0 or 2). Backs the processor-backlog gauge.
