@@ -333,6 +333,22 @@ func setAsideRecord(t *testing.T, h *capturingLogHandler) (msg, stage, consequen
 // The partial case is asserted alongside, because it is the reason the condition compares against the batch rather than against
 // zero. The withdrawal predicate is per ROW, so a partially withdrawn batch leaves rows that are claimed and evaluated again,
 // while the tally covers all of them.
+// tallyPerCycle returns a different tally on each cycle, so a test can drive the case where a later attempt resolves FEWER matches
+// than an earlier one. Evaluate accumulates up to the failure, so this is what a batch failing on an earlier rule looks like.
+//
+// The last entry repeats once the list is exhausted, so a test states only the cycles it cares about.
+type tallyPerCycle struct {
+	tallies []rulesapi.MonitorTally
+	err     error
+	cycles  int
+}
+
+func (e *tallyPerCycle) Evaluate(context.Context, []visibilityapi.Event) (rulesapi.MonitorTally, error) {
+	t := e.tallies[min(e.cycles, len(e.tallies)-1)]
+	e.cycles++
+	return t, e.err
+}
+
 // oversizedTally builds a tally past what the queue will carry, sized from the bound rather than from a guessed count so it stays
 // a just-over-the-line input if the bound moves.
 func oversizedTally() rulesapi.MonitorTally {
@@ -428,6 +444,32 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 		// The attempt still records what IT resolved: the encoding failed, not the evaluation, and this attempt withdrew the
 		// whole batch.
 		require.Len(t, rec.calls, 1, "an unstorable carry must not also lose this attempt's own matches")
+	})
+
+	t.Run("a withdrawal at detection reports what an earlier attempt matched, not its own emptier tally", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		// Both attempts reach detection and fail there, and the SECOND resolves nothing before failing. That is ordinary rather
+		// than exotic: Evaluate returns the matches it accumulated UP TO the failure, so an attempt that fails on an earlier rule
+		// than its predecessor returns fewer, and one that fails on the first rule returns none.
+		log := &replayingEventLog{batch: oneEventBatch(), withdrawOn: 2}
+		evaluator := &tallyPerCycle{
+			tallies: []rulesapi.MonitorTally{tally, nil},
+			err:     errors.New("persist detection alert: db down"),
+		}
+		p := newTestProcessor(t, log, stubBuilder{}, evaluator, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(t.Context())
+		p.ProcessOnce(t.Context())
+
+		require.Equal(t, 2, evaluator.cycles, "both cycles must have reached detection, or this proves nothing")
+		require.Len(t, rec.calls, 1, "the withdrawal is the batch's last word and must report what the batch matched")
+		assert.Equal(t, tally, rec.calls[0],
+			"cycle 2 resolved nothing, so recording ITS tally would discard cycle 1's on the very path #893 exists to fix")
+		assert.Equal(t, 2, metrics.total)
 	})
 
 	t.Run("a carry this build cannot read is logged, not recorded and not fatal", func(t *testing.T) {

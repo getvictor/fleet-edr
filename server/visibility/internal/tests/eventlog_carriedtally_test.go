@@ -162,3 +162,80 @@ func TestNackFromALostClaimStoresNoValue(t *testing.T) {
 		"SELECT COUNT(*) FROM event_queue WHERE event_id = 'lost-1' AND monitor_tally IS NOT NULL"))
 	assert.Zero(t, carrying, "an attempt that owns no rows writes no value to them")
 }
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-batch-that-is-coming-back-is-given-nothing
+//
+// A whole withdrawal is measured against what the CALLER handed over, not against the subset its claim still owns. Review found
+// this: mixed ownership is permitted here, so an attempt whose lease expired for part of its batch can own ONE event, have that
+// event pass its bounds, and withdraw everything it owns while the rest of its batch is being reprocessed by whoever claimed it.
+// The tally covers the whole batch, so handing it back there counts it alongside what those other events resolve on their own
+// attempt: the double count this whole design is arranged to avoid, reached from the other side.
+func TestNackWithholdsTheValueWhenOwnershipIsPartial(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-mixed"
+
+	enqueue(t, log, host, "mixed-mine", 1_000)
+	enqueue(t, log, host, "mixed-theirs", 1_001)
+
+	// Both events go to one claim, which supplies the tally, so the value covers BOTH of them.
+	carry := []byte(`{"v":1,"matches":[{"count":5}]}`)
+	require.Zero(t, nackOnce(t, log, host, 2, carry).SetAside)
+
+	// Drive the batch to its bounds, then split ownership: the second event is re-claimed by someone else, so the attempt below
+	// holds only the first.
+	for range 19 {
+		require.Zero(t, nackOnce(t, log, host, 2, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"mixed-mine", "mixed-theirs"}, 16*time.Minute)
+
+	claimed, myStamp, err := log.ClaimForHost(t.Context(), host, 2)
+	require.NoError(t, err)
+	require.Len(t, claimed, 2, "the premise is one claim over both, which is then split")
+	_, err = db.ExecContext(t.Context(),
+		"UPDATE event_queue SET claimed_at_ns = claimed_at_ns + 1 WHERE event_id = ?", "mixed-theirs")
+	require.NoError(t, err)
+
+	// This attempt names its whole batch and owns half of it. Every event it OWNS is withdrawn.
+	nacked, err := log.Nack(t.Context(), []string{"mixed-mine", "mixed-theirs"}, myStamp, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), nacked.SetAside, "it withdrew the one event it owned, and could not touch the other")
+	require.True(t, nacked.Held)
+	assert.Empty(t, nacked.CarriedTally,
+		"the other half of the batch is still being processed and this value covers it, so returning it would count it twice")
+}
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-later-value-replaces-the-one-it-supersedes
+//
+// An attempt that supplies a value CLEARS the column on the other rows it holds, so exactly one row carries a batch's value.
+//
+// Review found the gap a stable carrier alone leaves: the set to choose from is not stable. Each attempt claims a fresh pending
+// prefix, so consecutive attempts can own different sets and pick different carriers, and a value an earlier attempt left on a row
+// a later one does not write would still be there to be read. Clearing makes the invariant a property of the write.
+func TestNackClearsTheValueFromTheRowsItSupersedes(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-clear"
+
+	enqueue(t, log, host, "clear-2", 1_001)
+	enqueue(t, log, host, "clear-3", 1_002)
+
+	// An attempt that owns only the later two events writes to the lowest id it holds, clear-2.
+	stale := []byte(`{"v":1,"matches":[{"count":1}]}`)
+	require.Zero(t, nackOnce(t, log, host, 2, stale).SetAside)
+	var carryingRow string
+	require.NoError(t, db.GetContext(t.Context(), &carryingRow,
+		"SELECT event_id FROM event_queue WHERE monitor_tally IS NOT NULL AND host_id = ?", host))
+	require.Equal(t, "clear-2", carryingRow, "the premise is that the first attempt's carrier is clear-2")
+
+	// An older event now joins the claimable set, so the next attempt's set is WIDER and its carrier moves to clear-1.
+	enqueue(t, log, host, "clear-1", 1_000)
+	superseding := []byte(`{"v":1,"matches":[{"count":8}]}`)
+	require.Zero(t, nackOnce(t, log, host, 3, superseding).SetAside)
+
+	var carrying []string
+	require.NoError(t, db.SelectContext(t.Context(), &carrying,
+		"SELECT event_id FROM event_queue WHERE monitor_tally IS NOT NULL AND host_id = ? ORDER BY event_id", host))
+	assert.Equal(t, []string{"clear-1"}, carrying,
+		"the superseding attempt owns the new carrier AND clears the old one, so one row holds the batch's value")
+}

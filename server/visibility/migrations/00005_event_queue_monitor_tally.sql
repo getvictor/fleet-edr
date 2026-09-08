@@ -15,8 +15,9 @@
 -- nack that has a tally is already updating these rows, so this costs no additional write on the drain path.
 --
 -- Written on ONE row of a batch rather than all of them. The value is a property of the batch and the batch has no row of its own,
--- so writing it to every row would multiply a blob by the batch size on a hot path to store one fact. The reader takes whichever
--- row still carries it.
+-- so writing it to every row would multiply a blob by the batch size on a hot path to store one fact. An attempt that writes one
+-- clears the column on the other rows it holds, so exactly one row carries a batch's value at a time and the reader cannot pick up
+-- a value an earlier attempt left on a row this one does not write.
 --
 -- NULL is the ordinary state and means "no attempt has evaluated this batch yet". A nack with no tally leaves the column alone
 -- rather than clearing it: a later attempt that fails at the fold must not erase what an earlier one resolved, which is the whole

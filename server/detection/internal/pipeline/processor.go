@@ -524,9 +524,23 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			// attempt that outran its lease withdraws nothing and is told so, rather than withdrawing a replacement's events and
 			// being rejected here for a count short of its own batch.
 			if nacked.SetAside == int64(len(eventIDs)) {
-				// This attempt's own tally, not the one Nack carried back. They are the same value whenever the encoding above
-				// succeeded, and when it did not, this is the one that survived.
-				p.recordMonitorMatches(ctx, tally)
+				// What the queue carried, not this attempt's own tally, whenever the encoding above succeeded. The two differ in
+				// a case that is ordinary rather than exotic: Evaluate returns the matches it accumulated UP TO the failure, so
+				// an attempt that fails on an earlier rule than a previous one returns FEWER matches, and possibly none. Rules
+				// are also skipped per replica once a rule exceeds its evaluation budget, and the active rule set is reloaded
+				// between attempts. Recording this attempt's tally would then discard what an earlier one resolved on the very
+				// path #893 exists to fix, just reached through detection rather than the fold.
+				//
+				// The queue holds whichever is authoritative: this attempt's, since a non-empty tally was handed over above and
+				// supersedes; or an earlier attempt's, when this one resolved nothing and handed over nothing.
+				//
+				// The fallback is for an encoding failure alone, where the queue could NOT have this attempt's tally, so the
+				// value in hand is the only one that reflects this attempt.
+				if encodeErr != nil {
+					p.recordMonitorMatches(ctx, tally)
+				} else {
+					p.recordCarriedMatches(ctx, nacked.CarriedTally)
+				}
 			}
 			return 0
 		}

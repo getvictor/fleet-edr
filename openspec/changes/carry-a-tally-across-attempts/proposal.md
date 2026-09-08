@@ -20,4 +20,4 @@ The bias is one-directional and lands on the hosts that had the most trouble. A 
 
 - Affected specs: `observability-instrumentation`, `server-event-ingestion`
 - Affected code: `server/visibility/api/eventlog.go`, `server/visibility/internal/eventlog/store.go`, `server/visibility/migrations/`, `server/detection/internal/pipeline/`
-- One additive forward-only migration adds a nullable JSON column to `event_queue`. No backfill: NULL is the ordinary state and means no attempt has evaluated the batch yet.
+- One additive forward-only migration adds a nullable `BLOB` column to `event_queue`. No backfill: NULL is the ordinary state and means no attempt has evaluated the batch yet. A `JSON` column was measured and rejected: it parses and normalizes what it stores, so the bytes handed to the queue are not the bytes that come back, and bytes it cannot parse have their write refused, which fails the nack.

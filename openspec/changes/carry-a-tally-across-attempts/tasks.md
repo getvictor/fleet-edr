@@ -3,7 +3,7 @@
 ## 1. Queue contract
 
 - [x] 1.1 Add `NackResult` to the visibility API and give `Nack` a `tally []byte` parameter, documenting that the queue keeps the bytes without interpreting them and returns them only on a full withdrawal.
-- [x] 1.2 Add the nullable `monitor_tally` JSON column to `event_queue` in a forward-only migration.
+- [x] 1.2 Add the nullable `monitor_tally` `BLOB` column to `event_queue` in a forward-only migration, opaque rather than `JSON` so the bytes come back as they went in.
 - [x] 1.3 Store the tally on one deterministically chosen row inside the nack's existing `UPDATE`, only when the caller supplied one, and read it back only for a whole withdrawal.
 
 ## 2. Detection pipeline

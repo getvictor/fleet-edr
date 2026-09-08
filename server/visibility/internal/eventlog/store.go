@@ -433,10 +433,15 @@ func (s *Store) Nack(
 		return api.NackResult{}, nil
 	}
 
-	// One row carries the batch's tally, chosen deterministically so a later attempt overwrites the same row rather than leaving a
-	// second copy on another one. The batch has no row of its own, and writing the value to every row would multiply it by the
-	// batch size on the drain path to store one fact. Which row does not matter, only that it is the same one every time: the read
-	// below goes to that row, and two rows each holding a different attempt's value would make "the batch's tally" ambiguous.
+	// One row carries the batch's tally. The batch has no row of its own, and writing the value to every row would multiply it by
+	// the batch size on the drain path to store one fact.
+	//
+	// The row is chosen deterministically AND the write clears every other owned row, which is belt and braces on purpose. A stable
+	// choice alone is not enough, because the set to choose from is not stable: each attempt claims a fresh pending prefix, so
+	// consecutive attempts can own different sets and pick different carriers, leaving two rows holding two attempts' values. The
+	// read below takes one row, so which value comes back would then depend on which set the WITHDRAWING attempt happened to own,
+	// and an older value could come back after a newer one. Clearing makes "one row holds the batch's tally" an invariant of the
+	// write rather than a consequence of the carrier never moving.
 	//
 	// sqlx.In expands a slice argument into one placeholder per element, and deliberately excludes []byte, so the tally is passed
 	// as a single value rather than exploded into bytes.
@@ -444,13 +449,14 @@ func (s *Store) Nack(
 	carrier := owned[0]
 
 	now := time.Now().UnixNano()
-	// The tally is written only when this attempt HAS one, and the `? IS NOT NULL` half of the condition is what decides that. A
-	// nack with none leaves the column alone rather than clearing it, which is the whole case #893 exists for: an attempt that
-	// fails at the fold never evaluated, and must not erase what an earlier attempt resolved. Expressed in the statement rather
-	// than by assembling the statement from pieces, so there is one query to read here and one prepared shape for the server.
+	// The outer IF is what decides whether this attempt HAS a tally, and a nack with none leaves every row's column alone rather
+	// than clearing it. That is the whole case #893 exists for: an attempt that fails before evaluation resolved nothing, and must
+	// not erase what an earlier attempt did. Only an attempt that DOES supply one clears the others, and it supersedes them.
+	// Expressed in the statement rather than by assembling the statement from pieces, so there is one query to read here and one
+	// prepared shape for the server.
 	query, args, err := sqlx.In(`
 		UPDATE event_queue
-		SET monitor_tally = IF(? IS NOT NULL AND event_id = ?, ?, monitor_tally),
+		SET monitor_tally = IF(? IS NULL, monitor_tally, IF(event_id = ?, ?, NULL)),
 		    attempts = attempts + 1,
 		    first_failed_at_ns = IF(first_failed_at_ns = 0, ?, first_failed_at_ns),
 		    processed = 0,
@@ -503,8 +509,14 @@ func (s *Store) Nack(
 	// re-evaluated, and the tally covers all of them, so reporting it would count the survivors twice (the same reasoning the
 	// processor applies to its own tally). A whole withdrawal is the batch's last word, which is what makes this the moment to
 	// hand the matches back.
+	//
+	// Whole is measured against what the CALLER handed over, not against the subset this claim still owns, and the difference is
+	// not academic: this call permits mixed ownership, so an attempt whose lease expired for part of its batch can own one row,
+	// have that row pass its bounds, and withdraw "all" of what it owns while the rest of its batch is being reprocessed by
+	// whoever claimed it. The tally covers the whole batch, so handing it back there would count it alongside the matches those
+	// other events produce on their own attempt. len(owned) reads as the same thing only while ownership is total.
 	var carried []byte
-	if setAside == int64(len(owned)) {
+	if setAside == int64(len(eventIDs)) {
 		var stored []byte
 		if err := tx.GetContext(ctx, &stored,
 			"SELECT monitor_tally FROM event_queue WHERE event_id = ?", carrier); err != nil && !errors.Is(err, sql.ErrNoRows) {

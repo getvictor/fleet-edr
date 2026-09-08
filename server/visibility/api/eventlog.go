@@ -137,8 +137,13 @@ type NackResult struct {
 	// attempt and for a held batch that simply had no event reach its bounds.
 	Held bool
 
-	// CarriedTally is the tally an earlier attempt on these same events supplied, returned to whoever withdraws them and empty
-	// otherwise. A batch that is coming back will be processed again and resolve its own, so handing this out before the batch's
-	// last word would count it twice.
+	// CarriedTally is the tally the most recent attempt to supply one left for these events, returned to whoever withdraws the
+	// WHOLE batch and empty otherwise. A batch that is coming back will be processed again and resolve its own, so handing this
+	// out before the batch's last word would count it twice.
+	//
+	// Whole is measured against the events the caller handed over, not against the subset the claim still holds. Mixed ownership
+	// is permitted here, so an attempt can own one event of its batch, withdraw it, and leave the rest to whoever claimed them;
+	// the tally covers the whole batch, so returning it there would count it alongside what those events resolve on their own
+	// attempt.
 	CarriedTally []byte
 }
