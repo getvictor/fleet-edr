@@ -8,7 +8,6 @@
 package eventlog
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -531,21 +530,33 @@ func (s *Store) Nack(
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
 	// hyphen in prose reads SQL subtraction the same way, which is a nudge worth taking rather than suppressing.
-	// Read the carrier BEFORE the withdrawal, because the withdrawal clears it. A withdrawn row is terminal and is retained for
-	// the deployment's set-aside window, or forever where retention is disabled, so leaving up to MaxNackTallyBytes on every
-	// withdrawn batch would accumulate in the work queue with nothing ever reading it again. Clearing rides in the statement that
-	// is already updating those rows, so it costs no additional write, and reading first is what preserves the bytes this call
-	// still has to return.
+	// Read BEFORE the withdrawal, because the withdrawal clears it. A withdrawn row is terminal and is retained for the
+	// deployment's set-aside window, or forever where retention is disabled, so leaving up to MaxNackTallyBytes on every withdrawn
+	// batch would accumulate in the work queue with nothing ever reading it again. Clearing rides in the statement that is already
+	// updating those rows, so it costs no additional write, and reading first is what preserves the bytes this call still returns.
+	//
+	// Found by DIGEST across the rows this claim holds, not by recomputing the carrier. The carrier is the smallest id of the set
+	// an attempt OWNED, and ownership varies between attempts, so a value stored by an attempt that held part of its batch sits on
+	// a row a later full withdrawal does not compute as its carrier. Review found that; measured, the carry was simply lost.
+	// Matching on the digest makes which row holds it irrelevant, and the digest is what decides validity anyway, so this is the
+	// predicate rather than a check applied after the fact.
+	//
+	// ORDER BY keeps the choice deterministic in the one case where two rows can carry the same digest: two live attempts holding
+	// DISJOINT parts of one batch, each writing to its own subset's smallest id and neither able to clear the other's. Both values
+	// were resolved over the same events, so either is a legitimate answer and only reproducibility is at stake.
 	//
 	// Read unconditionally rather than under the whole-batch test below: the test needs setAside, which the statement that clears
-	// has not produced yet. It is one indexed point read on the primary key.
-	var stored struct {
-		Tally []byte `db:"monitor_tally"`
-		Batch []byte `db:"monitor_tally_batch"`
+	// has not produced yet. It is bounded by the batch size and every row is already locked by this transaction.
+	var stored []byte
+	storedQuery, storedArgs, err := sqlx.In(`
+		SELECT monitor_tally FROM event_queue
+		WHERE event_id IN (?) AND monitor_tally_batch = ?
+		ORDER BY event_id
+		LIMIT 1`, owned, digest)
+	if err != nil {
+		return api.NackResult{}, fmt.Errorf("nack build carried tally query: %w", err)
 	}
-	if err := tx.GetContext(ctx, &stored,
-		"SELECT monitor_tally, monitor_tally_batch FROM event_queue WHERE event_id = ?",
-		carrier); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := tx.GetContext(ctx, &stored, storedQuery, storedArgs...); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return api.NackResult{}, fmt.Errorf("nack read carried tally: %w", err)
 	}
 
@@ -580,12 +591,10 @@ func (s *Store) Nack(
 	// other events produce on their own attempt. len(owned) reads as the same thing only while ownership is total.
 	var carried []byte
 	if setAside == int64(len(eventIDs)) {
-		// Only when the stored tally was resolved over THIS batch. A batch whose membership moved gets nothing rather than a
-		// tally covering events it does not contain, which loses those counts instead of attributing them to events that did not
-		// produce them. bytes.Equal rather than a length check: two batches differ by content, not by size.
-		if bytes.Equal(stored.Batch, digest) {
-			carried = stored.Tally
-		}
+		// The read above already matched the digest, so anything it returned was resolved over exactly this batch. A batch whose
+		// membership moved matches nothing and gets nothing, which loses those counts rather than attributing them to events that
+		// did not produce them.
+		carried = stored
 	}
 	if err := tx.Commit(); err != nil {
 		return api.NackResult{}, fmt.Errorf("commit nack: %w", err)

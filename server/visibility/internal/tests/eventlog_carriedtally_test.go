@@ -432,3 +432,49 @@ func TestNackDigestsTheBatchTheTallyCoversNotTheSubsetItOwns(t *testing.T) {
 	assert.Empty(t, withdrawing.CarriedTally,
 		"the tally covers dig-lost too, and dig-lost was accounted for by the attempt that acknowledged it")
 }
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-value-survives-the-attempt-that-supplied-it
+//
+// The value must be found wherever it was stored, not only on the row a later attempt computes as the carrier. The carrier is the
+// smallest id of the set an attempt OWNED, and ownership varies between attempts, so an attempt holding part of its batch writes
+// to a row a later full withdrawal does not pick. Review found it; measured, the carry was lost outright.
+//
+// Reading by digest rather than by recomputed carrier is what fixes it, and it is also why the carrier choice no longer has to be
+// argued about: which row holds the value stopped mattering.
+// the value on a row a later full withdrawal does not compute as its carrier.
+func TestNackFindsTheValueWhereverTheStoringAttemptPutIt(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-carrier-move"
+
+	enqueue(t, log, host, "a-first", 1_000)
+	enqueue(t, log, host, "z-second", 1_001)
+
+	claimed, myStamp, err := log.ClaimForHost(t.Context(), host, 2)
+	require.NoError(t, err)
+	require.Len(t, claimed, 2)
+	// A replacement takes the lexicographically SMALLEST id, so this attempt owns only z-second.
+	_, err = db.ExecContext(t.Context(),
+		"UPDATE event_queue SET claimed_at_ns = claimed_at_ns + 1 WHERE event_id = ?", "a-first")
+	require.NoError(t, err)
+
+	carry := []byte(`{"v":1,"matches":[{"count":55}]}`)
+	nacked, err := log.Nack(t.Context(), []string{"a-first", "z-second"}, myStamp, carry)
+	require.NoError(t, err)
+	require.True(t, nacked.Held)
+
+	// The replacement returns a-first to the queue, so the full batch is claimable together again.
+	_, err = db.ExecContext(t.Context(),
+		"UPDATE event_queue SET processed = 0, claimed_at_ns = 0 WHERE event_id = ?", "a-first")
+	require.NoError(t, err)
+
+	for range 19 {
+		require.Zero(t, nackOnce(t, log, host, 2, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"a-first", "z-second"}, 16*time.Minute)
+
+	withdrawing := nackOnce(t, log, host, 2, nil)
+	require.Equal(t, int64(2), withdrawing.SetAside, "the whole batch is withdrawn")
+	assert.Equal(t, string(carry), string(withdrawing.CarriedTally),
+		"the digest matches this batch, so the value must be found wherever it was stored")
+}

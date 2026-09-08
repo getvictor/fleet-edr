@@ -16,8 +16,12 @@
 --
 -- Written on ONE row of a batch rather than all of them. The value is a property of the batch and the batch has no row of its own,
 -- so writing it to every row would multiply a blob by the batch size on a hot path to store one fact. An attempt that writes one
--- clears the column on the other rows it holds, so at most one row per BATCH carries a value and the reader cannot pick up one an
--- earlier attempt left on a row this one does not write.
+-- clears the column on the other rows it holds, so a batch does not accumulate copies of what it has superseded.
+--
+-- WHICH row does not matter, and the reader does not assume it. The writer picks the smallest id of the set it OWNED, and ownership
+-- varies between attempts, so an attempt holding part of its batch writes to a row a later full withdrawal would not pick. The read
+-- searches the rows the withdrawing claim holds for a matching digest instead of recomputing that choice, which is why the column
+-- below is what the read keys on.
 --
 -- Two pending rows CAN hold two batches' values at once, and the second column is what makes that safe. The claim orders by
 -- timestamp_ns while the carrier is the smallest event_id, two unrelated orderings, so a late-arriving older event can shift the
