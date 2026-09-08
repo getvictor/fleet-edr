@@ -236,6 +236,17 @@ export async function seedCriticalAlert(db: Connection, opts: { hostId: string; 
  *     reauth-freshness behaviour the specs have today rather than quietly acquiring a longer-lived one.
  *   - all three timestamps are NOW(6), so the session is as fresh as one from a just-completed ceremony.
  *
+ * `expires_at` deliberately does NOT try to reproduce the server's configured absolute timeout, and that is the safer choice
+ * rather than a shortcut. Reproducing it would mean duplicating `DefaultBreakglassAbsoluteTimeout` and every override
+ * (`EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT`) in TypeScript, and the failure mode of getting that wrong is one-directional and
+ * nasty: a forged session that outlives what the server would have issued keeps authorizing requests after a real one would
+ * have expired, so a spec passes against a session the product would have rejected.
+ *
+ * Ten minutes is instead chosen to be far SHORTER than any timeout the product configures (the default absolute is one hour and
+ * the default idle fifteen minutes), so drift can only ever make this fixture's sessions shorter-lived than real ones, which is
+ * harmless. It is also enormous next to what a spec needs: the whole converted set runs in under ten seconds and the per-test
+ * timeout is ninety.
+ *
  * The caller sets the cookie and SHOULD verify once against `/api/session`; `signInAsAdminViaForgedSession` in auth.ts does both.
  *
  * Role bindings are not created here and must not be: `resetDB` deliberately preserves the seeded admin's bindings, and the server
@@ -254,7 +265,7 @@ export async function forgeAdminSession(db: Connection): Promise<string> {
   await db.query(
     `INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token,
                            created_at, last_seen_at, last_auth_at, expires_at)
-     VALUES (?, ?, NULL, 'local_password', ?, NOW(6), NOW(6), NOW(6), NOW(6) + INTERVAL 1 HOUR)`,
+     VALUES (?, ?, NULL, 'local_password', ?, NOW(6), NOW(6), NOW(6), NOW(6) + INTERVAL 10 MINUTE)`,
     [id, rows[0].id, csrf],
   );
   return raw.toString("base64url");
