@@ -10,6 +10,15 @@ import mysql, { Connection } from "mysql2/promise";
 // hardcoded to `edr` would be worse than not running at all, because the suite would drive one lane's server and reset the OTHER
 // lane's auth tables. E2E_PORT and E2E_DB must therefore be set together, which assertLaneEnv below enforces rather than requests.
 /**
+ * LANE_SCHEMA is the MySQL and ClickHouse schema this run belongs to, and the single place that decision is made.
+ *
+ * Exported because playwright.config.ts needs the same answer to tell the server it spawns which lane it is in. Three independent
+ * copies of `process.env.E2E_DB ?? "edr"` is how a run ends up driving one lane's server while resetting another's tables, which
+ * is the exact hazard assertLaneEnv exists to prevent, arrived at by drift instead of by a typo.
+ */
+export const LANE_SCHEMA = process.env.E2E_DB ?? "edr";
+
+/**
  * assertLaneEnv refuses a half-configured lane override.
  *
  * Setting only E2E_PORT points the browser at one worktree's server while resetDB deletes the OTHER worktree's sessions, users and
@@ -44,7 +53,35 @@ export function assertLaneEnv(): void {
   if (db === "") {
     throw new Error(`E2E_DB must name a schema (got an empty string). ${advice}`);
   }
+
+  // Paired, valid, and MISMATCHED is the last shape, and the most destructive one now that the suite spawns its own server.
+  // `E2E_PORT=8089 E2E_DB=edr` passes every check above: it boots a lane B listener against lane A's schema and then deletes lane
+  // A's sessions, users and audit rows, which is the cross-lane wipe the pair rule was written to stop, reached by transposing
+  // one value rather than by omitting one. The lanes are a closed set of two, so the pairing is checkable rather than advisory.
+  const expected = LANE_TO_SCHEMA.get(parsed);
+  if (expected === undefined) {
+    throw new Error(
+      `E2E_PORT=${parsed} is not a lane this repository has (${[...LANE_TO_SCHEMA.keys()].join(", ")}). ${advice}`,
+    );
+  }
+  if (db !== expected) {
+    throw new Error(
+      `E2E_PORT=${parsed} belongs to schema ${expected}, not ${JSON.stringify(db)}. Running them crossed drives one worktree's ` +
+        `server while resetting the other worktree's auth tables. ${advice}`,
+    );
+  }
 }
+
+/**
+ * LANE_TO_SCHEMA is the machine's two worktrees: lane A on 8088 against `edr`, lane B on 8089 against `edr2`.
+ *
+ * A closed set rather than a convention, because the pair is what makes a run safe and nothing else can check it. Adding a third
+ * lane means adding it here, which is the right place to notice that its schema has to exist.
+ */
+const LANE_TO_SCHEMA = new Map<number, string>([
+  [8088, "edr"],
+  [8089, "edr2"],
+]);
 
 assertLaneEnv();
 
@@ -53,7 +90,7 @@ const DEV_DSN = {
   port: 33306,
   user: "root",
   password: "",
-  database: process.env.E2E_DB ?? "edr",
+  database: LANE_SCHEMA,
 };
 
 // Connect once per test; the connection is closed after each test via
@@ -70,7 +107,7 @@ export async function openDB(): Promise<Connection> {
 // has an empty password (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT), so no auth header is needed. database=edr selects the archive database
 // the server creates (matching EDR_CLICKHOUSE_DSN's /edr path); the connection's implicit database is `default`, where `events` does
 // not live.
-const CLICKHOUSE_HTTP = `http://127.0.0.1:18123/?database=${process.env.E2E_DB ?? "edr"}`;
+const CLICKHOUSE_HTTP = `http://127.0.0.1:18123/?database=${LANE_SCHEMA}`;
 
 // queryClickHouse runs a read-only query against the dev ClickHouse event archive (ADR-0015: events live here, not MySQL) over its HTTP
 // interface and returns the rows as parsed objects. No extra npm dependency: the HTTP interface speaks plain SQL. count() and other

@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { assertLaneEnv } from "./fixtures/db";
+import { assertLaneEnv, LANE_SCHEMA } from "./fixtures/db";
 
 // Playwright config for the EDR's E2E suite.
 //
@@ -58,39 +58,67 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  // Spawning is LANE A ONLY. The command below is `task dev:server:qa-oidc`, which is hardcoded to lane A's port, schema and dex
-  // wiring, so under a lane override it would boot lane A's server on 8088 and then probe lane B's 8089 until the timeout, with
-  // a "webServer was not able to start" error that says nothing about the actual cause. Skipping the spawn instead means a lane
-  // override requires the developer's own server to already be running, which is how lane B is worked anyway, and a missing one
-  // now surfaces as a plain connection refusal. Making the spawn lane-aware means parameterising that task too; not done here.
-  webServer: process.env.E2E_PORT
-    ? undefined
-    : {
-        // Boot the dev server with OIDC pointed at the local dex. Both
-        // break-glass and OIDC flows route through this one instance.
-        // Probe /readyz instead of /livez: the spec + docs/install-server.md
-        // + docs/operations.md treat /readyz as the readiness signal
-        // (returns 200 when the DB ping succeeds). /livez only proves
-        // the process is up; tests that hit DB-backed endpoints need
-        // the readiness guarantee.
-        command: "cd ../.. && task dev:server:qa-oidc",
-        url: `https://localhost:${PORT}/readyz`,
-        // The webServer probe ignores TLS-cert errors so a self-signed dev cert
-        // doesn't kill the probe before the server has a chance to start. Same
-        // rationale as `use.ignoreHTTPSErrors` above (issue #140).
-        ignoreHTTPSErrors: true,
-        // The default `!CI` reuse rule prevents the coverage runner from
-        // attaching to a server it just booted (CI is set in GH Actions,
-        // so Playwright would normally spawn its own `task dev:server:
-        // qa-oidc`, bypassing the instrumented binary). E2E_REUSE_SERVER=1
-        // is the opt-in that lets `task test:e2e:coverage` start the
-        // covered server in the foreground and then ask Playwright to
-        // reuse it. Other CI contexts (e.g. a future hosted runner that
-        // boots its own webServer) leave the env unset and get the
-        // standard !CI behavior.
-        reuseExistingServer: !process.env.CI || process.env.E2E_REUSE_SERVER === "1",
-        timeout: 60_000,
-        stderr: "pipe",
-        stdout: "pipe",
-      },
+  // Spawning works in EITHER lane (issue #826). It used to be lane A only: the command is `task dev:server:qa-oidc`, whose env
+  // block hardcodes 8088 and the `edr` schema, so under a lane override it booted lane A's server and then probed lane B's port
+  // until the timeout, reporting "webServer was not able to start" with nothing pointing at the cause. #824 skipped the spawn
+  // entirely rather than fix it, which left `task test:e2e` unusable from a cold lane B.
+  //
+  // What makes it work is that go-task's `env:` YIELDS to the parent environment, so the values passed below win over the task's
+  // own. Verified rather than assumed: with go-task 3.50.0, a task declaring `env: {X: from-taskfile}` prints `from-parent` when
+  // the caller exports X. Playwright merges webServer.env over process.env, so PATH and the rest survive.
+  //
+  // The dex half is what made this awkward, and it is settled in config/dex/dev-config.yaml: the `edr-qa` client now lists both
+  // lanes' callback URLs, so the derived redirect is accepted whichever lane seeded it.
+  webServer: {
+    // Boot the dev server with OIDC pointed at the local dex. Both
+    // break-glass and OIDC flows route through this one instance.
+    // Probe /readyz instead of /livez: the spec + docs/install-server.md
+    // + docs/operations.md treat /readyz as the readiness signal
+    // (returns 200 when the DB ping succeeds). /livez only proves
+    // the process is up; tests that hit DB-backed endpoints need
+    // the readiness guarantee.
+    // The schema is created first, because nothing else creates it. docker-compose.yml seeds only `edr` (MYSQL_DATABASE), and
+    // fleet-edr-migrate refuses a missing one outright ("Unknown database"), so a genuinely fresh lane B could not spawn a server
+    // at all: this worked here only because that worktree's schema already existed from earlier by-hand setup. IF NOT EXISTS, so
+    // lane A's existing data is never touched and a rerun is a no-op.
+    // The lane's schemas are ensured first, because nothing else creates them for a second worktree and neither
+    // fleet-edr-migrate nor the server will: migrate stops at "Unknown database" and the server at "Database <name> does not
+    // exist". Both stores, not just MySQL: the ClickHouse database is equally absent on a fresh lane and equally fatal. The
+    // script is IF NOT EXISTS throughout, so on a lane that already has them it is a no-op.
+    //
+    // A script rather than a shell chain in this template. The first version inlined the SQL and backquoted the identifier,
+    // which is the usual advice and wrong through a shell, where backticks inside double quotes are command substitution: the
+    // CREATE arrived with an empty name and the spawn failed with "webServer was not able to start", saying nothing about why.
+    command: `cd ../.. && scripts/ensure-lane-schemas.sh ${LANE_SCHEMA} && task dev:server:qa-oidc`,
+    // Every value the task hardcodes to lane A, restated for whichever lane the suite was pointed at. The migrate and seed
+    // steps that run before the server read EDR_DSN too, so they land in the same schema the suite will reset.
+    env: {
+      EDR_LISTEN_ADDR: `0.0.0.0:${PORT}`,
+      EDR_DSN: `root:@tcp(127.0.0.1:33306)/${LANE_SCHEMA}?parseTime=true`,
+      // Deferring to an exported value preserves the one escape hatch the task already offered: its own EDR_CLICKHOUSE_DSN is
+      // written as a go-task template with a default, so a developer pointing at another ClickHouse keeps doing so. The other
+      // four are hardcoded in the task, so there is no existing override to respect.
+      EDR_CLICKHOUSE_DSN: process.env.EDR_CLICKHOUSE_DSN ?? `clickhouse://default:@127.0.0.1:19000/${LANE_SCHEMA}`,
+      EDR_BREAKGLASS_RP_ORIGINS: `https://localhost:${PORT}`,
+      EDR_DEMO_OIDC_EXTERNAL_URL: `https://localhost:${PORT}`,
+    },
+    url: `https://localhost:${PORT}/readyz`,
+    // The webServer probe ignores TLS-cert errors so a self-signed dev cert
+    // doesn't kill the probe before the server has a chance to start. Same
+    // rationale as `use.ignoreHTTPSErrors` above (issue #140).
+    ignoreHTTPSErrors: true,
+    // The default `!CI` reuse rule prevents the coverage runner from
+    // attaching to a server it just booted (CI is set in GH Actions,
+    // so Playwright would normally spawn its own `task dev:server:
+    // qa-oidc`, bypassing the instrumented binary). E2E_REUSE_SERVER=1
+    // is the opt-in that lets `task test:e2e:coverage` start the
+    // covered server in the foreground and then ask Playwright to
+    // reuse it. Other CI contexts (e.g. a future hosted runner that
+    // boots its own webServer) leave the env unset and get the
+    // standard !CI behavior.
+    reuseExistingServer: !process.env.CI || process.env.E2E_REUSE_SERVER === "1",
+    timeout: 60_000,
+    stderr: "pipe",
+    stdout: "pipe",
+  },
 });

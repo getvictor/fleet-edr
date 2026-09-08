@@ -39,6 +39,12 @@ staticClients:
       # dev:server:qa-oidc's seeded EDR_DEMO_OIDC_EXTERNAL_URL (<url>/api/auth/callback)
       # exactly; dex refuses any other URL during the authorization-code redirect.
       - "https://localhost:8088/api/auth/callback"
+      # Lane B. This repository is worked as two worktrees on one machine and the second runs its
+      # server on 8089, so its derived redirect is a different URL that dex would otherwise refuse,
+      # which is what kept the Playwright suite from spawning its own server there (issue #826).
+      # One client with both URIs rather than a second client: dex matches the redirect against this
+      # list, so the lanes need no separate id or secret, and nothing has to know which lane it is.
+      - "https://localhost:8089/api/auth/callback"
 
 enablePasswordDB: true
 
