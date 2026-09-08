@@ -434,14 +434,27 @@ func collectArchivedRestatements(changesDir string) (map[string][]archivedRestat
 			addedBy:              make(map[string]map[string]struct{}),
 			removedBy:            make(map[string]map[string]struct{}),
 			modifiedRestatements: make(map[string]map[string]restatement),
+			addedStatements:      make(map[string]map[string]restatement),
 		}
 		if err := one.collectChange(filepath.Join(archiveDir, name)); err != nil {
 			return nil, nil, err
 		}
-		for requirement, byChange := range one.modifiedRestatements {
-			for _, r := range byChange {
-				restatements[requirement] = append(restatements[requirement],
-					archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios), text: splitRequirementText(r.lines)})
+		// Both sections, because an ADDED entry is as much a claim about what the canonical tree should hold after archiving as a
+		// MODIFIED one. Until issue #909 only MODIFIED was collected, so a requirement that was ADDED and never restated had NO
+		// claim against it at all: the archive could drop one of its scenarios, or the last line of its last requirement, and
+		// nothing here would say so. That is not a rare shape. Most requirements are introduced once and never restated.
+		//
+		// They are folded into one list rather than compared separately, so the existing winner selection applies unchanged: the
+		// latest batch wins, and within a batch the claims are INTERSECTED. An ADDED and a MODIFIED of one requirement in one
+		// batch therefore claim only what both list, which under-claims when the MODIFIED refined the requirement, and cannot
+		// over-claim. That is the direction this file errs in everywhere, and it is why the fold needs no ordering it does not
+		// have: the batch's internal order stays unrecoverable and nothing here pretends otherwise.
+		for _, section := range []map[string]map[string]restatement{one.modifiedRestatements, one.addedStatements} {
+			for requirement, byChange := range section {
+				for _, r := range byChange {
+					restatements[requirement] = append(restatements[requirement],
+						archivedRestatement{change: name, scenarios: sortedKeys(r.scenarios), text: splitRequirementText(r.lines)})
+				}
 			}
 		}
 		for requirement := range one.removedRequirements {

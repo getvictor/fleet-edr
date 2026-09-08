@@ -734,3 +734,130 @@ func TestVerifyArchive_ARequirementReAddedWithNoLaterRestatementIsLeftAlone(t *t
 		map[string]requirementText{"cap/the-thing": {body: []string{"The new body."}}},
 	), "nothing from the current lifetime is no claim to check against, not a claim that everything is missing")
 }
+
+// TestArchiveVerify_AnAddedOnlyRequirementIsChecked is issue #909.
+//
+// Until this, collectArchivedRestatements read `## MODIFIED Requirements` only, so a requirement that was ADDED and never restated
+// had no claim against it at all: the archive could drop one of its scenarios, or the last line of the last requirement in a file,
+// and nothing here would say so. Most requirements are introduced once and never restated, so the blind spot covered the majority
+// of the tree, and it is how the two bullets #901 found reached a release.
+//
+// Measured on the real tree when the fix landed: findings went from 85 to 215, and the first one inspected was a genuine loss the
+// tool had already half-reported. `2026-06-02-add-application-control` ADDED "Set application control command" and the canonical
+// spec never gained it; the retirement of the requirement it replaced WAS reported, because that came through a REMOVED, while the
+// replacement was invisible.
+func TestArchiveVerify_AnAddedOnlyRequirementIsChecked(t *testing.T) {
+	t.Parallel()
+
+	newTree := func(t *testing.T) (string, string) {
+		t.Helper()
+		changes, specs := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(changes, archiveDirName), 0o750))
+		return changes, specs
+	}
+	archived := func(t *testing.T, changesDir, folder, capability, body string) {
+		t.Helper()
+		writeChange(t, filepath.Join(changesDir, archiveDirName), folder, capability, body)
+	}
+	verify := func(t *testing.T, changesDir, specsDir string) []string {
+		t.Helper()
+		restatements, retired, err := collectArchivedRestatements(changesDir)
+		require.NoError(t, err)
+		scenarios, err := ParseAllSpecs(specsDir)
+		require.NoError(t, err)
+		text, err := ParseAllRequirementText(specsDir)
+		require.NoError(t, err)
+		return verifyArchive(restatements, canonicalScenarios(scenarios), retired, text)
+	}
+
+	t.Run("a scenario the ADDED introduced and the tree lacks is a finding", func(t *testing.T) {
+		t.Parallel()
+		changes, specs := newTree(t)
+		archived(t, changes, "2026-06-02-introduces-it", "cap", "# T\n\n## ADDED Requirements\n\n"+
+			"### Requirement: The thing\n\nSHALL.\n\n#### Scenario: Kept\n\n- **THEN** it does\n\n"+
+			"#### Scenario: Lost\n\n- **THEN** it does\n")
+		writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n\n### Requirement: The thing\n\nSHALL.\n\n"+
+			"#### Scenario: Kept\n\n- **THEN** it does\n")
+
+		findings := verify(t, changes, specs)
+		require.Len(t, findings, 1, "the ADDED is a claim about what the tree should hold, exactly as a MODIFIED is")
+		assert.Contains(t, findings[0], "cap/the-thing/lost")
+	})
+
+	t.Run("an ADDED the tree carries in full is not a finding", func(t *testing.T) {
+		t.Parallel()
+		changes, specs := newTree(t)
+		archived(t, changes, "2026-06-02-introduces-it", "cap", added("The thing"))
+		writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n\n### Requirement: The thing\n\nSHALL do the thing.\n\n"+
+			"#### Scenario: One\n\n- **THEN** it does\n")
+		assert.Empty(t, verify(t, changes, specs), "widening the check must not report a requirement that arrived intact")
+	})
+
+	t.Run("a later MODIFIED is the authority over the ADDED it refines", func(t *testing.T) {
+		t.Parallel()
+		changes, specs := newTree(t)
+		archived(t, changes, "2026-06-02-introduces-it", "cap", "# T\n\n## ADDED Requirements\n\n"+
+			"### Requirement: The thing\n\nSHALL.\n\n#### Scenario: One\n\n- **THEN** it does\n\n"+
+			"#### Scenario: Retired later\n\n- **THEN** it does\n")
+		archived(t, changes, "2026-06-09-refines-it", "cap", "# T\n\n## MODIFIED Requirements\n\n"+
+			"### Requirement: The thing\n\nSHALL.\n\n#### Scenario: One\n\n- **THEN** it does\n")
+		writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n\n### Requirement: The thing\n\nSHALL.\n\n"+
+			"#### Scenario: One\n\n- **THEN** it does\n")
+		assert.Empty(t, verify(t, changes, specs),
+			"a scenario the ADDED listed and a LATER restatement dropped is a retirement, not a loss")
+	})
+
+	t.Run("an ADDED and a MODIFIED in one batch claim only what both list", func(t *testing.T) {
+		t.Parallel()
+		changes, specs := newTree(t)
+		// Same date, so the batch's internal order is unrecoverable and the two are intersected. The MODIFIED refines the
+		// requirement with a scenario the ADDED never had; claiming it would report a correct archive as damage.
+		archived(t, changes, "2026-06-02-introduces-it", "cap", "# T\n\n## ADDED Requirements\n\n"+
+			"### Requirement: The thing\n\nSHALL.\n\n#### Scenario: Shared\n\n- **THEN** it does\n")
+		archived(t, changes, "2026-06-02-refines-it", "cap", "# T\n\n## MODIFIED Requirements\n\n"+
+			"### Requirement: The thing\n\nSHALL.\n\n#### Scenario: Shared\n\n- **THEN** it does\n\n"+
+			"#### Scenario: Only the refinement\n\n- **THEN** it does\n")
+		writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n\n### Requirement: The thing\n\nSHALL.\n\n"+
+			"#### Scenario: Shared\n\n- **THEN** it does\n")
+		assert.Empty(t, verify(t, changes, specs),
+			"intersecting under-claims rather than over-claims, which is the direction this command errs in")
+	})
+
+	t.Run("an ADDED requirement a later change retired is not a loss", func(t *testing.T) {
+		t.Parallel()
+		changes, specs := newTree(t)
+		archived(t, changes, "2026-06-02-introduces-it", "cap", added("The thing"))
+		archived(t, changes, "2026-06-09-retires-it", "cap", removedDelta("The thing"))
+		writeCanonical(t, specs, "cap", "# cap\n\n## Requirements\n")
+		assert.Empty(t, verify(t, changes, specs))
+	})
+}
+
+// TestCollectChange_FilesTheLastAddedRequirementUnderAdded pins the routing, which is the part of #909 that is easy to get wrong.
+//
+// A requirement is recorded when the scanner LEAVES it, at the next `## ` heading or at end of file, by which point the section
+// being scanned has already moved on. Routing on the live section rather than on the one the requirement was declared under files
+// the last requirement of an ADDED block under whatever follows it, and a delta that ends with ADDED loses it entirely.
+func TestCollectChange_FilesTheLastAddedRequirementUnderAdded(t *testing.T) {
+	t.Parallel()
+
+	changes := t.TempDir()
+	writeChange(t, changes, "a-change", "cap", "# T\n\n## MODIFIED Requirements\n\n"+
+		"### Requirement: Refined\n\nSHALL.\n\n#### Scenario: M\n\n- **THEN** it does\n\n"+
+		"## ADDED Requirements\n\n"+
+		"### Requirement: Introduced\n\nSHALL.\n\n#### Scenario: A\n\n- **THEN** it does\n")
+
+	d := &deltaSections{
+		removedRequirements:  make(map[string]struct{}),
+		addedBy:              make(map[string]map[string]struct{}),
+		removedBy:            make(map[string]map[string]struct{}),
+		modifiedRestatements: make(map[string]map[string]restatement),
+		addedStatements:      make(map[string]map[string]restatement),
+	}
+	require.NoError(t, d.collectChange(filepath.Join(changes, "a-change")))
+
+	assert.Contains(t, d.addedStatements, "cap/introduced", "the ADDED block is last, so it is flushed at end of file")
+	assert.NotContains(t, d.modifiedRestatements, "cap/introduced", "and must not be filed as a restatement of itself")
+	assert.Contains(t, d.modifiedRestatements, "cap/refined")
+	assert.NotContains(t, d.addedStatements, "cap/refined")
+}
