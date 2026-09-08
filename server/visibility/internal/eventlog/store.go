@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -403,13 +404,25 @@ const (
 // the previous batch while excluding its carrier. The new batch cannot clear a row it does not hold, so the old tally survives
 // there covering an event the two batches share, and the stranded row's own later withdrawal would report it a second time.
 //
-// Sorted so the digest does not depend on the order the caller listed its events, and NUL-joined because an event id is an opaque
-// string: joining on a character an id could contain would let two different batches collide.
+// Sorted so the digest does not depend on the order the caller listed its events.
+//
+// LENGTH-PREFIXED rather than joined on a separator, because no separator is safe here: ingest rejects only an EMPTY event id, and
+// the intake fuzz corpus seeds one containing a NUL deliberately, so an id can hold any byte. Review caught this on the first
+// version, which NUL-joined; measured, {"a", "b", "c\x00d"} and {"a", "b\x00c", "d"} produced an identical digest. A collision is
+// not cosmetic here: two different batches would compare equal, and the whole point of the digest is that they do not, so one
+// batch could be handed the other's tally. Writing each id's length before its bytes makes the preimage unambiguous whatever the
+// ids contain.
 func batchDigest(eventIDs []string) []byte {
 	sorted := slices.Clone(eventIDs)
 	slices.Sort(sorted)
-	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
-	return sum[:]
+	h := sha256.New()
+	var lengthPrefix [8]byte
+	for _, id := range sorted {
+		binary.BigEndian.PutUint64(lengthPrefix[:], uint64(len(id)))
+		h.Write(lengthPrefix[:])
+		h.Write([]byte(id))
+	}
+	return h.Sum(nil)
 }
 
 func (s *Store) Nack(
@@ -518,10 +531,28 @@ func (s *Store) Nack(
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
 	// hyphen in prose reads SQL subtraction the same way, which is a nudge worth taking rather than suppressing.
+	// Read the carrier BEFORE the withdrawal, because the withdrawal clears it. A withdrawn row is terminal and is retained for
+	// the deployment's set-aside window, or forever where retention is disabled, so leaving up to MaxNackTallyBytes on every
+	// withdrawn batch would accumulate in the work queue with nothing ever reading it again. Clearing rides in the statement that
+	// is already updating those rows, so it costs no additional write, and reading first is what preserves the bytes this call
+	// still has to return.
+	//
+	// Read unconditionally rather than under the whole-batch test below: the test needs setAside, which the statement that clears
+	// has not produced yet. It is one indexed point read on the primary key.
+	var stored struct {
+		Tally []byte `db:"monitor_tally"`
+		Batch []byte `db:"monitor_tally_batch"`
+	}
+	if err := tx.GetContext(ctx, &stored,
+		"SELECT monitor_tally, monitor_tally_batch FROM event_queue WHERE event_id = ?",
+		carrier); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return api.NackResult{}, fmt.Errorf("nack read carried tally: %w", err)
+	}
+
 	failingSince := now - setAsideWindow.Nanoseconds()
 	query, args, err = sqlx.In(`
 		UPDATE event_queue
-		SET processed = 3, set_aside_at_ns = ?
+		SET processed = 3, set_aside_at_ns = ?, monitor_tally = NULL, monitor_tally_batch = NULL
 		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
 		now, owned, setAsideAttempts, failingSince)
 	if err != nil {
@@ -549,15 +580,6 @@ func (s *Store) Nack(
 	// other events produce on their own attempt. len(owned) reads as the same thing only while ownership is total.
 	var carried []byte
 	if setAside == int64(len(eventIDs)) {
-		var stored struct {
-			Tally []byte `db:"monitor_tally"`
-			Batch []byte `db:"monitor_tally_batch"`
-		}
-		if err := tx.GetContext(ctx, &stored,
-			"SELECT monitor_tally, monitor_tally_batch FROM event_queue WHERE event_id = ?",
-			carrier); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return api.NackResult{}, fmt.Errorf("nack read carried tally: %w", err)
-		}
 		// Only when the stored tally was resolved over THIS batch. A batch whose membership moved gets nothing rather than a
 		// tally covering events it does not contain, which loses those counts instead of attributing them to events that did not
 		// produce them. bytes.Equal rather than a length check: two batches differ by content, not by size.

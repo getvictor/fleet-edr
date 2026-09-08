@@ -66,6 +66,15 @@ func TestNackCarriesAValueAcrossAttempts(t *testing.T) {
 	require.Equal(t, int64(batch), withdrawing.SetAside, "past both bounds the whole batch is withdrawn")
 	assert.Equal(t, string(first), string(withdrawing.CarriedTally),
 		"the withdrawing attempt supplied nothing and must still be given what the first attempt resolved")
+
+	// And the withdrawal takes the value with it. A withdrawn row is terminal and is retained for the deployment's set-aside
+	// window, or forever where retention is disabled, so leaving the blob there would accumulate in the work queue with nothing
+	// ever reading it again. Review found this; the clearing rides in the statement that already withdraws the rows.
+	var left int
+	require.NoError(t, db.GetContext(t.Context(), &left,
+		"SELECT COUNT(*) FROM event_queue WHERE host_id = ? AND (monitor_tally IS NOT NULL OR monitor_tally_batch IS NOT NULL)",
+		host))
+	assert.Zero(t, left, "a withdrawn row keeps no tally: it is terminal, and nothing will ever read it again")
 }
 
 // spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-later-value-replaces-the-one-it-supersedes
@@ -86,6 +95,13 @@ func TestNackKeepsOnlyTheLatestValue(t *testing.T) {
 	superseding := []byte(`{"v":1,"matches":[{"count":9}]}`)
 	require.Zero(t, nackOnce(t, log, host, batch, superseding).SetAside)
 
+	// Exactly one row holds it, which is what makes "the later value" a well-defined thing to return at all. Asserted here rather
+	// than after the withdrawal, because the withdrawal clears the columns it returns.
+	var carrying int
+	require.NoError(t, db.GetContext(t.Context(), &carrying,
+		"SELECT COUNT(*) FROM event_queue WHERE event_id IN ('latest-1', 'latest-2') AND monitor_tally IS NOT NULL"))
+	assert.Equal(t, 1, carrying, "one row carries the batch's value, so a second attempt overwrote rather than added")
+
 	for range 18 {
 		require.Zero(t, nackOnce(t, log, host, batch, nil).SetAside)
 	}
@@ -94,12 +110,6 @@ func TestNackKeepsOnlyTheLatestValue(t *testing.T) {
 	withdrawing := nackOnce(t, log, host, batch, nil)
 	require.Equal(t, int64(batch), withdrawing.SetAside)
 	assert.Equal(t, string(superseding), string(withdrawing.CarriedTally), "the later value is the one that survives")
-
-	// And exactly one row holds it, which is what makes "the later value" a well-defined thing to return at all.
-	var carrying int
-	require.NoError(t, db.GetContext(t.Context(), &carrying,
-		"SELECT COUNT(*) FROM event_queue WHERE event_id IN ('latest-1', 'latest-2') AND monitor_tally IS NOT NULL"))
-	assert.Equal(t, 1, carrying, "one row carries the batch's value, so a second attempt overwrote rather than added")
 }
 
 // spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-batch-that-is-coming-back-is-given-nothing
