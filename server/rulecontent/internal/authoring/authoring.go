@@ -37,7 +37,7 @@ func New(corpus api.Corpus, writer api.Writer, validator api.Validator) (*Servic
 //
 // Returns the new corpus version and any advisory warnings. A refusal comes back wrapped in api.ErrRefused with the validator's
 // own reason, and nothing is written.
-func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []api.ContentWarning, error) {
+func (s *Service) Put(ctx context.Context, doc api.Document, mkAudit api.AuditEntryFunc) (int64, []api.ContentWarning, error) {
 	proposed, base, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
 		return upsert(docs, doc)
 	})
@@ -55,7 +55,13 @@ func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []api.Conte
 	if err != nil {
 		return 0, warnings, fmt.Errorf("%w: %w", api.ErrRefused, err)
 	}
-	version, err := s.writer.PutDocument(ctx, doc, base)
+	// The version this write will produce is base+1 by construction: the writer refuses the change if the corpus moved from
+	// base, so there is no value between them for it to land on.
+	audit, err := api.BuildAuditEntry(mkAudit, base+1, warnings)
+	if err != nil {
+		return 0, warnings, err
+	}
+	version, err := s.writer.PutDocument(ctx, doc, base, audit)
 	if err != nil {
 		return 0, warnings, err
 	}
@@ -67,7 +73,7 @@ func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []api.Conte
 // Deleting is validated for the same reason writing is, which is less obvious and worth stating: removing a rule can be the thing
 // that breaks a corpus, because what remains still has to load. Reporting api.ErrDocumentNotFound when the path holds nothing
 // comes from the writer, so a delete of something absent is refused before it can move the version.
-func (s *Service) Delete(ctx context.Context, path string) (int64, []api.ContentWarning, error) {
+func (s *Service) Delete(ctx context.Context, path string, mkAudit api.AuditEntryFunc) (int64, []api.ContentWarning, error) {
 	var found bool
 	proposed, base, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
 		kept := make([]api.Document, 0, len(docs))
@@ -96,7 +102,11 @@ func (s *Service) Delete(ctx context.Context, path string) (int64, []api.Content
 	if err != nil {
 		return 0, warnings, fmt.Errorf("%w: %w", api.ErrRefused, err)
 	}
-	version, err := s.writer.DeleteDocument(ctx, path, base)
+	audit, err := api.BuildAuditEntry(mkAudit, base+1, warnings)
+	if err != nil {
+		return 0, warnings, err
+	}
+	version, err := s.writer.DeleteDocument(ctx, path, base, audit)
 	if err != nil {
 		return 0, warnings, err
 	}

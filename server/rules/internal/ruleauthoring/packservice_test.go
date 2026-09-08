@@ -20,20 +20,40 @@ type fakePacks struct {
 	rolled    rulecontentapi.PackRollback
 	rollErr   error
 	rollbacks int
+	outbox    *fakeOutbox
 }
 
 func (f *fakePacks) Status(context.Context) (rulecontentapi.PackStatus, error) {
 	return f.status, f.statusErr
 }
 
-func (f *fakePacks) Rollback(context.Context) (rulecontentapi.PackRollback, error) {
+// Rollback invokes the builder with its own result and commits the entry, which is the ordering the real store has: the audit row
+// is written in the transaction that performs the rollback, from what the rollback actually did (issue #886).
+func (f *fakePacks) Rollback(
+	_ context.Context, mkAudit rulecontentapi.PackAuditEntryFunc,
+) (rulecontentapi.PackRollback, error) {
 	f.rollbacks++
-	return f.rolled, f.rollErr
+	if f.rollErr != nil {
+		return rulecontentapi.PackRollback{}, f.rollErr
+	}
+	if mkAudit != nil {
+		entry, err := mkAudit(f.rolled)
+		if err != nil {
+			return rulecontentapi.PackRollback{}, err
+		}
+		if !entry.Zero() && f.outbox != nil {
+			f.outbox.add(entry)
+		}
+	}
+	return f.rolled, nil
 }
 
 func newPackService(t *testing.T, packs *fakePacks, audit *recordingAudit) *PackService {
 	t.Helper()
-	s, err := NewPackService(packs, audit, slog.New(slog.DiscardHandler))
+	if packs.outbox == nil {
+		packs.outbox = &fakeOutbox{}
+	}
+	s, err := NewPackService(packs, packs.outbox, audit, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	return s
 }
@@ -43,11 +63,15 @@ func newPackService(t *testing.T, packs *fakePacks, audit *recordingAudit) *Pack
 // to lose, so a deployment that wired it wrong should fail to start rather than discover it later.
 func TestNewPackService_RequiresItsCollaborators(t *testing.T) {
 	t.Parallel()
-	_, noPacks := NewPackService(nil, &recordingAudit{}, nil)
+	_, noPacks := NewPackService(nil, &fakeOutbox{}, &recordingAudit{}, nil)
 	require.Error(t, noPacks)
-	_, noAudit := NewPackService(&fakePacks{}, nil, nil)
+	_, noAudit := NewPackService(&fakePacks{}, &fakeOutbox{}, nil, nil)
 	require.Error(t, noAudit)
-	svc, ok := NewPackService(&fakePacks{}, &recordingAudit{}, nil)
+	// The outbox is required on the same terms: a rollback that committed its audit entry into nothing is the gap this
+	// mechanism closes, arrived at by wiring instead of by failure.
+	_, noOutbox := NewPackService(&fakePacks{}, nil, &recordingAudit{}, nil)
+	require.Error(t, noOutbox)
+	svc, ok := NewPackService(&fakePacks{}, &fakeOutbox{}, &recordingAudit{}, nil)
 	require.NoError(t, ok, "a nil logger is filled in rather than refused")
 	require.NotNil(t, svc)
 }
@@ -116,8 +140,12 @@ func TestPackService_RollbackRecordsWhoAndWhy(t *testing.T) {
 	assert.Equal(t, "rule_content_pack", e.TargetType)
 	assert.Equal(t, "restored-digest", e.TargetID)
 	assert.Equal(t, "rule X fires on everything", e.Payload["reason"])
-	assert.Equal(t, int64(12), e.Payload["corpus_version"])
-	assert.Equal(t, []string{"imported/mine.yml"}, e.Payload["withheld"],
+	// EqualValues because the payload round-trips through the outbox as JSON, which normalises numeric types. The stored row is
+	// unchanged; only the Go type between encode and decode differs.
+	assert.EqualValues(t, 12, e.Payload["corpus_version"])
+	// []string becomes []any across the JSON round-trip, so the elements are compared rather than the slice type.
+	require.Len(t, e.Payload["withheld"], 1)
+	assert.Equal(t, "imported/mine.yml", e.Payload["withheld"].([]any)[0],
 		"the deployment is deliberately not running a shipped rule, and a later reviewer needs that visible")
 }
 

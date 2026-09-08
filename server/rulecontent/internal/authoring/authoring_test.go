@@ -28,16 +28,24 @@ type fakeWriter struct {
 	put      []api.Document
 	deleted  []string
 	expected []int64
-	err      error
+	// audit records the entry the service built, so a test can assert what reached the write rather than only that it happened.
+	audit api.AuditOutboxEntry
+	err   error
 }
 
-func (f *fakeWriter) PutDocument(_ context.Context, doc api.Document, expected int64) (int64, error) {
+func (f *fakeWriter) PutDocument(
+	_ context.Context, doc api.Document, expected int64, audit api.AuditOutboxEntry,
+) (int64, error) {
+	f.audit = audit
 	f.put = append(f.put, doc)
 	f.expected = append(f.expected, expected)
 	return 7, f.err
 }
 
-func (f *fakeWriter) DeleteDocument(_ context.Context, path string, expected int64) (int64, error) {
+func (f *fakeWriter) DeleteDocument(
+	_ context.Context, path string, expected int64, audit api.AuditOutboxEntry,
+) (int64, error) {
+	f.audit = audit
 	f.deleted = append(f.deleted, path)
 	f.expected = append(f.expected, expected)
 	return 8, f.err
@@ -84,7 +92,7 @@ func TestPut_ValidatesTheWholeProposedCorpus(t *testing.T) {
 	v := &fakeValidator{}
 	w := &fakeWriter{}
 
-	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/c.yml", Content: []byte("c")})
+	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/c.yml", Content: []byte("c")}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"authored/c.yml", "imported/a.yml", "imported/b.yml"}, pathsOf(v.saw),
@@ -99,7 +107,7 @@ func TestPut_ReplacingSubstitutesRatherThanAppends(t *testing.T) {
 	v := &fakeValidator{}
 
 	_, _, err := newService(t, corpus, &fakeWriter{}, v).Put(t.Context(),
-		api.Document{Path: "imported/a.yml", Content: []byte("new")})
+		api.Document{Path: "imported/a.yml", Content: []byte("new")}, nil)
 	require.NoError(t, err)
 
 	require.Len(t, v.saw, 1, "replacing a path must not present the corpus with two documents at it")
@@ -115,7 +123,7 @@ func TestPut_RefusedWritesNothing(t *testing.T) {
 	w := &fakeWriter{}
 	v := &fakeValidator{err: errors.New("rule id \"a\" is already claimed by imported/a.yml")}
 
-	_, _, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
+	_, _, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"}, nil)
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, api.ErrRefused, "callers branch on this")
@@ -132,7 +140,7 @@ func TestPut_WarningsDoNotBlockTheWrite(t *testing.T) {
 		{Path: "authored/a.yml", Message: "authored/a.yml will not run: unsupported field"},
 	}}
 
-	version, warnings, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
+	version, warnings, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"}, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(7), version)
@@ -152,7 +160,7 @@ func TestDelete_ValidatesWhatWouldRemain(t *testing.T) {
 	v := &fakeValidator{}
 	w := &fakeWriter{}
 
-	_, _, err := newService(t, corpus, w, v).Delete(t.Context(), "imported/a.yml")
+	_, _, err := newService(t, corpus, w, v).Delete(t.Context(), "imported/a.yml", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"imported/b.yml"}, pathsOf(v.saw))
@@ -167,7 +175,7 @@ func TestDelete_NotFoundIsRefusedBeforeValidating(t *testing.T) {
 	v := &fakeValidator{}
 	w := &fakeWriter{}
 
-	_, _, err := newService(t, corpus, w, v).Delete(t.Context(), "imported/never-existed.yml")
+	_, _, err := newService(t, corpus, w, v).Delete(t.Context(), "imported/never-existed.yml", nil)
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, api.ErrDocumentNotFound)
@@ -205,7 +213,7 @@ func TestPut_UnreadableCorpusRefusesRatherThanValidatingAPartialSet(t *testing.T
 	w := &fakeWriter{}
 	corpus := &fakeCorpus{err: errors.New("connection refused")}
 
-	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
+	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"}, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, v.saw, "validating against a corpus we failed to read would hide every collision in it")
@@ -225,7 +233,7 @@ func TestPut_WritesAgainstTheVersionItValidated(t *testing.T) {
 	w := &fakeWriter{}
 	corpus := &fakeCorpus{version: 42, docs: []api.Document{{Path: "imported/a.yml"}}}
 
-	_, _, err := newService(t, corpus, w, &fakeValidator{}).Put(t.Context(), api.Document{Path: "authored/b.yml"})
+	_, _, err := newService(t, corpus, w, &fakeValidator{}).Put(t.Context(), api.Document{Path: "authored/b.yml"}, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, []int64{42}, w.expected, "the write must be conditional on the version that was validated")
@@ -237,7 +245,7 @@ func TestDelete_WritesAgainstTheVersionItValidated(t *testing.T) {
 	w := &fakeWriter{}
 	corpus := &fakeCorpus{version: 9, docs: []api.Document{{Path: "imported/a.yml"}, {Path: "imported/b.yml"}}}
 
-	_, _, err := newService(t, corpus, w, &fakeValidator{}).Delete(t.Context(), "imported/a.yml")
+	_, _, err := newService(t, corpus, w, &fakeValidator{}).Delete(t.Context(), "imported/a.yml", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, []int64{9}, w.expected)
@@ -251,7 +259,7 @@ func TestPut_UnreadableVersionRefusesBeforeReadingDocuments(t *testing.T) {
 	v := &fakeValidator{}
 	corpus := &fakeCorpus{versionErr: errors.New("connection refused")}
 
-	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
+	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"}, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, v.saw)
@@ -276,7 +284,7 @@ func TestPut_ReportsOnlyWarningsAboutTheDocumentBeingWritten(t *testing.T) {
 		{Path: "authored/mine.yml", Message: "mine: search \"selection\" discriminates nothing"},
 	}}
 
-	_, warnings, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/mine.yml"})
+	_, warnings, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/mine.yml"}, nil)
 	require.NoError(t, err)
 
 	require.Len(t, warnings, 1, "only the finding about this document belongs to this change")
@@ -297,7 +305,7 @@ func TestDelete_ReportsNoWarningsAboutADocumentThatIsGone(t *testing.T) {
 		{Path: "imported/other.yml", Message: "imported/other.yml will not run: unsupported field"},
 	}}
 
-	_, warnings, err := newService(t, corpus, &fakeWriter{}, v).Delete(t.Context(), "authored/mine.yml")
+	_, warnings, err := newService(t, corpus, &fakeWriter{}, v).Delete(t.Context(), "authored/mine.yml", nil)
 	require.NoError(t, err)
 
 	assert.Empty(t, warnings, "a pre-existing finding about another document is not a result of this deletion")

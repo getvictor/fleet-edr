@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,23 +19,89 @@ type fakeAuthor struct {
 	put      []rulecontentapi.Document
 	deleted  []string
 	warnings []rulecontentapi.ContentWarning
+	outbox   *fakeOutbox
 	err      error
 }
 
-func (f *fakeAuthor) Put(_ context.Context, doc rulecontentapi.Document) (int64, []rulecontentapi.ContentWarning, error) {
+// fakeOutbox is the durable half: entries land here when the change commits, and the drain takes them from here. Holding them in
+// a slice rather than delivering straight through is what lets a test assert the two are separable, which is the property the
+// outbox exists to give.
+type fakeOutbox struct {
+	entries []rulecontentapi.PendingAuditEntry
+	nextID  int64
+	// readErr and deleteErr drive the drain's failure paths, which decide whether an entry is retried or lost.
+	readErr   error
+	deleteErr error
+}
+
+func (o *fakeOutbox) add(e rulecontentapi.AuditOutboxEntry) {
+	o.nextID++
+	o.entries = append(o.entries, rulecontentapi.PendingAuditEntry{ID: o.nextID, Kind: e.Kind, Payload: e.Payload})
+}
+
+func (o *fakeOutbox) PendingAuditEntries(_ context.Context, limit int) ([]rulecontentapi.PendingAuditEntry, error) {
+	if o.readErr != nil {
+		return nil, o.readErr
+	}
+	if len(o.entries) > limit {
+		return o.entries[:limit], nil
+	}
+	return o.entries, nil
+}
+
+func (o *fakeOutbox) DeleteAuditEntries(_ context.Context, ids []int64) error {
+	if o.deleteErr != nil {
+		return o.deleteErr
+	}
+	keep := o.entries[:0]
+	for _, e := range o.entries {
+		if !slices.Contains(ids, e.ID) {
+			keep = append(keep, e)
+		}
+	}
+	o.entries = keep
+	return nil
+}
+
+// Put invokes the builder the way the real lifecycle does, with the version it is about to return and the warnings it resolved,
+// and commits the entry to the outbox. Modelling that ordering is the point: the entry has to be built from facts the caller does
+// not have, and written with the change rather than after it (issue #886).
+func (f *fakeAuthor) Put(
+	_ context.Context, doc rulecontentapi.Document, mkAudit rulecontentapi.AuditEntryFunc,
+) (int64, []rulecontentapi.ContentWarning, error) {
 	f.put = append(f.put, doc)
 	if f.err != nil {
 		return 0, f.warnings, f.err
 	}
+	if err := f.commit(mkAudit, 11); err != nil {
+		return 0, f.warnings, err
+	}
 	return 11, f.warnings, nil
 }
 
-func (f *fakeAuthor) Delete(_ context.Context, path string) (int64, []rulecontentapi.ContentWarning, error) {
+func (f *fakeAuthor) Delete(
+	_ context.Context, path string, mkAudit rulecontentapi.AuditEntryFunc,
+) (int64, []rulecontentapi.ContentWarning, error) {
 	f.deleted = append(f.deleted, path)
 	if f.err != nil {
 		return 0, f.warnings, f.err
 	}
+	if err := f.commit(mkAudit, 12); err != nil {
+		return 0, f.warnings, err
+	}
 	return 12, f.warnings, nil
+}
+
+// commit builds the entry and appends it to the outbox, which is what the real store does inside its transaction.
+func (f *fakeAuthor) commit(mkAudit rulecontentapi.AuditEntryFunc, version int64) error {
+	entry, err := rulecontentapi.BuildAuditEntry(mkAudit, version, f.warnings)
+	if err != nil {
+		return err
+	}
+	if !entry.Zero() && f.outbox != nil {
+		f.outbox.add(entry)
+	}
+	return nil
 }
 
 // fakeValidator is only reached by Check; the author owns validation for the mutating paths.
@@ -62,7 +129,12 @@ func (a *recordingAudit) Record(_ context.Context, e identityapi.AuditEvent) err
 
 func newService(t *testing.T, author *fakeAuthor, v *fakeValidator, audit *recordingAudit) *Service {
 	t.Helper()
-	s, err := New(author, v, audit, slog.New(slog.DiscardHandler))
+	// The author and the service share one outbox, which is what the real wiring does: rulecontent writes the entry and the
+	// rules-context drain reads it back. Wiring two would make every test pass against a service that delivered nothing.
+	if author.outbox == nil {
+		author.outbox = &fakeOutbox{}
+	}
+	s, err := New(author, v, author.outbox, audit, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	return s
 }
@@ -93,7 +165,8 @@ func TestPut_IsAttributedWithTheStatedReason(t *testing.T) {
 	assert.Equal(t, "authored/keychain_extra.yml", e.TargetID, "the row must name the document")
 	assert.Equal(t, "usr_7", e.Actor.ID, "and the principal who changed it")
 	assert.Equal(t, "tightening keychain coverage", e.Payload["reason"], "and why, which is the only field that says so")
-	assert.Equal(t, int64(11), e.Payload["corpus_version"])
+	// EqualValues because the payload round-trips through the outbox as JSON, which normalises numeric types (issue #886).
+	assert.EqualValues(t, 11, e.Payload["corpus_version"])
 }
 
 // spec:rule-content/every-authoring-change-is-attributable/a-deletion-is-attributed
@@ -184,7 +257,10 @@ func TestPut_WarningsAreRecorded(t *testing.T) {
 
 	assert.Equal(t, []string{"authored/a.yml will not run: unsupported field"}, warnings)
 	require.Len(t, audit.events, 1)
-	assert.Equal(t, []string{"authored/a.yml will not run: unsupported field"}, audit.events[0].Payload["warnings"])
+	// A JSON round-trip turns []string into []any, so the elements are compared rather than the slice type.
+	require.Len(t, audit.events[0].Payload["warnings"], 1)
+	assert.Equal(t, "authored/a.yml will not run: unsupported field",
+		audit.events[0].Payload["warnings"].([]any)[0])
 }
 
 // TestPut_CommittedChangeSurvivesAnAuditFailure pins the posture on the one ordering that has no good answer. The change is
@@ -240,10 +316,14 @@ func TestCheck_ReportsWarnings(t *testing.T) {
 // fleet detects loses its audit row. A contract a construction can silently violate is not a contract.
 func TestNew_RequiresEveryCollaborator(t *testing.T) {
 	t.Parallel()
-	_, noAuthor := New(nil, &fakeValidator{}, &recordingAudit{}, nil)
+	_, noAuthor := New(nil, &fakeValidator{}, &fakeOutbox{}, &recordingAudit{}, nil)
 	require.Error(t, noAuthor)
-	_, noValidator := New(&fakeAuthor{}, nil, &recordingAudit{}, nil)
+	_, noValidator := New(&fakeAuthor{}, nil, &fakeOutbox{}, &recordingAudit{}, nil)
 	require.Error(t, noValidator)
-	_, noRecorder := New(&fakeAuthor{}, &fakeValidator{}, nil, nil)
+	_, noRecorder := New(&fakeAuthor{}, &fakeValidator{}, &fakeOutbox{}, nil, nil)
 	require.Error(t, noRecorder, "a surface that cannot audit must not be constructible")
+	// The outbox is required for the same reason: a change that committed its entry into nothing is a change with no trail,
+	// reached by wiring rather than by failure.
+	_, noOutbox := New(&fakeAuthor{}, &fakeValidator{}, nil, &recordingAudit{}, nil)
+	require.Error(t, noOutbox, "a surface whose audit entries go nowhere must not be constructible")
 }

@@ -642,6 +642,7 @@ func openRules(
 		Corpus:               ruleContentCtx.Corpus(),
 		RuleAuthor:           ruleAuthor,
 		RulePacks:            rulePacks,
+		AuditOutbox:          ruleContentCtx.AuditOutbox(),
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		PrincipalLabel:       identityCtx.Service().PrincipalLabel,

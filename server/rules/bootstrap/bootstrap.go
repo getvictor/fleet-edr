@@ -83,6 +83,10 @@ type Deps struct {
 	// a deployment runs and restoring the one before it (issue #768). Optional on the same terms as RuleAuthor: nil leaves that
 	// surface unmounted, which is right for a tool that has no business changing rule content.
 	RulePacks rulecontentapi.PackLifecycle
+	// AuditOutbox is rulecontent's audit outbox, drained into Audit after a change commits (issue #886). Required alongside
+	// RuleAuthor and RulePacks: those surfaces write their audit row into this outbox inside the transaction that makes the
+	// change, so a wiring with the lifecycles and no outbox is one where every change commits with an entry nothing delivers.
+	AuditOutbox rulecontentapi.AuditOutbox
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -101,8 +105,10 @@ type Rules struct {
 	evalStatsBuffer *detectionconfig.BufferedEvalStats
 	// evalStatsFlushInterval is how often that buffer is written. See Deps.EvalStatsFlushInterval.
 	evalStatsFlushInterval time.Duration
-	detectionConfigH       *operator.DetectionConfigHandler
-	ruleAuthoringH         *operator.RuleAuthoringHandler
+	// auditDrain delivers rule-content audit entries the writing request could not (issue #886). Nil when no outbox was wired.
+	auditDrain       *ruleauthoring.AuditDrain
+	detectionConfigH *operator.DetectionConfigHandler
+	ruleAuthoringH   *operator.RuleAuthoringHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -160,13 +166,21 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	// Mounted only when every half is present: the lifecycle to change documents, the corpus to read them back, and the pack
 	// lifecycle behind the status and rollback routes. Without any one of them the surface would be partial, and a handler that
 	// 500s on some of its routes is worse than routes that are not there.
+	var auditDrain *ruleauthoring.AuditDrain
+	if deps.AuditOutbox != nil && deps.Audit != nil {
+		var derr error
+		if auditDrain, derr = ruleauthoring.NewAuditDrain(deps.AuditOutbox, deps.Audit, logger); derr != nil {
+			return nil, fmt.Errorf("build rule content audit drain: %w", derr)
+		}
+	}
+
 	var ruleAuthoringH *operator.RuleAuthoringHandler
 	if deps.RuleAuthor != nil && deps.Corpus != nil && deps.RulePacks != nil {
-		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, deps.Audit, logger)
+		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, deps.AuditOutbox, deps.Audit, logger)
 		if aerr != nil {
 			return nil, fmt.Errorf("build rule authoring service: %w", aerr)
 		}
-		packSvc, perr := ruleauthoring.NewPackService(deps.RulePacks, deps.Audit, logger)
+		packSvc, perr := ruleauthoring.NewPackService(deps.RulePacks, deps.AuditOutbox, deps.Audit, logger)
 		if perr != nil {
 			return nil, fmt.Errorf("build rule pack service: %w", perr)
 		}
@@ -194,6 +208,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		detectionConfigStore:   detectionConfigStore,
 		evalStatsBuffer:        evalStatsBuffer,
 		evalStatsFlushInterval: deps.EvalStatsFlushInterval,
+		auditDrain:             auditDrain,
 		operatorH:              opH,
 		appControlH:            appControlH,
 		appControlSt:           appControlStore,
@@ -288,6 +303,14 @@ func (r *Rules) Run(ctx context.Context) {
 		// waited on by the server's shutdown path, so the final write completes before the process exits.
 		func(ctx context.Context) {
 			r.evalStatsBuffer.FlushLoop(ctx, r.evalStatsFlushInterval)
+		},
+		// Delivers audit entries a request committed but could not write out (issue #886). Registered even when the authoring
+		// surface is unmounted, because entries can outlive the wiring that wrote them: a replica configured without the routes
+		// still has to drain what an earlier one left, and a drain over an empty table costs one query a minute.
+		func(ctx context.Context) {
+			if r.auditDrain != nil {
+				r.auditDrain.SweepLoop(ctx, ruleauthoring.DefaultSweepInterval)
+			}
 		},
 	}
 	var wg sync.WaitGroup

@@ -61,7 +61,7 @@ func TestRollback_RestoresTheGenerationAnUpgradeReplaced(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, upgraded)
 
-	rolled, err := rc.RollbackPackTo(ctx, stemIdentity)
+	rolled, err := rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, rolled.Restored)
 
@@ -96,7 +96,7 @@ func TestRollback_SurvivesARestart(t *testing.T) {
 	v2 := packFS(map[string]string{"imported/a.yml": "a v2"})
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 
 	// The restart: the same build, running its startup install again.
@@ -126,7 +126,7 @@ func TestRollback_DoesNotLatchOffFutureUpgrades(t *testing.T) {
 	v2 := packFS(map[string]string{"imported/a.yml": "a v2"})
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 
 	// The next release ships a different pack. It was never declined, so it installs.
@@ -165,7 +165,7 @@ func TestRollback_LeavesTheOperatorsOwnRulesAlone(t *testing.T) {
 	require.NoError(t, err)
 	_ = version
 
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 
 	docs, err := rc.Corpus().Documents(ctx)
@@ -193,7 +193,7 @@ func TestRollback_WithNothingRetainedIsReported(t *testing.T) {
 	_, err := rc.SeedFrom(ctx, v1, ".", nil)
 	require.NoError(t, err)
 
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.ErrorIs(t, err, api.ErrNoPreviousPack)
 
 	docs, err := rc.Corpus().Documents(ctx)
@@ -216,9 +216,9 @@ func TestRollback_CannotBeRepeatedPastTheRetainedGeneration(t *testing.T) {
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
 
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.ErrorIs(t, err, api.ErrNoPreviousPack)
 }
 
@@ -331,7 +331,7 @@ func TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns(t *testing.T) {
 		require.NoError(t, err)
 		_ = version
 
-		rolled, err := rc.RollbackPackTo(ctx, stemIdentity)
+		rolled, err := rc.RollbackPackTo(ctx, stemIdentity, nil)
 		require.NoError(t, err, "a rollback must not fail because the operator took over one of the rules")
 
 		docs, err := rc.Corpus().Documents(ctx)
@@ -359,7 +359,7 @@ func TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_, err = rc.RollbackPackTo(ctx, stemIdentity)
+		_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 		require.NoError(t, err)
 
 		docs, err := rc.Corpus().Documents(ctx)
@@ -409,7 +409,7 @@ func TestRollback_IsOfferedOnACorpusThatPredatesPackIdentity(t *testing.T) {
 		"the retained generation must have an identity, or the status surface reports no rollback while one would work")
 
 	// And the two halves agree: what status offers, rollback delivers.
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 	docs, err := rc.Corpus().Documents(ctx)
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestPackLifecycle_RefusesAnUnreadableStoredSource(t *testing.T) {
 	t.Run("rolling back", func(t *testing.T) {
 		t.Parallel()
 		rc, _ := corrupt(t)
-		_, err := rc.RollbackPackTo(t.Context(), stemIdentity)
+		_, err := rc.RollbackPackTo(t.Context(), stemIdentity, nil)
 		require.ErrorIs(t, err, api.ErrUnknownSource)
 	})
 }
@@ -485,7 +485,7 @@ func TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, installed, "the pack must install onto a corpus that held no shipped content")
 
-	rolled, err := rc.RollbackPackTo(ctx, stemIdentity)
+	rolled, err := rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err, "the generation retained was empty, not absent, so this rollback must be possible")
 	assert.NotEmpty(t, rolled.Restored, "an empty generation still has an identity")
 
@@ -521,7 +521,7 @@ func TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule(t *testing.T)
 	v2 := packFS(map[string]string{"imported/a.yml": "a v2", "imported/b.yml": "b v2"})
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 
 	// A build whose pack differs from the declined one only in the rule the operator owns. It would store exactly what the
@@ -568,7 +568,7 @@ func TestRollback_HoldsAfterTheOperatorEditsShippedContent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 
 	reinstalled, err := rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
@@ -617,7 +617,7 @@ func TestUpgradePack_RecordsTheInstalledGenerationOnANoOpStart(t *testing.T) {
 	require.NotEmpty(t, installed, "a start must record the generation it finds installed, or a rollback cannot name it")
 
 	// And the consequence that matters: the rollback now declines something, so a restart does not undo it.
-	_, err = rc.RollbackPackTo(ctx, stemIdentity)
+	_, err = rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err)
 	reinstalled, err := rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)

@@ -61,6 +61,13 @@ func (c readOnlyCorpus) Documents(ctx context.Context) ([]api.Document, error) {
 }
 func (c readOnlyCorpus) Version(ctx context.Context) (int64, error) { return c.inner.Version(ctx) }
 
+// AuditOutbox exposes the audit outbox for the rules context to drain (issue #886).
+//
+// The store satisfies it directly: the entries are written by the same transactions the store already runs, so there is nothing
+// to wrap. Exposed as the narrow interface rather than the store so the caller gets the two methods a drain needs and not the
+// corpus write surface alongside them.
+func (r *RuleContent) AuditOutbox() api.AuditOutbox { return r.store }
+
 // Author builds the authoring lifecycle over this context's storage, validated by v.
 //
 // The validator is INJECTED rather than constructed here, which is what keeps the ADR-0021 seam intact: the only honest validator
@@ -188,8 +195,8 @@ func (b boundPacks) Status(ctx context.Context) (api.PackStatus, error) {
 	return b.rc.PackStatusFrom(ctx, b.fsys, b.root, b.include, b.identity)
 }
 
-func (b boundPacks) Rollback(ctx context.Context) (api.PackRollback, error) {
-	return b.rc.RollbackPackTo(ctx, b.identity)
+func (b boundPacks) Rollback(ctx context.Context, mkAudit api.PackAuditEntryFunc) (api.PackRollback, error) {
+	return b.rc.RollbackPackTo(ctx, b.identity, mkAudit)
 }
 
 // RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
@@ -201,8 +208,10 @@ func (b boundPacks) Rollback(ctx context.Context) (api.PackRollback, error) {
 //
 // identity is needed for the same reason the install path needs it: a rule the operator has taken over since the upgrade must not
 // be taken back by the restore.
-func (r *RuleContent) RollbackPackTo(ctx context.Context, identity api.RuleIdentity) (api.PackRollback, error) {
-	rolled, err := r.store.RollbackPack(ctx, identity)
+func (r *RuleContent) RollbackPackTo(
+	ctx context.Context, identity api.RuleIdentity, mkAudit api.PackAuditEntryFunc,
+) (api.PackRollback, error) {
+	rolled, err := r.store.RollbackPack(ctx, identity, mkAudit)
 	if err != nil {
 		return api.PackRollback{}, err
 	}

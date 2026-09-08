@@ -398,7 +398,9 @@ func (s *Store) UpgradeVendoredTo(
 //
 // Reports api.ErrNoPreviousPack when there is nothing retained, which is the ordinary state of a deployment that has never
 // upgraded. Restoring an empty set instead would leave it detecting nothing.
-func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (api.PackRollback, error) {
+func (s *Store) RollbackPack(
+	ctx context.Context, identity api.RuleIdentity, mkAudit api.PackAuditEntryFunc,
+) (api.PackRollback, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return api.PackRollback{}, fmt.Errorf("begin tx for pack rollback: %w", err)
@@ -480,10 +482,24 @@ func (s *Store) RollbackPack(ctx context.Context, identity api.RuleIdentity) (ap
 	if w.err != nil {
 		return api.PackRollback{}, w.err
 	}
+	// In THIS transaction, so the audit entry commits with the rollback or not at all (issue #886). The rollback is the change
+	// with the widest blast radius here, since it replaces every shipped rule at once, which is why it was the one review
+	// objected to losing an audit row for. Built from the result rather than passed in, for the same reason the document paths
+	// build theirs from the version: what is worth recording is what the rollback DID, and only this transaction knows it yet.
+	result := api.PackRollback{Restored: restored, Version: version, Withheld: withheld}
+	if mkAudit != nil {
+		audit, auditErr := mkAudit(result)
+		if auditErr != nil {
+			return api.PackRollback{}, auditErr
+		}
+		if err := enqueueAuditEntry(ctx, tx, audit); err != nil {
+			return api.PackRollback{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return api.PackRollback{}, fmt.Errorf("commit pack rollback: %w", err)
 	}
-	return api.PackRollback{Restored: restored, Version: version, Withheld: withheld}, nil
+	return result, nil
 }
 
 // PackStatusAgainst reports what shipped content is stored and how it differs from the pack this build carries.
@@ -571,8 +587,8 @@ func diffByIdentity(stored, pack []api.Document, identity api.RuleIdentity) (add
 // The meta row is bumped FIRST, before the document, which is the lock order replaceWithin documents and which every mutation of
 // this corpus has to share. Bumping it last here would give this path a documents-then-meta order against Replace's
 // meta-then-documents, which is the ABBA deadlock that ordering was chosen to remove.
-func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersion int64) (int64, error) {
-	return s.withVersionBump(ctx, "put", expectedVersion, func(tx *sqlx.Tx) (bool, error) {
+func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersion int64, audit api.AuditOutboxEntry) (int64, error) {
+	return s.withVersionBump(ctx, "put", expectedVersion, audit, func(tx *sqlx.Tx) (bool, error) {
 		// Read before writing, because after the upsert the row says "authored" whatever it said before. A path that held a
 		// SHIPPED document is the only case where this write shrinks the pack: a new path adds content that was never in it,
 		// and a path that was already the operator's was never counted.
@@ -601,8 +617,8 @@ func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersi
 // Reports api.ErrDocumentNotFound when the path held nothing, and the transaction is rolled back in that case so the version does
 // NOT move. Both halves matter: a version bump with no content change would make every replica re-read the corpus to discover
 // nothing had happened, and reporting success would tell an operator who mistyped a path that they had deleted a rule.
-func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion int64) (int64, error) {
-	return s.withVersionBump(ctx, "delete", expectedVersion, func(tx *sqlx.Tx) (bool, error) {
+func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion int64, audit api.AuditOutboxEntry) (int64, error) {
+	return s.withVersionBump(ctx, "delete", expectedVersion, audit, func(tx *sqlx.Tx) (bool, error) {
 		// Read before deleting, for the same reason as the upsert: afterwards there is no row to ask.
 		wasVendored, err := pathHoldsVendored(ctx, tx, path)
 		if err != nil {
@@ -645,7 +661,7 @@ func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion
 // distinguishes them: with the lock, exactly one wins; without it both read the same version under REPEATABLE READ, both conclude
 // they are current, and both commit. Removing FOR UPDATE now fails that test with two documents stored where one was allowed.
 func (s *Store) withVersionBump(
-	ctx context.Context, op string, expectedVersion int64, write func(tx *sqlx.Tx) (bool, error),
+	ctx context.Context, op string, expectedVersion int64, audit api.AuditOutboxEntry, write func(tx *sqlx.Tx) (bool, error),
 ) (int64, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -666,6 +682,10 @@ func (s *Store) withVersionBump(
 	version := current + 1
 	packMoved, err := write(tx)
 	if err != nil {
+		return 0, err
+	}
+	// In THIS transaction, which is the point: the audit entry commits if and only if the content change does (issue #886).
+	if err := enqueueAuditEntry(ctx, tx, audit); err != nil {
 		return 0, err
 	}
 	// Re-derived here rather than in each mutation, for the same reason the version bump is: neither single-document path can
@@ -814,4 +834,64 @@ type corpusRow struct {
 	Path    string `db:"path"`
 	Content string `db:"content"`
 	Source  string `db:"source"`
+}
+
+// enqueueAuditEntry writes the caller's audit row into the outbox, inside the caller's transaction (issue #886).
+//
+// A zero entry writes nothing, which is the internal callers: seeding and the pack upgrade are the product installing its own
+// content rather than an operator changing it, so there is no actor and no reason to record.
+//
+// The payload is stored verbatim and never inspected. This context does not know what an audit event is, and giving this function
+// an opinion about the bytes would be the boundary the outbox exists to keep (ADR-0021).
+func enqueueAuditEntry(ctx context.Context, tx *sqlx.Tx, entry api.AuditOutboxEntry) error {
+	if entry.Zero() {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO rule_content_audit_outbox (kind, payload) VALUES (?, ?)", entry.Kind, string(entry.Payload)); err != nil {
+		return fmt.Errorf("enqueue rule content audit entry: %w", err)
+	}
+	return nil
+}
+
+// PendingAuditEntries returns the oldest undelivered audit entries, so the drain delivers them in the order the changes happened.
+//
+// Ordered by id rather than created_at: the timestamps have microsecond resolution and two changes inside one microsecond would
+// order arbitrarily, while the auto-increment is the sequence the rows were written in. The index on created_at serves age
+// queries, not this one, which the primary key already covers.
+func (s *Store) PendingAuditEntries(ctx context.Context, limit int) ([]api.PendingAuditEntry, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows := []struct {
+		ID      int64  `db:"id"`
+		Kind    string `db:"kind"`
+		Payload []byte `db:"payload"`
+	}{}
+	if err := s.db.SelectContext(ctx, &rows,
+		"SELECT id, kind, payload FROM rule_content_audit_outbox ORDER BY id LIMIT ?", limit); err != nil {
+		return nil, fmt.Errorf("read rule content audit outbox: %w", err)
+	}
+	out := make([]api.PendingAuditEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, api.PendingAuditEntry{ID: r.ID, Kind: r.Kind, Payload: r.Payload})
+	}
+	return out, nil
+}
+
+// DeleteAuditEntries removes entries the drain delivered. Deleting IS the delivery mark, so a caller must delete only after the
+// recorder has reported success: an entry deleted before that is the gap this whole mechanism exists to close, moved one step
+// along.
+func (s *Store) DeleteAuditEntries(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In("DELETE FROM rule_content_audit_outbox WHERE id IN (?)", ids)
+	if err != nil {
+		return fmt.Errorf("build audit outbox delete: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, s.db.Rebind(query), args...); err != nil {
+		return fmt.Errorf("delete rule content audit entries: %w", err)
+	}
+	return nil
 }

@@ -32,7 +32,74 @@ type PackLifecycle interface {
 	// Status reports the generation installed, the generation this build carries, and which rules differ.
 	Status(ctx context.Context) (PackStatus, error)
 	// Rollback restores the generation the last install replaced, and records that the current one was declined.
-	Rollback(ctx context.Context) (PackRollback, error)
+	Rollback(ctx context.Context, mkAudit PackAuditEntryFunc) (PackRollback, error)
+}
+
+// AuditOutboxEntry is the caller's audit row, carried into the same transaction as the content change so the two commit together
+// or not at all (issue #886).
+//
+// Opaque on purpose, and that is the whole design. The audit store sits behind an interface the identity context owns, so a
+// rules-context service cannot enlist it in this context's transaction (ADR-0021), and this context must not learn what an audit
+// event is in order to store one. So it carries bytes it does not interpret: the caller encodes, the caller decodes, and the only
+// thing this context promises is that they commit with the change.
+//
+// A zero value means "record nothing", which is what an internal caller with no actor passes. The seeding and upgrade paths are
+// exactly that: they are the product installing its own content, not an operator changing it, and they have no reason and no actor
+// to record.
+type AuditOutboxEntry struct {
+	// Kind names the ENCODING so a drain meeting an entry from a newer version can leave it rather than mis-decode it. Not the
+	// audit action, which lives inside Payload where the caller put it.
+	Kind string
+	// Payload is the encoded audit event. Must be valid JSON when Kind is set, because the column is JSON.
+	Payload []byte
+}
+
+// Zero reports whether the entry asks for nothing to be recorded.
+func (e AuditOutboxEntry) Zero() bool { return e.Kind == "" && len(e.Payload) == 0 }
+
+// AuditEntryFunc builds the entry for a document change, given the facts only this context knows at the time.
+//
+// A builder rather than a value because those facts are computed HERE: the version a change will produce is the base the write is
+// validated against plus one, and the warnings are narrowed to the document under change by the corpus-wide validation. A caller
+// one layer up cannot supply either without duplicating this context's logic, and an audit row that omitted them would be a
+// weaker trail than the one this replaces.
+//
+// The function is the caller's and the bytes it returns are opaque here, so the boundary is unchanged: this context invokes what
+// it was given and stores the result, and still does not know what an audit event is (ADR-0021).
+//
+// Nil means record nothing, which is the internal callers: seeding and the pack upgrade are the product installing its own
+// content rather than an operator changing it. An error from the builder fails the change, which is correct: an audit row that
+// cannot be built is a change that must not happen silently.
+type AuditEntryFunc func(version int64, warnings []ContentWarning) (AuditOutboxEntry, error)
+
+// PackAuditEntryFunc is AuditEntryFunc for a rollback, whose recordable facts are the restored generation and what it withheld.
+type PackAuditEntryFunc func(rollback PackRollback) (AuditOutboxEntry, error)
+
+// BuildAuditEntry invokes f when it is set, and reports the zero entry when it is not.
+func BuildAuditEntry(f AuditEntryFunc, version int64, warnings []ContentWarning) (AuditOutboxEntry, error) {
+	if f == nil {
+		return AuditOutboxEntry{}, nil
+	}
+	return f(version, warnings)
+}
+
+// PendingAuditEntry is one undelivered outbox row, as the drain sees it.
+type PendingAuditEntry struct {
+	ID      int64
+	Kind    string
+	Payload []byte
+}
+
+// AuditOutbox is the drain surface: read the oldest undelivered entries, and delete the ones that were delivered.
+//
+// Declared here and implemented by rulecontent's store, for the same reason the lifecycles are: the drain lives in the rules
+// context, beside the recorder it delivers to.
+type AuditOutbox interface {
+	// PendingAuditEntries returns up to limit undelivered entries, oldest first, so audit rows land in the order the changes did.
+	PendingAuditEntries(ctx context.Context, limit int) ([]PendingAuditEntry, error)
+	// DeleteAuditEntries removes entries that were delivered. Deleting is what marks delivery, so it runs after the recorder
+	// reports success and never before.
+	DeleteAuditEntries(ctx context.Context, ids []int64) error
 }
 
 // ErrNoPreviousPack reports that no earlier generation of shipped content is retained, so there is nothing to roll back to.
@@ -64,10 +131,10 @@ var ErrCorpusChanged = errors.New("rule content: corpus changed since it was val
 // since. Without that the validation above is advisory: it describes a corpus that no longer exists by the time the write lands.
 type Writer interface {
 	// PutDocument creates or replaces the document at doc.Path and returns the new corpus version.
-	PutDocument(ctx context.Context, doc Document, expectedVersion int64) (int64, error)
+	PutDocument(ctx context.Context, doc Document, expectedVersion int64, audit AuditOutboxEntry) (int64, error)
 	// DeleteDocument removes the document at path and returns the new corpus version. Reports ErrDocumentNotFound, and leaves the
 	// corpus version unmoved, when there was nothing there.
-	DeleteDocument(ctx context.Context, path string, expectedVersion int64) (int64, error)
+	DeleteDocument(ctx context.Context, path string, expectedVersion int64, audit AuditOutboxEntry) (int64, error)
 }
 
 // ContentWarning is one advisory finding about ONE document.
@@ -151,8 +218,8 @@ type Validator interface {
 // caller resolves by retrying rather than by reporting a failure.
 type Author interface {
 	// Put creates or replaces the document at doc.Path. Warnings are about that document only.
-	Put(ctx context.Context, doc Document) (version int64, warnings []ContentWarning, err error)
+	Put(ctx context.Context, doc Document, mkAudit AuditEntryFunc) (version int64, warnings []ContentWarning, err error)
 	// Delete removes the document at path. Warnings are about that document only, which in practice means none: a document that
 	// is gone has nothing left to warn about.
-	Delete(ctx context.Context, path string) (version int64, warnings []ContentWarning, err error)
+	Delete(ctx context.Context, path string, mkAudit AuditEntryFunc) (version int64, warnings []ContentWarning, err error)
 }
