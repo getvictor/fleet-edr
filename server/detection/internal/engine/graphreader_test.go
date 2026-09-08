@@ -225,9 +225,12 @@ func TestEngine_HandsRulesTheRetryableReader(t *testing.T) {
 	assert.Same(t, e.ruleReader, timed.inner, "specifically the engine's own instance, not a fresh decorator per batch")
 }
 
-// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-read-is-not-logged-per-attempt
-//
 // TestRetryCause_KeepsEveryDistinctCause pins that neither retry sentinel can mask the other.
+//
+// Deliberately carries NO spec marker, though it is what makes the "even when another rule was merely waiting" clause of the
+// set-aside scenario hold. It only calls retryCause: it never reaches a log level, the materialization counter, a withdrawal, or
+// the record itself, so anchoring the scenario here would let traceability pass while nothing exercised the scenario end to end.
+// Review caught exactly that. The anchor is TestSetAsideRecordNamesTheFailureThatRanOutTheRetries, which drives all of it.
 //
 // The batch's reported cause was first-wins with a single upgrade for a materialization miss. Once a failed read stopped stopping
 // the batch, a rule that merely waits and happens to run earlier would swallow a later read failure, and the set-aside record
