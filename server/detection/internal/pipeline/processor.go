@@ -399,6 +399,48 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 	return p.evaluateAndAck(ctx, events, eventIDsOf(events), claimStamp), true
 }
 
+// withHostLock runs fn while holding the host's claim lock, so an acknowledgement cannot interleave with another worker's claim
+// for the same host (issue #863).
+//
+// The claim already runs under this lock and the acknowledgement did not, which left a window with a real ordering consequence.
+// `Ack`'s conditional update takes row locks as it scans, so an earlier event of the batch can be locked while a later one is
+// not; a claimer arriving in between finds the locked row via `FOR UPDATE SKIP LOCKED`, SKIPS it, and takes the later one. The
+// in-flight floor does not bound that, because it only counts claims that are still live and this window is reached precisely
+// when the claim has outlived its lease. So the later event is folded without its predecessor, which is the guarantee the floor
+// exists to protect, reached by a route the floor cannot see.
+//
+// The lock is taken for the acknowledgement ALONE, not held across detection. That is the point: the processor deliberately
+// releases it before evaluating rules so a slow rule cannot hold a host, and re-acquiring it for a window that is one statement
+// long keeps that property while closing the race. Both callers take the advisory lock before any row lock, so the ordering
+// between the two lock types is the same on the claim path and this one, and they cannot deadlock against each other.
+//
+// Blocking rather than try-lock, which is the difference from the claim's DoOnceIfLeader: a claimer that loses the race has other
+// hosts to work on, while an acknowledgement has nothing else to do and abandoning it would leave a processed batch to be
+// redelivered on lease expiry for no reason.
+//
+// Without a coordinator there is one worker per replica by construction (NewProcessor forces it), so there is no second claimer
+// on this replica to race and fn runs directly. That does not make the ordering safe against ANOTHER replica, which is the same
+// disclaimer the claim path carries.
+func (p *Processor) withHostLock(ctx context.Context, host string, fn func(context.Context) error) error {
+	if p.coordinator == nil {
+		return fn(ctx)
+	}
+	return p.coordinator.WithLock(ctx, hostClaimLockName(host), fn)
+}
+
+// underHostLock is withHostLock for a callback that also reports a value, which the acknowledgement does: whether the claim was
+// still held. Written out rather than closing over a variable at each call site, because the variable would be read after the
+// lock is released and the point of the helper is that everything about the acknowledgement happens inside it.
+func (p *Processor) underHostLock(ctx context.Context, host string, fn func(context.Context) (bool, error)) (bool, error) {
+	var out bool
+	err := p.withHostLock(ctx, host, func(lockedCtx context.Context) error {
+		var innerErr error
+		out, innerErr = fn(lockedCtx)
+		return innerErr
+	})
+	return out, err
+}
+
 // eventIDsOf projects a claimed batch to the identities Ack and Nack take, so neither the locked region nor the post-lock path has to
 // keep a parallel slice in step with events.
 func eventIDsOf(events []visibilityapi.Event) []string {
@@ -419,7 +461,13 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		tally, err = p.detection.Evaluate(ctx, events)
 		if err != nil {
 			p.logDetectionRetry(ctx, err)
-			setAside, held, nackErr := p.eventLog.Nack(ctx, eventIDs, claimStamp)
+			var setAside int64
+			var held bool
+			nackErr := p.withHostLock(ctx, hostOf(events), func(lockedCtx context.Context) error {
+				var innerErr error
+				setAside, held, innerErr = p.eventLog.Nack(lockedCtx, eventIDs, claimStamp)
+				return innerErr
+			})
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
@@ -457,7 +505,9 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		}
 	}
 
-	held, err := p.eventLog.Ack(ctx, eventIDs, claimStamp)
+	held, err := p.underHostLock(ctx, hostOf(events), func(lockedCtx context.Context) (bool, error) {
+		return p.eventLog.Ack(lockedCtx, eventIDs, claimStamp)
+	})
 	if err != nil {
 		// The batch processed but the queue was not durably advanced (the rows stay leased until the claim lease expires).
 		// Returning 0 stops the drain loop so the worker waits for the next tick rather than treating this as a full-batch
