@@ -27,4 +27,4 @@
 - [x] 4.2 Go tests for the narrowed pattern, including the `.tmp` and `~` cases, and for the rename match.
 - [x] 4.3 Mutation-test the narrowing and the rename match.
 - [x] 4.4 Efficacy corpus scenario for the atomic-replace evasion.
-- [ ] 4.5 VM QA on edr-dev with the real agent, per CLAUDE.md for an ESF and wire-format change.
+- [x] 4.5 VM QA: ESF rename delivery measured on edr-dev with a probe using the production muting setup; the full pipeline (HTTP ingest to alert) exercised against the live lane-B dev server. The re-signed sysext deploy is NOT done, see the PR.

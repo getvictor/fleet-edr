@@ -262,3 +262,20 @@ func TestSudoersTamper_MatchesOnlyTheNamesSudoLoads(t *testing.T) {
 		})
 	}
 }
+
+// The finding sentence has to say what happened, and for a rename "opened for writing" is false: nothing was opened, and the
+// file became live sudo policy without its contents ever being written on this host. Live QA against the dev server produced
+// exactly that wrong sentence (`/bin/mv opened /etc/sudoers.d/evil for writing`), which is what this pins.
+func TestSudoersTamper_DescriptionSaysWhatHappened(t *testing.T) {
+	t.Parallel()
+
+	rename := sudoersDescription("file_rename", "/bin/mv",
+		boundRenameEvent(t, "/tmp/staged", "/etc/sudoers.d/evil", "/bin/mv"))
+	assert.Contains(t, rename, "renamed /tmp/staged onto /etc/sudoers.d/evil", "both paths, in the right order")
+	assert.Contains(t, rename, "making it sudo policy")
+	assert.NotContains(t, rename, "opened", "a rename opens nothing, and saying so sends an analyst looking for a write")
+
+	write := sudoersDescription("open", "/usr/bin/tee",
+		boundOpenEvent(t, "/etc/sudoers", 0x1|0x200|0x400, "/usr/bin/tee"))
+	assert.Contains(t, write, "/usr/bin/tee opened /etc/sudoers for writing", "the write wording is unchanged")
+}

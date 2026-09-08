@@ -8,6 +8,7 @@ import (
 
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
@@ -174,18 +175,35 @@ func (r *SudoersTamper) evalEvent(
 	}
 
 	return &api.Finding{
-		HostID:   evt.HostID,
-		RuleID:   r.ID(),
-		Severity: api.SeverityHigh,
-		Title:    r.DisplayName(),
-		Description: fmt.Sprintf(
-			"%s opened %s for writing: sudo escalation surface (MITRE T1548.003)",
-			// The path the detection matched on, which is present exactly because it required write intent to get here.
-			proc.Path, firstField(se, "TargetFilename"),
-		),
-		ProcessID: proc.ID,
-		EventIDs:  []string{evt.EventID},
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    api.SeverityHigh,
+		Title:       r.DisplayName(),
+		Description: sudoersDescription(evt.EventType, proc.Path, se),
+		ProcessID:   proc.ID,
+		EventIDs:    []string{evt.EventID},
 	}, nil
+}
+
+// sudoersDescription writes the operator-facing sentence for a finding, and says what actually happened.
+//
+// It exists because the single "opened X for writing" wording became wrong the moment renames were read: a rename opens
+// nothing, and live QA on the dev server surfaced an alert claiming `/bin/mv opened /etc/sudoers.d/evil for writing`. An
+// analyst triaging that would look for a write that never occurred, and the distinction is the whole point of the detection:
+// the file became live sudo policy without its contents ever being written on this host.
+//
+// The rename form names both paths, because where it came from is what an analyst needs next: a promotion out of /tmp reads
+// very differently from an editor committing its own temp file.
+func sudoersDescription(eventType, writerPath string, se *sigmabind.Event) string {
+	target := firstField(se, "TargetFilename")
+	if eventType == "file_rename" {
+		return fmt.Sprintf(
+			"%s renamed %s onto %s, making it sudo policy: escalation surface (MITRE T1548.003)",
+			writerPath, firstField(se, "SourceFilename"), target,
+		)
+	}
+	// The path the detection matched on, which is present exactly because it required write intent to get here.
+	return fmt.Sprintf("%s opened %s for writing: sudo escalation surface (MITRE T1548.003)", writerPath, target)
 }
 
 func (r *SudoersTamper) excluded(writerPath, hostID string) bool {
