@@ -25,6 +25,13 @@ type deltaSections struct {
 	// modifiedRestatements maps "<capability>/<requirement-slug>" to what each in-flight change restates for it, keyed by change
 	// name so a divergence between two changes can be reported against the changes that caused it.
 	modifiedRestatements map[string]map[string]restatement
+	// addedStatements is the same for `## ADDED Requirements`, and exists because an ADDED entry is just as much a claim about
+	// what the canonical tree should hold after archiving as a MODIFIED one (issue #909).
+	//
+	// Kept apart from modifiedRestatements rather than merged at parse time, because the two answer different questions and only
+	// one consumer wants both. The in-flight conflict check is about two changes RESTATING one requirement differently, which an
+	// ADDED cannot participate in: a requirement can only be introduced once. archive-verify wants both, and folds them itself.
+	addedStatements map[string]map[string]restatement
 }
 
 // restatement is what one change's `## MODIFIED Requirements` entry says about one requirement: the scenario slugs it lists, and
@@ -75,6 +82,7 @@ func parseDeltaSections(changesDir string) (*deltaSections, error) {
 		addedBy:              make(map[string]map[string]struct{}),
 		removedBy:            make(map[string]map[string]struct{}),
 		modifiedRestatements: make(map[string]map[string]restatement),
+		addedStatements:      make(map[string]map[string]restatement),
 	}
 	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
 		return d.collectChange(changeDir)
@@ -143,11 +151,20 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 	var lines []string
 	flush := func() {
 		// Recorded on leaving the requirement rather than on entering it, so the "no scenarios listed" case never reaches the map.
+		//
+		// `section` is still the one the open requirement was DECLARED under at every call site, which is what makes routing on it
+		// correct rather than merely convenient. The `## ` case flushes BEFORE it reassigns section, the two `### Requirement:`
+		// cases are guarded on the section they are in, and the call after the loop runs with the last block's section. Review
+		// caught a duplicate `currentSection` here that could not diverge from this and only looked like it protected something.
 		if current != "" && len(scenarios) > 0 {
-			if d.modifiedRestatements[current] == nil {
-				d.modifiedRestatements[current] = make(map[string]restatement)
+			index := d.modifiedRestatements
+			if section == sectionAdded {
+				index = d.addedStatements
 			}
-			d.modifiedRestatements[current][change] = restatement{scenarios: scenarios, lines: lines}
+			if index[current] == nil {
+				index[current] = make(map[string]restatement)
+			}
+			index[current][change] = restatement{scenarios: scenarios, lines: lines}
 		}
 		current, scenarios, lines = "", nil, nil
 	}
@@ -167,7 +184,11 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 				section = sectionOther
 			}
 		case section == sectionAdded && strings.HasPrefix(line, "### Requirement:"):
+			flush()
 			d.note(d.addedBy, capability+"/"+requirementSlug(line), change)
+			current = capability + "/" + requirementSlug(line)
+			scenarios = make(map[string]struct{})
+			lines = []string{line}
 		case section == sectionRemoved && strings.HasPrefix(line, "### Requirement:"):
 			key := capability + "/" + requirementSlug(line)
 			d.removedRequirements[key] = struct{}{}
@@ -177,13 +198,14 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 			current = capability + "/" + requirementSlug(line)
 			scenarios = make(map[string]struct{})
 			lines = []string{line}
-		case section == sectionModified && current != "" && strings.HasPrefix(line, "#### Scenario:"):
+		case (section == sectionModified || section == sectionAdded) && current != "" &&
+			strings.HasPrefix(line, "#### Scenario:"):
 			scenarios[slugify(strings.TrimSpace(strings.TrimPrefix(line, "#### Scenario:")))] = struct{}{}
 			lines = append(lines, line)
 		default:
-			// Everything else inside a MODIFIED requirement: its normative prose, scenario bullets and blank lines. Captured
-			// because the archive replaces the requirement whole, so the prose is as much at risk as the headings.
-			if section == sectionModified && current != "" {
+			// Everything else inside a MODIFIED or ADDED requirement: its normative prose, scenario bullets and blank lines.
+			// Captured because the archive writes the requirement whole, so the prose is as much at risk as the headings.
+			if (section == sectionModified || section == sectionAdded) && current != "" {
 				lines = append(lines, line)
 			}
 		}
