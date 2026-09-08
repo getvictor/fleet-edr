@@ -216,8 +216,14 @@ struct ApplicationControlBlockPayload: Codable, Sendable {
 ///
 /// It is a separate payload from OpenPayload rather than an extra field on it because a rename is the only watched
 /// operation carrying TWO paths, and because Sigma already models it: the `file_rename` category reads SourceFilename
-/// and TargetFilename, so a rule over these events stays portable standard Sigma instead of needing a field only we
-/// supply. Field names are the server's: `server/rules/internal/sigmabind` binds `source_path` to SourceFilename and
+/// and TargetFilename, so the FIELDS a rule reads over these events are Sigma's own rather than ones only we supply.
+///
+/// That is a claim about fields, not about a rule's exported portability. A rule combining this event type with another
+/// exports as `portable: mapped` regardless, because Sigma permits one logsource category per rule and no external engine
+/// would route both. sudoers_tamper is exactly that case. An earlier version of this comment said such a rule "stays
+/// portable standard Sigma", which stopped being true when the exporter learned to check the logsource.
+///
+/// Field names are the server's: `server/rules/internal/sigmabind` binds `source_path` to SourceFilename and
 /// `path` to TargetFilename.
 struct FileRenamePayload: Codable, Sendable {
     let pid: pid_t
