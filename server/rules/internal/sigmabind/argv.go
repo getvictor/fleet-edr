@@ -109,15 +109,47 @@ func envAssignments(path string, argv []string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
-	after, usable := skipEnvOptions(argv[1:])
-	if !usable {
+	return assignmentsAfterOptions(argv[1:], 0)
+}
+
+// assignmentsAfterOptions walks one env argument list: its options, then the assignment run that follows them.
+//
+// Shared by the outer vector and a -S payload, because after the split a payload IS an env argument list. One walk means the two
+// cannot drift, and it is what makes a nested -S work without a second code path.
+//
+// depth bounds the -S recursion. env really does accept nesting (measured: `env -S "-S A=1 /usr/bin/env"` applies A=1), and the
+// payload is attacker-controlled, so a bound belongs here even though each level consumes a token and the input is finite. Past
+// the bound this reports nothing, which is the same safe direction as any construct it declines to read.
+func assignmentsAfterOptions(args []string, depth int) []string {
+	scan := skipEnvOptions(args)
+	if scan.hasS {
+		// -S carries a whole command line that env re-splits and then processes as its own arguments, so an assignment at the
+		// head of the payload really was applied. Everything after the payload belongs to the command, which is why the outer
+		// run ends rather than continuing (issue #865).
+		if depth >= maxEnvPayloadDepth {
+			return nil
+		}
+		return envAssignmentsInPayload(scan.sPayload, depth+1)
+	}
+	if !scan.usable {
 		// Either env would have refused these options and run nothing, or the run that follows them says nothing about what env
 		// applied. Both mean there is no assignment here to report.
 		return nil
 	}
+	return collectAssignmentRun(args[min(scan.next, len(args)):])
+}
 
+// maxEnvPayloadDepth bounds how many nested -S payloads are followed. env's own use of -S is the shebang line, which is one level;
+// anything deeper is contrived, and stopping is a miss rather than a fabrication.
+const maxEnvPayloadDepth = 4
+
+// collectAssignmentRun reads the leading assignment run of an argument list env is about to process, stopping where env stops.
+//
+// Shared by the ordinary path and the -S payload so the two cannot drift: a payload is env's own argument list after the split, so
+// the same boundaries decide it.
+func collectAssignmentRun(rest []string) []string {
 	var out []string
-	for _, a := range argv[min(1+after, len(argv)):] {
+	for _, a := range rest {
 		if key, _, found := strings.Cut(a, "="); found && key == "" {
 			// env calls setenv with an empty name, gets EINVAL, and exits before executing anything (measured:
 			// `env =bad DYLD_INSERT_LIBRARIES=x prog` prints `setenv =bad: Invalid argument` and runs nothing). So an
@@ -155,14 +187,51 @@ const (
 	envOptionsTakingAnOperand = "uPSC"
 	// Options that take no value: -i, -v.
 	envOptionsTakingNone = "iv"
-	// Options after which the outer argument vector no longer describes what env applied to a command.
+	// Options after which the OUTER argument vector no longer describes what env applied to a command.
 	//
 	// -0 because env REFUSES to run a command at all with it (`env -0 A=1 /bin/sh` exits `cannot specify command with -0`), so
-	// nothing was injected into anything. -S because its operand is a whole command line that env re-splits, and the split
-	// payload may itself name the command: `env -S "/bin/echo hi" DYLD_INSERT_LIBRARIES=/tmp/x` runs echo with the assignment
-	// as its ARGUMENT, which measurement confirms, so reporting it as an assignment would be a fabricated injection finding.
+	// nothing was injected into anything. -S because its operand is a whole command line that env re-splits, and everything after
+	// that operand belongs to the command rather than to env: measured, `env -S "A=1 /bin/echo" B=2` prints `B=2`, so the
+	// trailing token is echo's ARGUMENT and reporting it as an assignment would be a fabricated injection finding.
+	//
+	// Ending the OUTER run is not the same as having nothing to report. What -S applies lives inside its payload, which
+	// envAssignmentsInPayload reads (issue #865).
 	envOptionsEndingTheRun = "0S"
 )
+
+// envAssignmentsInPayload reports the assignments env applies from a -S payload, or nil when the payload uses a construct this
+// does not emulate.
+//
+// env re-splits the payload and processes it as its own argument list, so `env -S "DYLD_INSERT_LIBRARIES=/tmp/x prog"` really does
+// apply the assignment: measured, it reaches the child's environment. That is a live bypass of the injection rule, and the reason
+// it is worth closing even though env itself is rare in telemetry (#791 measured one env invocation in 670,185 execs): an attacker
+// picks the form BECAUSE it evades, so rarity of the benign case is not rarity of the malicious one.
+//
+// The split env performs is its own grammar, not shell quoting, and measurement against env(1) on macOS found four constructs
+// beyond plain whitespace: quotes group and are stripped (`A='1 2'` sets `A=1 2`), a backslash escapes the next character
+// (`A=1\ 2` sets the same), `${VAR}` is substituted from env's own environment (`A=${FOO}` sets `A=zzz`), and options may be
+// embedded (`-S "-i A=1 cmd"`).
+//
+// Only the plain case is emulated, and a payload containing any of `'`, `"`, `\` or `$` returns nil instead. That is deliberate,
+// and it is the whole shape of this change: a partial emulation that guesses at quoting or substitution would report an assignment
+// env did not apply, and a FABRICATED injection finding is worse than the miss it replaces. The miss is what this field already
+// did for every -S invocation; the fabrication would be new. Closing the plain case is strictly better than that, and the escapes
+// can be added later against the same measurements.
+//
+// Embedded options need no special handling: the split tokens go through the same option walk as any argument list, so `-i` is
+// skipped and a nested `-S` ends the run exactly as it does outside.
+func envAssignmentsInPayload(payload string, depth int) []string {
+	if strings.ContainsAny(payload, "'\"\\$") {
+		return nil
+	}
+	fields := strings.Fields(payload)
+	if len(fields) == 0 {
+		return nil
+	}
+	// The payload IS env's argument list from argv[1] onward, so the walk starts at its first token rather than after a program
+	// name. Everything else, including a further -S, is decided by the same walk.
+	return assignmentsAfterOptions(fields, depth)
+}
 
 // skipEnvOptions returns the index of env's first non-option argument, and whether the assignment run that starts there describes
 // anything env actually applied.
@@ -182,41 +251,72 @@ const (
 // Clustering follows BSD env. An operand-taking letter consumes the REST of its own token when there is any (`-uNAME`, and also
 // `-uS`, where S is the name and not a second option), and the next argument otherwise (`-u NAME`, `-iu NAME`). A lone dash means
 // the same as -i and takes no operand.
-func skipEnvOptions(argv []string) (next int, usable bool) {
+func skipEnvOptions(argv []string) envOptionScan {
 	i := 0
 	for i < len(argv) {
 		a := argv[i]
 		switch {
 		case a == "--":
-			return i + 1, true
+			return envOptionScan{next: i + 1, usable: true}
 		case a == "-":
 			i++
 		case len(a) > 1 && a[0] == '-':
-			cluster, ok := parseEnvOptionCluster(a[1:])
-			if !ok {
-				return 0, false
+			next, scan, done := resolveEnvOption(argv, i)
+			if done {
+				return scan
 			}
-			i++
-			if cluster.opt == 0 {
-				continue
-			}
-			operand := cluster.attached
-			if cluster.consumesNext {
-				if i >= len(argv) {
-					// env exits `option requires an argument`, so nothing ran.
-					return 0, false
-				}
-				operand = argv[i]
-				i++
-			}
-			if !envOperandUsable(cluster.opt, operand) {
-				return 0, false
-			}
+			i = next
 		default:
-			return i, true
+			return envOptionScan{next: i, usable: true}
 		}
 	}
-	return i, true
+	return envOptionScan{next: i, usable: true}
+}
+
+// envOptionScan is what the option walk resolved: where env's assignment run starts, whether that run describes anything env
+// applied, and the payload of a -S it stopped at.
+//
+// The payload is carried separately from the run because the two are different argument lists. Everything after a -S operand
+// belongs to the command env will run, while the payload is re-split by env and processed as its own arguments, so an assignment
+// at the head of it really was applied.
+type envOptionScan struct {
+	next     int
+	usable   bool
+	sPayload string
+	hasS     bool
+}
+
+// resolveEnvOption consumes the option cluster at argv[i] and reports where scanning continues.
+//
+// done means the walk is over and scan is its result: either env would have refused and run nothing, or the cluster was the one
+// carrying a whole command line, whose payload is handed back for the caller to read (issue #865).
+func resolveEnvOption(argv []string, i int) (next int, scan envOptionScan, done bool) {
+	cluster, ok := parseEnvOptionCluster(argv[i][1:])
+	if !ok {
+		return 0, envOptionScan{}, true
+	}
+	i++
+	if cluster.opt == 0 {
+		return i, envOptionScan{}, false
+	}
+	operand := cluster.attached
+	if cluster.consumesNext {
+		if i >= len(argv) {
+			// env exits `option requires an argument`, so nothing ran.
+			return 0, envOptionScan{}, true
+		}
+		operand = argv[i]
+		i++
+	}
+	if !envOperandUsable(cluster.opt, operand) {
+		return 0, envOptionScan{}, true
+	}
+	if strings.ContainsRune(envOptionsEndingTheRun, cluster.opt) {
+		// The OUTER run ends here, which is what keeps a trailing token from being read as an assignment. The payload is carried
+		// out so the caller can read what env applied INSIDE it.
+		return 0, envOptionScan{sPayload: operand, hasS: true}, true
+	}
+	return i, envOptionScan{}, false
 }
 
 // envOptionCluster is what one option cluster resolved to: whether the next argument is its operand, which option took one, and
@@ -237,14 +337,15 @@ func parseEnvOptionCluster(letters string) (envOptionCluster, bool) {
 	for k := range len(letters) {
 		c := rune(letters[k])
 		switch {
-		case strings.ContainsRune(envOptionsEndingTheRun, c):
-			// Reached before the operand check on purpose, since -S is in both sets and its payload is what makes the run
-			// meaningless. Whether the payload is attached or separate makes no difference to that.
-			return envOptionCluster{}, false
 		case strings.ContainsRune(envOptionsTakingAnOperand, c):
+			// Reached BEFORE the ending-the-run check, which is the opposite of the original order, because -S is in both sets
+			// and its payload is now read rather than discarded (issue #865). -0 is only in the ending set, so it still falls
+			// through to the case below and ends the run outright.
 			// The operand is whatever remains of this token, or the next argument when nothing remains.
 			last := k == len(letters)-1
 			return envOptionCluster{consumesNext: last, opt: c, attached: letters[k+1:]}, true
+		case strings.ContainsRune(envOptionsEndingTheRun, c):
+			return envOptionCluster{}, false
 		case strings.ContainsRune(envOptionsTakingNone, c):
 			continue
 		default:

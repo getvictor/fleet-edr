@@ -102,7 +102,8 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-attached-operand-is-not-read-as-further-options
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-invocation-env-would-refuse-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-suppressing-the-command-reports-no-assignments
-// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-command-line-carried-as-an-option-value-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-inside-an-option-s-command-line-is-reported
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unemulated-construct-in-that-value-reports-nothing
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unset-of-a-name-env-cannot-unset-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
@@ -245,11 +246,50 @@ func TestEnvAssignments(t *testing.T) {
 		{"an operand-taking option's own operand may look like an option", "/usr/bin/env",
 			// -P's operand is a path, and a path is not parsed as a further option.
 			[]string{"env", "-P", "-weird", "A=1", "prog"}, []string{"A=1"}},
-		{"the string option's payload is not parsed for assignments", "/usr/bin/env",
-			// KNOWN GAP, pinned deliberately: `-S` carries a whole command line that env re-splits, so an assignment inside it
-			// is invisible to this field. Reporting nothing is the safe direction (a miss, not a fabricated finding); splitting
-			// -S the way env does is tracked separately.
-			[]string{"env", "-S", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib prog"}, nil},
+		{"an assignment inside the string option's payload is reported", "/usr/bin/env",
+			// The gap #865 closed. Measured: `env -S "A=1 /usr/bin/env"` applies A=1 and it reaches the child's environment, so
+			// this is an injection the rule must see. env re-splits the payload and processes it as its own argument list, which
+			// is why the ordinary assignment run decides it.
+			[]string{"env", "-S", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"an attached payload is read the same way", "/usr/bin/env",
+			[]string{"env", "-SDYLD_INSERT_LIBRARIES=/tmp/e.dylib prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a payload whose leading token assigns nothing reports nothing", "/usr/bin/env",
+			// The run ends at the command, exactly as it does outside a payload.
+			[]string{"env", "-S", "/bin/echo hi"}, nil},
+		{"an option embedded in the payload is skipped", "/usr/bin/env",
+			// Measured: `env -S "-i A=1 /usr/bin/env"` applies A=1. The split tokens go through the same option walk, so no
+			// special handling is needed for this.
+			[]string{"env", "-S", "-i DYLD_INSERT_LIBRARIES=/tmp/x prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a nested string option inside a payload is followed", "/usr/bin/env",
+			// Measured: env really does accept nesting. `env -S "-S NESTED=1 /usr/bin/env"` applies NESTED=1, and
+			// `env -S "-S NESTED=1 /bin/echo ran"` runs echo. One shared walk handles it without a second code path.
+			[]string{"env", "-S", "-S DYLD_INSERT_LIBRARIES=/tmp/x prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"attached nesting inside a payload is followed", "/usr/bin/env",
+			// Measured: `env -S "-S-SDEEP=1 /usr/bin/env"` applies DEEP=1, so env follows the ATTACHED form to depth. A
+			// whitespace-separated operand cannot nest, because it is a single field; the attached form is how depth is reached
+			// at all, and getting that wrong is how a bound test passes without exercising its bound.
+			[]string{"env", "-S", "-S-SDYLD_INSERT_LIBRARIES=/tmp/x prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"nesting past the depth bound reports nothing", "/usr/bin/env",
+			// The payload is attacker-controlled and each level strips only two characters, so a long one nests deeply. Past the
+			// bound this reports nothing, the same safe direction as any construct it declines to read.
+			[]string{"env", "-S", "-S-S-S-S-SDYLD_INSERT_LIBRARIES=/tmp/x prog"}, nil},
+		// Constructs env's split performs and this does NOT emulate. Each returns nil rather than a guess, because a partial
+		// emulation would report an assignment env did not apply, and a fabricated injection finding is worse than the miss it
+		// replaces. All four were measured against env(1): quotes group and are stripped, a backslash escapes the next
+		// character, `${VAR}` substitutes from env's own environment.
+		{"a quoted payload is not emulated", "/usr/bin/env",
+			[]string{"env", "-S", "A='1 2' DYLD_INSERT_LIBRARIES=/tmp/x prog"}, nil},
+		{"a double-quoted payload is not emulated", "/usr/bin/env",
+			[]string{"env", "-S", "A=\"1 2\" DYLD_INSERT_LIBRARIES=/tmp/x prog"}, nil},
+		{"a backslash-escaped payload is not emulated", "/usr/bin/env",
+			[]string{"env", "-S", "A=1\\ 2 DYLD_INSERT_LIBRARIES=/tmp/x prog"}, nil},
+		{"a payload using variable substitution is not emulated", "/usr/bin/env",
+			[]string{"env", "-S", "A=${FOO} DYLD_INSERT_LIBRARIES=/tmp/x prog"}, nil},
 		{"nothing after the string option is an assignment either", "/usr/bin/env",
 			// Measured: `env -S "/bin/echo hi" DYLD_INSERT_LIBRARIES=/tmp/x` prints `hi DYLD_INSERT_LIBRARIES=/tmp/x`, so the
 			// trailing token is echo's ARGUMENT. Skipping only the payload and collecting what followed fabricated an injection
