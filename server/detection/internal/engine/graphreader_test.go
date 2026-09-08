@@ -119,6 +119,11 @@ func TestRetryableGraphReader_WrapsEveryReadFailure(t *testing.T) {
 			require.Error(t, err)
 			require.ErrorIs(t, err, rulesapi.ErrRetryBatch,
 				"a read that could not be answered must fail the batch, not be isolated like a broken rule")
+			// The SPECIFIC sentinel, per method, because everything downstream turns on it: the generic one is absorbed by the
+			// per-event loops so the batch continues against a reader that has just failed. Asserting only ErrRetryBatch here
+			// leaves that revertible with the suite green, which review pointed out.
+			require.ErrorIs(t, err, rulesapi.ErrRuleReadUnavailable,
+				"and must carry the read-failure sentinel, or the per-event loops absorb it and re-read the failed dependency")
 			require.ErrorIs(t, err, readErr, "and must keep the underlying cause, or the log says only that something failed")
 			assert.Contains(t, err.Error(), name, "naming the read is what makes the log actionable")
 		})
