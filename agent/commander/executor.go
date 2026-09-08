@@ -235,9 +235,9 @@ func (e *Executor) runKill(ctx context.Context, cmd Command) (string, json.RawMe
 }
 
 // runSetApplicationControl forwards the raw command payload to the ESF extension over XPC. Result on success is
-// {"policy_id": P, "policy_version": V} so operators can confirm per host which snapshot the agent applied. Envelope validation only
-// (policy_id present, version positive, rules is a JSON array); the per-rule shape is the extension's responsibility, and forwarding the
-// raw bytes keeps the wire shape byte-identical across server, agent, and extension.
+// {"policy_id": P, "policy_version": V, "rules": N} so operators can confirm per host which snapshot the agent applied and how much of
+// it. Envelope validation only (policy_id positive, version positive, rules is a JSON array); the per-rule shape is the extension's
+// responsibility, and forwarding the raw bytes keeps the wire shape byte-identical across server, agent, and extension.
 func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (string, json.RawMessage) {
 	var payload setApplicationControlPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
@@ -268,9 +268,26 @@ func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (s
 	if err := e.sender.SendApplicationControl([]byte(cmd.Payload)); err != nil {
 		return StatusFailed, marshalResult("xpc send: " + err.Error())
 	}
+	// The rule COUNT rides along because the version alone is not convergence evidence: it says which policy the host took, not
+	// how much of it. An operator reconciling a rollout wants "policy 42, 137 rules on this host", and a host that took the right
+	// version with the wrong number of rules is exactly the case worth seeing. Counting here rather than in the extension keeps it
+	// on the acknowledgement the server already stores.
+	//
+	// Counted rather than decoded: the entries stay json.RawMessage, so the agent still does not need to know the rule shape, and
+	// a count is the one property it can report without taking a position on it.
+	//
+	// The error is discarded because no input reaches here that can produce one, and it takes BOTH guards above to say that.
+	// The outer json.Unmarshal of cmd.Payload rules out syntactically invalid JSON: encoding/json validates the whole document
+	// before it assigns a RawMessage field, so `{"rules":[{"a":` fails there and never gets this far. isJSONArray then rules out
+	// the one shape that IS valid JSON and still would not decode into a slice, a `rules` that is a string, object or number.
+	// isJSONArray alone would not be enough, since it only inspects the first non-whitespace byte and would accept a truncated
+	// array; the outer decode is what makes that unreachable.
+	var rules []json.RawMessage
+	_ = json.Unmarshal(payload.Rules, &rules)
 	result, _ := json.Marshal(map[string]any{
 		"policy_id":      payload.PolicyID,
 		"policy_version": payload.PolicyVersion,
+		"rules":          len(rules),
 	})
 	return StatusCompleted, result
 }

@@ -3,6 +3,7 @@ package commander
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -104,13 +105,13 @@ func (r *recordingApplicationControlSender) SendApplicationControl(payload []byt
 	return nil
 }
 
-// spec:agent-command-executor/set-blocklist-command/forwarded-successfully
+// spec:agent-command-executor/set-application-control-command/forwarded-successfully
 //
 // Covers the set_application_control command path: server enqueues the command, commander forwards it to
-// the extension, and reports `completed` with policy_id + policy_version. Note: the spec scenario text
-// says "the count of paths in the payload" but the implementation reports policy_id + policy_version; the
-// "count of paths" framing predates the set_application_control rename (was originally set_blocklist that
-// carried a path list). Filed as #246 to align spec naming.
+// the extension, and reports `completed` with policy_id, policy_version, and the rule count. The comment
+// here used to record a mismatch (the scenario said "the count of paths", predating the set_blocklist ->
+// set_application_control rename) and pointed at #246, which is closed. The scenario now says the count of
+// RULES and the executor reports it, so there is no longer a gap to note.
 func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	t.Parallel()
 	var gotStatus string
@@ -154,9 +155,47 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(gotResult, &result))
 	assert.EqualValues(t, 7, result["policy_id"])
 	assert.EqualValues(t, 42, result["policy_version"])
+	// The count is what makes this convergence evidence rather than just an acknowledgement: a host that took the right version
+	// with the wrong number of rules is the case an operator reconciling a rollout needs to see. Restored alongside the
+	// requirement that asks for it (#905), which the archive had dropped.
+	assert.EqualValues(t, 1, result["rules"], "the result reports how many rules were forwarded")
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/forwarding-to-the-extension-fails
+//
+// The transport failure, which was the one observable outcome of this command that no test reached: the
+// recording sender has carried a sendErr field the whole time and nothing ever set it, so the branch that
+// turns an XPC error into a failed status was dead as far as the suite was concerned. Unlike the nil-sender
+// case this is a live bridge that refuses the payload, and the two report different reasons on purpose, so
+// an operator reading the audit trail can tell "no extension installed" from "the extension rejected it".
+func TestExecuteSetApplicationControl_SendFails(t *testing.T) {
+	t.Parallel()
+	var gotStatus, gotErr string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body statusUpdate
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStatus = body.Status
+		var result map[string]string
+		_ = json.Unmarshal(body.Result, &result)
+		gotErr = result["error"]
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	sender := &recordingApplicationControlSender{sendErr: errors.New("connection interrupted")}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	c.dispatch(t.Context(), Command{
+		ID:          31,
+		CommandType: "set_application_control",
+		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":42,"rules":[]}`),
+	})
+
+	assert.Equal(t, "failed", gotStatus)
+	assert.Contains(t, gotErr, "connection interrupted", "the transport error must reach the audit trail")
+	assert.NotContains(t, gotErr, "not configured", "a live bridge that refuses is not a missing bridge")
+}
+
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Covers the malformed-JSON path: the commander must report `failed` BEFORE handing off to XPC so a
 // future schema tightening on the extension side never sees garbage bytes. One scenario, four invalid
@@ -185,7 +224,7 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: covers the version validation guard. Real
 // server versions start at 1, so a zero or negative payload version is either a hand-queued test command
@@ -217,7 +256,7 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	assert.Empty(t, sender.sent, "payload with invalid version must not reach the extension")
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: symmetric envelope check for policy_id.
 // Zero policy_id never comes from a healthy server fan-out; fail explicitly rather than hand garbage to
@@ -249,7 +288,7 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	assert.Empty(t, sender.sent)
 }
 
-// spec:agent-command-executor/set-blocklist-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: envelope check on `rules`. Without this
 // gate, a payload with missing or null rules slips past json.Unmarshal-into-json.RawMessage and only fails
@@ -314,7 +353,7 @@ func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 	require.Len(t, sender.sent, 1, "empty rules array is a valid snapshot push")
 }
 
-// spec:agent-command-executor/set-blocklist-command/extension-bridge-is-not-available
+// spec:agent-command-executor/set-application-control-command/extension-bridge-is-not-available
 //
 // Covers the agent startup case where the XPC bridge has not been wired yet (or has disconnected). The
 // command must fail with a clear reason so the operator's audit log surfaces "no extension" rather than a
