@@ -37,9 +37,18 @@ const monitorTallyVersion = 1
 
 // encodeMonitorTally renders a tally for Nack to carry, returning nil for an empty one.
 //
-// Nil rather than an encoding of nothing, because Nack treats "no tally" as "leave what is stored alone". An attempt that resolved
-// no matches must not erase an earlier attempt's, and that case is real: a rule demoted out of monitor mode between two attempts
-// leaves the later one with an empty tally over the same events.
+// Nil rather than an encoding of nothing, because Nack treats "no tally" as "leave what is stored alone", and an empty tally from
+// a FAILING attempt is an absence of information rather than an assertion that the batch matched nothing. Evaluation reports what
+// it accumulated UP TO its failure (see Engine.Evaluate, which returns tally.snapshot() alongside the error), so an attempt that
+// fails on an earlier rule than its predecessor reports fewer matches and one that fails on the first reports none. Encoding an
+// empty `matches` here would hand that over as a value and displace what an earlier attempt really resolved, on the commonest
+// failure there is, which is the under-reporting issue #893 exists to prevent.
+//
+// Review proposed the opposite in a later round, having asked for this direction in an earlier one, so the reasoning is written
+// down rather than left to be re-derived. The residual it was pointing at is real and accepted: where a rule is taken OUT of
+// monitor mode between two attempts, the later attempt's empty tally is a genuine zero and the carried value is the demoted rule's,
+// leaving the figure high by one batch for it. The two cases are indistinguishable here, because evaluation reports an empty tally
+// for both, and the recorded figure is documented as approximate. Tracked as issue #922 rather than guessed at here.
 func encodeMonitorTally(tally rulesapi.MonitorTally) ([]byte, error) {
 	if len(tally) == 0 {
 		return nil, nil

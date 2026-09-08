@@ -446,6 +446,7 @@ func TestMonitorMatchesRecordedWhenTheBatchIsWithdrawn(t *testing.T) {
 		require.Len(t, rec.calls, 1, "an unstorable carry must not also lose this attempt's own matches")
 	})
 
+	// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/an-empty-result-does-not-displace-earlier-matches
 	t.Run("a withdrawal at detection reports what an earlier attempt matched, not its own emptier tally", func(t *testing.T) {
 		t.Parallel()
 		rec := &recordingMonitorRecorder{}
