@@ -184,7 +184,14 @@
   outline-offset: 2px;
 }
 
-// The expanded sentence sits under the abbreviated value rather than beside it, so opening one row does not reflow the column.
+// The expanded sentence sits UNDER the abbreviated value rather than beside it, so the row grows downward instead of pushing
+// the abbreviated figure sideways.
+//
+// It does NOT stop the table reflowing. The table uses automatic layout, so a sentence wider than the column widens that column
+// for every row while it is open, and the columns to its right shift; measured in the browser at 463-478px against a column
+// drawn for "8.5us avg". That is ordinary disclosure behaviour and it reverses on collapse, but it is real, and an earlier
+// version of this comment claimed the opposite. Anything relying on a no-reflow guarantee here would be relying on nothing.
+// Constraining the width so it wraps inside the column is the fix if that ever becomes a problem.
 .detection-config__figure-full {
   display: block;
   margin-top: 0.15rem;
