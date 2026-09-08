@@ -16,8 +16,14 @@
 --
 -- Written on ONE row of a batch rather than all of them. The value is a property of the batch and the batch has no row of its own,
 -- so writing it to every row would multiply a blob by the batch size on a hot path to store one fact. An attempt that writes one
--- clears the column on the other rows it holds, so exactly one row carries a batch's value at a time and the reader cannot pick up
--- a value an earlier attempt left on a row this one does not write.
+-- clears the column on the other rows it holds, so at most one row per BATCH carries a value and the reader cannot pick up one an
+-- earlier attempt left on a row this one does not write.
+--
+-- Per batch, not per host: two pending rows CAN hold two batches' values at once, because the claim is a timestamp-ordered prefix
+-- and a late-arriving older event can push an earlier carrier out of it. That is harmless, and the claim's shape is why. A row
+-- still holding a value is either inside the prefix its own batch forms, where the next attempt to supply one overwrites or clears
+-- it, or has left the pending pool for good: acked rows are pruned, and a withdrawn row is never claimed or nacked again. So a
+-- withdrawal is only ever handed the value resolved over the events being withdrawn.
 --
 -- NULL is the ordinary state and means "no attempt has evaluated this batch yet". A nack with no tally leaves the column alone
 -- rather than clearing it: a later attempt that fails at the fold must not erase what an earlier one resolved, which is the whole

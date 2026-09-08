@@ -239,3 +239,88 @@ func TestNackClearsTheValueFromTheRowsItSupersedes(t *testing.T) {
 	assert.Equal(t, []string{"clear-1"}, carrying,
 		"the superseding attempt owns the new carrier AND clears the old one, so one row holds the batch's value")
 }
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-value-survives-the-attempt-that-supplied-it
+//
+// "No tally" has two spellings in Go, and only a nil []byte reaches SQL as NULL: an empty but non-nil one binds as an empty BLOB.
+// Review found that, and it is the defect this column exists to prevent reached by a caller spelling "nothing" the other way, so
+// the boundary normalizes and this pins it. The type cannot express the difference, which is why the guard is at the boundary
+// rather than trusted to callers.
+func TestNackTreatsAnEmptyTallyAsNoTally(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-empty"
+	const batch = 2
+
+	enqueue(t, log, host, "empty-1", 1_000)
+	enqueue(t, log, host, "empty-2", 1_001)
+
+	carry := []byte(`{"v":1,"matches":[{"count":4}]}`)
+	require.Zero(t, nackOnce(t, log, host, batch, carry).SetAside)
+
+	// An attempt that resolved nothing, spelled as an empty slice rather than nil. It must not erase what the first one supplied.
+	for range 19 {
+		require.Zero(t, nackOnce(t, log, host, batch, []byte{}).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"empty-1", "empty-2"}, 16*time.Minute)
+
+	withdrawing := nackOnce(t, log, host, batch, []byte{})
+	require.Equal(t, int64(batch), withdrawing.SetAside)
+	assert.Equal(t, string(carry), string(withdrawing.CarriedTally),
+		"an empty slice is no tally, not an instruction to store nothing over what an earlier attempt resolved")
+}
+
+// spec:server-event-ingestion/the-queue-carries-a-value-across-retry-attempts/a-later-value-replaces-the-one-it-supersedes
+//
+// A prefix shift at a FIXED batch limit, which review asked for by name: a late-arriving older event pushes an earlier carrier out
+// of the claimable prefix, so two pending rows hold two batches' values at once and neither attempt writes the other's row.
+//
+// The question that state raises is whether a withdrawal can be handed a value that does not describe the events being withdrawn,
+// which would count matches for events that were counted by someone else. It cannot, and the reason is the claim's shape rather
+// than the clearing: the claim is a timestamp-ordered prefix of PENDING rows, so a row still holding a value is either inside the
+// prefix its batch forms, where the next attempt to supply one overwrites or clears it, or has left the pending pool terminally.
+// Each batch is handed its own value here, which is what makes "one row per batch" the honest statement of the invariant rather
+// than "one row".
+func TestNackKeepsEachBatchsValueAcrossAPrefixShift(t *testing.T) {
+	t.Parallel()
+	log, db := newEventLogWithDB(t)
+	const host = "host-shift"
+	const batch = 2
+
+	// The first batch is the whole pending set, so it is the prefix.
+	enqueue(t, log, host, "shift-late-a", 2_000)
+	enqueue(t, log, host, "shift-late-b", 2_001)
+	older := []byte(`{"v":1,"matches":[{"count":11}]}`)
+	require.Zero(t, nackOnce(t, log, host, batch, older).SetAside)
+
+	// Two OLDER events arrive afterwards. At the same limit the prefix is now theirs, and the first batch's carrier is outside it.
+	enqueue(t, log, host, "shift-early-a", 1_000)
+	enqueue(t, log, host, "shift-early-b", 1_001)
+	newer := []byte(`{"v":1,"matches":[{"count":22}]}`)
+	require.Zero(t, nackOnce(t, log, host, batch, newer).SetAside)
+
+	var carrying []string
+	require.NoError(t, db.SelectContext(t.Context(), &carrying,
+		"SELECT event_id FROM event_queue WHERE monitor_tally IS NOT NULL AND host_id = ? ORDER BY event_id", host))
+	require.Equal(t, []string{"shift-early-a", "shift-late-a"}, carrying,
+		"the premise: two pending rows hold two batches' values, because neither attempt's prefix contained the other's carrier")
+
+	// The newer prefix reaches its bounds first, since the claim keeps offering it.
+	for range 19 {
+		require.Zero(t, nackOnce(t, log, host, batch, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"shift-early-a", "shift-early-b"}, 16*time.Minute)
+	early := nackOnce(t, log, host, batch, nil)
+	require.Equal(t, int64(batch), early.SetAside)
+	assert.Equal(t, string(newer), string(early.CarriedTally), "the early batch is handed the value resolved over the early batch")
+
+	// With those withdrawn, the displaced batch is the prefix again, and is handed ITS value, not the one that displaced it.
+	for range 19 {
+		require.Zero(t, nackOnce(t, log, host, batch, nil).SetAside)
+	}
+	ageFirstFailure(t, db, []string{"shift-late-a", "shift-late-b"}, 16*time.Minute)
+	late := nackOnce(t, log, host, batch, nil)
+	require.Equal(t, int64(batch), late.SetAside)
+	assert.Equal(t, string(older), string(late.CarriedTally),
+		"and the displaced batch is handed its own, so no batch is counted with another's matches")
+}

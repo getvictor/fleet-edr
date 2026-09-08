@@ -400,6 +400,14 @@ func (s *Store) Nack(
 		// Vacuously held, matching Ack: there was nothing to hold and nothing to lose.
 		return api.NackResult{Held: true}, nil
 	}
+	// "No tally" has two spellings in Go and only one of them reaches SQL as NULL: an empty but non-nil []byte binds as an empty
+	// BLOB, which is not NULL, so the statement below would take its overwrite branch and clear what an earlier attempt supplied.
+	// That is the defect this whole column exists to prevent, reached by a caller spelling "nothing" the other way. The type cannot
+	// rule it out, so the boundary normalizes once and everything below trusts it (measured: `SELECT ? IS NULL` returns true for a
+	// nil []byte and false for []byte{}).
+	if len(tally) == 0 {
+		tally = nil
+	}
 	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return api.NackResult{}, fmt.Errorf("begin tx for nack: %w", err)
