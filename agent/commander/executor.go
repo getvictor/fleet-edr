@@ -235,9 +235,9 @@ func (e *Executor) runKill(ctx context.Context, cmd Command) (string, json.RawMe
 }
 
 // runSetApplicationControl forwards the raw command payload to the ESF extension over XPC. Result on success is
-// {"policy_id": P, "policy_version": V} so operators can confirm per host which snapshot the agent applied. Envelope validation only
-// (policy_id present, version positive, rules is a JSON array); the per-rule shape is the extension's responsibility, and forwarding the
-// raw bytes keeps the wire shape byte-identical across server, agent, and extension.
+// {"policy_id": P, "policy_version": V, "rules": N} so operators can confirm per host which snapshot the agent applied and how much of
+// it. Envelope validation only (policy_id positive, version positive, rules is a JSON array); the per-rule shape is the extension's
+// responsibility, and forwarding the raw bytes keeps the wire shape byte-identical across server, agent, and extension.
 func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (string, json.RawMessage) {
 	var payload setApplicationControlPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {

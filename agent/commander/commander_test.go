@@ -160,7 +160,7 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	assert.EqualValues(t, 1, result["rules"], "the result reports how many rules were forwarded")
 }
 
-// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Covers the malformed-JSON path: the commander must report `failed` BEFORE handing off to XPC so a
 // future schema tightening on the extension side never sees garbage bytes. One scenario, four invalid
@@ -189,7 +189,7 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	assert.Empty(t, sender.sent, "malformed payload must not reach the extension")
 }
 
-// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: covers the version validation guard. Real
 // server versions start at 1, so a zero or negative payload version is either a hand-queued test command
@@ -221,7 +221,7 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	assert.Empty(t, sender.sent, "payload with invalid version must not reach the extension")
 }
 
-// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: symmetric envelope check for policy_id.
 // Zero policy_id never comes from a healthy server fan-out; fail explicitly rather than hand garbage to
@@ -253,7 +253,7 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	assert.Empty(t, sender.sent)
 }
 
-// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-has-a-non-positive-version
+// spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value
 //
 // Companion to TestExecuteSetApplicationControl_InvalidPayload: envelope check on `rules`. Without this
 // gate, a payload with missing or null rules slips past json.Unmarshal-into-json.RawMessage and only fails

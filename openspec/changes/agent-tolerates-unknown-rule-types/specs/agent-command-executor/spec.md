@@ -8,13 +8,15 @@ The system SHALL execute a `set_application_control` command by forwarding the t
 local Endpoint Security extension and SHALL report the policy identifier and version that were forwarded so
 the server can confirm per-host convergence. The payload SHALL carry `{policy_id, policy_version, rules}`
 where each `rules` entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url,
-severity}`. The executor SHALL validate that `policy_id` is non-empty and `policy_version` is positive
-before forwarding.
+severity}`. The executor SHALL validate, before forwarding, that `policy_id` is a positive integer, that
+`policy_version` is a positive integer, and that `rules` is a JSON array. It SHALL NOT validate the shape of
+the individual entries: the extension owns the rule shape, and the agent forwards the raw payload bytes so
+the wire shape stays byte-identical across server, agent, and extension.
 
 #### Scenario: Forwarded successfully
 
-- **GIVEN** a `set_application_control` command is received with a non-empty `policy_id`, a positive
-  `policy_version`, and a configured extension bridge
+- **GIVEN** a `set_application_control` command is received with a positive `policy_id`, a positive
+  `policy_version`, a `rules` array, and a configured extension bridge
 - **WHEN** the agent forwards the payload to the extension
 - **THEN** the executor reports completed with the policy identifier, the policy version, and the count of
   rules in the payload
@@ -26,10 +28,10 @@ before forwarding.
 - **THEN** the executor reports failed with a reason identifying the missing bridge
 - **AND** no other side effect is performed
 
-#### Scenario: Payload is missing required fields or has a non-positive version
+#### Scenario: Payload is missing required fields or carries a non-positive value
 
-- **GIVEN** a `set_application_control` command is received whose payload is missing `policy_id`, missing
-  `policy_version`, or whose `policy_version` is zero or negative
+- **GIVEN** a `set_application_control` command is received whose payload has a `policy_id` or a
+  `policy_version` that is absent, zero, or negative, or whose `rules` is absent or is not a JSON array
 - **WHEN** the executor decodes the payload
 - **THEN** the executor reports failed with a reason identifying the invalid payload
 - **AND** the extension bridge is not invoked

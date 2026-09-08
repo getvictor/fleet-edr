@@ -23,6 +23,12 @@ Removing a restored requirement is right when the specified behaviour is worse t
 
 This carries no delta of its own because it changes no specification. The requirement already says the count is reported; the #905 repair restores that sentence to canonical, and the code is brought into line with it.
 
+## The restatement also corrected two validation clauses
+
+Review found the restored text describes the validation loosely in a third way, and this is the same class as the other two rather than a wording nit. It said the executor validates that `policy_id` is "non-empty", which is the vocabulary of a string; `policy_id` is an `int64` and the executor rejects any value at or below zero. And it did not mention `rules` at all, though the executor refuses a payload whose `rules` is absent or is not a JSON array, before the extension bridge is touched.
+
+Both are corrected here, and the invalid-payload scenario is renamed to cover what its four tests already pinned: malformed JSON, a zero `policy_id`, a zero `policy_version`, and a `rules` value of the wrong shape. The requirement now also says what the executor deliberately does NOT validate, the shape of the individual rule entries, which is the same boundary the unknown-rule-type clause above draws.
+
 ## Impact
 
 - Affected specs: `agent-command-executor`
