@@ -32,8 +32,11 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"shell_network_connect": {
 			api.ExclusionMatchParentPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
 		},
-		"persistence_launchagent":       {api.ExclusionMatchPathGlob},
-		"sudoers_tamper":                {api.ExclusionMatchPathGlob},
+		"persistence_launchagent": {api.ExclusionMatchPathGlob},
+		"sudoers_tamper":          {api.ExclusionMatchPathGlob},
+		// Same surface as sudoers_tamper and for the same reason: the tunable subject is the acting process, since a
+		// configuration manager that rewrites a fragment by deleting and recreating it is the shape an operator excludes.
+		"sudoers_destroyed":             {api.ExclusionMatchPathGlob},
 		"privilege_launchd_plist_write": {api.ExclusionMatchTeamID},
 		"dyld_insert":                   {},
 		"shell_from_office":             {},

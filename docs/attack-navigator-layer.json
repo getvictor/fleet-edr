@@ -110,6 +110,12 @@
       "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_local_groups"
     },
     {
+      "techniqueID": "T1070.004",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: sudoers_destroyed"
+    },
+    {
       "techniqueID": "T1070.006",
       "score": 0.5,
       "color": "#fdae6b",
@@ -276,6 +282,12 @@
       "score": 0.5,
       "color": "#fdae6b",
       "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_system_shutdown_reboot"
+    },
+    {
+      "techniqueID": "T1531",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: sudoers_destroyed"
     },
     {
       "techniqueID": "T1543.001",

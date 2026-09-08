@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "event_id": "sdes-neg-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4000,
+      "event_type": "fork",
+      "payload": {"child_pid": 12300, "parent_pid": 1}
+    },
+    {
+      "event_id": "sdes-neg-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 12300,
+        "ppid": 1,
+        "path": "/usr/sbin/visudo",
+        "args": ["visudo", "-f", "/etc/sudoers.d/admins"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sdes-neg-del",
+      "host_id": "fixture-host",
+      "timestamp_ns": 4200,
+      "event_type": "file_delete",
+      "payload": {
+        "pid": 12300,
+        "path": "/private/etc/sudoers.d/admins.tmp"
+      }
+    }
+  ],
+  "expected_findings": []
+}

@@ -155,6 +155,9 @@ func TestCatalog_ListShape(t *testing.T) {
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
+		// Registered immediately after the rule it complements: sudoers_tamper covers a policy file being written or renamed
+		// into place, this one covers the same file being emptied or removed (issue #934).
+		"sudoers_destroyed",
 		"dns_c2_beacon",
 		"sensor_tamper",
 	}

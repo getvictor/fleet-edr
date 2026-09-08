@@ -1,0 +1,1 @@
+{"event_id":"99999999-9999-9999-9999-999999999999","event_type":"file_delete","host_id":"AAAAAAAA-0000-0000-0000-000000000000","payload":{"path":"\/etc\/sudoers.d\/admins","pid":4242},"platform":"darwin","timestamp_ns":1700000000000000000}
