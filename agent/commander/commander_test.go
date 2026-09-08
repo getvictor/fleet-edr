@@ -3,6 +3,7 @@ package commander
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -107,10 +108,10 @@ func (r *recordingApplicationControlSender) SendApplicationControl(payload []byt
 // spec:agent-command-executor/set-application-control-command/forwarded-successfully
 //
 // Covers the set_application_control command path: server enqueues the command, commander forwards it to
-// the extension, and reports `completed` with policy_id + policy_version. Note: the spec scenario text
-// says "the count of paths in the payload" but the implementation reports policy_id + policy_version; the
-// "count of paths" framing predates the set_application_control rename (was originally set_blocklist that
-// carried a path list). Filed as #246 to align spec naming.
+// the extension, and reports `completed` with policy_id, policy_version, and the rule count. The comment
+// here used to record a mismatch (the scenario said "the count of paths", predating the set_blocklist ->
+// set_application_control rename) and pointed at #246, which is closed. The scenario now says the count of
+// RULES and the executor reports it, so there is no longer a gap to note.
 func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	t.Parallel()
 	var gotStatus string
@@ -158,6 +159,40 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	// with the wrong number of rules is the case an operator reconciling a rollout needs to see. Restored alongside the
 	// requirement that asks for it (#905), which the archive had dropped.
 	assert.EqualValues(t, 1, result["rules"], "the result reports how many rules were forwarded")
+}
+
+// spec:agent-command-executor/set-application-control-command/forwarding-to-the-extension-fails
+//
+// The transport failure, which was the one observable outcome of this command that no test reached: the
+// recording sender has carried a sendErr field the whole time and nothing ever set it, so the branch that
+// turns an XPC error into a failed status was dead as far as the suite was concerned. Unlike the nil-sender
+// case this is a live bridge that refuses the payload, and the two report different reasons on purpose, so
+// an operator reading the audit trail can tell "no extension installed" from "the extension rejected it".
+func TestExecuteSetApplicationControl_SendFails(t *testing.T) {
+	t.Parallel()
+	var gotStatus, gotErr string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body statusUpdate
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStatus = body.Status
+		var result map[string]string
+		_ = json.Unmarshal(body.Result, &result)
+		gotErr = result["error"]
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	sender := &recordingApplicationControlSender{sendErr: errors.New("connection interrupted")}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	c.dispatch(t.Context(), Command{
+		ID:          31,
+		CommandType: "set_application_control",
+		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":42,"rules":[]}`),
+	})
+
+	assert.Equal(t, "failed", gotStatus)
+	assert.Contains(t, gotErr, "connection interrupted", "the transport error must reach the audit trail")
+	assert.NotContains(t, gotErr, "not configured", "a live bridge that refuses is not a missing bridge")
 }
 
 // spec:agent-command-executor/set-application-control-command/payload-is-missing-required-fields-or-carries-a-non-positive-value

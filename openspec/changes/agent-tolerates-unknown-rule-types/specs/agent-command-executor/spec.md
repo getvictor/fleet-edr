@@ -5,13 +5,23 @@
 ### Requirement: Set-application-control command
 
 The system SHALL execute a `set_application_control` command by forwarding the typed rule snapshot to the
-local Endpoint Security extension and SHALL report the policy identifier and version that were forwarded so
-the server can confirm per-host convergence. The payload SHALL carry `{policy_id, policy_version, rules}`
-where each `rules` entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url,
-severity}`. The executor SHALL validate, before forwarding, that `policy_id` is a positive integer, that
-`policy_version` is a positive integer, and that `rules` is a JSON array. It SHALL NOT validate the shape of
-the individual entries: the extension owns the rule shape, and the agent forwards the raw payload bytes so
-the wire shape stays byte-identical across server, agent, and extension.
+local Endpoint Security extension and SHALL report the policy identifier, the policy version, and the number
+of rules forwarded, so the server can confirm per-host convergence: the version says which policy the host
+took and the count says how much of it.
+
+The payload SHALL carry `{policy_id, policy_version, policy_epoch, deadline_fallback, rules}`, where each
+`rules` entry carries `{rule_id, rule_type, identifier, action, enforcement, severity}` and MAY carry
+`custom_msg` and `custom_url`, which are omitted when unset. `policy_epoch` is the policy's server-assigned
+update time and is the restore-surviving companion to `policy_version`, so a server restore that regresses
+the version still re-syncs hosts. `deadline_fallback` governs the extension's verdict when a BINARY rule's
+hash cannot be computed inside the kernel deadline. Both are forwarded rather than interpreted: they are
+addressed to the extension, and the agent is a conduit for them.
+
+The executor SHALL validate, before forwarding, that `policy_id` is a positive integer, that
+`policy_version` is a positive integer, and that `rules` is a JSON array. It SHALL NOT validate anything
+else in the payload, including the shape of the individual entries and the two fields addressed to the
+extension: the extension owns the rule shape, and the agent forwards the raw payload bytes so the wire shape
+stays byte-identical across server, agent, and extension.
 
 #### Scenario: Forwarded successfully
 
@@ -27,6 +37,14 @@ the wire shape stays byte-identical across server, agent, and extension.
 - **WHEN** a `set_application_control` command is received
 - **THEN** the executor reports failed with a reason identifying the missing bridge
 - **AND** no other side effect is performed
+
+#### Scenario: Forwarding to the extension fails
+
+- **GIVEN** a valid `set_application_control` payload and a configured extension bridge
+- **WHEN** the transport to the extension returns an error
+- **THEN** the executor reports failed with a reason carrying the transport error
+- **AND** the reason is distinguishable from the missing-bridge reason, so an operator reading the audit
+  trail can tell an absent extension from one that refused the payload
 
 #### Scenario: Payload is missing required fields or carries a non-positive value
 
