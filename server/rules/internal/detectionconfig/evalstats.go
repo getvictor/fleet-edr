@@ -111,6 +111,8 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 			first_seen       = LEAST(first_seen, VALUES(first_seen)),
 			last_seen        = GREATEST(last_seen, VALUES(last_seen))`
 
+	// Additive, and retried: safe under sqlhelpers.WithDeadlockRetry's contract, which is where that reasoning lives. Worth noting
+	// only that the buffer above this does NOT retry a failed flush, so this is the sole retry on the path (issue #868).
 	err := sqlhelpers.WithDeadlockRetry(ctx, matchCountDeadlockAttempts, matchCountDeadlockStep, func() error {
 		_, execErr := s.db.ExecContext(ctx, query, args...)
 		return execErr
