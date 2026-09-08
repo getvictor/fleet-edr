@@ -68,14 +68,14 @@ let package = Package(
                 "extension/main.swift",
                 "extension/ESFStringToken.swift",
                 "extension/ESFSubscriber.swift",
-                // ESFSubscriber's handler splits (+BTM / +AuthExec), the dedicated FileTamperSubscriber client, and the
-                // cdhash helpers depend on EndpointSecurity es_* types, so they belong to the Xcode extension target, not
-                // this pure-logic library. Listed here to keep `swift build` free of the "unhandled file" warning (the
-                // explicit sources list below still defines what actually compiles).
+                // ESFSubscriber's handler splits (+BTM / +AuthExec) and the dedicated FileTamperSubscriber client depend on
+                // EndpointSecurity es_* types, so they belong to the Xcode extension target, not this pure-logic library.
+                // Listed here to keep `swift build` free of the "unhandled file" warning (the explicit sources list below
+                // still defines what actually compiles). CDHashHex.swift used to be here on the same grounds and is not:
+                // its EndpointSecurity import was unused, so it compiles in the library and is now in `sources` instead.
                 "extension/ESFSubscriber+BTM.swift",
                 "extension/ESFSubscriber+AuthExec.swift",
                 "extension/FileTamperSubscriber.swift",
-                "extension/CDHashHex.swift",
                 "extension/NotificationClient.swift",
                 "extension/ProcessSnapshotEnumerator.swift",
                 "networkextension/Info.plist",
@@ -93,6 +93,11 @@ let package = Package(
                 "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
                 "extension/AuthExecDecider.swift",
+                // CDHashHex.swift holds the CDHash-to-hex helper and the Hardened Runtime flag test. It carried an
+                // EndpointSecurity import that nothing in it used (the only es_ references are in comments), so it moves
+                // in here on that import's removal. Worth doing: its all-zero rejection is the reason a hardened exec can
+                // legitimately carry no cdhash, and that branch had no test.
+                "extension/CDHashHex.swift",
                 "shared/BlockNotificationContract.swift",
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",

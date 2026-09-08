@@ -149,7 +149,7 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertFalse(json.contains("cdhash"))
     }
 
-    // spec:endpoint-event-collection/process-lifecycle-event-capture/an-exec-carries-the-code-directory-hash-only-for-a-hardened-binary
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/the-exec-event-carries-cdhash-only-when-the-kernel-reported-one
     //
     // Both halves in one test because the scenario is a biconditional: present for a Hardened Runtime binary, absent
     // otherwise. A test of only the present half would pass against a serializer that emitted a placeholder for every
@@ -166,9 +166,11 @@ final class EventSerializerTests: XCTestCase {
             sha256: nil, cdhash: String(repeating: "c", count: 40), snapshot: false
         )
         let hardenedJSON = String(data: try encoder.encode(hardened), encoding: .utf8) ?? ""
-        XCTAssertTrue(
-            hardenedJSON.contains("\"cdhash\":\"\(String(repeating: "c", count: 40))\""),
-            "hardened exec must carry cdhash, got: \(hardenedJSON)"
+        XCTAssertEqual(
+            hardenedJSON,
+            "{\"args\":[\"ssh\"],\"cdhash\":\"cccccccccccccccccccccccccccccccccccccccc\",\"code_signing\":{\"flags\":65536," +
+            "\"is_platform_binary\":true,\"signing_id\":\"com.apple.ssh\",\"team_id\":\"\"}," +
+                "\"cwd\":\"\\/\",\"gid\":0,\"path\":\"\\/usr\\/bin\\/ssh\",\"pid\":501,\"ppid\":1,\"uid\":0}"
         )
 
         let notHardened = ExecPayload(
@@ -177,9 +179,43 @@ final class EventSerializerTests: XCTestCase {
             sha256: nil, cdhash: nil, snapshot: false
         )
         let notHardenedJSON = String(data: try encoder.encode(notHardened), encoding: .utf8) ?? ""
-        XCTAssertFalse(notHardenedJSON.contains("cdhash"), "non-hardened exec must omit the key entirely")
-        XCTAssertTrue(notHardenedJSON.contains("\"code_signing\""), "the rest of the payload is unaffected")
+        XCTAssertEqual(
+            notHardenedJSON,
+            "{\"args\":[\"tool\"],\"code_signing\":{\"flags\":0,\"is_platform_binary\":false," +
+            "\"signing_id\":\"com.example.tool\",\"team_id\":\"FDG8Q7N4CC\"}," +
+                "\"cwd\":\"\\/\",\"gid\":0,\"path\":\"\\/usr\\/local\\/bin\\/tool\",\"pid\":502,\"ppid\":1," +
+                "\"uid\":0}"
+        )
+        XCTAssertFalse(notHardenedJSON.contains("cdhash"), "the key is absent, not null")
     }
+
+    // spec:endpoint-event-collection/process-lifecycle-event-capture/the-exec-event-carries-cdhash-only-when-the-kernel-reported-one
+    //
+    // The third case, and the one the payload-level test above cannot reach: a HARDENED process whose kernel cdhash is all zeros.
+    // cdhashHexString returns nil for it, so the event omits the field exactly as it does for a non-hardened binary, and the
+    // requirement is not the biconditional "hardened iff present" it first appeared to be.
+    //
+    // This branch had no test at all before now, which is why the gap survived: the payload tests construct ExecPayload directly
+    // and so can pair the Hardened Runtime flag with any hash the author likes, including one the kernel would never report.
+    // Emitting the zeros instead would be worse than omitting them, because a CDHASH rule whose identifier is forty zeros would
+    // then match every such exec by coincidence.
+    // The 20-element tuple is the C surface (es_process_t.cdhash imports as a fixed-size tuple), so the same scoped
+    // disable/enable pair CDHashHex.swift carries around its own signature applies to these two locals.
+    // swiftlint:disable large_tuple
+    func testCDHashHexStringRejectsAnAllZeroKernelValue() {
+        let allZero: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                      UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        XCTAssertNil(cdhashHexString(from: allZero), "an all-zero kernel cdhash means the kernel has none")
+
+        // One non-zero byte in the LAST position: an implementation that checked only the first byte, or only a prefix, would
+        // wrongly reject this real hash and silently drop cdhash from every event carrying one shaped like it.
+        let lastByteSet: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                          UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+        XCTAssertEqual(cdhashHexString(from: lastByteSet), "0000000000000000000000000000000000000001")
+    }
+    // swiftlint:enable large_tuple
 
     func testExecPayloadDecodesLegacyWireWithoutSnapshotKey() throws {
         // A pre-issue-#11 wire payload had no snapshot key. The custom decoder must
@@ -284,7 +320,7 @@ final class EventSerializerTests: XCTestCase {
     // Runs the real decision and builds the payload from what it returned, rather than hand-writing the fields, so the
     // wire assertions are made against values the decider actually produced.
     //
-    // What this canNOT distinguish, and the requirement's "not the rule's own stored identifier" clause can: today every
+    // What this cannot distinguish, and the requirement's "not the rule's own stored identifier" clause can: today every
     // layer is a map keyed by `rule.identifier`, so a match always returns a value equal to it. The clause is a
     // constraint on future divergence (a case-folded or glob-matched layer would break the equality), and it matches the
     // code, since emitBlockEvent is handed the matched identifier and not the rule. No test can separate the two while
@@ -310,15 +346,17 @@ final class EventSerializerTests: XCTestCase {
             policyID: 7, policyVersion: 12
         )
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
-        XCTAssertTrue(json.contains("\"identifier\":\"EQHXZ8M8AV\""), "identifier is the matched value, got: \(json)")
-        XCTAssertTrue(json.contains("\"rule_type\":\"TEAMID\""))
-        XCTAssertTrue(json.contains("\"rule_id\":\"app_control:test-EQHXZ8M8AV\""))
-        XCTAssertTrue(json.contains("\"pid\":991"))
-        XCTAssertTrue(json.contains("\"path\":\"\\/usr\\/local\\/bin\\/blocked\""))
-        XCTAssertTrue(json.contains("\"severity\":\"medium\""))
-        XCTAssertTrue(json.contains("\"policy_id\":7"))
-        XCTAssertTrue(json.contains("\"policy_version\":12"))
-        // Four field names the canonical requirement carried that the wire has never had.
+        // One literal rather than a set of `contains` checks. The encoder uses .sortedKeys, so the bytes are deterministic, and
+        // equality is the only assertion that fails when a field is ADDED. That is the direction this PR is about: the canonical
+        // requirement claimed four fields (rule_identifier, matched_identifier, process, ancestry) the wire has never had, and a
+        // substring test cannot notice an extra key. Absence assertions for those four follow, because a literal alone would not
+        // say WHICH four the requirement invented if this ever regresses.
+        XCTAssertEqual(
+            json,
+            "{\"identifier\":\"EQHXZ8M8AV\",\"path\":\"\\/usr\\/local\\/bin\\/blocked\",\"pid\":991," +
+                "\"policy_id\":7,\"policy_version\":12,\"rule_id\":\"app_control:test-EQHXZ8M8AV\"," +
+                "\"rule_type\":\"TEAMID\",\"severity\":\"medium\"}"
+        )
         for absent in ["rule_identifier", "matched_identifier", "ancestry", "\"process\""] {
             XCTAssertFalse(json.contains(absent), "\(absent) is not a field of this event")
         }

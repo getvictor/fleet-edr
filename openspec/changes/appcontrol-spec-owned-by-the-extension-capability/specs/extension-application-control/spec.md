@@ -4,7 +4,7 @@
 
 ### Requirement: Block event emission
 
-Whenever the extension denies an AUTH_EXEC because of a `BLOCK` rule, it SHALL emit an event of kind `application_control_block`. The event SHALL carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `identifier`, `severity`, `pid`, `path`, `custom_msg` (nullable), and `custom_url` (nullable). The `identifier` SHALL be the actual value from the target tuple that caused the match (for example, the CDHash that hit a `CDHASH` rule), not the rule's own stored identifier, so an operator reading the alert sees which of the process's identities was the one that matched.
+Whenever the extension denies an AUTH_EXEC because of a `BLOCK` rule, it SHALL emit an event of kind `application_control_block`. The event SHALL carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `identifier`, `severity`, `pid`, and `path`, and SHALL carry `custom_msg` and `custom_url` when the matched rule sets them, omitting the key entirely when it does not. The server's decoder relies on absence rather than a null. The `identifier` SHALL be the actual value from the target tuple that caused the match (for example, the CDHash that hit a `CDHASH` rule), not the rule's own stored identifier, so an operator reading the alert sees which of the process's identities was the one that matched.
 
 The event SHALL be emitted after the kernel has been responded to, so the JSON encode and the handoff to the upload pipeline do not run inside the AUTH_EXEC deadline.
 

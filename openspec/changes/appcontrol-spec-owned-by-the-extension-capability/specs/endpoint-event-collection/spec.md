@@ -6,7 +6,11 @@
 
 The system SHALL emit a `fork` event when a monitored process forks, an `exec` event when a process replaces its image, and an `exit` event when a process exits. Each event MUST carry the originating PID and any additional fields documented for that event type. The `exec` event SHALL additionally carry the process's own kernel PID generation and the `fork` event SHALL carry the child process's kernel PID generation (`pidversion`, read from the respective process's audit token) when it is available, so the server can disambiguate reused PIDs by identity rather than by time. The `pidversion` field is optional: when the audit token is unavailable the event is still emitted without it.
 
-The `exec` event SHALL also carry `cdhash`, the code-directory hash of the new image, when the process runs under Apple's Hardened Runtime, and SHALL omit it otherwise. The kernel maps pages lazily on a non-hardened process and does not re-verify them after load, so the hash reported at exec is not a reliable identity for the bytes that will eventually execute, and a value that cannot be relied on is worse than an absent one. The field is what lets an operator exclude a code-signed parent from a `suspicious_exec` finding by its non-spoofable code identity instead of a path glob an attacker who can write to a world-writable directory could land inside, so its absence on a hardened binary is a loss of that defence and not a cosmetic gap.
+The `exec` event SHALL carry `cdhash`, the code-directory hash of the new image, when the process runs under Apple's Hardened Runtime AND the kernel reported a hash for it. It SHALL omit the field otherwise, in both of the cases that reach that outcome: a process not running under the Hardened Runtime, and a hardened process whose reported hash is all zeros.
+
+Both omissions are deliberate. The kernel maps pages lazily on a non-hardened process and does not re-verify them after load, so the hash reported at exec is not a reliable identity for the bytes that will eventually execute. An all-zero hash is the kernel saying it has none, and emitting it would let a rule whose identifier is forty zeros match by coincidence. A value that cannot be relied on is worse than an absent one.
+
+The field is what lets an operator exclude a code-signed parent from a `suspicious_exec` finding by its non-spoofable code identity instead of a path glob an attacker who can write to a world-writable directory could land inside, so its absence where a hash does exist is a loss of that defence and not a cosmetic gap.
 
 #### Scenario: A user runs a shell command
 
@@ -23,13 +27,14 @@ The `exec` event SHALL also carry `cdhash`, the code-directory hash of the new i
 - **THEN** the system emits a `fork` event whose payload identifies the parent PID and the child PID
 - **AND** the payload includes the child process's `pidversion` when its audit token is available
 
-#### Scenario: An exec carries the code-directory hash only for a hardened binary
+#### Scenario: The exec event carries cdhash only when the kernel reported one
 
 - **GIVEN** the endpoint event capture is running
-- **WHEN** a process execs a binary that runs under Apple's Hardened Runtime
+- **WHEN** a process execs a binary that runs under Apple's Hardened Runtime and the kernel reports a hash for it
 - **THEN** the `exec` event payload carries `cdhash`
 - **AND** an exec of a binary that does not use the Hardened Runtime omits `cdhash`
-- **AND** the event is otherwise well-formed in both cases
+- **AND** an exec whose reported hash is all zeros omits `cdhash` rather than carrying forty zeros
+- **AND** the event is otherwise well-formed in every case
 
 ## REMOVED Requirements
 

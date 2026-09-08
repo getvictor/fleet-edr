@@ -13,7 +13,7 @@
 
 ## 3. Correct the two stale canonical requirements
 
-- [x] 3.1 Rewrite `Process exec authorization` to state the collection obligation and name `extension-application-control` as the owner of the decision.
+- [x] 3.1 Remove `Process exec authorization`, whose every clause is already canonical under `extension-application-control` and `Process lifecycle event capture`.
 - [x] 3.2 Correct `Block event emission` to the field list both sides of the wire actually use.
 
 ## 4. Repair the drifted markers
@@ -21,3 +21,10 @@
 - [x] 4.1 Add a `Snapshot persistence format is typed` scenario for per-type routing and move the two `ApplicationControlStore` markers onto it.
 - [x] 4.2 Add a test of the serialized block-event payload and move the `Block event emission` marker onto it.
 - [x] 4.3 Add a test that an `exec` event carries `cdhash` for a hardened binary and omits it otherwise.
+
+## 5. Correct the requirement this change itself added
+
+- [x] 5.1 State both cases where `cdhash` is omitted: a non-hardened process, and a hardened one whose reported hash is all zeros.
+- [x] 5.2 Drop the unused `EndpointSecurity` import from `CDHashHex.swift` and move it into the SwiftPM target so the all-zero branch is testable.
+- [x] 5.3 Test the all-zero rejection and the last-byte-set companion case.
+- [x] 5.4 Pin both new serializer tests to whole-payload literals rather than substring fragments.

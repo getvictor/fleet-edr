@@ -1,4 +1,3 @@
-import EndpointSecurity
 import Foundation
 
 // CDHashHex.swift carries the pure helpers ESFSubscriber.swift uses to extract a string CDHash identifier and decide
