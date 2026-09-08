@@ -26,6 +26,10 @@ The option carrying a whole command line as its value is a third case, and it is
 
 The split that value undergoes is env's own grammar rather than shell quoting, and an implementation SHALL report nothing for a value using a construct it does not emulate, rather than guessing at one. A guess produces an assignment env did not apply, and a fabricated injection finding is worse than the miss it replaces: the miss is bounded by what the implementation declines to read, while the fabrication points a responder at an event that did not happen.
 
+That grammar SHALL be followed exactly where it is followed at all. Its token separators are a fixed set of bytes rather than whatever a runtime calls whitespace, so a byte outside that set is part of the name it precedes; treating one as a separator reports a well-known variable when the tool set a different one, which is the fabrication above reached by a subtler route.
+
+A value may itself carry the option again, and an implementation MAY bound how far it follows that nesting, reporting nothing beyond the bound. The value is attacker-controlled and each level consumes only a token, so a bound is a defence rather than an omission, and stopping reports nothing rather than something wrong.
+
 That asymmetry is the reason the rule SHALL prefer reporting nothing in all three. Reporting nothing risks MISSING an injection, which another detection may still catch. Reporting the run risks FABRICATING one, sending an analyst after an event that did not happen, and this field feeds a high-severity rule.
 
 An option's OPERAND SHALL also be judged where env decides it STATICALLY. An unset of a name env cannot unset, being empty or containing an assignment separator, makes env exit before executing anything, so the assignments after it were never applied. An operand-taking option with no operand at all likewise makes env exit.
@@ -110,6 +114,19 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **GIVEN** an exec of env whose command-line option value uses quoting, escaping, or variable substitution
 - **WHEN** the field is read
 - **THEN** nothing is reported, rather than an assignment guessed from the unsplit text
+
+#### Scenario: A separator the tool does not recognise is part of the name
+
+- **GIVEN** an exec whose command-line option value begins with a whitespace character outside the tool's own separator set, followed by an assignment
+- **WHEN** the field is read
+- **THEN** no assignment is reported, because the tool set a variable whose name includes that character
+
+#### Scenario: Nesting past the bound reports nothing
+
+- **GIVEN** an exec whose command-line option value nests the same option deeper than the implementation follows
+- **WHEN** the field is read
+- **THEN** nothing is reported
+
 #### Scenario: An unset of a name env cannot unset reports no assignments
 
 - **GIVEN** an exec event for env unsetting a name that is empty or contains an assignment separator, followed by an assignment

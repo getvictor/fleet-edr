@@ -104,6 +104,8 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-suppressing-the-command-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-inside-an-option-s-command-line-is-reported
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unemulated-construct-in-that-value-reports-nothing
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-separator-the-tool-does-not-recognise-is-part-of-the-name
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/nesting-past-the-bound-reports-nothing
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unset-of-a-name-env-cannot-unset-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
@@ -274,6 +276,27 @@ func TestEnvAssignments(t *testing.T) {
 			// at all, and getting that wrong is how a bound test passes without exercising its bound.
 			[]string{"env", "-S", "-S-SDYLD_INSERT_LIBRARIES=/tmp/x prog"},
 			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"an empty payload lets the outer assignments continue", "/usr/bin/env",
+			// Review found this, and it was an attacker-selectable bypass costing two characters. Measured:
+			// `env -S "" ORACLEVAR=1 /usr/bin/env` APPLIES ORACLEVAR=1. -S does not end the run; its payload is prepended to the
+			// arguments that follow. A payload naming a command still ends the run at that command, which is why the trailing
+			// token in the `/bin/echo` case below is still not an assignment.
+			[]string{"env", "-S", "", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a payload naming a command still ends the run before the outer tokens", "/usr/bin/env",
+			[]string{"env", "-S", "/bin/echo hi", "DYLD_INSERT_LIBRARIES=/tmp/x"}, nil},
+		{"a payload of only whitespace behaves like an empty one", "/usr/bin/env",
+			[]string{"env", "-S", "   ", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a payload assignment continues into the outer arguments", "/usr/bin/env",
+			// The payload's tokens are prepended, so a run that starts inside it carries on through what follows.
+			[]string{"env", "-S", "A=1", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
+			[]string{"A=1", "DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a non-ASCII space is part of the name, not a separator", "/usr/bin/env",
+			// Measured: env's split is byte-oriented C isspace and never calls setlocale, so `env -S "<NBSP>A=1 cmd"` sets a
+			// variable whose NAME starts with the NBSP bytes. Splitting on it would report a plain DYLD assignment env never
+			// made, which is a fabricated injection finding. strings.Fields would have done exactly that.
+			[]string{"env", "-S", "\u00a0DYLD_INSERT_LIBRARIES=/tmp/x prog"}, nil},
 		{"nesting past the depth bound reports nothing", "/usr/bin/env",
 			// The payload is attacker-controlled and each level strips only two characters, so a long one nests deeply. Past the
 			// bound this reports nothing, the same safe direction as any construct it declines to read.

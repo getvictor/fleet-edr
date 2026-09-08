@@ -10,9 +10,9 @@ env's rarity in telemetry (#791 measured one env invocation across 670,185 execs
 
 ## What changes
 
-- A `-S` payload is split and its leading assignment run is read with the same boundaries as any other env argument list, so an embedded `-i` is skipped and a nested `-S` reports nothing, with no special cases.
-- Tokens after the payload are still never assignments. The outer run ends exactly as before.
-- A payload containing `'`, `"`, `\` or `$` reports nothing. Those are constructs env's split performs (quotes group and are stripped, a backslash escapes the next character, `${VAR}` substitutes from env's own environment) and emulating a subset of them would report an assignment env did not apply. A fabricated injection finding is worse than the miss it replaces.
+- A `-S` payload is split and its tokens are PREPENDED to the arguments that follow it, then the combined list is walked with the same boundaries as any other env argument list. That is what env does, and it needs no special cases: an embedded `-i` is skipped, a nested `-S` expands the same way, a payload naming a command ends the run there so nothing after it is an assignment, and an EMPTY payload simply leaves the outer arguments to be walked as env's own.
+- Tokens after a payload that NAMES a command are still never assignments, because the run ends at that command. Measured: `env -S "A=1 /bin/echo" B=2` prints `B=2`, so the trailing token is echo's argument.
+- The split is on the six ASCII whitespace bytes only, because env's own split is byte-oriented and never calls `setlocale`: a non-breaking space is part of a variable NAME, and splitting on it would report a `DYLD_*` assignment env never made. A payload containing `'`, `"`, `\` or `$` reports nothing. Those are constructs env's split performs (quotes group and are stripped, a backslash escapes the next character, `${VAR}` substitutes from env's own environment) and emulating a subset of them would report an assignment env did not apply. A fabricated injection finding is worse than the miss it replaces.
 
 ## Impact
 
