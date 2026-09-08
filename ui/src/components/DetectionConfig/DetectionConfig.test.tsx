@@ -717,8 +717,96 @@ describe("DetectionConfig observed column", () => {
     await waitFor(() => {
       expect(screen.getByText("4,102")).toBeInTheDocument();
     });
-    expect(screen.getByText(/on 3 hosts/)).toBeInTheDocument();
+    // The host count appears twice by design since #902: abbreviated in the cell, and again inside the full sentence the
+    // disclosure carries. The visible cell is what this assertion is about, so it is scoped to the button.
+    expect(screen.getByRole("button", { name: /on 3 hosts/ })).toBeVisible();
     expect(screen.getByTitle(/approximately 4,102 matches on 3 hosts in the last 7 days/)).toBeInTheDocument();
+  });
+
+  // The disclosure both abbreviated columns use (issue #902).
+  //
+  // The gap being closed: the precise figures lived in a native `title`, which opens on POINTER HOVER ONLY. A sighted keyboard
+  // user and anyone on a touch device could not reach them at all, and these are the numbers the columns exist for. The old
+  // aria-label meant assistive technology was fine, which is precisely why the gap was easy to miss.
+  //
+  // Both columns are exercised, because the acceptance criterion is that they use ONE mechanism: fixing one and leaving the
+  // other would put two adjacent columns on different interactions, which is worse than the gap.
+  describe("abbreviated figures are reachable without a pointer", () => {
+    // spec:web-ui/abbreviated-table-figures-are-reachable-without-a-pointer/the-precise-figure-opens-without-a-pointer
+    it("puts the observed figure behind a focusable control that reveals it", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        matchCounts: [{ rule_id: "suspicious_exec", matches: 42000, hosts: 1, last_seen: "" }],
+      });
+      renderPage();
+
+      const toggle = await screen.findByRole("button", { name: /42k/ });
+      // Focusable at all is the whole fix: a plain span with a title cannot be tabbed to.
+      toggle.focus();
+      expect(toggle).toHaveFocus();
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+      const full = screen.getByText(/approximately 42,000 matches on 1 host in the last 7 days/);
+      // Present for assistive technology before any interaction, which is what preserves what the aria-label used to give
+      // screen readers while the sighted user still sees an abbreviated column.
+      //
+      // Asserted by CLASS rather than with toBeVisible, and the reason is worth stating so nobody "fixes" it into a weaker
+      // check: the collapsed state is hidden by a stylesheet class, and jsdom does not load the SCSS, so toBeVisible reports
+      // this element visible either way and would pass against a mutation that never hid it. The class name IS the mechanism
+      // here. Real rendered visibility is an end-to-end concern.
+      expect(full).toHaveClass("detection-config__sr-only");
+
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(full).not.toHaveClass("detection-config__sr-only");
+      expect(full).toHaveClass("detection-config__figure-full");
+    });
+
+    // spec:web-ui/abbreviated-table-figures-are-reachable-without-a-pointer/the-precise-figure-opens-without-a-pointer
+    it("puts the cost figure behind the same control", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        evalStats: [
+          {
+            rule_id: "suspicious_exec",
+            evaluations: 900,
+            mean_eval_ns: 1_500_000,
+            max_eval_ns: 90_000_000,
+            retryable_misses: 0,
+            last_seen: new Date().toISOString(),
+          },
+        ],
+      });
+      renderPage();
+
+      const toggle = await screen.findByRole("button", { name: /avg/ });
+      toggle.focus();
+      expect(toggle).toHaveFocus();
+
+      // The worst case is the figure the Cost column exists for: "usually fast, occasionally terrible" is a real answer that
+      // lives only here, and it was unreachable without a mouse.
+      const full = screen.getByText(/at worst/);
+      expect(full).toHaveClass("detection-config__sr-only");
+      fireEvent.click(toggle);
+      expect(full).toHaveClass("detection-config__figure-full");
+      expect(full).toHaveTextContent(/at worst/);
+    });
+
+    // The description has to stay attached to the control, or assistive technology loses what the aria-label used to carry.
+    // spec:web-ui/abbreviated-table-figures-are-reachable-without-a-pointer/assistive-technology-has-the-figure-before-it-is-revealed
+    it("keeps the full sentence attached to the control as its description", async () => {
+      stubReads({
+        rules: [makeRuleEntry()],
+        matchCounts: [{ rule_id: "suspicious_exec", matches: 42000, hosts: 1, last_seen: "" }],
+      });
+      renderPage();
+
+      const toggle = await screen.findByRole("button", { name: /42k/ });
+      const describedBy = toggle.getAttribute("aria-describedby");
+      expect(describedBy).toBeTruthy();
+      const description = document.getElementById(describedBy ?? "");
+      expect(description).toHaveTextContent(/approximately 42,000 matches on 1 host in the last 7 days/);
+    });
   });
 
   // The Cost column (issue #774). Its states mirror Observed's because the failure modes are the same, and the cases below are
@@ -743,9 +831,7 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByText("1.5ms")).toBeVisible();
       });
-      expect(
-        screen.getByTitle(/1\.5ms on average and 90\.0ms at worst, across 400 evaluations in the last 7 days/),
-      ).toBeVisible();
+      expect(screen.getByTitle(/1\.5ms on average and 90\.0ms at worst, across 400 evaluations in the last 7 days/)).toBeVisible();
     });
 
     // The unit follows the magnitude, because sub-millisecond is the normal case and a column of "0.0ms" would hide every
@@ -800,7 +886,7 @@ describe("DetectionConfig observed column", () => {
       expect(screen.queryByLabelText("no evaluations recorded for suspicious_exec")).not.toBeInTheDocument();
     });
 
-    it("reads \"not recorded\" for a rule absent from a successful read", async () => {
+    it('reads "not recorded" for a rule absent from a successful read', async () => {
       stubReads({ rules: [makeRuleEntry()], evalStats: [] });
       renderPage();
 
@@ -871,7 +957,11 @@ describe("DetectionConfig observed column", () => {
       });
       renderPage();
 
-      const titles = () => screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+      const titles = () =>
+        screen
+          .getAllByRole("row")
+          .slice(1)
+          .map((row) => row.textContent);
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /^Cost/ })).toBeVisible();
       });
@@ -1031,7 +1121,11 @@ describe("DetectionConfig observed column", () => {
       });
       renderPage();
 
-      const titles = () => screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+      const titles = () =>
+        screen
+          .getAllByRole("row")
+          .slice(1)
+          .map((row) => row.textContent);
       await waitFor(() => {
         expect(screen.getByText("900.0ms")).toBeVisible();
       });
@@ -1075,7 +1169,7 @@ describe("DetectionConfig observed column", () => {
 
   // A rule with nothing recorded is ABSENT from the response, and absence is not the same claim as zero: the rule may have been
   // promoted before the window opened, or registered after it did.
-  it("reads \"not recorded\" rather than a zero for a rule with nothing recorded", async () => {
+  it('reads "not recorded" rather than a zero for a rule with nothing recorded', async () => {
     stubReads({ rules: [makeRuleEntry()], matchCounts: [] });
     renderPage();
 
@@ -1130,7 +1224,7 @@ describe("DetectionConfig observed column", () => {
   });
 
   // A rule genuinely absent from a SUCCESSFUL read is the other case, and must keep reading as absence.
-  it("reads \"not recorded\" for a rule absent from a SUCCESSFUL read", async () => {
+  it('reads "not recorded" for a rule absent from a SUCCESSFUL read', async () => {
     stubReads({ rules: [makeRuleEntry()], matchCounts: [] });
     renderPage();
 
@@ -1159,8 +1253,10 @@ describe("DetectionConfig observed column", () => {
     expect(screen.getByRole("columnheader", { name: "Observed (7d)" })).toBeVisible();
   });
 
-  // The visible cell abbreviates, so the exact figure and the window have to reach assistive technology some other way.
-  it("labels the cell with the exact count and the window it covers", async () => {
+  // The visible cell abbreviates, so the exact figure and the window have to reach assistive technology some other way. Since
+  // #902 that is a description on the disclosure button rather than an aria-label, and the sentence is real text in the DOM
+  // (visually hidden until expanded) rather than an attribute, so it is queried as text.
+  it("describes the cell with the exact count and the window it covers", async () => {
     stubReads({
       rules: [makeRuleEntry()],
       matchCounts: [{ rule_id: "suspicious_exec", matches: 42000, hosts: 1, last_seen: new Date().toISOString() }],
@@ -1170,7 +1266,7 @@ describe("DetectionConfig observed column", () => {
     await waitFor(() => {
       expect(screen.getByText(/42k/)).toBeInTheDocument();
     });
-    expect(screen.getByLabelText(/approximately 42,000 matches on 1 host in the last 7 days/)).toBeInTheDocument();
+    expect(screen.getByText(/approximately 42,000 matches on 1 host in the last 7 days/)).toBeInTheDocument();
   });
 
   // "approximately 1 matches" is the kind of wrong that makes a number look unread. The host noun was already pluralised; the
@@ -1183,7 +1279,7 @@ describe("DetectionConfig observed column", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/approximately 1 match on 1 host/)).toBeInTheDocument();
+      expect(screen.getByText(/approximately 1 match on 1 host/)).toBeInTheDocument();
     });
     expect(screen.queryByLabelText(/1 matches/)).not.toBeInTheDocument();
   });
@@ -1211,9 +1307,12 @@ describe("DetectionConfig observed column", () => {
     });
     renderPage();
 
+    // getAllByText, because the recency now appears twice on purpose: once abbreviated in the cell and once inside the full
+    // sentence the disclosure carries. Asserting the VISIBLE one is what this test is about.
     await waitFor(() => {
-      expect(screen.getByText(/2d ago/)).toBeInTheDocument();
+      expect(screen.getAllByText(/2d ago/).length).toBeGreaterThan(0);
     });
+    expect(screen.getByRole("button", { name: /2d ago/ })).toBeVisible();
   });
 
   // Large counts abbreviate, because scanning this column is about telling tens from thousands.

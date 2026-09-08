@@ -164,3 +164,44 @@
   text-transform: inherit;
   letter-spacing: inherit;
 }
+
+// The abbreviated-figure disclosure (#902). The button has to look like the plain text it replaced: these cells are scanned a
+// thousand rows at a time, and rendering a thousand buttons that look like buttons would wreck the column.
+.detection-config__figure-toggle {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+// Focus stays VISIBLE, which is the whole point: the reason this is a button is that a keyboard user could not reach the figure,
+// so removing the ring would reintroduce the bug in a subtler form.
+.detection-config__figure-toggle:focus-visible {
+  outline: 2px solid currentcolor;
+  outline-offset: 2px;
+}
+
+// The expanded sentence sits under the abbreviated value rather than beside it, so opening one row does not reflow the column.
+.detection-config__figure-full {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+// Visually hidden but present for assistive technology, which reads it through aria-describedby whether or not a sighted user
+// has expanded the row. Mirrors .host-header__sr-only.
+.detection-config__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
@@ -163,6 +163,44 @@ function formatMatches(n: number): string {
 // absence can equally mean it was promoted before the window opened, or that the window predates its registration. Spelled out
 // rather than drawn as a dash glyph, both because the repo forbids the character in user-facing text and because the words say
 // the distinction the glyph only implies.
+// AbbreviatedFigure is the disclosure both abbreviated columns use, so the pair cannot diverge (#902).
+//
+// The columns draw "42k" and "1.5ms" deliberately: at a thousand rules they have to stay scannable. The precise figures used to
+// live in a native `title`, which opens on POINTER HOVER ONLY. A sighted keyboard user and anyone on a touch device could not
+// reach them at all, and these are the numbers the columns exist for: the Cost column's whole purpose is finding the slow rule,
+// and "usually fast, occasionally terrible" is an answer that lives entirely in the worst-case figure.
+//
+// A button rather than a focusable span, because this does something when activated; keyboard activation and tap then come from
+// the platform rather than from hand-rolled key handlers.
+//
+// The full sentence is ALWAYS in the DOM, visually hidden until expanded rather than absent. That is what keeps assistive
+// technology whole: it reads the description through aria-describedby whether or not a sighted user has expanded anything, which
+// is exactly what the old aria-label gave it. Rendering it only when open would quietly take that away in the name of fixing
+// access for everyone else. `title` stays for pointer users, so no one loses the hover they have now.
+function AbbreviatedFigure({ full, children }: { full: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <span className="detection-config__figure">
+      <button
+        type="button"
+        className="detection-config__figure-toggle"
+        aria-expanded={open}
+        aria-describedby={id}
+        title={full}
+        onClick={() => {
+          setOpen((wasOpen) => !wasOpen);
+        }}
+      >
+        {children}
+      </button>
+      <span id={id} className={open ? "detection-config__figure-full" : "detection-config__sr-only"}>
+        {full}
+      </span>
+    </span>
+  );
+}
+
 function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days: number, unavailable: boolean) {
   if (unavailable) {
     return (
@@ -185,17 +223,13 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
   const lastSeen = formatRelativeISO(count.last_seen);
   const matches = `${count.matches.toLocaleString()} match${count.matches === 1 ? "" : "es"}`;
   const title =
-    `approximately ${matches} on ${hosts} in the last ${String(days)} days` +
-    (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
-  // aria-label carries the same sentence as the tooltip, because `title` alone reaches neither a screen reader reliably nor a
-  // touch user at all, and the abbreviated display ("42k") drops the exact figure. The visible text stays short; the label is
-  // what makes the precise value and the window available without a mouse.
+    `approximately ${matches} on ${hosts} in the last ${String(days)} days` + (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
   return (
-    <span title={title} aria-label={title}>
+    <AbbreviatedFigure full={title}>
       {formatMatches(count.matches)}
       <span className="detection-config__observed-hosts"> on {hosts}</span>
       {lastSeen === "" ? null : <span className="detection-config__observed-last"> &middot; {lastSeen}</span>}
-    </span>
+    </AbbreviatedFigure>
   );
 }
 
@@ -266,13 +300,13 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
     `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst, ` +
     `across ${evaluations} in the last ${String(days)} days${misses}`;
   return (
-    <span title={title} aria-label={title}>
+    <AbbreviatedFigure full={title}>
       {formatDuration(stat.mean_eval_ns)}
       <span className="detection-config__observed-hosts"> avg</span>
       {stat.retryable_misses === 0 ? null : (
         <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} undecided</span>
       )}
-    </span>
+    </AbbreviatedFigure>
   );
 }
 
@@ -769,9 +803,7 @@ export function DetectionConfig() {
               non-focusable th only surfaces on pointer hover, so the sentence that stops the number reading as a per-alert cost
               was the one keyboard and touch users did not get.
             */}
-            <p className="detection-config__note">
-              {costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
-            </p>
+            <p className="detection-config__note">{costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}</p>
 
             <Table>
               <thead>
