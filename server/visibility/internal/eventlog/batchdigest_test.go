@@ -2,6 +2,7 @@ package eventlog
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -72,4 +73,22 @@ func TestBatchDigestSeparatorCollision(t *testing.T) {
 
 	// Order is not part of a batch's identity, which is the other half of what the digest has to get right.
 	assert.Equal(t, batchDigest([]string{"z", "a", "m"}), batchDigest([]string{"m", "z", "a"}))
+}
+
+// TestBatchDigestGoldenValue pins the persisted digest FORMAT against literal bytes, which the tests above cannot do.
+//
+// They compare batchDigest to another call to batchDigest, so they hold under any change to the framing or the hash. That is right
+// for the property they state and useless for the one that matters here: this value is WRITTEN to the queue by one build and
+// compared against a LATER build's computation of it. Change the framing and every tally written before a rolling deploy stops
+// matching, so the carry silently drops exactly the counts it exists to preserve, and not one self-comparing test fails. Review
+// caught that, and it is the same shape as PackDigest's golden test (server/rulecontent/api/packdigest_test.go).
+//
+// The fixture is deliberately awkward: the ids are given OUT of sorted order, and one contains a NUL, so the value covers the sort
+// and the length-prefixing rather than only the hash call.
+func TestBatchDigestGoldenValue(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "b4973a27c253f874df2d5b474a54bd9cb76592fc11620a43539689117d107c5a",
+		hex.EncodeToString(batchDigest([]string{"z-second", "a-first\x00with-nul", "m-third"})),
+		"the persisted digest format changed, so tallies written by a build before this one would stop matching and be dropped")
 }

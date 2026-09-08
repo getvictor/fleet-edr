@@ -26,9 +26,15 @@
 -- withdrawal returned a tally covering an event the overlapping batch had already recorded, counting it twice.
 --
 -- So a tally is valid only for a withdrawal of EXACTLY the batch it was resolved over, and monitor_tally_batch records which batch
--- that was: the SHA-256 of the caller's event ids, sorted and NUL-joined. A withdrawal is handed the tally only when that digest
--- matches the batch being withdrawn. A batch whose membership moved gets nothing, which loses those counts rather than attributing
--- them to events that did not produce them, and losing is the direction this whole column is arranged to err in.
+-- that was: the SHA-256 of the caller's event ids, sorted, with each id's length written as eight big-endian bytes before the id
+-- itself. A withdrawal is handed the tally only when that digest matches the batch being withdrawn. A batch whose membership moved
+-- gets nothing, which loses those counts rather than attributing them to events that did not produce them, and losing is the
+-- direction this whole column is arranged to err in.
+--
+-- Length-prefixed rather than joined on a separator, because no separator is safe: ingest rejects only an EMPTY event id, so an id
+-- can hold any byte, NUL included. The first version NUL-joined and was not injective (measured: {"a", "b", "c\0d"} and
+-- {"a", "b\0c", "d"} digested identically), which would let one batch be handed another's tally. The format is pinned against
+-- literal bytes by a golden test, because a build that changes it stops matching what earlier builds wrote here.
 --
 -- This is also what makes mixed ownership safe. An attempt whose lease expired for part of its batch resolved its tally over the
 -- WHOLE batch, so the digest is the whole batch's, and a later withdrawal of only the part it kept does not match it.
