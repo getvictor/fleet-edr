@@ -149,18 +149,16 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 	current := ""
 	var scenarios map[string]struct{}
 	var lines []string
-	// currentSection is the section the OPEN requirement was declared under, which is not the same as the section being scanned:
-	// the scanner has already moved on by the time a requirement is flushed at the next `## ` heading. Routing on the live section
-	// would file the last requirement of an ADDED block under whatever heading follows it.
-	//
-	// Not reset by flush, and it does not need to be: it is read only while a requirement is open, and every path that opens one
-	// assigns it. A reset would be a line no test can fail on.
-	currentSection := sectionOther
 	flush := func() {
 		// Recorded on leaving the requirement rather than on entering it, so the "no scenarios listed" case never reaches the map.
+		//
+		// `section` is still the one the open requirement was DECLARED under at every call site, which is what makes routing on it
+		// correct rather than merely convenient. The `## ` case flushes BEFORE it reassigns section, the two `### Requirement:`
+		// cases are guarded on the section they are in, and the call after the loop runs with the last block's section. Review
+		// caught a duplicate `currentSection` here that could not diverge from this and only looked like it protected something.
 		if current != "" && len(scenarios) > 0 {
 			index := d.modifiedRestatements
-			if currentSection == sectionAdded {
+			if section == sectionAdded {
 				index = d.addedStatements
 			}
 			if index[current] == nil {
@@ -189,7 +187,6 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 			flush()
 			d.note(d.addedBy, capability+"/"+requirementSlug(line), change)
 			current = capability + "/" + requirementSlug(line)
-			currentSection = sectionAdded
 			scenarios = make(map[string]struct{})
 			lines = []string{line}
 		case section == sectionRemoved && strings.HasPrefix(line, "### Requirement:"):
@@ -199,7 +196,6 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 		case section == sectionModified && strings.HasPrefix(line, "### Requirement:"):
 			flush()
 			current = capability + "/" + requirementSlug(line)
-			currentSection = sectionModified
 			scenarios = make(map[string]struct{})
 			lines = []string{line}
 		case (section == sectionModified || section == sectionAdded) && current != "" &&

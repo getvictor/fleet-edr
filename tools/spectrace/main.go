@@ -108,12 +108,15 @@ Subcommands:
             2 on a usage or write failure.
   archive-verify
             Run BEFORE archiving and again after, and diff the two. Checks that everything the
-            last archived restatement of a requirement said is still in the canonical spec,
-            which is what archiving in the wrong order silently destroys, along with normative
-            text the restatement carried and a retirement the archive did not apply. Findings do
-            NOT gate: the tree carries older ones this cannot classify, so a line that is NEW in
-            the second report is the loss this archive caused. Exit code 2 on a usage or write
-            failure.
+            last archived delta for a requirement said is still in the canonical spec, which is
+            what archiving in the wrong order silently destroys, along with normative text the
+            delta carried and a retirement the archive did not apply. Both ADDED and MODIFIED
+            count as claims: a requirement introduced once and never restated is most of the
+            tree, and reading MODIFIED alone left it unchecked. Where one batch carries both for
+            one requirement they are intersected, so only what every delta in it listed is
+            claimed. Findings do NOT gate: the tree carries older ones this cannot classify, so
+            a line that is NEW in the second report is the loss this archive caused. Exit code 2
+            on a usage or write failure.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)
