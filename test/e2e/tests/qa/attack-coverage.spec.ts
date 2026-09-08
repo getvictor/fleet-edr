@@ -1,6 +1,5 @@
 import { test, expect } from "../../fixtures/test";
-import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
-import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
+import { signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB } from "../../fixtures/db";
 
 // ATT&CK coverage page. Renders the rule-to-technique mapping grouped by tactic, with technique ids that link
@@ -11,8 +10,6 @@ import { openDB, resetDB } from "../../fixtures/db";
 // fixture would work, but we use per-test beforeEach to keep the spec readable + avoid coupling tests
 // through shared state).
 test.describe("ATT&CK coverage page", () => {
-  let va: VirtualAuthenticator | undefined;
-
   test.beforeEach(async ({ page }) => {
     const db = await openDB();
     try {
@@ -20,14 +17,7 @@ test.describe("ATT&CK coverage page", () => {
     } finally {
       await db.end();
     }
-    va = await signInAsAdminViaBreakGlass(page);
-  });
-
-  test.afterEach(async () => {
-    if (va) {
-      await uninstallVirtualAuthenticator(va);
-      va = undefined;
-    }
+    await signInAsAdminViaForgedSession(page);
   });
 
   // spec:web-ui/att-ck-coverage-page/coverage-page-renders-technique-groups

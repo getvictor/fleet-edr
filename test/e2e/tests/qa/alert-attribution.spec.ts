@@ -11,8 +11,7 @@
 
 import * as crypto from "node:crypto";
 import { test, expect } from "../../fixtures/agent";
-import { signInAsAdminViaBreakGlass, uninstallVirtualAuthenticator } from "../../fixtures/auth";
-import type { VirtualAuthenticator } from "../../fixtures/webauthn";
+import { signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB } from "../../fixtures/db";
 import type { GlobalRuleSetting } from "../../fixtures/detection-config";
 import { restoreGlobalRuleSetting, setGlobalRuleMode, takeGlobalRuleSetting, waitForRuleMode } from "../../fixtures/detection-config";
@@ -23,7 +22,6 @@ const RULE_ID = "proc_creation_macos_applescript";
 const UPSTREAM_AUTHOR = "SigmaHQ, by Alejandro Ortuno, oscd.community";
 
 test.describe("alert attribution", () => {
-  let va: VirtualAuthenticator | undefined;
   // undefined means the snapshot never ran, which is NOT the same as running and finding no row. Sharing one
   // sentinel for both would make a failed setup delete an operator's setting on the way out.
   let previousSetting: GlobalRuleSetting | null | undefined;
@@ -45,11 +43,10 @@ test.describe("alert attribution", () => {
     // indistinguishable from a promotion failure. The helper carries the version bump, which is the cache-invalidation signal
     // rather than bookkeeping: a replica reloads its config snapshot only when that counter moves.
     await setGlobalRuleMode(RULE_ID, "alert", "e2e-alert-attribution");
-    va = await signInAsAdminViaBreakGlass(page);
+    await signInAsAdminViaForgedSession(page);
   });
 
   test.afterEach(async () => {
-    if (va) await uninstallVirtualAuthenticator(va);
     // Put back exactly what was there, which on a long-lived dev database may be an operator's own tuning rather than nothing.
     // The helper carries the version bump either way: without it the server keeps serving this rule as promoted after the test
     // that promoted it has finished, and a later spec inherits an alerting rule it never asked for.

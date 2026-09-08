@@ -60,9 +60,7 @@ export function assertLaneEnv(): void {
   // one value rather than by omitting one. The lanes are a closed set of two, so the pairing is checkable rather than advisory.
   const expected = LANE_TO_SCHEMA.get(parsed);
   if (expected === undefined) {
-    throw new Error(
-      `E2E_PORT=${parsed} is not a lane this repository has (${[...LANE_TO_SCHEMA.keys()].join(", ")}). ${advice}`,
-    );
+    throw new Error(`E2E_PORT=${parsed} is not a lane this repository has (${[...LANE_TO_SCHEMA.keys()].join(", ")}). ${advice}`);
   }
   if (db !== expected) {
     throw new Error(
@@ -216,4 +214,59 @@ export async function seedCriticalAlert(db: Connection, opts: { hostId: string; 
     [opts.hostId, opts.ruleId, opts.title, processId, String(processId)],
   );
   return (alertResult[0] as { insertId: number }).insertId;
+}
+
+/**
+ * forgeAdminSession inserts a session row for the seeded admin and returns the plaintext token for the `edr_session` cookie.
+ *
+ * This is the fast path for the dozen specs that need nothing more than "any signed-in admin". The break-glass ceremony they used
+ * instead is rate-limited: `/admin/break-glass/setup` allows five submissions per minute globally and one sign-in spends TWO, so
+ * ten sign-ins need twenty tokens from a bucket that starts with five and refills one every twelve seconds. Measured on a lane-B
+ * dev server, roughly three of Phase 8's 4.8 minutes was the suite sitting still waiting for that bucket.
+ *
+ * Every column is written the way `sessions.Store.Create` writes it, because a forged session that differs from a real one lets a
+ * spec pass against a shape the product never issues:
+ *
+ *   - `id` is SHA-256 of the RAW token bytes, not of their base64 text. That differs from `mintBootstrapToken` above, which hashes
+ *     the encoded string, and getting the two confused produces a row that simply never matches.
+ *   - the cookie carries unpadded base64url of those same raw bytes, which is what `api.EncodeToken` emits.
+ *   - `csrf_token` is present and random. A session without one authenticates and then fails every state-changing request, which
+ *     would look like an authorization bug in whichever spec first tried to POST.
+ *   - `auth_method` is `local_password`, the value the break-glass ceremony sets, so these sessions keep the timeout class and the
+ *     reauth-freshness behaviour the specs have today rather than quietly acquiring a longer-lived one.
+ *   - all three timestamps are NOW(6), so the session is as fresh as one from a just-completed ceremony.
+ *
+ * `expires_at` deliberately does NOT try to reproduce the server's configured absolute timeout, and that is the safer choice
+ * rather than a shortcut. Reproducing it would mean duplicating `DefaultBreakglassAbsoluteTimeout` and every override
+ * (`EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT`) in TypeScript, and the failure mode of getting that wrong is one-directional and
+ * nasty: a forged session that outlives what the server would have issued keeps authorizing requests after a real one would
+ * have expired, so a spec passes against a session the product would have rejected.
+ *
+ * Ten minutes is instead chosen to be far SHORTER than any timeout the product configures (the default absolute is one hour and
+ * the default idle fifteen minutes), so drift can only ever make this fixture's sessions shorter-lived than real ones, which is
+ * harmless. It is also enormous next to what a spec needs: the whole converted set runs in under ten seconds and the per-test
+ * timeout is ninety.
+ *
+ * The caller sets the cookie and SHOULD verify once against `/api/session`; `signInAsAdminViaForgedSession` in auth.ts does both.
+ *
+ * Role bindings are not created here and must not be: `resetDB` deliberately preserves the seeded admin's bindings, and the server
+ * ensures its super_admin binding at boot. Inserting one here would mask a missing binding rather than surface it.
+ */
+export async function forgeAdminSession(db: Connection): Promise<string> {
+  const raw = crypto.randomBytes(32);
+  const id = crypto.createHash("sha256").update(raw).digest();
+  const csrf = crypto.randomBytes(32);
+
+  const [rows] = await db.query<mysql.RowDataPacket[]>("SELECT id FROM users WHERE email = 'admin@fleet-edr.local' LIMIT 1");
+  if (rows.length === 0) {
+    throw new Error("forgeAdminSession: admin@fleet-edr.local not seeded yet");
+  }
+
+  await db.query(
+    `INSERT INTO sessions (id, user_id, identity_id, auth_method, csrf_token,
+                           created_at, last_seen_at, last_auth_at, expires_at)
+     VALUES (?, ?, NULL, 'local_password', ?, NOW(6), NOW(6), NOW(6), NOW(6) + INTERVAL 10 MINUTE)`,
+    [id, rows[0].id, csrf],
+  );
+  return raw.toString("base64url");
 }

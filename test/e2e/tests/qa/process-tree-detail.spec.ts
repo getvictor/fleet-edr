@@ -1,6 +1,5 @@
 import { test, expect } from "../../fixtures/agent";
-import { signInAsAdminViaBreakGlass } from "../../fixtures/auth";
-import { uninstallVirtualAuthenticator, VirtualAuthenticator } from "../../fixtures/webauthn";
+import { signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB } from "../../fixtures/db";
 import { setupProcessTreeDeep } from "../../fixtures/process-tree";
 
@@ -16,8 +15,6 @@ import { setupProcessTreeDeep } from "../../fixtures/process-tree";
 // non-synthetic root). All three tests share the same scenario + sign-in setup so the per-scenario cost is
 // just the per-test interaction.
 test.describe("process tree detail and kill control", () => {
-  let va: VirtualAuthenticator | undefined;
-
   test.beforeEach(async ({ page }) => {
     const db = await openDB();
     try {
@@ -25,14 +22,7 @@ test.describe("process tree detail and kill control", () => {
     } finally {
       await db.end();
     }
-    va = await signInAsAdminViaBreakGlass(page);
-  });
-
-  test.afterEach(async () => {
-    if (va) {
-      await uninstallVirtualAuthenticator(va);
-      va = undefined;
-    }
+    await signInAsAdminViaForgedSession(page);
   });
 
   // spec:web-ui/process-tree-visualization/selecting-a-process-opens-the-detail-panel
@@ -87,10 +77,7 @@ test.describe("process tree detail and kill control", () => {
     // "reflects the command's lifecycle state (pending, completed, or failed)", which a "pending" badge
     // satisfies.
     const [response] = await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().endsWith("/api/commands") && r.request().method() === "POST",
-        { timeout: 10_000 },
-      ),
+      page.waitForResponse((r) => r.url().endsWith("/api/commands") && r.request().method() === "POST", { timeout: 10_000 }),
       killBtn.click(),
     ]);
     // 201, not 200: issuing a command creates one, and the operator handler has answered Created since the response context was
@@ -105,10 +92,10 @@ test.describe("process tree detail and kill control", () => {
     // The command row must exist in the DB with command_type=kill_process and host_id matching this host.
     const db = await openDB();
     try {
-      const [rows] = (await db.query(
-        "SELECT command_type, status FROM commands WHERE host_id = ? ORDER BY id DESC LIMIT 1",
-        [hostId],
-      )) as [Array<{ command_type: string; status: string }>, unknown];
+      const [rows] = (await db.query("SELECT command_type, status FROM commands WHERE host_id = ? ORDER BY id DESC LIMIT 1", [hostId])) as [
+        Array<{ command_type: string; status: string }>,
+        unknown,
+      ];
       expect(rows).toHaveLength(1);
       expect(rows[0].command_type).toBe("kill_process");
       // "pending" is the initial status the server writes; allow a wider set in case a future processor
