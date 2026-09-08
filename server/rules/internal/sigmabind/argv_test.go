@@ -105,6 +105,7 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-inside-an-option-s-command-line-is-reported
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unemulated-construct-in-that-value-reports-nothing
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-separator-the-tool-does-not-recognise-is-part-of-the-name
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-comment-ends-that-value-and-the-rest-continues
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/nesting-past-the-bound-reports-nothing
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unset-of-a-name-env-cannot-unset-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
@@ -292,6 +293,24 @@ func TestEnvAssignments(t *testing.T) {
 			// The payload's tokens are prepended, so a run that starts inside it carries on through what follows.
 			[]string{"env", "-S", "A=1", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
 			[]string{"A=1", "DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a payload that is only a comment lets the outer assignments continue", "/usr/bin/env",
+			// Measured: `env -S "#" ORACLEVAR=1 /usr/bin/env` APPLIES ORACLEVAR=1, and so does `-S "# some comment"`. env drops a
+			// word beginning with '#' and the rest of the payload with it, which is what -S is for: a shebang line has to be able
+			// to carry a comment. Modelling '#' as the command ended the run and reported nothing (review found it).
+			[]string{"env", "-S", "#", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a comment truncates the rest of the payload", "/usr/bin/env",
+			[]string{"env", "-S", "# a comment", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a comment drops the payload assignments behind it", "/usr/bin/env",
+			// The comment truncates, so an assignment written after it in the payload was never applied and must not be reported.
+			[]string{"env", "-S", "# A=1 B=2", "DYLD_INSERT_LIBRARIES=/tmp/x", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"a hash inside a word is an ordinary byte", "/usr/bin/env",
+			// Measured: `env -S "A#B=1 cmd"` sets a variable literally named `A#B`, so truncating there would drop an assignment
+			// env really made. It is not well-formed, so it is not reported, but the run must continue past it.
+			[]string{"env", "-S", "A#B=1 DYLD_INSERT_LIBRARIES=/tmp/x prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
 		{"a non-ASCII space is part of the name, not a separator", "/usr/bin/env",
 			// Measured: env's split is byte-oriented C isspace and never calls setlocale, so `env -S "<NBSP>A=1 cmd"` sets a
 			// variable whose NAME starts with the NBSP bytes. Splitting on it would report a plain DYLD assignment env never

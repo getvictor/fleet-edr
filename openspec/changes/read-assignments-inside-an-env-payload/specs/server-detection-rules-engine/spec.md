@@ -28,6 +28,8 @@ The split that value undergoes is env's own grammar rather than shell quoting, a
 
 That grammar SHALL be followed exactly where it is followed at all. Its token separators are a fixed set of bytes rather than whatever a runtime calls whitespace, so a byte outside that set is part of the name it precedes; treating one as a separator reports a well-known variable when the tool set a different one, which is the fabrication above reached by a subtler route.
 
+That grammar also has a comment form, and a value's first word introducing a comment ends the value there. The words after it were never arguments, so an assignment among them SHALL NOT be reported; and because the value then contributes nothing, the arguments that follow it are the tool's own and SHALL be read as usual.
+
 A value may itself carry the option again, and an implementation MAY bound how far it follows that nesting, reporting nothing beyond the bound. The value is attacker-controlled and each level consumes only a token, so a bound is a defence rather than an omission, and stopping reports nothing rather than something wrong.
 
 That asymmetry is the reason the rule SHALL prefer reporting nothing in all three. Reporting nothing risks MISSING an injection, which another detection may still catch. Reporting the run risks FABRICATING one, sending an analyst after an event that did not happen, and this field feeds a high-severity rule.
@@ -120,6 +122,13 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **GIVEN** an exec whose command-line option value begins with a whitespace character outside the tool's own separator set, followed by an assignment
 - **WHEN** the field is read
 - **THEN** no assignment is reported, because the tool set a variable whose name includes that character
+
+#### Scenario: A comment ends that value, and the rest continues
+
+- **GIVEN** an exec whose command-line option value begins with a comment
+- **WHEN** the field is read
+- **THEN** an assignment among the arguments that follow the value is reported
+- **AND** an assignment written after the comment inside the value is not
 
 #### Scenario: Nesting past the bound reports nothing
 

@@ -238,7 +238,26 @@ func splitEnvPayload(payload string) (fields []string, ok bool) {
 	if strings.ContainsAny(payload, "'\"\\$") {
 		return nil, false
 	}
-	return strings.FieldsFunc(payload, isEnvPayloadSpace), true
+	return truncateAtComment(strings.FieldsFunc(payload, isEnvPayloadSpace)), true
+}
+
+// truncateAtComment drops the payload's first word beginning with '#' and everything after it.
+//
+// env treats such a word as a comment and discards the rest of the payload, which is what -S is for: a shebang line carries the
+// interpreter's own arguments, and a comment has to be droppable there. Measured: `env -S "#" DYLD=1 prog` and
+// `env -S "# a comment" DYLD=1 prog` both APPLY DYLD=1, because the payload contributes no tokens and the outer arguments carry
+// on as env's own. Modelling `#` as a command instead ended the run and reported nothing, an attacker-selectable miss costing four
+// characters (review found it).
+//
+// Only at the START of a word. Measured: `env -S "A#B=1 cmd"` sets a variable literally named `A#B`, so a '#' inside a word is an
+// ordinary byte and truncating there would drop an assignment env really made.
+func truncateAtComment(fields []string) []string {
+	for i, f := range fields {
+		if strings.HasPrefix(f, "#") {
+			return fields[:i]
+		}
+	}
+	return fields
 }
 
 // isEnvPayloadSpace reports the bytes env's split treats as separators: the six C isspace characters, and no others.
