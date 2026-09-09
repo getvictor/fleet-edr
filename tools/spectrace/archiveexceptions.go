@@ -175,10 +175,12 @@ func printExcused(p func(string, ...any), excused []excusedFinding) {
 	byRequirement := map[string][]string{}
 	entries := map[string]archiveException{}
 	for _, e := range excused {
-		head, _, _ := strings.Cut(e.finding, "\n")
 		key := e.exception.Requirement
 		entries[key] = e.exception
-		byRequirement[key] = append(byRequirement[key], head)
+		// The WHOLE finding, not its first line. Several normative-text findings under one requirement share a head and differ
+		// only in the lines after it, so printing heads alone left the release diff unable to say which text moved. That is the
+		// same defect as printing a count, one level in, and review caught the second version of it too.
+		byRequirement[key] = append(byRequirement[key], e.finding)
 	}
 	keys := make([]string, 0, len(byRequirement))
 	for k := range byRequirement {
@@ -191,11 +193,23 @@ func printExcused(p func(string, ...any), excused []excusedFinding) {
 	for _, k := range keys {
 		e := entries[k]
 		where := "covered by " + strings.Join(e.CoveredBy, " and ")
-		if e.TrackedBy != "" {
+		if strings.TrimSpace(e.TrackedBy) != "" {
 			where = "tracked by " + e.TrackedBy
 		}
 		p("  %s (%d finding(s)): %s\n", k, len(byRequirement[k]), where)
 		p("      %s\n", e.Reason)
+		// Every excused line, not a count of them. The release checklist reads this command by diffing two runs, and a scenario
+		// newly lost under an EXISTING exception would otherwise move a number without showing the line that moved.
+		sort.Strings(byRequirement[k])
+		for _, finding := range byRequirement[k] {
+			for i, line := range strings.Split(finding, "\n") {
+				if i == 0 {
+					p("        %s\n", line)
+					continue
+				}
+				p("      %s\n", line)
+			}
+		}
 	}
 }
 
@@ -208,7 +222,7 @@ func exceptionsPathFor(specsDir string) string {
 
 // validateEntryShape checks the fields an entry must and must not carry, independently of whether its claim holds.
 func validateEntryShape(e archiveException, where string) []string {
-	hasCovered, hasTracked := len(e.CoveredBy) > 0, e.TrackedBy != ""
+	hasCovered, hasTracked := len(e.CoveredBy) > 0, strings.TrimSpace(e.TrackedBy) != ""
 	switch {
 	case hasCovered && hasTracked:
 		return []string{where + ": sets both covered_by and tracked_by; an excused finding is one or the other"}
@@ -217,6 +231,14 @@ func validateEntryShape(e archiveException, where string) []string {
 	}
 	if strings.TrimSpace(e.Reason) == "" {
 		return []string{where + ": reason is empty"}
+	}
+	// The unit is one requirement. A capability-only key would once have excused everything beneath it; matching on the exact
+	// key stopped that, but the entry then failed as "excuses no finding", which points the reader at the wrong problem.
+	// Slug-stable, not merely two non-empty halves. Canonical keys are produced by slugify, so `A/b` and `a/ b` can never match
+	// one and would otherwise reach the reader as "excuses no finding", which points at the wrong problem.
+	parts := strings.Split(e.Requirement, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || slugify(parts[0]) != parts[0] || slugify(parts[1]) != parts[1] {
+		return []string{where + `: requirement must be "<capability>/<requirement-slug>", both slug-formatted`}
 	}
 	return nil
 }

@@ -127,6 +127,37 @@ func TestValidateExceptions(t *testing.T) {
 			matched: 1,
 			want:    "requirement is empty",
 		},
+		{
+			name:    "a whitespace-only tracked_by is not a disposition",
+			entry:   archiveException{Requirement: "a/b", TrackedBy: "   ", Reason: "why"},
+			matched: 1,
+			want:    "sets neither covered_by nor tracked_by",
+		},
+		{
+			name:    "a capability-only requirement is rejected by shape",
+			entry:   archiveException{Requirement: "web-ui", TrackedBy: "#929", Reason: "why"},
+			matched: 1,
+			want:    `requirement must be "<capability>/<requirement-slug>"`,
+		},
+		{
+			name:    "a scenario-level requirement is rejected by shape",
+			entry:   archiveException{Requirement: "a/b/c", TrackedBy: "#929", Reason: "why"},
+			matched: 1,
+			want:    `requirement must be "<capability>/<requirement-slug>"`,
+		},
+		{
+			// Canonical keys come from slugify, so neither of these can ever match one; saying so beats "excuses no finding".
+			name:    "an unslugged requirement is rejected by shape",
+			entry:   archiveException{Requirement: "Web-UI/Alerts List", TrackedBy: "#929", Reason: "why"},
+			matched: 1,
+			want:    "both slug-formatted",
+		},
+		{
+			name:    "a requirement with a stray space is rejected by shape",
+			entry:   archiveException{Requirement: "web-ui/ alerts-list", TrackedBy: "#929", Reason: "why"},
+			matched: 1,
+			want:    "both slug-formatted",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,6 +184,25 @@ func TestValidateExceptions(t *testing.T) {
 		problems := validateExceptions([]archiveException{entry}, canonical, map[int]int{0: 1})
 		require.Len(t, problems, 1)
 		assert.Contains(t, problems[0], `covered_by "gone/missing" is not a requirement`)
+	})
+
+	t.Run("validation and rendering agree on a whitespace-only tracked_by", func(t *testing.T) {
+		t.Parallel()
+		// The mixed case: a valid covered_by plus a blank tracked_by. Validation must read it as covered, and the report must
+		// render the survivor rather than an empty "tracked by".
+		e := archiveException{
+			Requirement: "a/b",
+			CoveredBy:   stringOrList{"extension-application-control/block-event-emission"},
+			TrackedBy:   "   ",
+			Reason:      "why",
+		}
+		assert.Empty(t, validateExceptions([]archiveException{e}, canonical, map[int]int{0: 1}))
+
+		var buf bytes.Buffer
+		require.Equal(t, 0, printArchiveVerify(&buf, nil,
+			[]excusedFinding{{finding: "a/b\n    listed by x", exception: e}}, nil, 5))
+		assert.Contains(t, buf.String(), "covered by extension-application-control/block-event-emission")
+		assert.NotContains(t, buf.String(), "tracked by  ")
 	})
 
 	t.Run("a duplicate requirement is an error", func(t *testing.T) {
@@ -246,4 +296,44 @@ func TestExceptionsPathIsBesideTheSpecsTree(t *testing.T) {
 	// A caller pointed at another checkout gets that checkout's file, not the repository root's.
 	assert.Equal(t, filepath.Join("/tmp", "x", "openspec", "archive-verify-exceptions.yaml"),
 		exceptionsPathFor(filepath.Join("/tmp", "x", "openspec", "specs")))
+}
+
+func TestExceptionReportShowsEveryExcusedLine(t *testing.T) {
+	t.Parallel()
+	// The defect this pins: printExcused collected the finding heads and then printed only a count, contradicting its own
+	// "printed in full" contract. The release checklist diffs two runs of this command, so a scenario newly lost under an
+	// EXISTING exception has to move a LINE, not a number, or the diff cannot show what changed.
+	var buf bytes.Buffer
+	// Two findings that share a head and differ only AFTER the newline, which is the shape textDiff emits for normative text.
+	// Printing heads alone made these indistinguishable, so losing one more line of text moved a duplicate line and the release
+	// diff still could not say what changed.
+	excused := []excusedFinding{
+		{finding: "a/b\n    text listed by x, and not in the canonical spec:\n      FIRST normative line",
+			exception: archiveException{Requirement: "a/b", TrackedBy: "#1", Reason: "r"}},
+		{finding: "a/b\n    text listed by x, and not in the canonical spec:\n      SECOND normative line",
+			exception: archiveException{Requirement: "a/b", TrackedBy: "#1", Reason: "r"}},
+	}
+	require.Equal(t, 0, printArchiveVerify(&buf, nil, excused, nil, 5))
+	out := buf.String()
+	assert.Contains(t, out, "FIRST normative line")
+	assert.Contains(t, out, "SECOND normative line")
+}
+
+func TestAllExcusedIsNotReportedAsACleanTree(t *testing.T) {
+	t.Parallel()
+	// With every finding excused the outstanding list is empty, and the clean-run sentence would otherwise print immediately
+	// above a list of real discrepancies. That is the end state this audit is driving toward, so it has to read correctly.
+	var buf bytes.Buffer
+	excused := []excusedFinding{
+		{finding: "a/b/one\n    listed by x", exception: archiveException{Requirement: "a/b", TrackedBy: "#1", Reason: "r"}},
+	}
+	require.Equal(t, 0, printArchiveVerify(&buf, nil, excused, nil, 5))
+	out := buf.String()
+	assert.NotContains(t, out, "every scenario still canonical")
+	assert.Contains(t, out, "no outstanding findings")
+
+	// A genuinely empty report still says so.
+	buf.Reset()
+	require.Equal(t, 0, printArchiveVerify(&buf, nil, nil, nil, 5))
+	assert.Contains(t, buf.String(), "every scenario still canonical")
 }
