@@ -396,3 +396,16 @@ func preferencesTimeoutMessage(for action: HostAppAction, timeout: TimeInterval)
         + "nobody answered: re-run it as the console user (`launchctl asuser <uid> ...`) and approve the prompt. "
         + "Otherwise the preferences daemon is not responding, and the setting can be changed in System Settings > Network."
 }
+
+/// reportOnce runs `report` only if `latch` is still unclaimed, and returns whether it ran.
+///
+/// This exists so the ORDER is testable, which is the part that was wrong. The first version of the bounded toggles claimed the
+/// latch on the way out and left the `reporter` calls ahead of it, so a round-trip landing at the deadline printed its own
+/// result AND the watchdog's timeout, breaking the "exactly one outcome" clause the requirement states. Caught in review on
+/// PR #945, and unit tests could not have caught it while the sequencing lived in main.swift, which carries top-level
+/// executable code and is excluded from the logic module.
+func reportOnce(_ latch: PreferencesLatch, _ report: () -> Void) -> Bool {
+    guard latch.complete() else { return false }
+    report()
+    return true
+}
