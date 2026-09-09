@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/test/integration"
 	"github.com/fleetdm/edr/test/scale"
 )
@@ -41,6 +42,11 @@ const (
 	// backlog at max 17; at 200 hosts with the production fan-out it should stay in the low tens. 5000 leaves generous headroom for
 	// CI-runner noise while still failing decisively on the pre-#535 unbounded-growth class (that run climbed to ~37k).
 	scaleGateMaxBacklog = 5000
+	// scaleGateWorkers is the fan-out a production replica runs. Taken from the production constant rather than copied, because
+	// the gate both REQUESTS and ASSERTS it: a local copy would let a change to the shipped default leave this lane requesting
+	// and asserting a stale number, passing its own self-check while measuring a configuration that ships nowhere. That is the
+	// same failure the self-check exists to catch, one level up (issue #962).
+	scaleGateWorkers = config.DefaultProcessConcurrency
 	// scaleGateBacklogPoll is how often the gate samples the queue depth during the run.
 	scaleGateBacklogPoll = 1 * time.Second
 	// scaleGateQueryTimeout bounds a single backlog COUNT so a stuck query cannot stall sampling for the rest of the lane (mirrors
@@ -52,7 +58,16 @@ const (
 func TestScaleGate_BacklogBounded(t *testing.T) {
 	t.Parallel()
 	repoRoot := filepath.Join("..", "..")
-	stack := integration.Setup(t, integration.WithProcessConcurrency(4))
+	stack := integration.Setup(t, integration.WithProcessConcurrency(scaleGateWorkers))
+
+	// Assert the fan-out this gate claims to measure, before measuring anything. The processor silently reduces its worker count
+	// when the harness gives it no coordinator or too small a pool, so a gate that only REQUESTS the production fan-out can spend
+	// months measuring a single worker. That is what happened: #719 made a coordinator load-bearing, this harness wired none, and
+	// the gate went red for three weeks looking exactly like a throughput regression in the product (issue #962). The backlog
+	// number below is only meaningful if this line holds.
+	require.Equal(t, scaleGateWorkers, stack.Detection.ProcessorConcurrency(),
+		"scale gate must measure the production fan-out: the processor clamps itself when the harness cannot support the "+
+			"requested workers, and a clamped run measures a configuration that ships nowhere")
 
 	ctx, cancel := context.WithTimeout(t.Context(), scaleGateDuration+60*time.Second)
 	defer cancel()

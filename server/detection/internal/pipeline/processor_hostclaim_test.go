@@ -196,7 +196,11 @@ func TestNewProcessor_ConcurrencyBounds(t *testing.T) {
 				ReservedConns: tc.reservedConns,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, proc.concurrency)
+			// Through the accessor, not the field: Concurrency() is what callers outside the package size themselves against, so
+			// the whole clamp table has to hold through it. Asserting the field would leave the accessor free to report the
+			// REQUESTED count, which is the shape of the defect that made the scale gate measure one worker while asking for four
+			// (issue #962).
+			assert.Equal(t, tc.want, proc.Concurrency())
 			// Run logs the reduction so an operator can see the configured count was not honored; the record has to exist whenever a
 			// reduction happened, and must not exist otherwise.
 			if tc.want < tc.concurrency {

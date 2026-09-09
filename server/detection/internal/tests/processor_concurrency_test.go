@@ -20,6 +20,7 @@ import (
 
 	"github.com/fleetdm/edr/server/coordination/leader"
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
@@ -112,4 +113,90 @@ func TestProcessor_IntraReplicaConcurrencyDrainsCompletely(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM (SELECT host_id, pid FROM processes WHERE host_id LIKE 'conc-host-%' GROUP BY host_id, pid) k`).Scan(&distinctKeys))
 	assert.Equal(t, hosts*forksPerHost, distinctKeys, "no (host,pid) was materialized more than once")
+}
+
+// TestDetection_ProcessorConcurrencyReportsTheEffectiveFanOut pins what ProcessorConcurrency answers, which is the question issue
+// #962 was decided on: not "how many workers were configured" but "how many will actually run".
+//
+// The three cases are the three answers a caller can get, and the middle one is the regression itself. A harness that wires no
+// coordinator gets a single worker however many it asked for, silently and with only a WARN, so the scale gate spent three weeks
+// measuring one worker while believing it measured four and read the shortfall as a throughput regression in the product. An
+// accessor that reported the REQUESTED count would have kept that hidden, so the assertion here is specifically that the clamped
+// case reports 1.
+func TestDetection_ProcessorConcurrencyReportsTheEffectiveFanOut(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		mode bootstrap.Mode
+		// withCoordinator decides the clamp: without one the processor refuses to run more than a single worker, because nothing
+		// would keep two of them off the same host's stream (issue #717).
+		withCoordinator bool
+		// maxOpenConns sizes the pool BEFORE bootstrap, since the processor reads the cap at construction to decide what it can
+		// afford. A locked worker holds two connections and workers take at most half the pool, so four workers need sixteen
+		// obtainable connections on top of the three the leader-gated sweeps pin for the life of the process.
+		maxOpenConns int
+		requested    int
+		want         int
+	}{
+		{
+			name:            "the production shape reports the fan-out it was given",
+			mode:            bootstrap.ModeFull,
+			withCoordinator: true,
+			maxOpenConns:    24,
+			requested:       4,
+			want:            4,
+		},
+		{
+			name:            "no coordinator reports the single worker it will really run, not the four requested",
+			mode:            bootstrap.ModeFull,
+			withCoordinator: false,
+			maxOpenConns:    24,
+			requested:       4,
+			want:            1,
+		},
+		{
+			name:            "a mode that wires no processor reports zero rather than a fan-out it does not have",
+			mode:            bootstrap.ModeIntake,
+			withCoordinator: true,
+			maxOpenConns:    24,
+			requested:       4,
+			want:            0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+
+			db := full.Open(t)
+			db.SetMaxOpenConns(tc.maxOpenConns)
+			db.SetMaxIdleConns(tc.maxOpenConns)
+			vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db})
+			require.NoError(t, err)
+			require.NoError(t, vis.ApplySchema(ctx))
+
+			deps := bootstrap.Deps{
+				DB:                   db,
+				Mode:                 tc.mode,
+				ProcessInterval:      20 * time.Millisecond,
+				ProcessBatch:         100,
+				ProcessConcurrency:   tc.requested,
+				StaleProcessTTL:      time.Hour,
+				StaleProcessInterval: 20 * time.Millisecond,
+				RetentionDays:        30,
+				RetentionInterval:    20 * time.Millisecond,
+				AuthZ:                allowAllAuthZ{},
+				EventLog:             vis.EventLog(),
+				EventArchive:         detectiontestkit.NewMemArchive(),
+			}
+			if tc.withCoordinator {
+				deps.Coordinator = leader.NewMySQL(db, discardLogger())
+			}
+			d, err := bootstrap.New(deps)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, d.ProcessorConcurrency())
+		})
+	}
 }

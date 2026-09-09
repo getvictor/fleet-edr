@@ -118,6 +118,7 @@ type Detection struct {
 	operatorH *operator.Handler
 	svc       *service.Service
 	pipe      *pipeline.Runner
+	processor *pipeline.Processor
 	db        *sqlx.DB
 	mode      Mode
 	logger    *slog.Logger
@@ -260,6 +261,7 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 		d.operatorH.SetWebhookTester(webhookTester)
 	}
 
+	d.processor = processor
 	d.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
 		Processor:       processor,
 		ProcessTTL:      processTTL,
@@ -336,6 +338,16 @@ func configureWebhookDelivery(store *mysql.Store, deps Deps, logger *slog.Logger
 // Service exposes the operator-facing api.Service. RecordHostSeen is
 // the hot path response consumes via its Heartbeat closure.
 func (d *Detection) Service() api.Service { return d.svc }
+
+// ProcessorConcurrency reports how many processor workers this context will actually run, or 0 in a mode that wires no
+// processor. It is the EFFECTIVE count after the coordinator and connection-budget clamps, not the requested one, so a caller
+// that needs the production fan-out can assert it got the production fan-out (issue #962).
+func (d *Detection) ProcessorConcurrency() int {
+	if d.processor == nil {
+		return 0
+	}
+	return d.processor.Concurrency()
+}
 
 // SetMetrics wires the metrics recorder into the engine + intake + pipeline (processttl + retention) AFTER construction. Used by
 // cmd/main to break the circular dependency between detectionCtx and metrics.New (the OfflineHosts gauge source needs detectionCtx;
