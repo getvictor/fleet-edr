@@ -4,16 +4,18 @@
 
 `server-application-control/Application control block event contract` says every `application_control_block` event MUST carry `rule_identifier`, `matched_identifier`, `process` and `ancestry`. The wire has never carried any of them, and the requirement omits three fields it does carry.
 
-Four sources agree against the spec:
+Three independent implementations of this contract agree with each other and disagree with the requirement:
 
 | Source | Fields |
 | --- | --- |
 | `EventSerializer.swift`'s block payload | `pid`, `path`, `rule_id`, `rule_type`, `identifier`, `severity`, `custom_msg`, `custom_url`, `policy_id`, `policy_version` |
 | `schema/events.json` `application_control_block_payload` | the same ten |
 | the server's decoder in `application_control_block.go` | the same ten |
-| the requirement | four fields that appear in none of them |
+| **the requirement** | **four fields that appear in none of them** |
 
 `rule_identifier`, `matched_identifier` and `ancestry` appear nowhere in `server/` or `extension/` outside the test that pins their absence.
+
+The last row is the requirement itself, listed so the mismatch is visible in one place rather than asserted.
 
 This is the same defect #931 found and fixed on the extension side. Application control declared its block event twice, once in `extension-application-control` and once here, and the in-flight `appcontrol-spec-owned-by-the-extension-capability` change corrected only the extension copy. This is the other half: a requirement that has been describing a wire shape that does not exist, on the ingest side, where an implementer reading it would build a decoder for fields no agent sends.
 
