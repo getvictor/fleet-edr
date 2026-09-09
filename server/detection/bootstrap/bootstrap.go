@@ -337,6 +337,8 @@ func configureWebhookDelivery(store *mysql.Store, deps Deps, logger *slog.Logger
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is
 // the hot path response consumes via its Heartbeat closure.
+func (d *Detection) Service() api.Service { return d.svc }
+
 // ProcessorConcurrency reports how many processor workers this context will actually run, or 0 in a mode that wires no
 // processor. It is the EFFECTIVE count after the coordinator and connection-budget clamps, not the requested one, so a caller
 // that needs the production fan-out can assert it got the production fan-out (issue #962).
@@ -346,8 +348,6 @@ func (d *Detection) ProcessorConcurrency() int {
 	}
 	return d.processor.Concurrency()
 }
-
-func (d *Detection) Service() api.Service { return d.svc }
 
 // SetMetrics wires the metrics recorder into the engine + intake + pipeline (processttl + retention) AFTER construction. Used by
 // cmd/main to break the circular dependency between detectionCtx and metrics.New (the OfflineHosts gauge source needs detectionCtx;

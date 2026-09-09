@@ -236,6 +236,8 @@ func hostClaimLockName(hostID string) string {
 // SetMetrics installs the OTel recorder the processor counts materialization-miss retries on (issue #631). Called by
 // Runner.SetMetrics during cmd/main's two-phase wiring; nil-safe (an unset recorder no-ops the retry counter). Set-once before Run,
 // like the sibling runners' recorders, so the running worker loops only read it.
+func (p *Processor) SetMetrics(m api.MetricsRecorder) { p.metrics = m }
+
 // Concurrency reports the number of worker loops this processor will actually run, AFTER the coordinator and connection-budget
 // clamps have been applied. It is not what the caller asked for: a processor built without a coordinator runs one worker whatever
 // was requested, and one whose pool cannot afford the request runs fewer.
@@ -244,8 +246,6 @@ func hostClaimLockName(hostID string) string {
 // this: it asked for four workers, silently got one for three weeks because its harness wired no coordinator, and its failure
 // then looked like a throughput regression in the product (issue #962).
 func (p *Processor) Concurrency() int { return p.concurrency }
-
-func (p *Processor) SetMetrics(m api.MetricsRecorder) { p.metrics = m }
 
 // SetMonitorMatchRecorder wires the durable monitor-match counter AFTER construction, mirroring SetMetrics. cmd/main passes the
 // rules context's store once both contexts are built; the rules context owns the table, so the wiring direction matches the
