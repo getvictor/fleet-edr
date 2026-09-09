@@ -12,6 +12,12 @@ The behavior described here is the contract agents and the server depend on. It 
 
 The system SHALL emit a `fork` event when a monitored process forks, an `exec` event when a process replaces its image, and an `exit` event when a process exits. Each event MUST carry the originating PID and any additional fields documented for that event type. The `exec` event SHALL additionally carry the process's own kernel PID generation and the `fork` event SHALL carry the child process's kernel PID generation (`pidversion`, read from the respective process's audit token) when it is available, so the server can disambiguate reused PIDs by identity rather than by time. The `pidversion` field is optional: when the audit token is unavailable the event is still emitted without it.
 
+The `exec` event SHALL carry `cdhash`, the code-directory hash of the new image, when the process runs under Apple's Hardened Runtime AND the kernel reported a hash for it. It SHALL omit the field otherwise, in both of the cases that reach that outcome: a process not running under the Hardened Runtime, and a hardened process whose reported hash is all zeros.
+
+Both omissions are deliberate. The kernel maps pages lazily on a non-hardened process and does not re-verify them after load, so the hash reported at exec is not a reliable identity for the bytes that will eventually execute. An all-zero hash is the kernel saying it has none, and emitting it would let a rule whose identifier is forty zeros match by coincidence. A value that cannot be relied on is worse than an absent one.
+
+The field is what lets an operator exclude a code-signed parent from a `suspicious_exec` finding by its non-spoofable code identity instead of a path glob an attacker who can write to a world-writable directory could land inside, so its absence where a hash does exist is a loss of that defence and not a cosmetic gap.
+
 #### Scenario: A user runs a shell command
 
 - **GIVEN** the endpoint event capture is running
@@ -27,6 +33,15 @@ The system SHALL emit a `fork` event when a monitored process forks, an `exec` e
 - **THEN** the system emits a `fork` event whose payload identifies the parent PID and the child PID
 - **AND** the payload includes the child process's `pidversion` when its audit token is available
 
+#### Scenario: The exec event carries cdhash only when the kernel reported one
+
+- **GIVEN** the endpoint event capture is running
+- **WHEN** a process execs a binary that runs under Apple's Hardened Runtime and the kernel reports a hash for it
+- **THEN** the `exec` event payload carries `cdhash`
+- **AND** an exec of a binary that does not use the Hardened Runtime omits `cdhash`
+- **AND** an exec whose reported hash is all zeros omits `cdhash` rather than carrying forty zeros
+- **AND** the event is otherwise well-formed in every case
+
 ### Requirement: Launch-item registration event capture
 
 The system SHALL emit a `btm_launch_item_add` event when launchd registers a launch item (a LaunchDaemon, LaunchAgent, or login item) via Background Task Management. The payload MUST carry the item type, the launch item path, the registered executable path when available, the MDM-managed flag, and the code-signing identity of the REGISTERED EXECUTABLE (`executable_code_signing`: team ID, signing ID, platform-binary flag) evaluated out-of-band, because the event provides code-signing for the instigator process but not for the to-be-launched executable.
@@ -41,6 +56,10 @@ The system SHALL emit a `btm_launch_item_add` event when launchd registers a lau
 
 The system SHALL emit a write-mode `open` event when a process creates or writes a file under a fixed set of sensitive target paths (currently `/etc/sudoers` and any direct child of `/etc/sudoers.d/`), carrying the writing process PID, the file path, and write-mode access flags. The system SHALL NOT forward a broad stream of file opens: collection is scoped at the source to those sensitive target paths via a dedicated Endpoint Security client with inverted target-path muting, kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes to paths outside the sensitive set MUST NOT be collected.
 
+The system SHALL additionally emit a `file_rename` event when a process renames a file into, within, or out of that same sensitive set, carrying the renaming process PID, the source path, and the destination path. Both paths are required: a rename is the only operation in this set that makes a file become sudo policy without any write to the destination, and the source is what distinguishes a file promoted from a scratch path elsewhere from one already inside the watched directory.
+
+Renames SHALL be collected under the same inverted target-path muting as creations and writes, which matches a rename when EITHER of its paths falls in the sensitive set.
+
 #### Scenario: A write to a sensitive path is captured
 
 - **GIVEN** the extension is running with the sensitive-path file-modification client active
@@ -48,23 +67,14 @@ The system SHALL emit a write-mode `open` event when a process creates or writes
 - **THEN** a write-mode `open` event is emitted carrying the writing process PID, the file path, and the write-mode access flags
 - **AND** the event reaches the server and is available to the detection pipeline
 
-### Requirement: Process exec authorization
+#### Scenario: A rename event carries both of its paths
 
-The system SHALL evaluate every exec against the active blocklist before allowing the new image to run. When the target binary path is on the blocklist the system MUST deny the exec so the image never executes; otherwise the system MUST allow the exec and emit a notification event for it.
+- **GIVEN** a rename touching the sensitive set has been observed
+- **WHEN** the extension serializes it
+- **THEN** the `file_rename` event carries the renaming process PID, the source path, and the destination path
+- **AND** the destination is carried under the same field name every other file event uses for its target, so one detection can read both
 
-#### Scenario: An exec of a blocklisted path is denied
-
-- **GIVEN** the active policy contains a path on its blocklist
-- **WHEN** any process attempts to exec that path
-- **THEN** the system denies the exec so the kernel returns the standard "operation not permitted" error to the caller
-- **AND** the binary does not run
-
-#### Scenario: An exec of a non-blocklisted path is allowed
-
-- **GIVEN** the active policy does not contain the target path
-- **WHEN** a process execs that path
-- **THEN** the system allows the exec
-- **AND** an `exec` event is emitted describing the new image
+Note on verification: this scenario pins the event's SHAPE, which is what the extension's unit tests can reach. That the ESF client is subscribed and that `handleRename` reads both halves of the rename union are exercised at the system / VM layer per `docs/testing-strategy.md`, because `FileTamperSubscriber` imports EndpointSecurity and is outside the unit-testable target.
 
 ### Requirement: Outbound socket flow capture
 
@@ -188,3 +198,69 @@ The macOS system extension serializers SHALL stamp the platform that produced th
 - **GIVEN** the endpoint-security serializer encodes an event envelope
 - **WHEN** the encoded JSON is inspected
 - **THEN** its `platform` field is `darwin`
+
+### Requirement: Event payload schema is selected by event type
+
+The published event schema SHALL select which payload definition applies from the envelope's `event_type`, and SHALL NOT select it by requiring the payload to match exactly one definition. Payload definitions overlap by construction: `snapshot_heartbeat_payload` requires only `pid`, so every payload carrying a `pid` satisfies it, and `file_truncate_payload` and `file_delete_payload` are identical in both their required and their declared fields. A schema that selects by matching exactly one definition therefore refuses envelopes the system emits and accepts, which is the opposite of what the document is for.
+
+Every value of the documented `event_type` enum SHALL have exactly one selection clause, and that clause SHALL name a payload definition that exists. An event type without a clause leaves its payload wholly unconstrained while the document still appears to describe it.
+
+The schema SHALL validate the envelopes the system's own emitters produce. The document is mirrored by hand in several emitters and is cited across the agent, the extension and the server as the wire contract, so an emitter that drifts from it MUST be observable rather than silent.
+
+The schema constrains each payload's required fields and their types. It does NOT forbid fields beyond those it declares, because the ingest path accepts them; a payload that carries its own type's required fields plus additional keys is therefore accepted.
+
+#### Scenario: Each documented event type validates
+
+- **GIVEN** the published event schema
+- **WHEN** an envelope is validated for each value of the documented `event_type` enum, carrying that type's documented payload
+- **THEN** every one of them validates
+- **AND** none is refused for matching more than one payload definition
+
+#### Scenario: A mismatched payload is rejected
+
+- **GIVEN** the published event schema
+- **WHEN** an envelope carries a payload that does not satisfy the definition its own `event_type` selects
+- **THEN** validation fails, naming the field that is missing or ill-typed
+
+#### Scenario: Emitted envelopes validate against the document
+
+- **GIVEN** the envelopes an emitter in this repository produces for its shipped scenarios
+- **WHEN** each is validated against the published event schema
+- **THEN** every envelope validates, including its `event_id` format
+
+#### Scenario: A payload carrying an undeclared field is accepted
+
+- **GIVEN** the published event schema
+- **WHEN** an envelope carries its own event type's required fields plus a field the schema does not declare
+- **THEN** it validates, because the ingest path accepts such a payload and the document must not be stricter than what the system accepts
+
+#### Scenario: Every event type has a discriminator clause
+
+- **GIVEN** the published event schema
+- **WHEN** its selection clauses are compared against the documented `event_type` enum
+- **THEN** each enum value has exactly one clause, and no clause names a type outside the enum
+- **AND** each clause names a payload definition the document defines
+
+### Requirement: Destruction of a sensitive file is captured
+
+The system SHALL emit a `file_truncate` event when a process discards the contents of a file in the sensitive target set, and a `file_delete` event when a process removes one, each carrying the acting process PID and the path.
+
+Truncation SHALL be captured however it is performed. `truncate(2)` and `ftruncate(2)` are one kernel path and an `open(2)` carrying `O_TRUNC` is another, and only the second is what a shell redirect uses, so capturing either alone leaves the common case invisible.
+
+An open that does NOT discard contents SHALL NOT be emitted. The sensitive paths are read routinely, since every `sudo` invocation reads the policy, so reporting those reads would turn a destruction signal into a stream of ordinary privilege checks. The filter belongs in the extension rather than in a rule, because what is being avoided is what reaches the wire at all.
+
+Note on verification: the scenarios below pin the event SHAPES, which is what this repository's tests can reach. That the ESF client is subscribed to the three event types, that an `O_TRUNC` open is told from a routine read, and that a truncate syscall and a shell redirect both arrive are exercised at the system / VM layer per `docs/testing-strategy.md`, because `FileTamperSubscriber` imports EndpointSecurity and is outside the unit-testable target.
+
+#### Scenario: An emptied file is reported as a truncation
+
+- **GIVEN** a process has discarded the contents of a file in the sensitive set
+- **WHEN** the extension serializes the event
+- **THEN** a `file_truncate` event carries the acting process PID and the path
+- **AND** the same shape is produced whether the contents were discarded by a truncate syscall or by an open carrying `O_TRUNC`
+
+#### Scenario: A removed file is reported as a deletion
+
+- **GIVEN** a process has removed a file in the sensitive set
+- **WHEN** the extension serializes the event
+- **THEN** a `file_delete` event carries the acting process PID and the path
+- **AND** it is distinguishable from a truncation, because an emptied file still exists and a removed one does not
