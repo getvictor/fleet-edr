@@ -124,6 +124,7 @@ describe("PoliciesList", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
+  // spec:web-ui/application-control-screen-lists-policies-and-their-rules/a-fresh-deployment-shows-the-seeded-default-policy
   it("renders assignment_count with the appropriate singular / plural / zero label", async () => {
     (api.listAppControlPolicies as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePolicy({ id: 1, name: "SeedDefault", assignment_count: 1 }),

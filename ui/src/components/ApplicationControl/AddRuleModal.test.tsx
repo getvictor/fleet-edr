@@ -69,6 +69,7 @@ describe("AddRuleModal", () => {
     expect((dialog as HTMLDialogElement).open).toBe(false);
   });
 
+  // spec:web-ui/add-rule-modal-validates-the-identifier-for-its-type/submission-is-blocked-until-an-audit-reason-is-entered
   it("disables Save until both identifier and reason are populated", () => {
     render(
       <AddRuleModal
@@ -113,6 +114,7 @@ describe("AddRuleModal", () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  // spec:web-ui/add-rule-modal-validates-the-identifier-for-its-type/an-identifier-that-does-not-match-its-type-is-refused
   it("rejects a BINARY identifier with the wrong length", async () => {
     const createSpy = vi.spyOn(api, "createAppControlRule");
     render(

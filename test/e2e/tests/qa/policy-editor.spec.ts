@@ -4,12 +4,16 @@ import { test, expect } from "../../fixtures/test";
 import { signInAsAdminViaForgedSession } from "../../fixtures/auth";
 import { openDB, resetDB } from "../../fixtures/db";
 
-// Application Control policy editor (/ui/app-control/policies/<id>). The spec calls out three lifecycle
-// invariants:
-//   1. operator-stages-and-saves-a-policy-change: staged BINARY rule + non-empty reason POSTs and persists.
-//   2. save-is-blocked-without-a-reason: submit stays disabled until the reason is filled.
-//   3. invalid-path-or-hash-is-rejected-at-staging: client-side validation prevents a malformed hash from
-//      being saved and surfaces an operator-visible error.
+// Application Control policy detail (/ui/app-control/policies/<id>). Three invariants of the add-rule modal:
+//   1. a-valid-rule-is-created-with-its-reason-recorded: a valid rule + non-empty reason POSTs and persists.
+//   2. submission-is-blocked-until-an-audit-reason-is-entered: submit stays disabled until the reason is filled.
+//   3. an-identifier-that-does-not-match-its-type-is-refused: client-side validation prevents a malformed
+//      identifier from being saved and surfaces an operator-visible error.
+//
+// These markers used to name web-ui/policy-editor-with-audit-reason-gate, the requirement for the two-textarea
+// editor this screen replaced. That component was deleted before the first release and the requirement is
+// retired by the same change that restores the ones above; the markers had outlived it while this spec went
+// on driving the current UI.
 //
 // EnsureDefaultPolicy seeds a Default policy at boot. resetDB does NOT touch app_control_policies, so the
 // seed survives every test. We resolve the policy id by name (the auto-increment column may not be 1 on a
@@ -69,7 +73,7 @@ test.describe("application control policy editor", () => {
     await signInAsAdminViaForgedSession(page);
   });
 
-  // spec:web-ui/policy-editor-with-audit-reason-gate/operator-stages-and-saves-a-policy-change
+  // spec:web-ui/add-rule-modal-validates-the-identifier-for-its-type/a-valid-rule-is-created-with-its-reason-recorded
   test("operator stages a BINARY rule with a reason and the rule persists", async ({ page }) => {
     await page.goto(`/ui/app-control/policies/${String(policyID)}`);
     await expect(page.getByRole("heading", { name: /default/i })).toBeVisible({ timeout: 10_000 });
@@ -113,7 +117,7 @@ test.describe("application control policy editor", () => {
     }
   });
 
-  // spec:web-ui/policy-editor-with-audit-reason-gate/save-is-blocked-without-a-reason
+  // spec:web-ui/add-rule-modal-validates-the-identifier-for-its-type/submission-is-blocked-until-an-audit-reason-is-entered
   test("save stays disabled when the reason is empty even if the identifier is valid", async ({ page }) => {
     await page.goto(`/ui/app-control/policies/${String(policyID)}`);
     await page.getByRole("button", { name: /^add rule$/i }).click();
@@ -136,7 +140,7 @@ test.describe("application control policy editor", () => {
     await expect(saveBtn).toBeEnabled();
   });
 
-  // spec:web-ui/policy-editor-with-audit-reason-gate/invalid-path-or-hash-is-rejected-at-staging
+  // spec:web-ui/add-rule-modal-validates-the-identifier-for-its-type/an-identifier-that-does-not-match-its-type-is-refused
   test("a malformed BINARY hash is rejected with a validation error and no POST", async ({ page }) => {
     await page.goto(`/ui/app-control/policies/${String(policyID)}`);
     await page.getByRole("button", { name: /^add rule$/i }).click();

@@ -34,11 +34,6 @@ const SEVERITIES = ["low", "medium", "high", "critical"];
 const PLACEHOLDER_BINARY_LENGTH = 64;
 const PLACEHOLDER_TEXTAREA = "a".repeat(PLACEHOLDER_BINARY_LENGTH) + "\nEQHXZ8M8AV\nplatform:com.apple.curl";
 
-// AVAILABLE_RULE_TYPES are the same Phase A close-out values AddRuleModal accepts. CERTIFICATE + PATH are inferred from
-// shape but flagged as unavailable so the operator overrides them to BINARY (or removes the row) before submit. Keeping
-// the gate here in lockstep with AddRuleModal so both UI surfaces agree on what the server validators accept today.
-const AVAILABLE_RULE_TYPES = new Set(["BINARY", "CDHASH", "SIGNINGID", "TEAMID"]);
-
 // errorMessageByCode maps server-typed application_control.* codes to operator-friendly copy. `invalid_rule` is intentionally
 // absent: the server's per-item message ("bulk item 1: identifier failed validation") names the offending row index, which is
 // strictly more useful than any generic UI copy could be, so applyAppControlSubmitError falls through to err.message verbatim
@@ -112,12 +107,13 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
   );
   const { call: callBulk, modal: reauthModal } = useReauthRetry(submitBulk);
 
-  // unresolvedCount captures rows the operator still needs to address: ruleType=null (no shape matched) or ruleType set to
-  // an unavailable type (CERTIFICATE / PATH). Submit is disabled until every row has a server-acceptable type.
-  const unresolvedCount = useMemo(
-    () => rows.filter((r) => r.ruleType === null || !AVAILABLE_RULE_TYPES.has(r.ruleType)).length,
-    [rows],
-  );
+  // unresolvedCount captures rows the operator still needs to address: a line whose shape matched no rule type. Submit is
+  // disabled until every row has one, so an ambiguous paste cannot be committed by accident.
+  //
+  // This used to also treat CERTIFICATE and PATH as unresolved, on a comment claiming parity with AddRuleModal. There was no
+  // parity: AddRuleModal offers all six types, the rule_type column is a six-value enum, and the server validates CERTIFICATE
+  // identifiers, so the gate blocked pasting rules an operator could create one at a time.
+  const unresolvedCount = useMemo(() => rows.filter((r) => r.ruleType === null).length, [rows]);
 
   const submitDisabled =
     busy || phase !== "preview" || rows.length === 0 || unresolvedCount > 0 || reason.trim().length === 0;
@@ -241,7 +237,6 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
               </thead>
               <tbody>
                 {rows.map((row, index) => {
-                  const typeUnavailable = row.ruleType !== null && !AVAILABLE_RULE_TYPES.has(row.ruleType);
                   return (
                     <tr key={row.id}>
                       <td className="app-control__identifier" title={row.identifier}>
@@ -257,8 +252,8 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                         >
                           <option value="">pick a type</option>
                           {PASTE_MANY_RULE_TYPES.map((t) => (
-                            <option key={t} value={t} disabled={!AVAILABLE_RULE_TYPES.has(t)}>
-                              {t}{AVAILABLE_RULE_TYPES.has(t) ? "" : " (coming soon)"}
+                            <option key={t} value={t}>
+                              {t}
                             </option>
                           ))}
                         </select>
@@ -266,7 +261,6 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                       <td className="app-control-dialog__paste-notes">
                         {row.hint && <span>{row.hint}</span>}
                         {row.ruleType === null && <span>No matching shape; pick a type.</span>}
-                        {typeUnavailable && <span>Type not enabled in this build.</span>}
                       </td>
                       <td>
                         <button

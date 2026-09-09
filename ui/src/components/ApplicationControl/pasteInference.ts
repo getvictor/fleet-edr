@@ -3,9 +3,10 @@
 // per-line before submission (the spec scenario for mixed identifiers requires it), so this module is advisory: an inferred
 // type of null is "no shape matched" rather than an error.
 
-// Phase A close-out gates CERTIFICATE and PATH behind the same "coming soon" flag the AddRuleModal renders. inference still
-// returns those values when the shape matches so the operator sees that the row would map to a not-yet-supported type and can
-// switch to BINARY (for a 64-hex) or omit the row (for a PATH), instead of the row being silently rejected by the server.
+// All six rule types are inferred and all six are submittable. An earlier build gated CERTIFICATE and PATH here as "coming
+// soon", on a claim of parity with AddRuleModal that was not true: that modal offers all six, the rule_type column is a
+// six-value enum, and the server validates CERTIFICATE identifiers. The gate blocked pasting rules an operator could create
+// one at a time, and was removed with the spec restoration in #905.
 const RULE_TYPE_CDHASH = "CDHASH";
 const RULE_TYPE_BINARY = "BINARY";
 const RULE_TYPE_TEAMID = "TEAMID";
