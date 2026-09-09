@@ -16,4 +16,5 @@
 - [x] 3.2 Validate the envelopes the fake agent's shipped scenarios actually emit.
 - [x] 3.3 Assert mismatched payloads are rejected.
 - [x] 3.4 Assert every enum value has exactly one discriminator clause pointing at an existing definition.
-- [x] 3.5 Mutation-test: restore `oneOf`, drop a clause, drop an `if` guard, revert the UUID fix, and confirm each is caught.
+- [x] 3.5 Assert a payload carrying an undeclared field is accepted, pinning the decision to leave `additionalProperties` unset.
+- [x] 3.6 Mutation-test: restore `oneOf`, drop a clause, drop an `if` guard, revert the UUID fix, set `additionalProperties: false`, and confirm each is caught.

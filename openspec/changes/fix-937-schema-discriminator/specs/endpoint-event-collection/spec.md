@@ -31,6 +31,12 @@ The schema constrains each payload's required fields and their types. It does NO
 - **WHEN** each is validated against the published event schema
 - **THEN** every envelope validates, including its `event_id` format
 
+#### Scenario: A payload carrying an undeclared field is accepted
+
+- **GIVEN** the published event schema
+- **WHEN** an envelope carries its own event type's required fields plus a field the schema does not declare
+- **THEN** it validates, because the ingest path accepts such a payload and the document must not be stricter than what the system accepts
+
 #### Scenario: Every event type has a discriminator clause
 
 - **GIVEN** the published event schema

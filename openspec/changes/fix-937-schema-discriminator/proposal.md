@@ -12,9 +12,9 @@ Issue #937 offered `additionalProperties: false` as an alternative. It cannot wo
 
 - `schema/events.json` selects the payload with a top-level `allOf` of `if`/`then` clauses keyed on `event_type`, one per enum value. `payload` itself becomes a plain object.
 - `test/fakeagent` emits a real UUID for `event_id`. The document declares `format: uuid` and the production agent (`uuid.New`), the extension (`UUID().uuidString`) and the TypeScript twin (`crypto.randomUUID()`) all honour it; the fake agent emitted a bare 32-character hex string and was the one emitter that did not. The new validation test found this, which is the drift it exists to catch.
-- Four tests in `test/fakeagent/schema_test.go` validate against the document with `santhosh-tekuri/jsonschema/v6`, already present in the module graph as an indirect dependency and promoted to direct.
+- Five tests in `test/fakeagent/schema_test.go` validate against the document with `santhosh-tekuri/jsonschema/v6`, already present in the module graph as an indirect dependency and promoted to direct.
 
-Payload definitions deliberately keep `additionalProperties` unset. With `event_type` doing the discrimination, forbidding extra keys would no longer buy correctness, and it would make the document stricter than the ingest path, which tolerates unknown fields. The consequence is stated plainly: a payload carrying the required fields of its own type plus extra keys is accepted, so a body belonging to a type whose required set is a subset of another's is not rejected on shape alone.
+Payload definitions deliberately keep `additionalProperties` unset. With `event_type` doing the discrimination, forbidding extra keys would no longer buy correctness, and it would make the document stricter than the ingest path, which tolerates unknown fields. The consequence is stated plainly: a payload carrying the required fields of its own type plus extra keys is accepted, so a body belonging to a type whose required set is a subset of another's is not rejected on shape alone. A test pins that decision, because otherwise setting `additionalProperties: false` later would pass the whole suite while contradicting the requirement.
 
 ## Impact
 

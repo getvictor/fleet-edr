@@ -48,9 +48,10 @@ func WithBatchSize(n int) Option {
 	return func(c *runConfig) { c.batchSize = n }
 }
 
-// WithIDGenerator overrides the function used to derive each envelope's event_id. The default produces a 32-hex-char random ID per
-// envelope; tests pass a deterministic generator to make golden comparisons reproducible. Panics on a nil function so the failure
-// surfaces at the WithIDGenerator(nil) call site rather than later in Envelopes when cfg.idGenerator() dereferences nil.
+// WithIDGenerator overrides the function used to derive each envelope's event_id. The default produces a random UUID, which is what
+// schema/events.json's "format": "uuid" requires; tests pass a deterministic generator to make golden comparisons reproducible, and
+// one that yields non-UUIDs will not validate against that schema. Panics on a nil function so the failure surfaces at the
+// WithIDGenerator(nil) call site rather than later in Envelopes when cfg.idGenerator() dereferences nil.
 func WithIDGenerator(f func() string) Option {
 	if f == nil {
 		panic("fakeagent: WithIDGenerator requires a non-nil function")

@@ -51,28 +51,33 @@ func envelopeJSON(t *testing.T, eventType, payload string) []byte {
 // payloadFixtures carries one minimally-valid payload per event_type. TestEventSchema_EveryEventTypeValidates asserts the key set
 // equals the schema's event_type enum, so a new event type without a fixture fails rather than going unexercised.
 var payloadFixtures = map[string]string{
-	"exec":                          `{"pid":100,"ppid":1,"path":"/bin/zsh","args":["zsh","-c","id"],"cwd":"/","uid":501,"gid":20}`,
-	"fork":                          `{"child_pid":101,"parent_pid":100}`,
-	"exit":                          `{"pid":101,"exit_code":0}`,
-	"open":                          `{"pid":101,"path":"/etc/sudoers","flags":1}`,
-	"file_rename":                   `{"pid":101,"source_path":"/tmp/staged","path":"/etc/sudoers"}`,
-	"file_truncate":                 `{"pid":101,"path":"/etc/sudoers"}`,
-	"file_delete":                   `{"pid":101,"path":"/etc/sudoers.d/admins"}`,
-	"network_connect":               `{"pid":101,"protocol":"tcp","direction":"outbound","remote_address":"93.184.216.34","remote_port":443}`,
-	"dns_query":                     `{"pid":101,"query_name":"example.com","query_type":"A"}`,
-	"snapshot_heartbeat":            `{"pid":101}`,
-	"btm_launch_item_add":           `{"item_type":"agent","item_path":"/Library/LaunchAgents/com.example.plist"}`,
-	"sensor_provider_transition":    `{"provider":"network_extension","state":"stopped"}`,
-	"sensor_recovery_failed":        `{"provider":"network_extension","outcome":"attempts_exhausted","attempts":3}`,
-	"application_control_block":     `{"pid":101,"path":"/tmp/tool","rule_id":"r-1","rule_type":"CDHASH","identifier":"abc","severity":"high","policy_id":1,"policy_version":2}`,
-	"application_control_undecided": `{"pid":101,"path":"/tmp/tool","verdict":"allow","reason":"deadline","file_size_bytes":4096,"policy_id":1,"policy_version":2}`,
-	"application_control_resync":    `{"policy_id":1,"previous_version":5,"new_version":2,"previous_epoch":1,"new_epoch":2,"reason":"version_regression"}`,
+	"exec":                       `{"pid":100,"ppid":1,"path":"/bin/zsh","args":["zsh","-c","id"],"cwd":"/","uid":501,"gid":20}`,
+	"fork":                       `{"child_pid":101,"parent_pid":100}`,
+	"exit":                       `{"pid":101,"exit_code":0}`,
+	"open":                       `{"pid":101,"path":"/etc/sudoers","flags":1}`,
+	"file_rename":                `{"pid":101,"source_path":"/tmp/staged","path":"/etc/sudoers"}`,
+	"file_truncate":              `{"pid":101,"path":"/etc/sudoers"}`,
+	"file_delete":                `{"pid":101,"path":"/etc/sudoers.d/admins"}`,
+	"network_connect":            `{"pid":101,"protocol":"tcp","direction":"outbound","remote_address":"93.184.216.34","remote_port":443}`,
+	"dns_query":                  `{"pid":101,"query_name":"example.com","query_type":"A"}`,
+	"snapshot_heartbeat":         `{"pid":101}`,
+	"btm_launch_item_add":        `{"item_type":"agent","item_path":"/Library/LaunchAgents/com.example.plist"}`,
+	"sensor_provider_transition": `{"provider":"network_extension","state":"stopped"}`,
+	"sensor_recovery_failed":     `{"provider":"network_extension","outcome":"attempts_exhausted","attempts":3}`,
+	"application_control_block": `{"pid":101,"path":"/tmp/tool","rule_id":"r-1","rule_type":"CDHASH","identifier":"abc",` +
+		`"severity":"high","policy_id":1,"policy_version":2}`,
+	"application_control_undecided": `{"pid":101,"path":"/tmp/tool","verdict":"allow","reason":"deadline",` +
+		`"file_size_bytes":4096,"policy_id":1,"policy_version":2}`,
+	"application_control_resync": `{"policy_id":1,"previous_version":5,"new_version":2,"previous_epoch":1,"new_epoch":2,` +
+		`"reason":"version_regression"}`,
 }
 
 // TestEventSchema_EveryEventTypeValidates is the regression test for issue #937. Under the previous `payload.oneOf` the schema
 // required EXACTLY ONE payload definition to match, and no definition set additionalProperties: false, so every payload carrying a
 // pid also satisfied snapshot_heartbeat_payload (whose sole requirement is pid). Ten of the sixteen event types matched two
-// definitions and therefore failed. Each subtest here fails against that schema and passes against the event_type-keyed if/then.
+// definitions and therefore failed. Measured against that schema, ten of these subtests fail and six pass: fork, snapshot_heartbeat,
+// btm_launch_item_add, application_control_resync and the two sensor payloads carry no pid, so they matched exactly one definition
+// and validated even then.
 //
 // spec:endpoint-event-collection/event-payload-schema-is-selected-by-event-type/each-documented-event-type-validates
 func TestEventSchema_EveryEventTypeValidates(t *testing.T) {
@@ -139,8 +144,9 @@ func TestEventSchema_PayloadMismatchedToEventTypeIsRejected(t *testing.T) {
 		{
 			name:      "block body with a string pid",
 			eventType: "application_control_block",
-			payload:   `{"pid":"101","path":"/tmp/t","rule_id":"r","rule_type":"CDHASH","identifier":"a","severity":"high","policy_id":1,"policy_version":2}`,
-			want:      "pid",
+			payload: `{"pid":"101","path":"/tmp/t","rule_id":"r","rule_type":"CDHASH","identifier":"a","severity":"high",` +
+				`"policy_id":1,"policy_version":2}`,
+			want: "pid",
 		},
 	}
 	for _, tc := range cases {
@@ -151,6 +157,21 @@ func TestEventSchema_PayloadMismatchedToEventTypeIsRejected(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+// TestEventSchema_UndeclaredPayloadFieldIsAccepted pins the deliberate decision NOT to set additionalProperties: false on the
+// payload definitions. With event_type doing the discrimination, forbidding extra keys would buy no correctness, and it would make
+// the document stricter than the ingest path, which tolerates unknown fields. Without this test, adding additionalProperties: false
+// would pass the rest of the suite while contradicting the requirement, because every other fixture carries only declared fields.
+//
+// spec:endpoint-event-collection/event-payload-schema-is-selected-by-event-type/a-payload-carrying-an-undeclared-field-is-accepted
+func TestEventSchema_UndeclaredPayloadFieldIsAccepted(t *testing.T) {
+	t.Parallel()
+	sch := compileEnvelopeSchema(t)
+
+	// An exec payload plus a field no definition declares, standing in for a wire field added ahead of the document.
+	payload := `{"pid":100,"ppid":1,"path":"/bin/zsh","args":["zsh"],"cwd":"/","uid":501,"gid":20,"undeclared_field":"x"}`
+	assert.NoError(t, validateEnvelope(t, sch, envelopeJSON(t, "exec", payload)))
 }
 
 // TestEventSchema_ShippedScenarioEnvelopesValidate runs the envelopes this package actually emits through the schema. The fixtures
