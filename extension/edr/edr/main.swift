@@ -127,11 +127,78 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     }
 }
 
+/// toggleLatch decides the race between a toggle's own completion handler and the watchdog armed beside it, so a
+/// round-trip that lands exactly at the deadline reports one outcome rather than both.
+///
+/// nil until a watchdog is armed, and that is load-bearing rather than tidy. A latch is one-shot, so a single process-wide
+/// instance is claimed by the FIRST terminal path and every later one loses. `activate` chains enableContentFilter into
+/// enableDNSProxy in one process, so a non-optional latch made the second link lose every time: success skipped its completion
+/// and the process never exited, and an error parked forever. No watchdog is armed on activate, so there is nothing to race
+/// and nothing to claim.
+private nonisolated(unsafe) var toggleLatch: PreferencesLatch?
+
+/// finishToggle reports a toggle's outcome and exits, but only if this path won the race with the watchdog.
+///
+/// The claim has to come BEFORE the reporting, not just before the exit. An earlier version claimed the latch on the way out
+/// and left `reporter` calls ahead of it, which meant a round-trip landing at the deadline printed its own result AND the
+/// watchdog's timeout: exactly the "exactly one outcome" clause the requirement states. Caught in review on PR #945.
+///
+/// Returns Never either way, so it stays a drop-in for `exit` and no call site can fall through. A path that lost exits with the
+/// watchdog's verdict rather than its own, so the status matches the single message that was printed.
+private func finishToggle(_ status: Int32, _ report: () -> Void) -> Never {
+    guard reportOnce(toggleLatch, report) else {
+        parkUntilTheWinnerExits()
+    }
+    exit(status)
+}
+
+/// parkUntilTheWinnerExits blocks a path that lost the race, instead of exiting.
+///
+/// Exiting here looks harmless and is not. The watchdog claims the latch and THEN prints the timeout guidance, so a losing
+/// callback that calls exit in between kills the process before the message the requirement demands ever reaches the operator:
+/// the first fix made both outcomes print, and exiting here would have made neither. Caught in review on PR #945.
+///
+/// Safe to block forever because the path that won is on its way to exit(): whichever side claimed the outcome reports it and
+/// terminates the process, so this thread is waiting on something guaranteed to happen.
+private func parkUntilTheWinnerExits() -> Never {
+    // The interval is irrelevant to correctness: the winner exits the process, so nothing here is waited on for long. It is a
+    // loop rather than one long sleep only so a stuck winner shows up as a parked thread rather than an inexplicable delay.
+    let parkInterval: TimeInterval = 60
+    while true {
+        Thread.sleep(forTimeInterval: parkInterval)
+    }
+}
+
+/// claimToggleSuccess is finishToggle's half for the success paths that CHAIN rather than exit: on `activate`,
+/// enableContentFilter runs enableDNSProxy after reporting. Returns false when the watchdog already reported a timeout, in which
+/// case the chained work must not run and this path must stay silent.
+///
+/// On `activate` no watchdog is armed, so toggleLatch is nil and every link of the chain reports and continues.
+private func claimToggleSuccess(_ message: String) -> Bool {
+    reportOnce(toggleLatch) { reporter.progress(message) }
+}
+
+/// armPreferencesWatchdog bounds a toggle's NetworkExtension preferences round-trip (issue #905, specified by the
+/// archived resilient-network-enforcement change and never built).
+///
+/// `loadFromPreferences` and `saveToPreferences` take a completion handler that is simply never called when the save is
+/// waiting on a console-session approval that no one is there to give. The subcommand then sits in `dispatchMain()`
+/// forever. That is worst exactly where it matters: `disable-dns-proxy` is the operator's recovery lever for a host
+/// whose DNS our own proxy has broken, and it is reached over SSH, which is the case with no console session.
+private func armPreferencesWatchdog(for action: HostAppAction) {
+    let latch = PreferencesLatch()
+    toggleLatch = latch
+    DispatchQueue.global().asyncAfter(deadline: .now() + defaultPreferencesTimeout) {
+        guard latch.expire() else { return }
+        reporter.failure(preferencesTimeoutMessage(for: action, timeout: defaultPreferencesTimeout))
+        exit(EXIT_FAILURE)
+    }
+}
+
 private func enableContentFilter(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
-            reporter.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)") }
         }
         print("Loaded filter preferences, isEnabled=\(NEFilterManager.shared().isEnabled)")
 
@@ -146,11 +213,11 @@ private func enableContentFilter(then completion: @escaping () -> Void = { exit(
         print("Saving filter preferences...")
         NEFilterManager.shared().saveToPreferences { error in
             if let error {
-                reporter.failure("ERROR: Failed to save filter preferences: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to save filter preferences: \(error.localizedDescription)") }
             }
-            reporter.progress("Content filter enabled successfully")
-            completion()
+            if claimToggleSuccess("Content filter enabled successfully") {
+                completion()
+            }
         }
     }
 }
@@ -158,8 +225,7 @@ private func enableContentFilter(then completion: @escaping () -> Void = { exit(
 private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
-            reporter.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)") }
         }
 
         let proxyConfig = NEDNSProxyProviderProtocol()
@@ -171,11 +237,11 @@ private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_
 
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
-                reporter.failure("ERROR: Failed to save DNS proxy preferences: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to save DNS proxy preferences: \(error.localizedDescription)") }
             }
-            reporter.progress("DNS proxy enabled successfully")
-            completion()
+            if claimToggleSuccess("DNS proxy enabled successfully") {
+                completion()
+            }
         }
     }
 }
@@ -183,17 +249,14 @@ private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_
 private func disableContentFilter() {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
-            reporter.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)") }
         }
         NEFilterManager.shared().isEnabled = false
         NEFilterManager.shared().saveToPreferences { error in
             if let error {
-                reporter.failure("ERROR: Failed to disable filter: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to disable filter: \(error.localizedDescription)") }
             }
-            reporter.progress("Content filter disabled")
-            exit(EXIT_SUCCESS)
+            finishToggle(EXIT_SUCCESS) { reporter.progress("Content filter disabled") }
         }
     }
 }
@@ -201,17 +264,14 @@ private func disableContentFilter() {
 private func disableDNSProxy() {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
-            reporter.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)") }
         }
         NEDNSProxyManager.shared().isEnabled = false
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
-                reporter.failure("ERROR: Failed to disable DNS proxy: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE) { reporter.failure("ERROR: Failed to disable DNS proxy: \(error.localizedDescription)") }
             }
-            reporter.progress("DNS proxy disabled")
-            exit(EXIT_SUCCESS)
+            finishToggle(EXIT_SUCCESS) { reporter.progress("DNS proxy disabled") }
         }
     }
 }
@@ -260,18 +320,22 @@ guard let action = validateHostAppArgs(positionalArgs) else {
 switch action {
 case .enableFilter:
     print("Enabling content filter...")
+    armPreferencesWatchdog(for: .enableFilter)
     enableContentFilter()
     dispatchMain()
 case .disableFilter:
     print("Disabling content filter...")
+    armPreferencesWatchdog(for: .disableFilter)
     disableContentFilter()
     dispatchMain()
 case .enableDNSProxy:
     print("Enabling DNS proxy...")
+    armPreferencesWatchdog(for: .enableDNSProxy)
     enableDNSProxy()
     dispatchMain()
 case .disableDNSProxy:
     print("Disabling DNS proxy...")
+    armPreferencesWatchdog(for: .disableDNSProxy)
     disableDNSProxy()
     dispatchMain()
 case .notify:

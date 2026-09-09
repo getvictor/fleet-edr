@@ -343,3 +343,78 @@ struct Reporter: Sendable {
         progress(approvalPendingMessage)
     }
 }
+
+/// defaultPreferencesTimeout bounds one NetworkExtension preferences round-trip (`loadFromPreferences` /
+/// `saveToPreferences`).
+///
+/// Two minutes, and the size is the whole design. A healthy round-trip is sub-second: measured on edr-dev (macOS 26.3)
+/// over SSH with no console session, both `enable-dns-proxy` and `disable-dns-proxy` returned in under a second against
+/// an already-approved configuration. What takes real time is the other case: saving a configuration the machine has not
+/// approved yet raises a system consent prompt and does not return until a human answers it. A bound tight enough to
+/// "fail fast" would abort that approval, turning a supported interactive flow into a failure.
+///
+/// So this is not a fast timeout. It is an upper bound on an otherwise unbounded wait: long enough that a person can
+/// read a prompt and click Allow, short enough that an unattended invocation reports something instead of blocking
+/// forever.
+let defaultPreferencesTimeout: TimeInterval = 120
+
+/// PreferencesLatch decides the race between a NetworkExtension completion handler and the watchdog that bounds it.
+/// Exactly one of `complete()` and `expire()` returns true, whichever runs first; every later call returns false.
+///
+/// The race is real rather than theoretical: the completion handler runs on an arbitrary framework queue and the
+/// watchdog on a timer queue, so a round-trip that finishes at the deadline could otherwise report success AND failure,
+/// or call `exit()` twice with different statuses.
+final class PreferencesLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settled = false
+
+    /// complete claims the latch for the framework's completion handler. Returns false when the watchdog already fired,
+    /// meaning the caller has already reported a timeout and this late result must be discarded.
+    func complete() -> Bool { claim() }
+
+    /// expire claims the latch for the watchdog. Returns false when the round-trip already finished.
+    func expire() -> Bool { claim() }
+
+    private func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if settled { return false }
+        settled = true
+        return true
+    }
+}
+
+/// preferencesTimeoutMessage is what the operator sees when a toggle's preferences round-trip does not complete in time.
+///
+/// It names the subcommand, the bound it exceeded, and what to do next, because the situation it reports is one an
+/// operator reaches while recovering a host whose DNS is already broken. The advice is the measured cause: saving a
+/// NetworkExtension configuration waits for a human to approve it, so the call never returns when it is made from a
+/// context with no console session (an SSH shell, an MDM script) rather than failing.
+func preferencesTimeoutMessage(for action: HostAppAction, timeout: TimeInterval) -> String {
+    "ERROR: \(action.rawValue) timed out after \(Int(timeout))s waiting for the network-extension preferences round-trip. "
+        + "If this machine has not yet approved the configuration, the save is waiting on a console consent prompt that "
+        + "nobody answered: re-run it as the console user (`launchctl asuser <uid> ...`) and approve the prompt. "
+        + "Otherwise the preferences daemon is not responding, and the setting can be changed in System Settings > Network."
+}
+
+/// reportOnce runs `report` only if `latch` is still unclaimed, and returns whether it ran.
+///
+/// This exists so the ORDER is testable, which is the part that was wrong. The first version of the bounded toggles claimed the
+/// latch on the way out and left the `reporter` calls ahead of it, so a round-trip landing at the deadline printed its own
+/// result AND the watchdog's timeout, breaking the "exactly one outcome" clause the requirement states. Caught in review on
+/// PR #945, and unit tests could not have caught it while the sequencing lived in main.swift, which carries top-level
+/// executable code and is excluded from the logic module.
+/// A nil latch means no bound is armed, so there is no race and every call reports. That is the `activate` flow, which chains
+/// enableContentFilter into enableDNSProxy: a single process-wide latch is ONE-SHOT, so the second link always lost its claim
+/// and activation enabled both providers and then hung instead of exiting. Caught in review on PR #945, after a code comment of
+/// mine asserted the latch was "uncontended" on that path without checking that a second claim in the same process fails
+/// whether or not a watchdog exists.
+func reportOnce(_ latch: PreferencesLatch?, _ report: () -> Void) -> Bool {
+    guard let latch else {
+        report()
+        return true
+    }
+    guard latch.complete() else { return false }
+    report()
+    return true
+}
