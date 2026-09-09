@@ -141,9 +141,26 @@ private let toggleLatch = PreferencesLatch()
 /// watchdog's verdict rather than its own, so the status matches the single message that was printed.
 private func finishToggle(_ status: Int32, _ report: () -> Void) -> Never {
     guard reportOnce(toggleLatch, report) else {
-        exit(EXIT_FAILURE)
+        parkUntilTheWinnerExits()
     }
     exit(status)
+}
+
+/// parkUntilTheWinnerExits blocks a path that lost the race, instead of exiting.
+///
+/// Exiting here looks harmless and is not. The watchdog claims the latch and THEN prints the timeout guidance, so a losing
+/// callback that calls exit in between kills the process before the message the requirement demands ever reaches the operator:
+/// the first fix made both outcomes print, and exiting here would have made neither. Caught in review on PR #945.
+///
+/// Safe to block forever because the path that won is on its way to exit(): whichever side claimed the outcome reports it and
+/// terminates the process, so this thread is waiting on something guaranteed to happen.
+private func parkUntilTheWinnerExits() -> Never {
+    // The interval is irrelevant to correctness: the winner exits the process, so nothing here is waited on for long. It is a
+    // loop rather than one long sleep only so a stuck winner shows up as a parked thread rather than an inexplicable delay.
+    let parkInterval: TimeInterval = 60
+    while true {
+        Thread.sleep(forTimeInterval: parkInterval)
+    }
 }
 
 /// claimToggleSuccess is finishToggle's half for the success paths that CHAIN rather than exit: on `activate`,

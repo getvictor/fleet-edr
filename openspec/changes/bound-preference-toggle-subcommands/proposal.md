@@ -29,5 +29,5 @@ The bound covers all four toggles rather than only the two the archived requirem
 ## Impact
 
 - Affected specs: `host-app-extension-manager`
-- Affected code: `extension/edr/edr/main.swift`, `extension/edr/edr/ExtensionManagerLogic.swift`, `extension/edr/Tests/EDRExtensionLogicTests/HostAppExtensionManagerTests.swift`
+- Affected code: `extension/edr/edr/main.swift`, `extension/edr/edr/ExtensionManagerLogic.swift`, `extension/edr/Tests/EDRExtensionLogicTests/PreferenceToggleBoundTests.swift`
 - Operator-visible: a toggle whose preferences round-trip stalls now exits non-zero after 120 seconds with guidance, instead of waiting without limit. No change to any round-trip that completes, which is every one measured on edr-dev.
