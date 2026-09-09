@@ -47,6 +47,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// flag stops at the first positional argument and leaves the rest unread, so `task release:archive -- dry-run`, with the
+	// leading dashes lost, parses as no flags at all: dryRun stays false and the command archives for real. The operator asked
+	// for a preview and got the mutation, which is the worst way for a release-time tool to fail, so a positional is refused
+	// here rather than dropped. Before anything is built or read, because refusing after the first archive is not refusing.
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q: this command takes flags only, and --dry-run needs both of its dashes",
+			fs.Arg(0))
+	}
 	bin, cleanup, err := buildSpectrace(ctx, *root, stderr)
 	if err != nil {
 		return err
@@ -98,18 +106,20 @@ func archiveAll(ctx context.Context, c commands, dryRun bool, out io.Writer) err
 		return fmt.Errorf("%w; nothing was archived", err)
 	}
 	if len(changes) == 0 {
-		fmt.Fprintln(out, "release:archive: no pending changes, nothing to archive")
-		return nil
+		_, err := fmt.Fprintln(out, "release:archive: no pending changes, nothing to archive")
+		return err
 	}
-	fmt.Fprintf(out, "release:archive: %d pending change(s), to be archived in this order:\n", len(changes))
-	for i, change := range changes {
-		fmt.Fprintf(out, "  %3d. %s\n", i+1, change)
+	if err := printPlan(out, changes); err != nil {
+		return fmt.Errorf("writing the plan failed, so nothing was archived: %w", err)
 	}
 	if dryRun {
-		fmt.Fprintln(out, "release:archive: dry run, nothing archived")
-		return nil
+		_, err := fmt.Fprintln(out, "release:archive: dry run, nothing archived")
+		return err
 	}
 	for i, change := range changes {
+		// Unchecked from here on, unlike the plan above, and the asymmetry is deliberate. Once the tree has started moving, a
+		// broken pipe is a reason to lose the log rather than to abandon a correct sequence half applied; before it has, the
+		// plan is the operator's one chance to stop the run and a truncated one is not that.
 		fmt.Fprintf(out, "release:archive: [%d/%d] openspec archive %s -y\n", i+1, len(changes), change)
 		if err := c.archive(ctx, change); err != nil {
 			// Stopping leaves the tree half-archived, which is recoverable by git and by re-running this once the failure is
@@ -119,6 +129,24 @@ func archiveAll(ctx context.Context, c commands, dryRun bool, out io.Writer) err
 		}
 	}
 	fmt.Fprintf(out, "release:archive: archived %d change(s)\n", len(changes))
+	return nil
+}
+
+// printPlan writes the sequence that is about to be applied.
+//
+// Every write is checked, and a failure stops the run before the first archive rather than after it. The command's contract is
+// that the whole sequence is readable BEFORE the tree moves, so a plan a broken pipe truncated while the archiving carried on
+// would break exactly the contract while reporting success. printArchiveVerify in tools/spectrace records the same reasoning for
+// its own report, and for the same reason: output that exists to be read before a decision must fail loudly when it is not.
+func printPlan(out io.Writer, changes []string) error {
+	if _, err := fmt.Fprintf(out, "release:archive: %d pending change(s), to be archived in this order:\n", len(changes)); err != nil {
+		return err
+	}
+	for i, change := range changes {
+		if _, err := fmt.Fprintf(out, "  %3d. %s\n", i+1, change); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -276,3 +276,65 @@ func (r *recordingArchive) archive(_ context.Context, change string) error {
 	r.archived = append(r.archived, change)
 	return nil
 }
+
+// stubbornWriter fails after a set number of successful writes, which is what a broken pipe partway through the plan looks like.
+type stubbornWriter struct {
+	ok  int
+	err error
+}
+
+func (w *stubbornWriter) Write(p []byte) (int, error) {
+	if w.ok == 0 {
+		return 0, w.err
+	}
+	w.ok--
+	return len(p), nil
+}
+
+// TestArchiveAllStopsOnATruncatedPlan covers the contract the plan exists for: the whole sequence is readable BEFORE the tree
+// moves. A plan a broken pipe cut short while the archiving carried on would break exactly that while still reporting success,
+// which is the failure printArchiveVerify refuses for its own report.
+func TestArchiveAllStopsOnATruncatedPlan(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		wrote int
+	}{
+		{"the header fails", 0},
+		{"a line partway through the plan fails", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stub := &stubCommands{sequence: []string{"m-unrelated", "z-introduces-it", "a-refines-it"}}
+			err := archiveAll(t.Context(), stub, false, &stubbornWriter{ok: tc.wrote, err: errors.New("pipe closed")})
+			require.ErrorContains(t, err, "pipe closed")
+			require.ErrorContains(t, err, "nothing was archived")
+			assert.Empty(t, stub.archived, "the plan is the operator's one chance to stop this, so a truncated one archives nothing")
+		})
+	}
+}
+
+// TestRunRejectsAPositionalArgument is the mistyped preview. `flag` stops at the first positional argument and leaves the rest
+// unread, so `task release:archive -- dry-run` parses as no flags at all: without this refusal the operator asks for a preview
+// and gets the archive. The check runs before spectrace is even built, so a refused run has done nothing whatsoever.
+func TestRunRejectsAPositionalArgument(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"a flag typed without its dashes", []string{"dry-run"}, `unexpected argument "dry-run"`},
+		{"a stray word after a real flag", []string{"--dry-run", "later"}, `unexpected argument "later"`},
+		{"a change name, which this command does not take", []string{"some-change"}, `unexpected argument "some-change"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			require.ErrorContains(t, run(t.Context(), tc.args, &stdout, &stderr), tc.want)
+			assert.Empty(t, stdout.String(), "refused before anything was built, read, or archived")
+		})
+	}
+}

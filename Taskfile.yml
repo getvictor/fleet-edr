@@ -1044,6 +1044,9 @@ tasks:
       carrying on down the list.
 
       Preview the sequence without touching the tree: `task release:archive -- --dry-run`.
+      Both dashes are required, and a bare word is refused rather than run as a real
+      archive, so a mistyped preview cannot become one.
+
       It does NOT verify the archive was lossless; that is the separate before/after
       archive-verify comparison in the checklist.
     preconditions:
