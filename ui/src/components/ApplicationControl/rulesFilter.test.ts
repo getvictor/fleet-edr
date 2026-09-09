@@ -83,6 +83,7 @@ describe("applyRulesFilter", () => {
     expect(applyRulesFilter(rules, { ...EMPTY_RULES_FILTER, search: "   " })).toHaveLength(rules.length);
   });
 
+  // spec:web-ui/application-control-screen-lists-policies-and-their-rules/the-rules-table-filters-independently-on-each-dimension
   it("intersects dimensions: BINARY + enabled returns only rules satisfying both", () => {
     const filter: RulesFilter = { ...EMPTY_RULES_FILTER, ruleType: "BINARY", enabled: "enabled" };
     expect(applyRulesFilter(rules, filter).map((r) => r.id)).toEqual([1]);

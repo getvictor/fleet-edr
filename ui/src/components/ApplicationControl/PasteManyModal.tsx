@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bulkUpsertAppControlRules,
   MAX_BULK_UPSERT_ITEMS,
@@ -11,11 +11,7 @@ import { ReauthModal } from "../ReauthModal";
 import { Input, Select } from "../ui/Input";
 import { AppControlDialogShell } from "./AppControlDialogShell";
 import { applyAppControlSubmitError } from "./dialogErrors";
-import {
-  PASTE_MANY_RULE_TYPES,
-  parsePasteInput,
-  type PasteInference,
-} from "./pasteInference";
+import { PASTE_MANY_RULE_TYPES, parsePasteInput, type PasteInference } from "./pasteInference";
 import "./ApplicationControl.scss";
 
 // PasteManyModalProps mirrors the AddRuleModal contract: open drives showModal()/close(); onClose fires on Cancel/Escape;
@@ -33,11 +29,6 @@ const SEVERITIES = ["low", "medium", "high", "critical"];
 // PLACEHOLDER_BINARY_LENGTH is the placeholder SHA-256 length so the textarea hint matches the BINARY rule_type's hex width.
 const PLACEHOLDER_BINARY_LENGTH = 64;
 const PLACEHOLDER_TEXTAREA = "a".repeat(PLACEHOLDER_BINARY_LENGTH) + "\nEQHXZ8M8AV\nplatform:com.apple.curl";
-
-// AVAILABLE_RULE_TYPES are the same Phase A close-out values AddRuleModal accepts. CERTIFICATE + PATH are inferred from
-// shape but flagged as unavailable so the operator overrides them to BINARY (or removes the row) before submit. Keeping
-// the gate here in lockstep with AddRuleModal so both UI surfaces agree on what the server validators accept today.
-const AVAILABLE_RULE_TYPES = new Set(["BINARY", "CDHASH", "SIGNINGID", "TEAMID"]);
 
 // errorMessageByCode maps server-typed application_control.* codes to operator-friendly copy. `invalid_rule` is intentionally
 // absent: the server's per-item message ("bulk item 1: identifier failed validation") names the offending row index, which is
@@ -106,21 +97,26 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
     setFormError(null);
   }, [open]);
 
-  const submitBulk = useCallback(
-    (req: BulkUpsertAppControlRulesRequest) => bulkUpsertAppControlRules(policyID, req),
-    [policyID],
-  );
+  const submitBulk = useCallback((req: BulkUpsertAppControlRulesRequest) => bulkUpsertAppControlRules(policyID, req), [policyID]);
   const { call: callBulk, modal: reauthModal } = useReauthRetry(submitBulk);
 
-  // unresolvedCount captures rows the operator still needs to address: ruleType=null (no shape matched) or ruleType set to
-  // an unavailable type (CERTIFICATE / PATH). Submit is disabled until every row has a server-acceptable type.
-  const unresolvedCount = useMemo(
-    () => rows.filter((r) => r.ruleType === null || !AVAILABLE_RULE_TYPES.has(r.ruleType)).length,
-    [rows],
-  );
+  // unresolvedCount captures rows the operator still needs to address: a line whose shape matched no rule type. Submit is
+  // disabled until every row has one, so an ambiguous paste cannot be committed by accident.
+  //
+  // This used to also treat CERTIFICATE and PATH as unresolved, on a comment claiming parity with AddRuleModal. There was no
+  // parity: AddRuleModal offers all six types, the rule_type column is a six-value enum, and the server validates CERTIFICATE
+  // identifiers, so the gate blocked pasting rules an operator could create one at a time.
+  const unresolvedCount = useMemo(() => rows.filter((r) => r.ruleType === null).length, [rows]);
 
-  const submitDisabled =
-    busy || phase !== "preview" || rows.length === 0 || unresolvedCount > 0 || reason.trim().length === 0;
+  // Focus the paste box when the modal opens on the paste phase. A bare autoFocus attribute does the same thing but moves
+  // focus on mount regardless of context, which is why Sonar flags it: it can yank a screen reader out of whatever it was
+  // announcing. Doing it here scopes the move to the moment the dialog actually presents this phase.
+  const pasteRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (open && phase === "paste") pasteRef.current?.focus();
+  }, [open, phase]);
+
+  const submitDisabled = busy || phase !== "preview" || rows.length === 0 || unresolvedCount > 0 || reason.trim().length === 0;
 
   function handleParse(e: React.SyntheticEvent) {
     e.preventDefault();
@@ -183,9 +179,10 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
   const pluralSuffix = rows.length === 1 ? "" : "s";
   const previewSubtitle = `${String(rows.length)} row${pluralSuffix} ready. Override any inferred type before saving.`;
   const previewSubmitLabel = `Save ${String(rows.length)} rule${pluralSuffix}`;
-  const subtitle = phase === "paste"
-    ? "Paste one identifier per line. The next step infers the rule type per line and lets you override it before saving."
-    : previewSubtitle;
+  const subtitle =
+    phase === "paste"
+      ? "Paste one identifier per line. The next step infers the rule type per line and lets you override it before saving."
+      : previewSubtitle;
   const submitLabel = phase === "paste" ? "Parse" : previewSubmitLabel;
 
   return (
@@ -200,7 +197,9 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
       submitDisabled={phase === "paste" ? rawInput.trim().length === 0 || busy : submitDisabled}
       submitLabel={submitLabel}
       submitBusyLabel="Saving…"
-      onSubmit={(e) => { void handleSubmit(e); }}
+      onSubmit={(e) => {
+        void handleSubmit(e);
+      }}
       reauthModal={<ReauthModal {...reauthModal} />}
     >
       {phase === "paste" && (
@@ -220,9 +219,11 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
             data-lpignore="true"
             placeholder={PLACEHOLDER_TEXTAREA}
             value={rawInput}
-            onChange={(e) => { setRawInput(e.target.value); }}
+            onChange={(e) => {
+              setRawInput(e.target.value);
+            }}
             disabled={busy}
-            autoFocus
+            ref={pasteRef}
           />
         </div>
       )}
@@ -240,48 +241,48 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, index) => {
-                  const typeUnavailable = row.ruleType !== null && !AVAILABLE_RULE_TYPES.has(row.ruleType);
-                  return (
-                    <tr key={row.id}>
-                      <td className="app-control__identifier" title={row.identifier}>
-                        {row.identifier}
-                      </td>
-                      <td>
-                        <select
-                          className="field__input"
-                          aria-label={`Type for row ${String(index + 1)}`}
-                          value={row.ruleType ?? ""}
-                          onChange={(e) => { handleTypeChange(index, e.target.value); }}
-                          disabled={busy}
-                        >
-                          <option value="">pick a type</option>
-                          {PASTE_MANY_RULE_TYPES.map((t) => (
-                            <option key={t} value={t} disabled={!AVAILABLE_RULE_TYPES.has(t)}>
-                              {t}{AVAILABLE_RULE_TYPES.has(t) ? "" : " (coming soon)"}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="app-control-dialog__paste-notes">
-                        {row.hint && <span>{row.hint}</span>}
-                        {row.ruleType === null && <span>No matching shape; pick a type.</span>}
-                        {typeUnavailable && <span>Type not enabled in this build.</span>}
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="app-control-dialog__paste-remove"
-                          onClick={() => { handleRemoveRow(index); }}
-                          disabled={busy}
-                          aria-label={`Remove row ${String(index + 1)}`}
-                        >
-                          ×
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {rows.map((row, index) => (
+                  <tr key={row.id}>
+                    <td className="app-control__identifier" title={row.identifier}>
+                      {row.identifier}
+                    </td>
+                    <td>
+                      <select
+                        className="field__input"
+                        aria-label={`Type for row ${String(index + 1)}`}
+                        value={row.ruleType ?? ""}
+                        onChange={(e) => {
+                          handleTypeChange(index, e.target.value);
+                        }}
+                        disabled={busy}
+                      >
+                        <option value="">pick a type</option>
+                        {PASTE_MANY_RULE_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="app-control-dialog__paste-notes">
+                      {row.hint && <span>{row.hint}</span>}
+                      {row.ruleType === null && <span>No matching shape; pick a type.</span>}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="app-control-dialog__paste-remove"
+                        onClick={() => {
+                          handleRemoveRow(index);
+                        }}
+                        disabled={busy}
+                        aria-label={`Remove row ${String(index + 1)}`}
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -291,11 +292,15 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
             label="Severity (applied to every row)"
             inline={false}
             value={severity}
-            onChange={(e) => { setSeverity(e.target.value); }}
+            onChange={(e) => {
+              setSeverity(e.target.value);
+            }}
             disabled={busy}
           >
             {SEVERITIES.map((s) => (
-              <option key={s} value={s}>{s}</option>
+              <option key={s} value={s}>
+                {s}
+              </option>
             ))}
           </Select>
 
@@ -305,16 +310,13 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
             type="text"
             placeholder="Why are you importing these rules?"
             value={reason}
-            onChange={(e) => { setReason(e.target.value); }}
+            onChange={(e) => {
+              setReason(e.target.value);
+            }}
             disabled={busy}
           />
 
-          <button
-            type="button"
-            className="app-control-dialog__paste-back"
-            onClick={handleBack}
-            disabled={busy}
-          >
+          <button type="button" className="app-control-dialog__paste-back" onClick={handleBack} disabled={busy}>
             ← Back to paste
           </button>
         </>

@@ -54,6 +54,7 @@ describe("PasteManyModal", () => {
     expect((selects[3] as HTMLSelectElement).value).toBe("SIGNINGID");
   });
 
+  // spec:web-ui/paste-many-infers-a-rule-type-per-line/an-unresolved-line-blocks-the-whole-submission
   it("disables Save when any row's type is unresolved (no shape matched)", () => {
     render(
       <PasteManyModal open policyID={1} onClose={() => undefined} onUpserted={() => undefined} />,
@@ -66,23 +67,23 @@ describe("PasteManyModal", () => {
     expect(screen.getByRole("button", { name: /save 2 rules/i })).toBeDisabled();
   });
 
-  it("disables Save when an inferred type is unavailable (CERTIFICATE/PATH) until overridden", () => {
+  // spec:web-ui/paste-many-infers-a-rule-type-per-line/mixed-identifiers-are-inferred-and-can-be-overridden
+  it("infers PATH and CERTIFICATE as submittable types, not as blocked rows", () => {
     render(
       <PasteManyModal open policyID={1} onClose={() => undefined} onUpserted={() => undefined} />,
     );
-    // PATH is inferred but unavailable; the row's type must be switched to a supported type before Save unlocks.
+    // This used to assert the opposite. CERTIFICATE and PATH were gated as "coming soon" on a claim of parity with
+    // AddRuleModal that was not true: that modal offers all six types, rule_type is a six-value enum, and the server
+    // validates CERTIFICATE identifiers, so the gate blocked pasting rules an operator could create one at a time.
     fireEvent.change(screen.getByLabelText(/identifiers/i), {
       target: { value: "/Applications/Mail.app/Contents/MacOS/Mail" },
     });
     fireEvent.click(screen.getByRole("button", { name: /parse/i }));
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "import" } });
-    const save = screen.getByRole("button", { name: /save 1 rule/i });
-    expect(save).toBeDisabled();
 
-    // Override to BINARY (still wrong shape but the modal is advisory: server will reject; pre-submit gate is satisfied).
     const select = screen.getByRole("combobox", { name: /^type for row 1/i });
-    fireEvent.change(select, { target: { value: "BINARY" } });
-    expect(save).not.toBeDisabled();
+    expect(select).toHaveValue("PATH");
+    expect(screen.getByRole("button", { name: /save 1 rule/i })).toBeEnabled();
   });
 
   it("submits the bulk-upsert request and fires onUpserted on success", async () => {

@@ -14,6 +14,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
+- **Pasting a list of certificate hashes or paths into an application-control policy now works.** The paste-many flow labelled the `CERTIFICATE` and `PATH` rule types "coming soon" and refused to submit any line it inferred as one, even though the same rules could be created one at a time in the add-rule dialog and the server has always accepted them. Operators importing a mixed list had to change those lines to a different type or remove them.
 - **The precise figures in the detection-tuning table are reachable without a mouse.** The Observed and Cost columns abbreviate, and the exact counts, the evaluation window and the worst-case duration were in a hover tooltip only, so they could not be read by keyboard or on a touch device. Both columns now open on click, tap or keyboard, and the columns stay abbreviated while collapsed.
 - **Alerts a rule had already found survive a database outage.** When a lookup a rule depends on fails, the batch is retried rather than dropped. Until now the retry discarded whatever that rule had already found, so if the outage lasted long enough for the batch to be given up on, those detections were lost rather than delayed. They are now kept and raised. The retry also stops re-reading a dependency that has just failed once per event, which removed a burst of load landing on a database that is already in trouble.
 
