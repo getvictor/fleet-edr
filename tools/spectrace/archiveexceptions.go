@@ -196,6 +196,12 @@ func printExcused(p func(string, ...any), excused []excusedFinding) {
 		}
 		p("  %s (%d finding(s)): %s\n", k, len(byRequirement[k]), where)
 		p("      %s\n", e.Reason)
+		// Every excused line, not a count of them. The release checklist reads this command by diffing two runs, and a scenario
+		// newly lost under an EXISTING exception would otherwise move a number without showing the line that moved.
+		sort.Strings(byRequirement[k])
+		for _, head := range byRequirement[k] {
+			p("        %s\n", head)
+		}
 	}
 }
 
@@ -208,7 +214,7 @@ func exceptionsPathFor(specsDir string) string {
 
 // validateEntryShape checks the fields an entry must and must not carry, independently of whether its claim holds.
 func validateEntryShape(e archiveException, where string) []string {
-	hasCovered, hasTracked := len(e.CoveredBy) > 0, e.TrackedBy != ""
+	hasCovered, hasTracked := len(e.CoveredBy) > 0, strings.TrimSpace(e.TrackedBy) != ""
 	switch {
 	case hasCovered && hasTracked:
 		return []string{where + ": sets both covered_by and tracked_by; an excused finding is one or the other"}
@@ -217,6 +223,11 @@ func validateEntryShape(e archiveException, where string) []string {
 	}
 	if strings.TrimSpace(e.Reason) == "" {
 		return []string{where + ": reason is empty"}
+	}
+	// The unit is one requirement. A capability-only key would once have excused everything beneath it; matching on the exact
+	// key stopped that, but the entry then failed as "excuses no finding", which points the reader at the wrong problem.
+	if parts := strings.Split(e.Requirement, "/"); len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return []string{where + `: requirement must be "<capability>/<requirement-slug>"`}
 	}
 	return nil
 }

@@ -127,6 +127,24 @@ func TestValidateExceptions(t *testing.T) {
 			matched: 1,
 			want:    "requirement is empty",
 		},
+		{
+			name:    "a whitespace-only tracked_by is not a disposition",
+			entry:   archiveException{Requirement: "a/b", TrackedBy: "   ", Reason: "why"},
+			matched: 1,
+			want:    "sets neither covered_by nor tracked_by",
+		},
+		{
+			name:    "a capability-only requirement is rejected by shape",
+			entry:   archiveException{Requirement: "web-ui", TrackedBy: "#929", Reason: "why"},
+			matched: 1,
+			want:    `requirement must be "<capability>/<requirement-slug>"`,
+		},
+		{
+			name:    "a scenario-level requirement is rejected by shape",
+			entry:   archiveException{Requirement: "a/b/c", TrackedBy: "#929", Reason: "why"},
+			matched: 1,
+			want:    `requirement must be "<capability>/<requirement-slug>"`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -246,4 +264,39 @@ func TestExceptionsPathIsBesideTheSpecsTree(t *testing.T) {
 	// A caller pointed at another checkout gets that checkout's file, not the repository root's.
 	assert.Equal(t, filepath.Join("/tmp", "x", "openspec", "archive-verify-exceptions.yaml"),
 		exceptionsPathFor(filepath.Join("/tmp", "x", "openspec", "specs")))
+}
+
+func TestExceptionReportShowsEveryExcusedLine(t *testing.T) {
+	t.Parallel()
+	// The defect this pins: printExcused collected the finding heads and then printed only a count, contradicting its own
+	// "printed in full" contract. The release checklist diffs two runs of this command, so a scenario newly lost under an
+	// EXISTING exception has to move a LINE, not a number, or the diff cannot show what changed.
+	var buf bytes.Buffer
+	excused := []excusedFinding{
+		{finding: "a/b/one\n    listed by x", exception: archiveException{Requirement: "a/b", TrackedBy: "#1", Reason: "r"}},
+		{finding: "a/b/two\n    listed by x", exception: archiveException{Requirement: "a/b", TrackedBy: "#1", Reason: "r"}},
+	}
+	require.Equal(t, 0, printArchiveVerify(&buf, nil, excused, nil, 5))
+	out := buf.String()
+	assert.Contains(t, out, "a/b/one")
+	assert.Contains(t, out, "a/b/two")
+}
+
+func TestAllExcusedIsNotReportedAsACleanTree(t *testing.T) {
+	t.Parallel()
+	// With every finding excused the outstanding list is empty, and the clean-run sentence would otherwise print immediately
+	// above a list of real discrepancies. That is the end state this audit is driving toward, so it has to read correctly.
+	var buf bytes.Buffer
+	excused := []excusedFinding{
+		{finding: "a/b/one\n    listed by x", exception: archiveException{Requirement: "a/b", TrackedBy: "#1", Reason: "r"}},
+	}
+	require.Equal(t, 0, printArchiveVerify(&buf, nil, excused, nil, 5))
+	out := buf.String()
+	assert.NotContains(t, out, "every scenario still canonical")
+	assert.Contains(t, out, "no outstanding findings")
+
+	// A genuinely empty report still says so.
+	buf.Reset()
+	require.Equal(t, 0, printArchiveVerify(&buf, nil, nil, nil, 5))
+	assert.Contains(t, buf.String(), "every scenario still canonical")
 }

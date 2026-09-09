@@ -572,9 +572,16 @@ func printArchiveVerify(w io.Writer, findings []string, excused []excusedFinding
 		_, werr = fmt.Fprintf(w, format, args...)
 	}
 
-	if len(findings) == 0 {
+	switch {
+	case len(findings) == 0 && len(excused) > 0:
+		// The end state this audit is driving toward, and it is NOT the same as a clean tree: every discrepancy is accounted
+		// for, but the excused section below still lists real differences from what the archive claimed. Saying "every scenario
+		// still canonical" here would contradict the lines printed immediately after it.
+		p("spectrace: %d archived requirement restatement(s) checked, no outstanding findings; every discrepancy is excused below\n",
+			requirements)
+	case len(findings) == 0:
 		p("spectrace: %d archived requirement restatement(s) checked, every scenario still canonical\n", requirements)
-	} else {
+	default:
 		p("spectrace: %d finding(s) against what the archived deltas say the canonical spec should hold.\n", len(findings))
 		p("%s\n%s\n%s\n%s\n",
 			"Compare this list with the one from before the archive. A line that is NEW is damage this archive did, which is",
