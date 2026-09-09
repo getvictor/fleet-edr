@@ -365,3 +365,40 @@
   reason: >-
     Intact. The only difference from the archived restatement is that it writes "*presented email*" where canonical writes
     "_presented email_", which is Prettier normalising Markdown emphasis. Every other character matches.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Four more requirements whose behaviour is intact, three of them under a canonical requirement that generalised or absorbed
+# them, and one whose only drift is two identifiers the code renamed after archiving.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: server-detection-rules-engine/alert-dedup-by-source-host-rule-process
+  covered_by: server-detection-rules-engine/alert-dedup-by-subject
+  reason: >-
+    Generalised, not dropped. The survivor dedups on (source, host id, rule id, subject) and says in its own text that for a
+    process-backed finding the subject is the process identifier, "preserving the historical (host, rule, process) dedup".
+    The archived requirement is that historical case, which the survivor states it subsumes.
+
+- requirement: server-detection-rules-engine/application-control-blocks-become-alerts
+  covered_by:
+    - server-detection-rules-engine/registered-rule-catalog
+    - server-detection-rules-engine/evaluate-every-registered-rule-against-each-batch
+  reason: >-
+    Absorbed into the general rule machinery. `application_control_block` is named in the registered catalog, which evaluates
+    every registered rule against each batch and persists what fires. The catalog requirement explains why naming it there
+    matters in exactly these terms: leaving it out "would let the spec permit dropping its alerts entirely". Both are named
+    because the guarantee needs both: registration alone does not evaluate, and evaluation alone does not register.
+
+- requirement: endpoint-event-collection/exec-events-carry-signing-identity-fields-when-available
+  covered_by: endpoint-event-collection/process-lifecycle-event-capture
+  reason: >-
+    Folded into the exec event's own requirement, whose scenario requires the payload to include "the code-signing identity
+    (team ID, signing ID, platform-binary flag) when the binary is signed", which is the when-available clause the archived
+    requirement carried separately.
+
+- requirement: server-identity-audit-log/audit-log-read-endpoint-requires-audit-read-and-audits-its-own-access
+  covered_by: server-identity-audit-log/audit-log-read-endpoint-requires-audit-read-and-audits-its-own-access
+  reason: >-
+    Intact; the body matches the archived restatement exactly. Two identifiers inside its scenarios were renamed in the code
+    and canonical followed: the emitted audit row's action is `authz.audit.read` (the archived copy named `audit.read`, which
+    is the permission, not the row action) and the deny reason is `no_matching_rule` (formerly `no_role_grants_action`). Both
+    canonical values are the ones the code uses today.
