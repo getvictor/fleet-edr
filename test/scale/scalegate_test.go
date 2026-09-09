@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/test/integration"
 	"github.com/fleetdm/edr/test/scale"
 )
@@ -41,9 +42,11 @@ const (
 	// backlog at max 17; at 200 hosts with the production fan-out it should stay in the low tens. 5000 leaves generous headroom for
 	// CI-runner noise while still failing decisively on the pre-#535 unbounded-growth class (that run climbed to ~37k).
 	scaleGateMaxBacklog = 5000
-	// scaleGateWorkers is config.DefaultProcessConcurrency: the fan-out a production replica runs. Kept as a named constant
-	// because it is asserted as well as requested.
-	scaleGateWorkers = 4
+	// scaleGateWorkers is the fan-out a production replica runs. Taken from the production constant rather than copied, because
+	// the gate both REQUESTS and ASSERTS it: a local copy would let a change to the shipped default leave this lane requesting
+	// and asserting a stale number, passing its own self-check while measuring a configuration that ships nowhere. That is the
+	// same failure the self-check exists to catch, one level up (issue #962).
+	scaleGateWorkers = config.DefaultProcessConcurrency
 	// scaleGateBacklogPoll is how often the gate samples the queue depth during the run.
 	scaleGateBacklogPoll = 1 * time.Second
 	// scaleGateQueryTimeout bounds a single backlog COUNT so a stuck query cannot stall sampling for the rest of the lane (mirrors
