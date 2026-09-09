@@ -28,24 +28,68 @@
       "description": "Operating system that produced the event. Optional on the wire: an agent predating the platform-aware contract omits it and the server normalizes an absent value to darwin."
     },
     "payload": {
-      "oneOf": [
-        { "$ref": "#/definitions/exec_payload" },
-        { "$ref": "#/definitions/fork_payload" },
-        { "$ref": "#/definitions/exit_payload" },
-        { "$ref": "#/definitions/open_payload" },
-        { "$ref": "#/definitions/file_rename_payload" },
-        { "$ref": "#/definitions/network_connect_payload" },
-        { "$ref": "#/definitions/dns_query_payload" },
-        { "$ref": "#/definitions/application_control_block_payload" },
-        { "$ref": "#/definitions/application_control_undecided_payload" },
-        { "$ref": "#/definitions/application_control_resync_payload" },
-        { "$ref": "#/definitions/snapshot_heartbeat_payload" },
-        { "$ref": "#/definitions/btm_launch_item_add_payload" },
-        { "$ref": "#/definitions/sensor_provider_transition_payload" },
-        { "$ref": "#/definitions/sensor_recovery_failed_payload" }
-      ]
+      "type": "object",
+      "description": "Event body. The top-level \"allOf\" block selects which definition applies, keyed on \"event_type\"."
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "event_type": { "const": "exec" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/exec_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "fork" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/fork_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "exit" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/exit_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "open" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/open_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "file_rename" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/file_rename_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "network_connect" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/network_connect_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "dns_query" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/dns_query_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "application_control_block" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/application_control_block_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "application_control_undecided" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/application_control_undecided_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "application_control_resync" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/application_control_resync_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "snapshot_heartbeat" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/snapshot_heartbeat_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "btm_launch_item_add" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/btm_launch_item_add_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "sensor_provider_transition" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/sensor_provider_transition_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "sensor_recovery_failed" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/sensor_recovery_failed_payload" } } }
+    }
+  ],
   "definitions": {
     "code_signing": {
       "type": "object",

@@ -1,10 +1,9 @@
 package fakeagent
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"time"
+	"uuid"
 )
 
 // runConfig is the resolved set of knobs the envelope builder + feeders read at runtime. Defaults are filled in by newRunConfig;
@@ -85,14 +84,9 @@ func newRunConfig(opts []Option) *runConfig {
 	return c
 }
 
-// randomEventID returns a 32-character lower-hex random identifier. Stable, dependency-free, sufficient for collision-free
-// scenario runs at the volumes this library is designed for (single-digit thousands of events per run).
+// randomEventID returns a random UUID. schema/events.json declares event_id as "format": "uuid", and the production agent
+// (uuid.New) and the extension (UUID().uuidString) both honour that, so the default emitted here has to as well: a bare 32-char
+// hex string is not a UUID and fails validation against the document this package claims to match.
 func randomEventID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand.Read on a properly configured OS does not fail; the panic here is defensive and would surface as a test
-		// failure rather than producing duplicated event_ids that mask a real bug downstream.
-		panic("fakeagent: crypto/rand.Read: " + err.Error())
-	}
-	return hex.EncodeToString(b[:])
+	return uuid.New().String()
 }

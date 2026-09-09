@@ -13,6 +13,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/open-policy-agent/opa v1.19.1
 	github.com/pressly/goose/v3 v3.27.3
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.20.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0
