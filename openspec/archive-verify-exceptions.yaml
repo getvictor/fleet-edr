@@ -402,3 +402,32 @@
     and canonical followed: the emitted audit row's action is `authz.audit.read` (the archived copy named `audit.read`, which
     is the permission, not the row action) and the deny reason is `no_matching_rule` (formerly `no_role_grants_action`). Both
     canonical values are the ones the code uses today.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# The last two the audit could classify without new tooling. One is an invariant canonical states more precisely AND corrects;
+# the other is an endpoint that was never built.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: extension-network-response/default-network-action-is-forward-deny-only-on-explicit-match
+  covered_by:
+    - endpoint-event-collection/dns-query-capture
+    - extension-network-response/dns-proxy-reports-forwarding-degradation-without-leaving-the-dns-path
+  reason: >-
+    Both of this requirement's scenarios are the fail-open invariant, and both are carried by the DNS-capture requirement,
+    which is the primary survivor: it requires that "Capture failures MUST NOT prevent the query or its response from being
+    forwarded", that a forward failure for a query no policy blocks "SHALL fail open by releasing the flow cleanly", and that
+    "Telemetry remains strictly best-effort and never gates forwarding or the fail-open path". Its own scenarios cover the
+    unparseable-payload case and ordinary forwarding to the originally-intended resolver. The degradation requirement is named
+    too because it carries the half the capture requirement does not, and CORRECTS the archived text while doing so: the
+    archived version assumed not-denying was achievable by declining a flow, and measured on edr-dev declining terminates the
+    flow rather than returning it to the OS, which is why the survivor forbids declining outright. The body's remaining half,
+    denying on an explicit match against a blocklist or containment ruleset, describes an enforcement path that does not exist
+    and is tracked as #948 and #949.
+
+- requirement: server-admin-surface/read-the-role-catalog
+  tracked_by: "#956"
+  reason: >-
+    Never built. There is no GET /api/roles, and the assignable role set is instead a literal in two places, bindableRoles in
+    the useradmin handler and a second list in the users page, neither derived from the roles the server seeds. The role model
+    itself is specified and built by server-identity-authorization; what is missing is the way to read it, which is why both
+    copies exist.
