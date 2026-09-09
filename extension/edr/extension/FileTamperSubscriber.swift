@@ -23,10 +23,15 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// exists with or without rename (it was firing the rule; see #933). What rename adds is the only event carrying a source
 /// path, which is what finally lets the server tell a promotion into live policy from a move that changes nothing.
 ///
-/// NOTIFY_OPEN is not subscribed here, but the reason recorded until #917 was wrong and is worth not repeating: the claim was
-/// that ESF ignores muting for it. Measured with THIS client's configuration on 26.3, target-path mute inversion is honoured
-/// for NOTIFY_OPEN (zero events across two seconds of unrelated filesystem traffic). It stays unsubscribed only because the
-/// destructive-open case it would cover is #934, not because it cannot be scoped.
+/// NOTIFY_OPEN, NOTIFY_TRUNCATE and NOTIFY_UNLINK are subscribed as of #934, for destruction of sudo policy: emptying a
+/// sudoers file or removing one produced no telemetry at all before. NOTIFY_OPEN is the awkward one, and it is here because
+/// `: > /etc/sudoers` empties the file through open(2) with O_TRUNC, a different kernel path from truncate(2) that raises no
+/// CREATE, WRITE, TRUNCATE, RENAME or UNLINK. Opens without O_TRUNC are discarded in handleOpen before reaching the wire, so
+/// routine reads of the policy (every `sudo` invocation makes one) are not reported.
+///
+/// The reason NOTIFY_OPEN was avoided until then was wrong, and is worth not repeating: the claim was that ESF ignores muting
+/// for it. Measured with THIS client's configuration on 26.3, target-path mute inversion is honoured for NOTIFY_OPEN, with
+/// zero events across two seconds of unrelated filesystem traffic.
 final class FileTamperSubscriber: Sendable {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private nonisolated(unsafe) var client: OpaquePointer!
@@ -98,7 +103,7 @@ final class FileTamperSubscriber: Sendable {
             logger.error("file-tamper subscribe failed")
             exit(EXIT_FAILURE)
         }
-        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers* - CREATE/WRITE/RENAME/TRUNCATE/UNLINK/OPEN")
+        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers*: CREATE/WRITE/RENAME/TRUNCATE/UNLINK/OPEN")
     }
 
     func stop() {

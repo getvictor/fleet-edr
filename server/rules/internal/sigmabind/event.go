@@ -70,16 +70,18 @@ type openPayload struct {
 //
 // Both paths are required on the wire, so neither is a pointer: an event missing either is malformed rather than partial,
 // and the decode below reports it that way instead of matching on half a rename.
-// fileDestructionPayload is the wire shape shared by file_truncate and file_delete: the process, and the path it destroyed.
-type fileDestructionPayload struct {
-	Path string `json:"path"`
-	PID  *int   `json:"pid"`
-}
-
 type fileRenamePayload struct {
 	SourcePath string `json:"source_path"`
 	Path       string `json:"path"`
 	PID        *int   `json:"pid"`
+}
+
+// fileDestructionPayload is the wire shape shared by file_truncate and file_delete: the acting process, and the path it
+// destroyed. One struct for both because they carry the same fields; the envelope's event type is what says whether the file
+// was emptied or removed.
+type fileDestructionPayload struct {
+	Path string `json:"path"`
+	PID  *int   `json:"pid"`
 }
 
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything

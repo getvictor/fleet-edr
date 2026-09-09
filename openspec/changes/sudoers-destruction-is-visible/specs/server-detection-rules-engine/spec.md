@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: Destroyed sudo policy is detected separately from tampering
+### Requirement: Destroyed sudo policy is its own detection
 
 The system SHALL detect destruction of sudo policy: a file sudo will parse being emptied or removed. It SHALL report that separately from the rule covering a sudoers file being written or renamed into place.
 

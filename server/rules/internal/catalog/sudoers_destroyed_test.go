@@ -25,9 +25,9 @@ func boundDestructionEvent(t *testing.T, eventType, path, subject string) *sigma
 	return ev
 }
 
-// spec:server-detection-rules-engine/destroyed-sudo-policy-is-detected-separately-from-tampering/emptying-a-sudoers-file-fires
-// spec:server-detection-rules-engine/destroyed-sudo-policy-is-detected-separately-from-tampering/deleting-a-sudoers-file-fires
-// spec:server-detection-rules-engine/destroyed-sudo-policy-is-detected-separately-from-tampering/destroying-a-file-sudo-ignores-does-not-fire
+// spec:server-detection-rules-engine/destroyed-sudo-policy-is-its-own-detection/emptying-a-sudoers-file-fires
+// spec:server-detection-rules-engine/destroyed-sudo-policy-is-its-own-detection/deleting-a-sudoers-file-fires
+// spec:server-detection-rules-engine/destroyed-sudo-policy-is-its-own-detection/destroying-a-file-sudo-ignores-does-not-fire
 //
 // Both destruction shapes and the boundary, as a table so what does and does not count as destroyed policy is auditable at a
 // glance.
@@ -65,7 +65,7 @@ func TestSudoersDestroyed_MatchesOnlyPolicySudoWouldLoad(t *testing.T) {
 	}
 }
 
-// spec:server-detection-rules-engine/destroyed-sudo-policy-is-detected-separately-from-tampering/destruction-and-tampering-carry-different-techniques
+// spec:server-detection-rules-engine/destroyed-sudo-policy-is-its-own-detection/destruction-and-tampering-carry-different-techniques
 //
 // The mapping is the whole reason this is a separate rule rather than two more event types on sudoers_tamper. Emptying or
 // deleting a sudoers file grants nothing, so reporting it under T1548.003 (Abuse Elevation Control Mechanism) would put a

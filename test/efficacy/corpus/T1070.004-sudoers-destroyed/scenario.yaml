@@ -1,4 +1,4 @@
-# spec:endpoint-event-collection/destruction-of-a-sensitive-file-is-captured/a-shell-redirect-that-empties-a-sensitive-file-is-captured
+# spec:server-detection-rules-engine/destroyed-sudo-policy-is-its-own-detection/emptying-a-sudoers-file-fires
 # T1070.004 Indicator Removal: File Deletion (with T1531 Account Access Removal).
 #
 # The vector that produced NO telemetry at all before #934: `: > /etc/sudoers` empties the policy through open(2) with O_TRUNC,
