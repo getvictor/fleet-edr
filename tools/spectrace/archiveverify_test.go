@@ -142,7 +142,7 @@ func TestPrintArchiveVerify(t *testing.T) {
 	t.Run("says so when nothing is missing", func(t *testing.T) {
 		t.Parallel()
 		var buf bytes.Buffer
-		assert.Equal(t, 0, printArchiveVerify(&buf, nil, 12))
+		assert.Equal(t, 0, printArchiveVerify(&buf, nil, nil, nil, 12))
 		assert.Contains(t, buf.String(), "every scenario still canonical")
 	})
 
@@ -151,7 +151,7 @@ func TestPrintArchiveVerify(t *testing.T) {
 	t.Run("reports without gating, and says how to read it", func(t *testing.T) {
 		t.Parallel()
 		var buf bytes.Buffer
-		assert.Equal(t, 0, printArchiveVerify(&buf, []string{"cap/r/s\n    listed by x"}, 3))
+		assert.Equal(t, 0, printArchiveVerify(&buf, []string{"cap/r/s\n    listed by x"}, nil, nil, 3))
 		out := buf.String()
 		assert.Contains(t, out, "A line that is NEW is damage this archive did")
 		assert.Contains(t, out, "cap/r/s")
@@ -163,13 +163,13 @@ func TestPrintArchiveVerify(t *testing.T) {
 	t.Run("a truncated report is a failure, not a clean run", func(t *testing.T) {
 		t.Parallel()
 		assert.Equal(t, 2, printArchiveVerify(&stubbornWriter{ok: 1, err: errors.New("pipe closed")},
-			[]string{"cap/r/s\n    listed by x"}, 3))
+			[]string{"cap/r/s\n    listed by x"}, nil, nil, 3))
 	})
 
 	// The clean path writes too, and its single line is just as capable of failing.
 	t.Run("a truncated clean report is a failure too", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, 2, printArchiveVerify(&stubbornWriter{err: errors.New("pipe closed")}, nil, 12))
+		assert.Equal(t, 2, printArchiveVerify(&stubbornWriter{err: errors.New("pipe closed")}, nil, nil, nil, 12))
 	})
 }
 
