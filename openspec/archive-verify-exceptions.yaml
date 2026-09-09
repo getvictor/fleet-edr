@@ -206,3 +206,119 @@
     Intact; the restatement renamed both scenarios ("Authorized operator request proceeds", "Authenticated operator without
     permission is rejected") and canonical carries the same boundary through the session middleware and the authorization
     chokepoint.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Application control Detect mode: 2026-06-02-add-application-control-detect-mode specified an enforcement mode that was
+# archived and never built. Verified rather than assumed: `would_block` and a `DETECT` enforcement value appear nowhere in
+# server/, the UI has no enforcement selector, no promote-to-protect action and no subtype chip, and ui/src/api.ts still
+# describes the field in the future tense ("Phase B's Detect-mode change will layer an `enforcement` field").
+#
+# Restoring any of these would put requirements in the canonical tree for behaviour the product does not have, which breaks
+# the traceability gate (nothing to test) and is how a spec stops being trusted. Tracked as a feature instead.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: server-application-control/default-detect-on-rule-creation
+  tracked_by: "#929"
+  reason: New rules defaulting to DETECT is part of the unbuilt Detect mode.
+
+- requirement: server-application-control/patch-endpoint-for-rule-enforcement-change
+  tracked_by: "#929"
+  reason: The PATCH endpoint that promotes a rule to PROTECT is part of the unbuilt Detect mode.
+
+- requirement: server-application-control/per-rule-enforcement-detect-honors-a-log-only-contract
+  tracked_by: "#929"
+  reason: The log-only enforcement contract is the core of the unbuilt Detect mode.
+
+- requirement: server-detection-rules-engine/alert-subtype-distinguishes-block-from-would-block
+  tracked_by: "#929"
+  reason: Alert subtypes exist only under the unbuilt Detect mode; no subtype is persisted or served.
+
+- requirement: server-detection-rules-engine/would-block-events-map-to-alerts-with-subtype-would-block
+  tracked_by: "#929"
+  reason: "There is no would-block event to map: the endpoint never emits one."
+
+- requirement: web-ui/add-rule-modal-carries-an-enforcement-selector
+  tracked_by: "#929"
+  reason: The add-rule modal has no enforcement control, because there is no enforcement mode to select.
+
+- requirement: web-ui/alerts-list-distinguishes-block-vs-would-block-subtypes
+  tracked_by: "#929"
+  reason: The alerts list renders no subtype chip; nothing carries a subtype.
+
+- requirement: web-ui/alerts-list-filters-by-subtype
+  tracked_by: "#929"
+  reason: The alerts list has no subtype filter, for the same reason.
+
+- requirement: web-ui/policy-detail-surfaces-enforcement-and-offers-promote-to-protect
+  tracked_by: "#929"
+  reason: The policy detail shows no enforcement column and offers no promote action.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Text that differs from the archived restatement only because the canonical tree was edited AFTER archiving, by a rename or
+# a lint rule. The requirement is intact in both cases; only the wording moved. Each was confirmed by diffing the two bodies
+# and checking that every difference is the substitution named below.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: server-identity-audit-log/append-only-persistence
+  covered_by: server-identity-audit-log/append-only-persistence
+  reason: >-
+    Intact. The only difference from the archived restatement is the phrase "wave 1", which the canonical tree now writes as
+    "the current release". Every other character matches.
+
+- requirement: server-identity-authentication/a-user-is-the-row-an-identity-is-the-way-to-authenticate
+  covered_by: server-identity-authentication/a-user-is-the-row-an-identity-is-the-way-to-authenticate
+  reason: Intact; the same "wave 1" to "the current release" rename is the only difference.
+
+- requirement: server-identity-authentication/reauthentication-is-required-for-destructive-actions
+  covered_by: server-identity-authentication/reauthentication-is-required-for-destructive-actions
+  reason: Intact; the same "wave 1" to "the current release" rename is the only difference.
+
+- requirement: server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking
+  covered_by: server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking
+  reason: Intact; the same "wave 1" to "the current release" rename is the only difference.
+
+- requirement: web-ui/authorization-denials-degrade-gracefully
+  covered_by: web-ui/authorization-denials-degrade-gracefully
+  reason: >-
+    Intact. The archived restatement writes two asides with spaced hyphens; the canonical text writes them in parentheses,
+    because `task lint:dashes` bans a spaced hyphen standing in for an em dash. Every difference between the two bodies is
+    one of those four punctuation swaps.
+
+- requirement: web-ui/navigation-and-action-affordances-are-capability-gated
+  covered_by: web-ui/navigation-and-action-affordances-are-capability-gated
+  reason: Intact; the same spaced-hyphen-to-parentheses rewrite, and nothing else.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Declared in two capabilities, one copy kept.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: server-rest-api/application-control-endpoints-under-api-v1-app-control
+  covered_by:
+    - server-application-control/rest-surface-for-policies-rules-groups-and-assignments
+    - server-rest-api/json-response-format-and-error-shape
+  reason: >-
+    The same REST surface declared under both capabilities by 2026-06-02-add-application-control. The archive kept the
+    application-control copy, which is where the endpoints' behaviour belongs and which mandates operator session
+    authentication and CSRF on every state-changing call itself. It defers only the error shape, which it names as "the API
+    capability's ErrorResponse shape", so that requirement is the second survivor. server-rest-api's own session and CSRF
+    requirement is deliberately NOT listed: it scopes itself to "every endpoint defined in this capability", and these
+    endpoints are defined in server-application-control, so depending on it here would be a survivor this entry does not
+    actually rest on.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Network response capability that 2026-06-22-resilient-network-enforcement specified and the archive dropped, and which was
+# never built. Filed as features rather than restored, for the same reason as Detect mode above.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: extension-network-response/host-network-containment-is-declarative-and-survives-provider-restart
+  tracked_by: "#948"
+  reason: >-
+    Host containment is not implemented. Nothing in the extension persists a containment ruleset or reapplies one on provider
+    restart, and the operator-facing half is #584. Restoring the requirement would claim an incident-response action the
+    product does not have.
+
+- requirement: extension-network-response/a-blocked-dns-query-is-answered-locally-without-upstream
+  tracked_by: "#949"
+  reason: >-
+    Not implemented: neither NXDOMAIN nor a sinkhole answer is produced anywhere in extension/edr, so a blocked query is not
+    answered locally and enforcement still depends on the upstream path it is meant to be independent of.
