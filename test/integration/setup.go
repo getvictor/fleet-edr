@@ -87,16 +87,19 @@ func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Ser
 //   - CookieSecure = false because httptest is plain HTTP.
 func Setup(t *testing.T, opts ...Option) *Stack {
 	t.Helper()
+	// Parse once and pass the result down. Reading the fan-out by applying the options to a throwaway config and then applying
+	// them again inside the replica would run every option twice, which is harmless only while they are all pure assignments.
+	cfg := parseOptions(opts)
 	db := full.Open(t)
 	// Size the pool BEFORE the stack is wired, because the processor's fan-out is clamped to what the pool can afford at
 	// construction time and cannot be raised afterwards. The suite default is four connections, which cannot serve even one
 	// processor worker once a coordinator exists: a worker pins two (one for the host advisory lock across claim-fold-flush,
 	// one for the statements themselves) and the fleet is capped at half the pool, with more reserved for the leader loops.
-	if n := processConcurrencyOf(opts); n > 1 {
-		db.SetMaxOpenConns(poolForWorkers(n))
-		db.SetMaxIdleConns(poolForWorkers(n))
+	if cfg.processConcurrency > 1 {
+		db.SetMaxOpenConns(poolForWorkers(cfg.processConcurrency))
+		db.SetMaxIdleConns(poolForWorkers(cfg.processConcurrency))
 	}
-	return setupReplica(t, db, opts...)
+	return setupReplicaWith(t, db, cfg)
 }
 
 // coordinatorFor returns the advisory-lock coordinator a multi-worker processor requires, or nil for the single-worker default.
@@ -112,16 +115,17 @@ func coordinatorFor(concurrency int, db *sqlx.DB, logger *slog.Logger) leader.Co
 // being wrong is a silent clamp to fewer workers rather than an error.
 func poolForWorkers(n int) int { return n*4 + 8 }
 
-// processConcurrencyOf reads the requested fan-out out of the options without applying them, so Setup can provision for it.
-func processConcurrencyOf(opts []Option) int {
+// parseOptions applies the options once and returns the resulting config. Single place the option loop lives, so provisioning
+// decisions Setup makes before wiring and the wiring itself cannot read a different configuration from the same arguments.
+func parseOptions(opts []Option) setupConfig {
 	var cfg setupConfig
 	for _, opt := range opts {
-		if opt == nil {
+		if opt == nil { // tolerate a nil from the conditional-option idiom (var o Option; if cond { o = WithX() }; Setup(t, o))
 			continue
 		}
 		opt(&cfg)
 	}
-	return cfg.processConcurrency
+	return cfg
 }
 
 // Option customises the stack Setup builds. Defaults reproduce the historical Setup behaviour (a single processor worker, the
@@ -145,14 +149,13 @@ func WithProcessConcurrency(n int) Option {
 // across calls, which is what lets a session minted against one stack validate on the other.
 func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	t.Helper()
+	return setupReplicaWith(t, db, parseOptions(opts))
+}
 
-	var cfg setupConfig
-	for _, opt := range opts {
-		if opt == nil { // tolerate a nil from the conditional-option idiom (var o Option; if cond { o = WithX() }; Setup(t, o))
-			continue
-		}
-		opt(&cfg)
-	}
+// setupReplicaWith is setupReplica with the options already parsed, so Setup can size the pool from the same config the replica
+// is then wired with rather than parsing the options a second time.
+func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
+	t.Helper()
 
 	logger := slog.Default()
 	ctx, cancel := context.WithCancel(context.Background())
