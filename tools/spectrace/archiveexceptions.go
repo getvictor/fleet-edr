@@ -108,32 +108,15 @@ func validateExceptions(exceptions []archiveException, canonical map[string]stru
 		}
 		seen[e.Requirement] = i
 
-		hasCovered, hasTracked := len(e.CoveredBy) > 0, e.TrackedBy != ""
-		switch {
-		case hasCovered && hasTracked:
-			problems = append(problems, where+": sets both covered_by and tracked_by; an excused finding is one or the other")
-			continue
-		case !hasCovered && !hasTracked:
-			problems = append(problems, where+": sets neither covered_by nor tracked_by")
-			continue
-		}
-		if strings.TrimSpace(e.Reason) == "" {
-			problems = append(problems, where+": reason is empty")
+		if bad := validateEntryShape(e, where); len(bad) > 0 {
+			problems = append(problems, bad...)
 			continue
 		}
 		// The claim that keeps this file honest. A survivor that no longer exists means the behaviour is now genuinely
 		// unspecified, and the entry would otherwise go on hiding that.
-		if hasCovered {
-			var unresolved bool
-			for _, target := range e.CoveredBy {
-				if _, ok := canonical[target]; !ok {
-					problems = append(problems, fmt.Sprintf("%s: covered_by %q is not a requirement in the canonical spec", where, target))
-					unresolved = true
-				}
-			}
-			if unresolved {
-				continue
-			}
+		if bad := unresolvedSurvivors(e, canonical, where); len(bad) > 0 {
+			problems = append(problems, bad...)
+			continue
 		}
 		if matched[i] == 0 {
 			problems = append(problems, where+": excuses no finding, so it is stale and should be deleted")
@@ -221,4 +204,31 @@ func printExcused(p func(string, ...any), excused []excusedFinding) {
 func exceptionsPathFor(specsDir string) string {
 	// specsDir is `<root>/openspec/specs`; the file sits beside `specs` under `openspec`.
 	return filepath.Join(filepath.Dir(specsDir), filepath.Base(defaultExceptionsFile))
+}
+
+// validateEntryShape checks the fields an entry must and must not carry, independently of whether its claim holds.
+func validateEntryShape(e archiveException, where string) []string {
+	hasCovered, hasTracked := len(e.CoveredBy) > 0, e.TrackedBy != ""
+	switch {
+	case hasCovered && hasTracked:
+		return []string{where + ": sets both covered_by and tracked_by; an excused finding is one or the other"}
+	case !hasCovered && !hasTracked:
+		return []string{where + ": sets neither covered_by nor tracked_by"}
+	}
+	if strings.TrimSpace(e.Reason) == "" {
+		return []string{where + ": reason is empty"}
+	}
+	return nil
+}
+
+// unresolvedSurvivors reports every covered_by target that is not a canonical requirement. All of them, not just the first: a
+// split requirement names one survivor per half, and stopping at the first failure would hide the second.
+func unresolvedSurvivors(e archiveException, canonical map[string]struct{}, where string) []string {
+	var problems []string
+	for _, target := range e.CoveredBy {
+		if _, ok := canonical[target]; !ok {
+			problems = append(problems, fmt.Sprintf("%s: covered_by %q is not a requirement in the canonical spec", where, target))
+		}
+	}
+	return problems
 }
