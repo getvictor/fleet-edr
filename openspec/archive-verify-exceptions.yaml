@@ -322,3 +322,19 @@
   reason: >-
     Not implemented: neither NXDOMAIN nor a sinkhole answer is produced anywhere in extension/edr, so a blocked query is not
     answered locally and enforcement still depends on the upstream path it is meant to be independent of.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# A retirement the archive did not apply, where the requirement is nonetheless correct and live. The archived change retired a
+# mechanism and said a later phase of the same change would reintroduce it under a new contract; it did, and this requirement
+# describes the successor.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: agent-xpc-receiver/outbound-policy-push-routed-to-active-connection
+  covered_by: agent-xpc-receiver/outbound-policy-push-routed-to-active-connection
+  reason: >-
+    Live, accurate and tested, despite reading as dead. 2026-06-02-add-application-control retired the LEGACY push channel
+    (policyDispatcher, Receiver.SendPolicy) and its own removal note says a later phase reintroduces the outbound channel for
+    the typed snapshot. That is receiver.Dispatcher.SendApplicationControl, which sends over the active connection and returns
+    ErrNoConnector when none is published: exactly what this requirement states, with both scenarios covered by
+    agent/receiver/loop_test.go. Grepping for the retired symbol names finds nothing and looks like a deletion, which is how
+    this nearly got removed.
