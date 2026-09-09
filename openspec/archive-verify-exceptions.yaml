@@ -229,17 +229,9 @@
   tracked_by: "#929"
   reason: The log-only enforcement contract is the core of the unbuilt Detect mode.
 
-- requirement: server-detection-rules-engine/alert-dedup-key-depends-on-source
-  tracked_by: "#929"
-  reason: The dedup key's would-block dimension exists only under the unbuilt Detect mode.
-
 - requirement: server-detection-rules-engine/alert-subtype-distinguishes-block-from-would-block
   tracked_by: "#929"
   reason: Alert subtypes exist only under the unbuilt Detect mode; no subtype is persisted or served.
-
-- requirement: server-detection-rules-engine/alerts-list-filters-by-source-and-subtype
-  tracked_by: "#929"
-  reason: The subtype half of this filter exists only under the unbuilt Detect mode.
 
 - requirement: server-detection-rules-engine/would-block-events-map-to-alerts-with-subtype-would-block
   tracked_by: "#929"
@@ -301,11 +293,15 @@
 # ---------------------------------------------------------------------------------------------------------------------------
 
 - requirement: server-rest-api/application-control-endpoints-under-api-v1-app-control
-  covered_by: server-application-control/rest-surface-for-policies-rules-groups-and-assignments
+  covered_by:
+    - server-application-control/rest-surface-for-policies-rules-groups-and-assignments
+    - server-rest-api/session-authentication-and-csrf-protection
+    - server-rest-api/json-response-format-and-error-shape
   reason: >-
     The same REST surface declared under both capabilities by 2026-06-02-add-application-control. The archive kept the
-    application-control copy, which is where the endpoints' behaviour belongs, and server-rest-api carries the transport
-    concerns that apply to every endpoint rather than a second description of these.
+    application-control copy, which is where the endpoints' behaviour belongs. Its authentication, CSRF and error-shape
+    scenarios survive as the generic server-rest-api contracts that apply to every endpoint, so all three are named: deleting
+    any one of them should invalidate this entry rather than leave those scenarios hidden.
 
 # ---------------------------------------------------------------------------------------------------------------------------
 # Network response capability that 2026-06-22-resilient-network-enforcement specified and the archive dropped, and which was
