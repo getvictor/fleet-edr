@@ -72,6 +72,18 @@ final class PreferenceToggleBoundTests: XCTestCase {
         XCTAssertEqual(reported, [], "a round-trip landing after the timeout must print nothing")
     }
 
+    // spec:host-app-extension-manager/preference-toggles-are-bounded-and-fail-with-guidance/a-completed-round-trip-is-unaffected
+    func testAnUnboundedChainReportsEveryLink() {
+        // The regression this pins: `activate` chains enableContentFilter into enableDNSProxy in one process. A latch is
+        // one-shot, so a single process-wide instance was claimed by the first link and the second lost every time, which
+        // skipped its completion and left activation hung instead of exited. No watchdog is armed on that path, so there is
+        // nothing to race: a nil latch must let every link report and continue.
+        var reported: [String] = []
+        XCTAssertTrue(reportOnce(nil) { reported.append("filter") })
+        XCTAssertTrue(reportOnce(nil) { reported.append("dns") })
+        XCTAssertEqual(reported, ["filter", "dns"], "an unbounded chain must not be silenced after its first link")
+    }
+
     // spec:host-app-extension-manager/preference-toggles-are-bounded-and-fail-with-guidance/a-stalled-round-trip-fails-within-the-bound
     func testTimeoutMessageNamesTheSubcommandTheBoundAndTheRemedy() {
         let message = preferencesTimeoutMessage(for: .disableDNSProxy, timeout: defaultPreferencesTimeout)

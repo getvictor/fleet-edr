@@ -404,7 +404,16 @@ func preferencesTimeoutMessage(for action: HostAppAction, timeout: TimeInterval)
 /// result AND the watchdog's timeout, breaking the "exactly one outcome" clause the requirement states. Caught in review on
 /// PR #945, and unit tests could not have caught it while the sequencing lived in main.swift, which carries top-level
 /// executable code and is excluded from the logic module.
-func reportOnce(_ latch: PreferencesLatch, _ report: () -> Void) -> Bool {
+/// A nil latch means no bound is armed, so there is no race and every call reports. That is the `activate` flow, which chains
+/// enableContentFilter into enableDNSProxy: a single process-wide latch is ONE-SHOT, so the second link always lost its claim
+/// and activation enabled both providers and then hung instead of exiting. Caught in review on PR #945, after a code comment of
+/// mine asserted the latch was "uncontended" on that path without checking that a second claim in the same process fails
+/// whether or not a watchdog exists.
+func reportOnce(_ latch: PreferencesLatch?, _ report: () -> Void) -> Bool {
+    guard let latch else {
+        report()
+        return true
+    }
     guard latch.complete() else { return false }
     report()
     return true

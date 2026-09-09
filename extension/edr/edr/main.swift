@@ -129,7 +129,13 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
 
 /// toggleLatch decides the race between a toggle's own completion handler and the watchdog armed beside it, so a
 /// round-trip that lands exactly at the deadline reports one outcome rather than both.
-private let toggleLatch = PreferencesLatch()
+///
+/// nil until a watchdog is armed, and that is load-bearing rather than tidy. A latch is one-shot, so a single process-wide
+/// instance is claimed by the FIRST terminal path and every later one loses. `activate` chains enableContentFilter into
+/// enableDNSProxy in one process, so a non-optional latch made the second link lose every time: success skipped its completion
+/// and the process never exited, and an error parked forever. No watchdog is armed on activate, so there is nothing to race
+/// and nothing to claim.
+private nonisolated(unsafe) var toggleLatch: PreferencesLatch?
 
 /// finishToggle reports a toggle's outcome and exits, but only if this path won the race with the watchdog.
 ///
@@ -167,7 +173,7 @@ private func parkUntilTheWinnerExits() -> Never {
 /// enableContentFilter runs enableDNSProxy after reporting. Returns false when the watchdog already reported a timeout, in which
 /// case the chained work must not run and this path must stay silent.
 ///
-/// No watchdog is armed on the activate path, so the latch is uncontended there and this always returns true.
+/// On `activate` no watchdog is armed, so toggleLatch is nil and every link of the chain reports and continues.
 private func claimToggleSuccess(_ message: String) -> Bool {
     reportOnce(toggleLatch) { reporter.progress(message) }
 }
@@ -180,8 +186,10 @@ private func claimToggleSuccess(_ message: String) -> Bool {
 /// forever. That is worst exactly where it matters: `disable-dns-proxy` is the operator's recovery lever for a host
 /// whose DNS our own proxy has broken, and it is reached over SSH, which is the case with no console session.
 private func armPreferencesWatchdog(for action: HostAppAction) {
+    let latch = PreferencesLatch()
+    toggleLatch = latch
     DispatchQueue.global().asyncAfter(deadline: .now() + defaultPreferencesTimeout) {
-        guard toggleLatch.expire() else { return }
+        guard latch.expire() else { return }
         reporter.failure(preferencesTimeoutMessage(for: action, timeout: defaultPreferencesTimeout))
         exit(EXIT_FAILURE)
     }

@@ -10,7 +10,7 @@ The bound SHALL be long enough for a person to answer a system consent prompt. S
 
 Exactly one outcome SHALL be reported. A round-trip that completes as the bound elapses SHALL NOT report both a result and a timeout.
 
-The `activate` subcommand is deliberately NOT bounded: its flow includes waiting for a human to approve a system-extension installation, so waiting is correct there rather than a defect.
+The `activate` subcommand is deliberately NOT bounded: its flow includes waiting for a human to approve a system-extension installation, so waiting is correct there rather than a defect. Because `activate` chains two provider enables in one process, the single-outcome rule above SHALL apply per bounded invocation and SHALL NOT silence the second link of an unbounded chain.
 
 #### Scenario: A stalled round-trip fails within the bound
 
