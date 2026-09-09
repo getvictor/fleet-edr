@@ -1,0 +1,208 @@
+# archive-verify exceptions: findings that are correct as they stand, and why.
+#
+# `spectrace archive-verify` reports every requirement an archived change said the canonical spec should hold that it does not.
+# It cannot tell a deliberate non-restoration from an unrepaired archive drop, so without this file a reviewed decision reports
+# forever and the release checklist's before-and-after diff has to be read past a standing list nobody can shorten.
+#
+# This is NOT a mute list. Every entry names where the behaviour actually went, and both forms are checked on every run:
+#
+#   covered_by  the canonical requirement that carries the behaviour now, verified to exist. Use it when the behaviour survives
+#               under another name, in another capability, or in a copy the archive happened to keep. Naming the SAME
+#               requirement is legitimate and common: it means the requirement is intact and its scenarios were renamed.
+#   tracked_by  the issue tracking a capability that was specified and never built. Restoring one of those would write a spec
+#               claiming what the product does not do, which is worse than the current silence.
+#
+# An entry that excuses no finding is an error, so this file cannot outlive the findings it was written for. An entry whose
+# covered_by does not resolve is an error, so it cannot go on hiding a behaviour that has since become genuinely unspecified.
+#
+# Written against the audit recorded on issue #905. A requirement absent from this file is a finding still outstanding, not one
+# nobody looked at: the audit's per-group findings are on that issue.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# endpoint-event-collection: application control was declared TWICE by every archived change in that batch, once here and once
+# under extension-application-control. The archive kept one copy of each pair, which is the right outcome reached by accident.
+# Restoring the other copy would put two contradicting requirements in the tree: the pairs drifted, and the surviving copy is
+# the one that matches the code. Audited in #931.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: endpoint-event-collection/process-exec-authorization
+  covered_by: extension-application-control/precedence-walk
+  reason: >-
+    Declared in both capabilities by 2026-06-02-add-application-control; the archive kept the extension copy. Restoring this one
+    would be a regression, not a repair: it says the walk is CDHASH then BINARY then SIGNINGID then TEAMID and stops as soon as a
+    BINARY consultation is uncertain, while AuthExecDecider.matchLowerLayers walks CERTIFICATE, SIGNINGID, TEAMID, PATH and
+    continues past that uncertainty so a definitive lower-precedence DENY still wins. The dropped text describes a bypass that
+    was fixed under review before it shipped.
+
+- requirement: endpoint-event-collection/application-control-block-event-kind
+  covered_by: extension-application-control/block-event-emission
+  reason: >-
+    The same block event declared in both capabilities by 2026-06-02-add-application-control. The extension copy survived and is
+    the one being corrected to the shipped payload field-for-field by the in-flight appcontrol-spec-owned-by-the-extension-capability
+    change.
+
+- requirement: endpoint-event-collection/application-control-undecided-event-kind
+  covered_by: extension-application-control/application-control-undecided-event
+  reason: >-
+    The same undecided event declared in both capabilities by 2026-06-02-add-application-control and restated by
+    appcontrol-auth-exec-hardening-v01. The extension copy survived and carries the deadline and read-failure cases.
+
+- requirement: endpoint-event-collection/application-control-would-block-event-kind
+  tracked_by: "#929"
+  reason: >-
+    Detect mode was specified by 2026-06-02-add-application-control-detect-mode, archived, and never built. Nothing in the server
+    emits or stores a would-block event: grepping for would_block and for a DETECT enforcement value across server/ returns
+    nothing outside unrelated uses of the word enforcement.
+
+- requirement: endpoint-event-collection/every-auth-exec-decision-emits-a-corresponding-exec-event
+  tracked_by: "#929"
+  reason: >-
+    The findings under this requirement are the Detect-mode scenarios (a would-blocked AUTH_EXEC emitting both events, and the
+    decision field carrying would_block). Same unbuilt capability as the would-block event above.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# extension-application-control: text drift across three restatements archived in one batch, plus a heading annotation that
+# breaks the archive's by-heading match. Canonical is the newer and correct side in every case, verified against the code.
+# Audited on #905 (group 3).
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: extension-application-control/precedence-walk
+  covered_by: extension-application-control/precedence-walk
+  reason: >-
+    Intact; the archived restatement is the stale side. It lists CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH, while
+    canonical and AuthExecDecider.matchLowerLayers both put CERTIFICATE before SIGNINGID.
+
+- requirement: extension-application-control/deadline-fallback-posture
+  covered_by: extension-application-control/deadline-fallback-posture
+  reason: >-
+    Intact; the archived restatement is the stale side. It says the BINARY layer's uncertainty dominates anything the lower
+    layers would say, while canonical and decideAuthExec both consult every lower layer first so a definitive lower-precedence
+    DENY wins.
+
+- requirement: extension-application-control/lazy-signing-info-fetch-is-non-blocking
+  covered_by: extension-application-control/lazy-signing-info-fetch-is-non-blocking
+  reason: >-
+    Intact and narrowed as intended. The 2026-06-02-add-application-control text groups file_sha256 under the same lazy contract;
+    appcontrol-auth-exec-hardening-v01 explicitly REMOVED that grouping because file_sha256 is now computed synchronously under
+    the deadline budget. Canonical carries the narrowed version.
+
+- requirement: extension-application-control/lazy-signing-info-fetch-is-non-blocking-scope-narrowed-to-leaf-cert-only
+  covered_by: extension-application-control/lazy-signing-info-fetch-is-non-blocking
+  reason: >-
+    Not a separate requirement. appcontrol-auth-exec-hardening-v01 restated the requirement under a heading carrying the
+    annotation "(scope narrowed to leaf_cert only)", and the archive matches by heading, so the annotated name looks like a
+    requirement canonical never had. The text is byte-identical to what canonical holds under the unannotated name.
+
+- requirement: extension-application-control/auth-exec-denial-on-block-match
+  covered_by: extension-application-control/auth-exec-denial-on-block-match
+  reason: >-
+    Intact and richer than any of the three restatements in its batch, which is why every one of them reads as having retired
+    text canonical still holds.
+
+- requirement: extension-application-control/target-identifier-tuple-for-every-exec
+  covered_by: extension-application-control/target-identifier-tuple-for-every-exec
+  reason: >-
+    Intact; one scenario was renamed. The restatements list "A platform binary's signing identifier carries the platform prefix"
+    and canonical carries "A signing-id rule matches a platform binary by its platform-prefixed signing identity". Same
+    behaviour, so the rename reports twice, once as missing and once as unretired.
+
+- requirement: extension-application-control/block-event-emission
+  covered_by: extension-application-control/block-event-emission
+  reason: >-
+    Intact, and its remaining finding is being repaired rather than excused: canonical names rule_identifier, matched_identifier,
+    process and ancestry, which the wire has never carried, and the in-flight
+    appcontrol-spec-owned-by-the-extension-capability change replaces them with the shipped field set.
+
+- requirement: extension-application-control/detect-mode-allows-the-exec-and-emits-a-would-block-event
+  tracked_by: "#929"
+  reason: Detect mode was specified, archived, and never built. Same unbuilt capability as the endpoint-event-collection entries above.
+
+- requirement: extension-application-control/every-auth-exec-decision-emits-a-regular-exec-event
+  tracked_by: "#929"
+  reason: >-
+    The findings here are the Detect-mode scenarios: the decision field's would_block value and the paired would-block event.
+    Same unbuilt capability.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# ui-authentication-session: 2026-06-02-add-user-management restated five requirements with every scenario renamed to say "on
+# the break-glass surface", and split one requirement across two capabilities. Every behaviour survives; each survivor was read
+# in full rather than assumed. Audited on #905.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: ui-authentication-session/login-failures-do-not-enumerate-accounts
+  covered_by: ui-authentication-session/login-failures-do-not-enumerate-accounts
+  reason: >-
+    Intact; both scenarios were renamed by appending "on the break-glass surface" to "Email is unknown" and "Email is known but
+    password is wrong".
+
+- requirement: ui-authentication-session/login-mints-a-session-cookie-and-a-csrf-token
+  covered_by:
+    - ui-authentication-session/login-mints-a-session-cookie-and-a-csrf-token
+    - server-identity-authentication/okta-oidc-is-the-primary-login-path
+  reason: >-
+    Intact. Two scenarios were renamed onto the break-glass surface, and the third, "Successful OIDC callback mints a session",
+    lives in the capability that owns OIDC as server-identity-authentication/Okta OIDC is the primary login path, scenario
+    "Successful callback mints a session".
+
+- requirement: ui-authentication-session/passwords-are-stored-as-argon2id-hashes
+  covered_by:
+    - ui-authentication-session/passwords-are-stored-as-argon2id-hashes
+    - server-identity-authentication/a-user-is-the-row-an-identity-is-the-way-to-authenticate
+  reason: >-
+    Intact. "Password verification for a break-glass account" is canonical's "Password verification"; "SSO user has no stored
+    password" is asserted by server-identity-authentication scenario "SSO user has exactly one OIDC identity", which states that
+    the user's password_hash and password_salt are NULL.
+
+- requirement: ui-authentication-session/initial-break-glass-account-is-bootstrapped-via-single-use-token
+  covered_by:
+    - ui-authentication-session/initial-operator-account-is-bootstrapped-at-first-startup
+    - server-identity-authentication/break-glass-account-is-bootstrapped-via-single-use-token-not-a-printed-password
+  reason: >-
+    Renamed. All three scenarios survive under the new name ("First-startup seed", "Restart with an existing operator",
+    "Recovery after a lost password"), and server-identity-authentication carries the fuller token-redemption requirement that
+    the breakglass tests already reference by marker.
+
+- requirement: ui-authentication-session/sessions-enforce-idle-absolute-and-reauthentication-timeouts
+  covered_by:
+    - ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class
+    - server-identity-authentication/reauthentication-is-required-for-destructive-actions
+  reason: >-
+    Split in two, both present. The idle, absolute and break-glass halves are in the named survivor, which carries five
+    scenarios where the restatement listed four. The reauthentication half is
+    server-identity-authentication/Reauthentication is required for destructive actions, which names the 30-minute window and
+    the destructive-action set.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# server-admin-surface: 2026-06-02-add-user-management ADDED four user-administration requirements here. They are not in this
+# capability, and the reason is not a drop: the behaviour is specified under server-identity-authorization, more accurately than
+# the archived text, which describes endpoints that were never built. Audited on #905.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: server-admin-surface/list-users
+  covered_by: server-identity-authorization/operators-manage-users-and-their-roles-through-an-audited-api
+  reason: >-
+    The survivor specifies listing users with effective role and account status. The archived text names GET /api/users; the
+    shipped route is GET /api/settings/users, so restoring it verbatim would document an endpoint that does not exist.
+
+- requirement: server-admin-surface/bind-and-unbind-a-role
+  covered_by: server-identity-authorization/operators-manage-users-and-their-roles-through-an-audited-api
+  reason: >-
+    The survivor is the accurate one. The archived text specifies POST and DELETE on /api/users/{id}/role-bindings; the shipped
+    surface is PUT /api/settings/users/{id}/role under a single-global-binding model, which the survivor describes as replacing
+    the user's global bindings transactionally.
+
+- requirement: server-admin-surface/disable-a-user
+  covered_by:
+    - server-identity-authorization/operators-manage-users-and-their-roles-through-an-audited-api
+    - server-identity-authorization/user-management-guardrails-prevent-lockout-and-privilege-escalation
+  reason: >-
+    The survivor specifies enabling and disabling a user with its audit rows, and
+    server-identity-authorization/user-management-guardrails-prevent-lockout-and-privilege-escalation carries the last-admin,
+    self-management and break-glass guards. The archived POST /api/users/{id}/disable was never the shipped route.
+
+- requirement: server-admin-surface/authenticated-admin-boundary
+  covered_by: server-admin-surface/authenticated-admin-boundary
+  reason: >-
+    Intact; the restatement renamed both scenarios ("Authorized operator request proceeds", "Authenticated operator without
+    permission is rejected") and canonical carries the same boundary through the session middleware and the authorization
+    chokepoint.

@@ -543,7 +543,16 @@ func runArchiveVerify(args []string) int {
 		return 2
 	}
 
-	return printArchiveVerify(os.Stdout, verifyArchive(archived, canonical, lifecycle, text), len(archived))
+	exceptions, err := loadArchiveExceptions(exceptionsPathFor(*specsDir))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "spectrace archive-verify: %v\n", err)
+		return 2
+	}
+	findings := verifyArchive(archived, canonical, lifecycle, text)
+	outstanding, excused, matched := applyExceptions(findings, exceptions)
+	problems := validateExceptions(exceptions, canonicalRequirements(scenarios), matched)
+
+	return printArchiveVerify(os.Stdout, outstanding, excused, problems, len(archived))
 }
 
 // printArchiveVerify renders the report. FINDINGS never gate: the tree carries pre-existing entries this pass cannot classify,
@@ -554,7 +563,7 @@ func runArchiveVerify(args []string) int {
 // against the run from before archiving, so a report truncated by a broken pipe while the status says it succeeded would hide
 // exactly the new line the diff exists to surface. That is the same reasoning report.go records for PR #281, and printArchiveOrder
 // for its plan. Returns 2 on a write failure, matching the usage/IO code the rest of the tool uses.
-func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
+func printArchiveVerify(w io.Writer, findings []string, excused []excusedFinding, problems []string, requirements int) int {
 	var werr error
 	p := func(format string, args ...any) {
 		if werr != nil {
@@ -577,9 +586,26 @@ func printArchiveVerify(w io.Writer, findings []string, requirements int) int {
 		}
 	}
 
+	printExcused(p, excused)
+
+	// A malformed or stale exception DOES gate, where a finding does not. The findings list is a report a human diffs; the
+	// exceptions file is a set of claims this tool is the only checker of. An entry naming a survivor that no longer exists, or
+	// one left behind after the finding it excused was repaired, silently shrinks what the report covers, and nothing else in
+	// the pipeline would catch it.
+	if len(problems) > 0 {
+		p("\nspectrace: %d problem(s) in %s. Each entry must name a covered_by that resolves, or a tracked_by issue, "+
+			"carry a reason, and excuse at least one finding.\n", len(problems), defaultExceptionsFile)
+		for _, l := range problems {
+			p("  %s\n", l)
+		}
+	}
+
 	if werr != nil {
 		fmt.Fprintf(os.Stderr, "spectrace archive-verify: write output: %v\n", werr)
 		return 2
+	}
+	if len(problems) > 0 {
+		return 1
 	}
 	return 0
 }

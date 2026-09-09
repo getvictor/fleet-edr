@@ -117,8 +117,14 @@ Subcommands:
             from the retirement checks comes from its MODIFIED entries alone, since a MODIFIED
             replaces the requirement whole and is applied after the ADDED it refines. Findings
             do NOT gate: the tree carries older ones this cannot classify, so a line that is NEW
-            in the second report is the loss this archive caused. Exit code 2 on a usage or
-            write failure.
+            in the second report is the loss this archive caused.
+            openspec/archive-verify-exceptions.yaml records findings that are correct as they
+            stand. Each entry names the canonical requirement carrying the behaviour now
+            (covered_by) or the issue tracking a capability specified but never built
+            (tracked_by), plus a reason; excused findings print in their own section with that
+            survivor, never silently. Those entries DO gate: an unresolvable covered_by, or an
+            entry that excuses nothing and is therefore stale, exits 1, because a shrinking
+            report has no other checker. Exit code 2 on a usage or write failure.
 
 See docs/testing-strategy.md for the marker syntax and rollout plan.
 `)
