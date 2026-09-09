@@ -1,0 +1,43 @@
+{
+  "events": [
+    {
+      "event_id": "sdes-trunc-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {"child_pid": 12100, "parent_pid": 1}
+    },
+    {
+      "event_id": "sdes-trunc-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 12100,
+        "ppid": 1,
+        "path": "/bin/sh",
+        "args": ["sh", "-c", ": > /etc/sudoers"],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "sdes-trunc",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2200,
+      "event_type": "file_truncate",
+      "payload": {
+        "pid": 12100,
+        "path": "/etc/sudoers"
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "sudoers_destroyed",
+      "severity": "high",
+      "description_contains": "emptied /etc/sudoers",
+      "event_ids": ["sdes-trunc"]
+    }
+  ]
+}

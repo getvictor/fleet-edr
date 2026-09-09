@@ -1,0 +1,1 @@
+{"event_id":"88888888-8888-8888-8888-888888888888","event_type":"file_truncate","host_id":"AAAAAAAA-0000-0000-0000-000000000000","payload":{"path":"\/etc\/sudoers","pid":4242},"platform":"darwin","timestamp_ns":1700000000000000000}

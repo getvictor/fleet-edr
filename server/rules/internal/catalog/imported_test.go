@@ -890,3 +890,21 @@ func TestCategoryIsInert_RefusesAnImportedRenameRule(t *testing.T) {
 	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the refusal auditable")
 	assert.Contains(t, err.Error(), "file_rename")
 }
+
+// The file_delete refusal added by #934, for the same reason as the file_rename one above and caught the same way: the export
+// mapping makes these rules loadable, and this agent emits deletions for the sudoers set alone.
+//
+// Three bots flagged the missing refusal independently on #940, which is the signal that the pattern is now the rule rather
+// than the exception: adding an event type to sigmaCategory whose events come from FileTamperSubscriber requires a refusal
+// here in the same commit.
+func TestCategoryIsInert_RefusesAnImportedDeletionRule(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("title: Log file deleted\nlevel: high\n" +
+		"logsource: {category: file_delete, product: macos}\n" +
+		"detection: {sel: {TargetFilename|endswith: '.log'}, condition: sel}\n")
+	_, err := parseImported("delete.yml", body, false)
+	require.Error(t, err, "the agent emits deletions only for sudoers paths, so this rule could never fire")
+	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the refusal auditable")
+	assert.Contains(t, err.Error(), "file_delete")
+}

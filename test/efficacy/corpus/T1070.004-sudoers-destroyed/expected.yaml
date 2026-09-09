@@ -1,0 +1,9 @@
+# Expected detection assertions for destruction of sudo policy.
+# Deliberately NOT sudoers_tamper: that rule maps to T1548.003 (gaining elevated execution) and this event grants nothing.
+scenario_id: T1070.004-sudoers-destroyed
+mitre: T1070.004
+within_seconds: 30
+rules:
+  - rule_id: sudoers_destroyed
+    severity: high
+    expect: alert

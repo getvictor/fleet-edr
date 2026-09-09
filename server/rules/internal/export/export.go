@@ -111,7 +111,9 @@ var sigmaCategory = map[string]string{
 	// Sigma's own category for a rename, carrying SourceFilename and TargetFilename. A genuine equivalence, not a self-map,
 	// so the FIELDS a rename rule reads stay standard taxonomy. That is a statement about fields only: a rule combining this
 	// category with another is downgraded below, because one logsource cannot route two categories.
-	"file_rename":     "file_rename",
+	"file_rename": "file_rename",
+	// Sigma's category for a deletion, carrying TargetFilename. Another genuine equivalence.
+	"file_delete":     "file_delete",
 	"dns_query":       "dns_query",
 	"network_connect": "network_connection",
 }

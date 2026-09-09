@@ -74,3 +74,51 @@ func assertField(rt *rapid.T, ev *sigmabind.Event, name, want string) {
 		rt.Fatalf("%s = %v (ok=%v), want [%q]", name, got, ok, want)
 	}
 }
+
+// The round trip for the destruction wire structs: whatever path a truncation or a deletion carries, the decode surfaces it as
+// TargetFilename, unchanged.
+//
+// Property-based rather than table-driven for the same reason as the rename above: the interesting inputs are string contents
+// nobody writes in a table. It also pins the property that makes the EVENT TYPE load-bearing, which no single-type test can
+// state: the two types decode identically, so the envelope's type is the only thing separating "emptied" from "removed".
+func TestFileDestructionPayloadRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	awkward := []string{
+		"", "/", "/etc/sudoers", `/etc/sudoers.d/a"b`, `/etc/sudoers.d/a\b`, "/etc/sudoers.d/a\nb",
+		"/etc/sudoers.d/ünïcodé", "/private/etc/sudoers.d/admins", "/etc/sudoers.d/  spaces  ",
+	}
+	rapid.Check(t, func(rt *rapid.T) {
+		path := rapid.SampledFrom(awkward).Draw(rt, "path")
+		if rapid.Bool().Draw(rt, "freeform") {
+			path = rapid.String().Draw(rt, "freeformPath")
+		}
+		pid := rapid.IntRange(0, 1<<22).Draw(rt, "pid")
+
+		payload, err := json.Marshal(map[string]any{"pid": pid, "path": path})
+		if err != nil {
+			rt.Fatalf("marshal: %v", err)
+		}
+
+		var encoded [][]byte
+		for _, eventType := range []string{"file_truncate", "file_delete"} {
+			ev, err := sigmabind.NewOpenEventLazy(
+				rulesapi.Event{EventID: "e", EventType: eventType, Payload: payload},
+				func() (string, error) { return "/bin/rm", nil })
+			if err != nil {
+				rt.Fatalf("decode %s: %v", eventType, err)
+			}
+			assertField(rt, ev, "TargetFilename", path)
+
+			// A destruction supplies no source, and must not: a rule reading SourceFilename here would get a value that
+			// means nothing, since nothing was renamed.
+			if got, ok := ev.Field("SourceFilename"); ok {
+				rt.Fatalf("%s supplied SourceFilename = %v, which describes a rename and not a destruction", eventType, got)
+			}
+			encoded = append(encoded, payload)
+		}
+		if string(encoded[0]) != string(encoded[1]) {
+			rt.Fatalf("the two destruction types must decode from an identical payload; the event type carries the meaning")
+		}
+	})
+}

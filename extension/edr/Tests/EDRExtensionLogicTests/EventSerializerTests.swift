@@ -396,6 +396,39 @@ final class EventSerializerTests: XCTestCase {
         XCTAssertEqual(decoded.path, "/etc/sudoers.d/evil")
     }
 
+    // MARK: Destruction payloads
+
+    // spec:endpoint-event-collection/destruction-of-a-sensitive-file-is-captured/an-emptied-file-is-reported-as-a-truncation
+    // spec:endpoint-event-collection/destruction-of-a-sensitive-file-is-captured/a-removed-file-is-reported-as-a-deletion
+    //
+    // The two destruction shapes, pinned as whole literals for the same reason the block event is: a substring check cannot
+    // fail when a field is ADDED, and the server decodes these by literal key name.
+    //
+    // What this canNOT reach, said plainly rather than implied by the marker: whether the ESF client is subscribed, whether an
+    // O_TRUNC open is told from a routine read, and whether a truncate syscall and a shell redirect both arrive. All of that
+    // lives in FileTamperSubscriber, which imports EndpointSecurity and sits outside this target, and is verified at the VM
+    // layer. These tests pass unchanged if none of it works.
+    func testDestructionPayloadsPinTheirWireShapes() throws {
+        let truncated = FileTruncatePayload(pid: 4242, path: "/etc/sudoers")
+        XCTAssertEqual(
+            String(data: try encoder.encode(truncated), encoding: .utf8) ?? "",
+            "{\"path\":\"\\/etc\\/sudoers\",\"pid\":4242}"
+        )
+
+        let deleted = FileDeletePayload(pid: 4242, path: "/etc/sudoers.d/admins")
+        XCTAssertEqual(
+            String(data: try encoder.encode(deleted), encoding: .utf8) ?? "",
+            "{\"path\":\"\\/etc\\/sudoers.d\\/admins\",\"pid\":4242}"
+        )
+
+        // The payloads are byte-identical for the same input, which is exactly why the EVENT TYPE has to carry the meaning:
+        // an emptied file still exists and a removed one does not, and nothing in the payload says which happened.
+        let sameInputTruncate = FileTruncatePayload(pid: 1, path: "/etc/sudoers")
+        let sameInputDelete = FileDeletePayload(pid: 1, path: "/etc/sudoers")
+        XCTAssertEqual(try encoder.encode(sameInputTruncate), try encoder.encode(sameInputDelete),
+                       "if these ever diverge, the envelope's event_type is no longer the only discriminator")
+    }
+
     // MARK: EventEnvelope
 
     // spec:endpoint-event-collection/canonical-event-envelope/an-event-envelope-is-well-formed

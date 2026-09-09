@@ -32,6 +32,7 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 		&CredentialKeychainDump{},
 		&PrivilegeLaunchdPlistWrite{Exclusions: resolver},
 		&SudoersTamper{Exclusions: resolver},
+		&SudoersDestroyed{Exclusions: resolver},
 		&ApplicationControlBlock{},
 		&DNSC2Beacon{},
 		&SensorTamper{},
