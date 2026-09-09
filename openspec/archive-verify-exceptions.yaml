@@ -409,15 +409,20 @@
 # ---------------------------------------------------------------------------------------------------------------------------
 
 - requirement: extension-network-response/default-network-action-is-forward-deny-only-on-explicit-match
-  covered_by: extension-network-response/dns-proxy-reports-forwarding-degradation-without-leaving-the-dns-path
+  covered_by:
+    - endpoint-event-collection/dns-query-capture
+    - extension-network-response/dns-proxy-reports-forwarding-degradation-without-leaving-the-dns-path
   reason: >-
-    Both of this requirement's scenarios, "No active policy allows resolution" and "A telemetry or forwarding degradation does
-    not deny a non-matching flow", are the fail-open invariant, and the survivor states it more precisely: a claimed flow stays
-    claimed, declining is never a recovery action, and the degradation report "MUST NOT change whether flows are claimed". It
-    also CORRECTS the archived text, which assumed not-denying was achievable by declining a flow; measured on edr-dev,
-    declining terminates the flow instead of returning it to the OS, which is why the survivor forbids declining outright. The
-    body's other half, denying on an explicit match against a blocklist or containment ruleset, describes an enforcement path
-    that does not exist and is tracked as #948 and #949, whose own requirements carry it.
+    Both of this requirement's scenarios are the fail-open invariant, and both are carried by the DNS-capture requirement,
+    which is the primary survivor: it requires that "Capture failures MUST NOT prevent the query or its response from being
+    forwarded", that a forward failure for a query no policy blocks "SHALL fail open by releasing the flow cleanly", and that
+    "Telemetry remains strictly best-effort and never gates forwarding or the fail-open path". Its own scenarios cover the
+    unparseable-payload case and ordinary forwarding to the originally-intended resolver. The degradation requirement is named
+    too because it carries the half the capture requirement does not, and CORRECTS the archived text while doing so: the
+    archived version assumed not-denying was achievable by declining a flow, and measured on edr-dev declining terminates the
+    flow rather than returning it to the OS, which is why the survivor forbids declining outright. The body's remaining half,
+    denying on an explicit match against a blocklist or containment ruleset, describes an enforcement path that does not exist
+    and is tracked as #948 and #949.
 
 - requirement: server-admin-surface/read-the-role-catalog
   tracked_by: "#956"
