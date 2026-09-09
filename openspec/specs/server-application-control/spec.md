@@ -176,7 +176,11 @@ The enqueue SHALL be performed in bulk, as a bounded-size multi-row insert rathe
 
 ### Requirement: Application control block event contract
 
-The system SHALL accept ingest events of kind `application_control_block` from agents through the same host-token-authenticated `POST /api/events` channel that carries every other agent event. The system MUST bind every accepted event to the `host_id` resolved by the existing host-token middleware and MUST reject events whose envelope `host_id` does not match the authenticated host. Each event MUST carry `policy_id`, `policy_version`, `rule_id`, `rule_type`, `rule_identifier`, `matched_identifier`, `severity`, `process`, and `ancestry`. The event MAY carry optional `custom_msg` and `custom_url`. The system SHALL accept events whose `policy_id` or `rule_id` does not correspond to a known rule (so an in-flight block is not lost when a rule is deleted after the block fired).
+The system SHALL accept ingest events of kind `application_control_block` from agents through the same host-token-authenticated `POST /api/events` channel that carries every other agent event. The system MUST bind every accepted event to the `host_id` resolved by the existing host-token middleware and MUST reject events whose envelope `host_id` does not match the authenticated host.
+
+Each event MUST carry `pid`, `path`, `policy_id`, `policy_version`, `rule_id`, `rule_type`, `identifier`, and `severity`. The event MAY carry `custom_msg` and `custom_url`, which are absent rather than null when the matched rule does not set them. The `identifier` is the value from the target tuple that actually matched, not the rule's own stored identifier, so an operator reading the alert sees which of the process's identities was the one that hit.
+
+The system SHALL accept events whose `policy_id` or `rule_id` does not correspond to a known rule (so an in-flight block is not lost when a rule is deleted after the block fired).
 
 #### Scenario: A block event for an unknown rule is accepted
 

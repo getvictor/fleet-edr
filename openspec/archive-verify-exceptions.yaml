@@ -25,15 +25,6 @@
 # the one that matches the code. Audited in #931.
 # ---------------------------------------------------------------------------------------------------------------------------
 
-- requirement: endpoint-event-collection/process-exec-authorization
-  covered_by: extension-application-control/precedence-walk
-  reason: >-
-    Declared in both capabilities by 2026-06-02-add-application-control; the archive kept the extension copy. Restoring this one
-    would be a regression, not a repair: it says the walk is CDHASH then BINARY then SIGNINGID then TEAMID and stops as soon as a
-    BINARY consultation is uncertain, while AuthExecDecider.matchLowerLayers walks CERTIFICATE, SIGNINGID, TEAMID, PATH and
-    continues past that uncertainty so a definitive lower-precedence DENY still wins. The dropped text describes a bypass that
-    was fixed under review before it shipped.
-
 - requirement: endpoint-event-collection/application-control-block-event-kind
   covered_by: extension-application-control/block-event-emission
   reason: >-
@@ -105,13 +96,6 @@
     Intact; one scenario was renamed. The restatements list "A platform binary's signing identifier carries the platform prefix"
     and canonical carries "A signing-id rule matches a platform binary by its platform-prefixed signing identity". Same
     behaviour, so the rename reports twice, once as missing and once as unretired.
-
-- requirement: extension-application-control/block-event-emission
-  covered_by: extension-application-control/block-event-emission
-  reason: >-
-    Intact, and its remaining finding is being repaired rather than excused: canonical names rule_identifier, matched_identifier,
-    process and ancestry, which the wire has never carried, and the in-flight
-    appcontrol-spec-owned-by-the-extension-capability change replaces them with the shipped field set.
 
 - requirement: extension-application-control/detect-mode-allows-the-exec-and-emits-a-would-block-event
   tracked_by: "#929"
@@ -431,3 +415,48 @@
     the useradmin handler and a second list in the users page, neither derived from the roles the server seeds. The role model
     itself is specified and built by server-identity-authorization; what is missing is the way to read it, which is why both
     copies exist.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Requirements the v0.5.0 release archive restored under a better name. Each was a real loss the #905 audit found; the repair
+# deliberately did NOT reuse the archived heading, because the archived text was stale in ways the restoration corrected. The
+# archive matches by heading, so the old name now reports as missing. These entries name what it became.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: web-ui/application-control-screen
+  covered_by: web-ui/application-control-screen-lists-policies-and-their-rules
+  reason: >-
+    Restored under a clearer heading. The archived text was stale in four places, so it was rewritten against the shipped
+    components: the policies list carries a version column it did not mention, the host-group count is in the list rather than
+    the detail view it named, the rules table's columns are pinned to what it renders, and paste-many is also gated on an
+    audit reason.
+
+- requirement: web-ui/add-rule-modal-with-type-aware-identifier-validation
+  covered_by: web-ui/add-rule-modal-validates-the-identifier-for-its-type
+  reason: >-
+    Restored under a shorter heading, which the spectrace marker length budget required: the original name plus its longest
+    scenario exceeded the 140-character line cap. Same behaviour, and the survivor additionally carries the happy-path
+    scenario the E2E spec was already exercising under an orphaned marker.
+
+- requirement: web-ui/paste-many-flow-infers-rule-type-by-identifier-shape
+  covered_by: web-ui/paste-many-infers-a-rule-type-per-line
+  reason: >-
+    Restored under a shorter heading for the same marker-length reason. The survivor also states two things the archived text
+    omitted and the flow does: it is gated on a non-empty audit reason, and it refuses to submit while any line has no
+    resolved type.
+
+- requirement: host-app-extension-manager/the-dns-proxy-toggle-subcommands-fail-fast-instead-of-hanging
+  covered_by: host-app-extension-manager/preference-toggles-are-bounded-and-fail-with-guidance
+  reason: >-
+    Built, and deliberately renamed away from "fail fast". Measured on edr-dev, saving a configuration the machine has not yet
+    approved waits on a console consent prompt, so a bound tight enough to fail fast would abort a supported interactive flow.
+    The survivor bounds all four toggles at 120 seconds rather than failing fast, and covers the content-filter pair the
+    archived requirement named only for DNS.
+
+- requirement: extension-xpc-server/inbound-policy-update
+  covered_by: extension-xpc-server/inbound-policy-update
+  reason: >-
+    Live and correct, and its retirement by 2026-06-02-add-application-control was for the legacy blocklist message, not for
+    this. The same batch reintroduced the channel for the typed snapshot, which is what the requirement now describes:
+    application_control.update carrying snapshot JSON in data, handed to the snapshot store unread, with an absent or empty
+    data field rejected without touching the active snapshot or closing the connection. Narrowed to that transport contract by
+    the v0.5.0 archive, because what happens to the bytes afterwards is the snapshot requirement's contract.

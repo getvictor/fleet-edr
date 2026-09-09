@@ -172,29 +172,6 @@ When the alert is not attributed to a single process (a process-optional finding
 - **WHEN** the operator acknowledges it from the alert detail surface
 - **THEN** the alert's status transitions to acknowledged even though no process node was selected
 
-### Requirement: Policy editor with audit reason gate
-
-The UI SHALL provide a policy editor that loads the current blocklist, lets the operator stage additions and removals to paths and SHA-256 hashes, and persists the staged copy to the server only when the operator submits a non-empty audit reason. The editor MUST validate paths as absolute and hashes as 64-character lowercase hex before allowing them to be staged. Saving MUST issue the documented admin policy update request with the operator's identity recorded as the actor.
-
-#### Scenario: Operator stages and saves a policy change
-
-- **GIVEN** the policy editor is loaded with the current policy
-- **WHEN** the operator stages one or more changes and submits a non-empty reason
-- **THEN** the UI issues a policy update request carrying the new paths, hashes, the operator's identity, and the reason
-- **AND** on success the editor reflects the new persisted version
-
-#### Scenario: Save is blocked without a reason
-
-- **GIVEN** the operator has staged changes
-- **WHEN** the operator attempts to save without entering a reason
-- **THEN** the editor refuses to save and surfaces a visible error explaining the reason is required
-
-#### Scenario: Invalid path or hash is rejected at staging
-
-- **GIVEN** the operator types a non-absolute path or a hash that is not 64 lowercase hex characters
-- **WHEN** the operator attempts to stage the entry
-- **THEN** the editor refuses to add it and surfaces a visible validation error
-
 ### Requirement: ATT&CK coverage page
 
 The UI SHALL provide a coverage page that renders the rule-to-technique mapping in the same shape the upstream MITRE ATT&CK Navigator uses, grouped by tactic. Each covered technique MUST link to its upstream MITRE reference, and the rule identifiers that cover a technique MUST link to that rule's documentation page. The page MUST also expose a control to download the underlying Navigator layer JSON.
@@ -812,3 +789,91 @@ The page SHALL render an activity histogram of process starts over the active wi
 - **GIVEN** the operator pivots from an alert
 - **WHEN** the host page opens
 - **THEN** the active window is the wide default ending at the alert's time, as before
+
+### Requirement: Abbreviated table figures are reachable without a pointer
+
+Where a table cell abbreviates a figure and keeps the precise value elsewhere, the precise value SHALL be reachable by keyboard and by touch, not by pointer hover alone. The cell SHALL keep its abbreviated form, because a table read a thousand rows at a time has to stay scannable.
+
+The precise value SHALL remain available to assistive technology whether or not it has been revealed, and SHALL be associated with the control that reveals it. A disclosure that renders the value only while expanded would remove what a hover tooltip's accessible label already provided, which would trade one population's access for another's.
+
+Where several columns in the same table abbreviate, they SHALL use one mechanism, so adjacent columns do not answer the same gesture differently.
+
+#### Scenario: The precise figure opens without a pointer
+
+- **GIVEN** a table cell showing an abbreviated figure
+- **WHEN** an operator reaches the cell's control by keyboard and activates it
+- **THEN** the precise figure becomes visible
+- **AND** the same activation by tap has the same effect
+
+#### Scenario: Assistive technology has the figure before it is revealed
+
+- **GIVEN** a table cell showing an abbreviated figure that has not been expanded
+- **WHEN** assistive technology reads the cell's control
+- **THEN** the precise figure is available as the control's description
+
+### Requirement: Application control screen lists policies and their rules
+
+The UI SHALL provide an Application Control section reachable from the primary navigation. The section SHALL list every policy in the deployment with its name, its rule count, its version, the number of host groups it is assigned to, and when it was last modified, and SHALL let the operator open a policy detail view.
+
+The policy detail view SHALL show the policy's rules in a table carrying each rule's type, identifier, severity, custom message, and last-modified time, and SHALL offer per-row enable, disable, edit and delete actions through the operator-session-authenticated REST surface. The table SHALL be filterable by rule type, by enabled state, and by source, and by a free-text search matched against the identifier OR the comment. Each filter dimension SHALL be independent, so an unset dimension admits every rule.
+
+#### Scenario: A fresh deployment shows the seeded default policy
+
+- **GIVEN** a deployment with no operator-authored rules
+- **WHEN** the operator opens Application Control
+- **THEN** the policies list shows the seeded `Default` policy with a rule count of zero
+- **AND** the row reports how many host groups the policy is assigned to
+
+#### Scenario: The rules table filters independently on each dimension
+
+- **GIVEN** a policy detail view listing rules of more than one type, state and source
+- **WHEN** the operator sets one filter dimension and leaves the others unset
+- **THEN** only rules matching that dimension are listed, and the unset dimensions admit every rule
+- **AND** a free-text search matches a rule whose identifier OR whose comment contains the text
+
+### Requirement: Add-rule modal validates the identifier for its type
+
+The Application Control screen SHALL provide a modal for creating a rule. The modal SHALL offer a rule-type selector carrying every type the rule schema accepts (`CDHASH`, `BINARY`, `SIGNINGID`, `CERTIFICATE`, `TEAMID`, `PATH`), an identifier field, and optional custom-message, custom-URL, comment and severity controls.
+
+The modal SHALL validate the identifier against the format the selected type requires before allowing submission, and SHALL surface a visible error naming the expected format when it does not match. Submission SHALL additionally be gated on a non-empty audit reason, so no rule reaches the deployment without one recorded.
+
+#### Scenario: An identifier that does not match its type is refused
+
+- **GIVEN** the modal is open with a rule type selected
+- **WHEN** the operator enters an identifier that does not match that type's format
+- **THEN** the modal refuses to submit and shows an error naming the format the type requires
+
+#### Scenario: A valid rule is created with its reason recorded
+
+- **GIVEN** the modal is open with a valid type, a valid identifier and a non-empty audit reason
+- **WHEN** the operator submits
+- **THEN** the rule is persisted against the policy through the app-control REST surface
+- **AND** the audit reason is carried with the request
+
+#### Scenario: Submission is blocked until an audit reason is entered
+
+- **GIVEN** the modal is open with a valid type and a valid identifier
+- **WHEN** the audit reason is empty
+- **THEN** submission is unavailable until a non-empty reason is entered
+
+### Requirement: Paste-many infers a rule type per line
+
+The Application Control screen SHALL provide a flow that accepts a newline-delimited list of identifiers and infers a rule type for each line from the identifier's shape: 40 lowercase hex characters as `CDHASH`, 64 lowercase hex characters as `BINARY`, ten characters of `[A-Z0-9]` as `TEAMID`, a prefixed signing identity as `SIGNINGID`, and an absolute path as `PATH`.
+
+A 64-character hex value is the SHA-256 of either a Mach-O binary or a leaf certificate, and the shape cannot distinguish them. The flow SHALL therefore mark such a line with a visible hint that it could also be a `CERTIFICATE`.
+
+The operator SHALL be able to override the inferred type on any line before submitting. The flow SHALL NOT submit while any line has no resolved type, and SHALL be gated on a non-empty audit reason, so an ambiguous paste cannot be committed by accident.
+
+#### Scenario: Mixed identifiers are inferred and can be overridden
+
+- **GIVEN** the operator pastes a list containing a 40-hex value, a 64-hex value, a TeamID and an absolute path
+- **WHEN** the flow parses the input
+- **THEN** each line is shown with the rule type inferred from its shape
+- **AND** the 64-hex line carries a visible hint that it could also be a `CERTIFICATE`
+- **AND** the operator can change any line's type before submitting
+
+#### Scenario: An unresolved line blocks the whole submission
+
+- **GIVEN** a parsed paste in which at least one line has no resolved rule type
+- **WHEN** the operator attempts to submit
+- **THEN** submission is refused until every line has a type

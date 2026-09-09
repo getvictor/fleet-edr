@@ -361,9 +361,15 @@ A monitor match SHALL be attributed to the host it matched on and to the day it 
 
 Counts SHALL be recorded on the transition that ends the batch's life, not while the batch is evaluated. A batch that fails is nacked and replayed whole, so a count written during evaluation is written again by every retry.
 
-Usually that transition is the acknowledgement. The other is the batch being withdrawn from processing for good once its retry bounds are passed, and where the attempt that was withdrawn had itself evaluated the batch, the matches THAT attempt resolved SHALL be recorded rather than discarded, because there is no later attempt to record them. Discarding them under-reports for precisely the hosts that had processing trouble, and the figure is what an operator reads when deciding whether to promote a monitor-mode rule, so the bias is toward believing a rule is quiet.
+Usually that transition is the acknowledgement. The other is the batch being withdrawn from processing for good once its retry bounds are passed, and there the MOST RECENT matches resolved for that batch by any of its attempts SHALL be recorded rather than discarded, because there is no later attempt to record them. Discarding them under-reports for precisely the hosts that had processing trouble, and the figure is what an operator reads when deciding whether to promote a monitor-mode rule, so the bias is toward believing a rule is quiet.
 
-A withdrawal on an attempt that did NOT evaluate the batch records nothing, and matches from that batch's earlier attempts are NOT carried to it. Processing has stages, and a batch withdrawn at a stage before evaluation has no matches of its own to record, while an earlier attempt's were discarded when that attempt was retried. Closing this would mean holding a batch's matches somewhere that survives its retries, which is either state in the work queue that is telemetry rather than work, or per-replica state that a stateless app tier cannot keep. It is stated here rather than closed, so the figure's remaining bias is documented rather than implied away.
+Across attempts, and not merely on the withdrawing one. Processing has stages and the retry bounds do not distinguish them: they accrue on the queue entry and count every attempt, whichever stage failed, so a batch can be evaluated on one attempt and withdrawn on an attempt that failed at the fold and evaluated nothing. Without carrying, the batch's last word says nothing about what it matched.
+
+An attempt that resolved NO matches SHALL NOT displace what an earlier attempt resolved, and this is the case that decides what "most recent" means. Evaluation reports what it accumulated UP TO its failure, so an attempt that fails on an earlier rule than its predecessor reports fewer matches and one that fails on the first reports none. An empty result from a failing attempt is therefore an absence of information and MUST NOT be read as an assertion that the batch matched nothing; reading it that way would discard a predecessor's real matches on the commonest failure there is, which is the under-reporting this requirement exists to prevent.
+
+The residual is stated rather than implied away: where a rule is taken out of monitor mode between two attempts, the carried matches are the demoted rule's and the figure is high by one batch for it. That is accepted because the alternative is systematic. The two cases are indistinguishable at this layer, since evaluation reports an empty result for both, and the recorded figure is already documented as approximate. Telling them apart needs evidence the result does not carry, which is tracked separately.
+
+The matches SHALL survive the attempt that resolved them by riding with the queued events rather than in the replica that evaluated them. Per-replica state would be lost on exactly the restarts that produce these failures, and the app tier is multi-replica by design. The queue SHALL keep them without interpreting them, since a work queue that understood a monitor match would be a detection concern living in it, and keeping them SHALL NOT cost a write the return of a failed batch does not already make.
 
 Only a batch withdrawn IN FULL SHALL be counted this way. The withdrawal decision is made per queued event, so a partly withdrawn batch leaves events that are claimed and evaluated again while the recorded figure covers all of them, and recording it would count the remainder twice. Exactly-once SHALL rest on the queue reporting a withdrawal to one caller rather than on coordination between workers, and withdrawal SHALL be a state an event does not leave. An event that has been withdrawn is not returned to the queue, so no later attempt can withdraw it again and no later attempt is told that it did.
 
@@ -416,12 +422,19 @@ Recorded counts SHALL be subject to the deployment's data-retention window, and 
 - **THEN** nothing is recorded for that attempt
 - **AND** the events that returned are counted by the attempt that finishes them
 
-#### Scenario: A withdrawal before evaluation records nothing
+#### Scenario: An empty result does not displace earlier matches
+
+- **GIVEN** a batch whose first attempt resolved matches and failed, and a later attempt that reached evaluation but failed before resolving any
+- **WHEN** that later attempt withdraws every one of its events
+- **THEN** the first attempt's matches are recorded
+- **AND** the later attempt's empty result is not read as the batch having matched nothing
+
+#### Scenario: An earlier attempt's matches reach the withdrawal
 
 - **GIVEN** a batch that evaluated and failed on one attempt, and on a later attempt failed before evaluation was reached
 - **WHEN** that later attempt withdraws every one of its events
-- **THEN** nothing is recorded, because the withdrawing attempt resolved no matches
-- **AND** the earlier attempt's matches are not carried to it
+- **THEN** the earlier attempt's matches are recorded, because no attempt will evaluate those events again
+- **AND** they are recorded once, by the attempt that withdrew the batch
 
 ### Requirement: A per-rule span reports the alerts it raised
 

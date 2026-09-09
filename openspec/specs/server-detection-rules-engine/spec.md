@@ -132,11 +132,11 @@ Where a rule matches something specific enough to identify a sub-technique, it S
 
 ### Requirement: Rule failure isolation, batch retry on persistence failure
 
-The system SHALL isolate a single rule's evaluation failure so that other rules in the batch still run, EXCEPT where the failure means the rule's dependency was unavailable rather than that the rule was wrong: a failed READ of the process graph SHALL fail the batch with the retryable error class, so the processor re-evaluates those events rather than acknowledging them. The system MUST NOT silently drop alerts on persistence failures: when persisting a finding fails, the batch is surfaced as failed so the processor can retry it.
+The system SHALL isolate a single rule's evaluation failure so that other rules in the batch still run, EXCEPT where the failure means the rule's dependency was unavailable rather than that the rule was wrong: a failed READ of the rule-facing data interface SHALL fail the batch with the retryable error class, so the processor re-evaluates those events rather than acknowledging them. The system MUST NOT silently drop alerts on persistence failures: when persisting a finding fails, the batch is surfaced as failed so the processor can retry it.
 
-Isolation and retry are the right handling of two different conditions, and treating them alike loses detections silently. A BROKEN rule must be isolated: retrying cannot change its answer, and failing the batch on it would let one defective rule stop detection for every other rule. A rule whose graph read FAILED is not broken. The answer is merely unavailable, the events are still in the work queue, and every rule in that batch that reads the graph is equally affected, so isolating one of them and acknowledging the batch discards the evaluation of all of them.
+Isolation and retry are the right handling of two different conditions, and treating them alike loses detections silently. A BROKEN rule must be isolated: retrying cannot change its answer, and failing the batch on it would let one defective rule stop detection for every other rule. A rule whose read FAILED is not broken. The answer is merely unavailable and the events are still in the work queue, so isolating that rule and acknowledging the batch discards its evaluation for events that were never decided. Which OTHER rules are affected depends on what they read: the interface spans more than one store, so a rule reading a different one can still decide, and the requirement below says the batch's other rules SHALL run rather than being stopped.
 
-A graph read failure SHALL fail the batch regardless of which rule performed the read, and no rule SHALL be required to classify the failure itself for this to hold. A contract that depends on each rule remembering to mark its own read failures retryable is one an added rule silently breaks, and the resulting loss is invisible.
+A read failure SHALL fail the batch regardless of which rule performed the read, and no rule SHALL be required to classify the failure itself for this to hold. A contract that depends on each rule remembering to mark its own read failures retryable is one an added rule silently breaks, and the resulting loss is invisible.
 
 A failed read SHALL be distinguished from a read that legitimately finds nothing. An absent row is an answer, and rules already handle it; only the failure to obtain an answer is retryable.
 
@@ -156,6 +156,34 @@ The retry this creates SHALL be bounded by the work queue's own bound rather tha
 - **THEN** evaluation fails with the retryable error class
 - **AND** the processor does not acknowledge the batch, so the events are re-evaluated on a later cycle
 - **AND** the events are not lost to a warning log
+
+#### Scenario: A failed read stops that rule's pass
+
+- **GIVEN** a rule evaluating a batch of many events while its reads fail
+- **WHEN** the first read fails
+- **THEN** that rule stops rather than repeating the failing read for every remaining event
+
+#### Scenario: A failed read keeps resolved findings
+
+- **GIVEN** a rule that resolved a finding from an earlier event in the batch, then hit a failed read
+- **WHEN** the failure is reported
+- **THEN** the finding is reported alongside it, and persisted if it raises an alert
+- **AND** a rule that failed for a reason other than a read still has its findings discarded, since its output is not trustworthy
+
+#### Scenario: A failed read spares the other rules
+
+- **GIVEN** a batch and several rules, where one rule's read fails
+- **WHEN** evaluation continues
+- **THEN** the rules after it are still evaluated, because they may read a dependency that is healthy
+- **AND** the batch is still retried
+
+#### Scenario: A failed read is not logged per attempt
+
+- **GIVEN** rule evaluation failing because a read failed
+- **WHEN** the batch is returned for retry
+- **THEN** the attempt is not reported at a level that would produce a record per retry for the duration of the condition
+- **AND** a read failure on its own is not counted as a process-materialization retry, which is a different condition
+- **AND** when retries are exhausted, the record of the events being set aside names the underlying failure, even when another rule in the same batch was merely waiting
 
 #### Scenario: A read that finds nothing is not a failure
 
@@ -397,6 +425,10 @@ The `shell_network_connect` rule MUST NOT treat an outbound `network_connect` ev
 
 The system SHALL give every detection rule one canonical human-readable name, distinct from its stable snake_case identifier, and reuse that one name across every operator-facing surface. The rule's documentation title (surfaced in `/api/rules` and `docs/detection-rules.md`) and the title of every alert the rule raises SHALL both be that canonical name, so an operator who triages an alert, reads the documentation, and writes an exclusion sees one name mapped to one rule. A rule that fires on more than one trigger arm SHALL still raise its findings under the single canonical name; the distinguishing arm detail belongs in the finding's description, not in a divergent title. The rule identifier SHALL remain unchanged by this requirement.
 
+The canonical name SHALL describe what the rule detects. A name that describes something else is a defect rather than a cosmetic matter: it tells an operator that a behaviour is covered when it is not, tells an analyst that something was observed when it was not, and it propagates, because documentation generated or written from a rule's name inherits the claim.
+
+Correcting such a name SHALL NOT require changing the identifier, and the two are permitted to diverge. The identifier is a stable key that alerts, exclusions and per-rule settings are stored against, so changing it strands tuning and orphans alert history; the name is what operators read. Where they diverge, the rule SHALL record that the divergence is deliberate, so a later reader finds a decision rather than apparent drift.
+
 The application-control block rule is exempt from the alert-title half: its alerts carry a per-block computed title that names the blocked binary and a per-rule identifier (`app_control:<n>`) rather than the catalog rule's identifier, because those alerts name the admin rule and binary that were blocked rather than a catalog detection. Its documentation title SHALL still be the canonical name.
 
 #### Scenario: A rule names itself the same way everywhere
@@ -413,6 +445,13 @@ The application-control block rule is exempt from the alert-title half: its aler
 - **WHEN** either arm fires
 - **THEN** the alert title is the one canonical name "Suspicious exec chain"
 - **AND** the finding description names which arm fired
+
+#### Scenario: The canonical name may differ from the identifier
+
+- **GIVEN** a rule whose identifier names a behaviour the rule does not detect
+- **WHEN** its canonical name is corrected to describe what it detects
+- **THEN** the identifier is unchanged, so stored exclusions, per-rule settings and historical alerts still resolve
+- **AND** the rule records that the divergence between its name and its identifier is deliberate
 
 ### Requirement: Alert evidence is self-contained
 
@@ -682,7 +721,9 @@ The system SHALL decode an event's payload once and reuse it for every rule eval
 
 The system SHALL report a field as absent when the payload does not carry it, so that a rule matching on absence behaves as its author intended.
 
-The system SHALL supply a file-event rule's target filename only for an open that carries write intent. The Sigma category names file creation and modification rather than any access, and read-only opens of a watched path are routine background activity, so supplying them would present known noise to every such rule as a detection.
+The system SHALL supply a file-event rule's target filename only for an open that carries write access AND a flag that changes the file's contents. The Sigma category names file creation and modification rather than any access, so an open that only reads, and an open that only takes a write-mode lock, are both routine background activity rather than modifications. Supplying either would present known noise to every such rule as a detection.
+
+Deciding this where the field is supplied, rather than in each rule, is what lets a file rule read only fields from Sigma's own taxonomy.
 
 #### Scenario: Our events supply the Sigma fields a rule reads
 
@@ -695,6 +736,12 @@ The system SHALL supply a file-event rule's target filename only for an open tha
 - **GIVEN** a file-open event that opens a path for reading only
 - **WHEN** a file-event rule is evaluated against it
 - **THEN** the rule sees no target filename, and does not match
+
+#### Scenario: A lock supplies no target filename
+
+- **GIVEN** a file-open event that carries write access and no flag that changes the file's contents
+- **WHEN** a file-event rule is evaluated against it
+- **THEN** the rule sees no target filename, and does not match, because taking a lock is not a modification
 
 #### Scenario: A rule is inert against an event type it does not name
 
@@ -920,7 +967,17 @@ An assignment whose NAME is empty is the exception, and it ends more than the ru
 
 An option's OPERAND SHALL NOT be read as an assignment. The variable named by an unset is the opposite of an injection, and reporting `env -u VAR prog` as assigning VAR would invert what the event says. An operand SHALL be taken from the remainder of its own token when there is one and from the next argument otherwise, so that the trailing characters of an attached operand are not themselves read as further options.
 
-An invocation SHALL report no assignments when the argument vector after env's options no longer describes what env applied. Three cases, and in each one the safe direction is the same: an option env does NOT have, because env exits without executing the command and performs none of them; the option that suppresses running a command at all, which env refuses to combine with one; and the option carrying a whole command line as its value, since env re-splits that value and the command it names may consume the tokens that follow as its own arguments.
+An invocation SHALL report no assignments when the argument vector after env's options no longer describes what env applied. Two cases, and in each the safe direction is the same: an option env does NOT have, because env exits without executing the command and performs none of them; and the option that suppresses running a command at all, which env refuses to combine with one.
+
+The option carrying a whole command line as its value is a third case, and it is not the same. Everything AFTER that value belongs to the command env will run, so no token there is an assignment; but env re-splits the value and processes it as its own argument list, so an assignment at the head of it really was applied and SHALL be reported. Reporting nothing there was a MISS rather than a safe answer, and one an attacker can choose deliberately.
+
+The split that value undergoes is env's own grammar rather than shell quoting, and an implementation SHALL report nothing for a value using a construct it does not emulate, rather than guessing at one. A guess produces an assignment env did not apply, and a fabricated injection finding is worse than the miss it replaces: the miss is bounded by what the implementation declines to read, while the fabrication points a responder at an event that did not happen.
+
+That grammar SHALL be followed exactly where it is followed at all. Its token separators are a fixed set of bytes rather than whatever a runtime calls whitespace, so a byte outside that set is part of the name it precedes; treating one as a separator reports a well-known variable when the tool set a different one, which is the fabrication above reached by a subtler route.
+
+That grammar also has a comment form, and a value's first word introducing a comment ends the value there. The words after it were never arguments, so an assignment among them SHALL NOT be reported; and because the value then contributes nothing, the arguments that follow it are the tool's own and SHALL be read as usual.
+
+A value may itself carry the option again, and an implementation MAY bound how far it follows that nesting, reporting nothing beyond the bound. The value is attacker-controlled and each level consumes only a token, so a bound is a defence rather than an omission, and stopping reports nothing rather than something wrong.
 
 That asymmetry is the reason the rule SHALL prefer reporting nothing in all three. Reporting nothing risks MISSING an injection, which another detection may still catch. Reporting the run risks FABRICATING one, sending an analyst after an event that did not happen, and this field feeds a high-severity rule.
 
@@ -994,11 +1051,37 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **WHEN** the assignments are read
 - **THEN** no assignment is reported
 
-#### Scenario: A command line carried as an option value reports no assignments
+#### Scenario: An assignment inside an option's command line is reported
 
-- **GIVEN** an exec event for env whose option value is a command line, followed by a token that looks like an assignment
-- **WHEN** the assignments are read
-- **THEN** no assignment is reported, because that token may be an argument of the command the value names
+- **GIVEN** an exec of env whose command-line option value begins with an assignment
+- **WHEN** the field is read
+- **THEN** that assignment is reported, because env re-splits the value and applies it
+- **AND** no token after the value is reported, because those belong to the command env runs
+
+#### Scenario: An unemulated construct in that value reports nothing
+
+- **GIVEN** an exec of env whose command-line option value uses quoting, escaping, or variable substitution
+- **WHEN** the field is read
+- **THEN** nothing is reported, rather than an assignment guessed from the unsplit text
+
+#### Scenario: A separator the tool does not recognise is part of the name
+
+- **GIVEN** an exec whose command-line option value begins with a whitespace character outside the tool's own separator set, followed by an assignment
+- **WHEN** the field is read
+- **THEN** no assignment is reported, because the tool set a variable whose name includes that character
+
+#### Scenario: A comment ends that value, and the rest continues
+
+- **GIVEN** an exec whose command-line option value begins with a comment
+- **WHEN** the field is read
+- **THEN** an assignment among the arguments that follow the value is reported
+- **AND** an assignment written after the comment inside the value is not
+
+#### Scenario: Nesting past the bound reports nothing
+
+- **GIVEN** an exec whose command-line option value nests the same option deeper than the implementation follows
+- **WHEN** the field is read
+- **THEN** nothing is reported
 
 #### Scenario: An unset of a name env cannot unset reports no assignments
 
@@ -1049,9 +1132,13 @@ The system SHALL treat a rule's detection block as authored rather than generate
 
 ### Requirement: Portability is derived from the rule rather than declared
 
-The system SHALL derive a rule's kind and portability from the rule itself: whether it carries a detection block, and whether the fields that block reads come from Sigma's own taxonomy or are computed by this engine.
+The system SHALL derive a rule's kind and portability from the rule itself: whether it carries a detection block, whether the fields that block reads come from Sigma's own taxonomy or are computed by this engine, and whether the event types it consumes can be expressed as one Sigma logsource.
 
 The system SHALL report a rule reading only taxonomy fields as portable to any Sigma-compatible engine, one reading a computed field as valid Sigma that needs fields only this engine supplies, and one with no detection block as not portable at all. Each rule file SHALL state the reason, so a reader of one file in isolation learns why it will or will not run elsewhere.
+
+A rule may also be unportable for a reason that has nothing to do with its fields. Sigma permits exactly one logsource category per rule, so a rule consuming event types that map to different categories cannot be expressed as one Sigma rule: an engine routing by category would deliver the declared category's events and silently never deliver the rest. The system SHALL NOT report such a rule as portable to any Sigma-compatible engine even when every field it reads is taxonomy-standard, and SHALL name the categories that would not be routed, because the failure is silent partial coverage rather than an error.
+
+A rule with no detection block SHALL remain not portable at all whatever its event types, since there is nothing in the file to route events to.
 
 Portability is a promise made to whoever reads the file about whether they can run the rule, so it is derived rather than asserted by hand.
 
@@ -1060,6 +1147,20 @@ Portability is a promise made to whoever reads the file about whether they can r
 - **GIVEN** a rule whose detection block reads a field this engine computes
 - **WHEN** its file is generated
 - **THEN** the file reports it as valid Sigma requiring fields only this engine supplies, and explains why
+
+#### Scenario: Two Sigma categories are not portable
+
+- **GIVEN** a rule whose detection block reads only taxonomy fields
+- **AND** whose event types map to more than one Sigma logsource category
+- **WHEN** its file is generated
+- **THEN** the file does not report it as portable to any Sigma-compatible engine
+- **AND** it names the category another engine would not route events from
+
+#### Scenario: A Go rule stays unportable
+
+- **GIVEN** a rule with no detection block whose event types map to more than one Sigma category
+- **WHEN** its file is generated
+- **THEN** the file still reports it as not portable at all, rather than as a rule needing fields this engine supplies
 
 ### Requirement: An alert from a converted rule names what fired
 
@@ -1442,38 +1543,6 @@ The system SHALL NOT decide what to export by asking whether a rule is upstream'
 - **WHEN** an operator exports it
 - **THEN** a declarative rule file is rendered for it
 - **AND** the response is not an empty document
-
-### Requirement: An open event supplies the writer and the meaning of the write
-
-The system SHALL supply, for a file-open event, the image of the process performing the open, whether the open carried write access, and whether it carried a flag that changes the file's contents.
-
-Write access and mutating intent SHALL be supplied as separate facts rather than combined into one. A rule may need to suppress a specific writer that opens a file write-mode without changing it, which is a test on the second fact conditioned on the writer, and a single combined field cannot express it: collapsing them either loses the suppression or applies it to every writer.
-
-A rule that reads these fields SHALL be reported as valid Sigma requiring fields only this engine supplies. Sigma's file taxonomy models a completed creation or modification rather than an open with flags, so it has no field for the intent behind an open.
-
-#### Scenario: A write-mode open that changes nothing is distinguished from one that does
-
-- **GIVEN** two opens of the same watched path by the same process, one taking a write-mode lock and one truncating the file
-- **WHEN** a rule reads the mutating-intent field
-- **THEN** it sees them as different, though both carried write access
-
-#### Scenario: The writing process image is available to a file rule
-
-- **GIVEN** a file-open event
-- **WHEN** a rule matches on the image of the process that opened the file
-- **THEN** it sees the path of that process
-
-### Requirement: A rule suppresses a named exception rather than branching on the writer
-
-The system SHALL let a rule state an exception as a named set of field tests its condition subtracts, so that a suppression conditional on one writer is expressed in the rule file rather than in engine code.
-
-A suppression written this way SHALL apply only to events matching every test in it. A writer other than the named one, performing the same open, SHALL still match the rule.
-
-#### Scenario: The suppression applies only to the writer it names
-
-- **GIVEN** a rule suppressing a write-mode open by one named process that does not change file contents
-- **WHEN** a different process performs an identical open of the same path
-- **THEN** the rule matches
 
 ### Requirement: A detection can be an upstream Sigma file with nothing added
 
@@ -2039,3 +2108,95 @@ The chain is DROPPED, not retried. This is the skip semantics the "Retryable eva
 - **GIVEN** a chain whose shell generation claims a parent that has no record in the graph, and whose parent is not the init process
 - **WHEN** the batch is evaluated
 - **THEN** no finding is produced, rather than one naming an unresolved parent, and the batch is acknowledged rather than retried
+
+### Requirement: An open event supplies the writer
+
+The system SHALL supply, for a file-open event, the image of the process performing the open, so a rule can match on who changed a watched file.
+
+The meaning of an open's flags SHALL NOT be supplied as fields a rule reads. Whether an open carried write access and whether it carried a content-changing flag decide whether the event is reported as a modification at all, which is settled where the target filename is supplied; exposing them again would let a rule read a fact this engine computes and forfeit its portability for no gain.
+
+#### Scenario: The writing process image is available to a file rule
+
+- **GIVEN** a file-open event
+- **WHEN** a rule matches on the image of the process that opened the file
+- **THEN** it sees the path of that process
+
+### Requirement: A rule suppresses a named exception
+
+The system SHALL let a rule state an exception as a named set of field tests its condition subtracts, so that a suppression is expressed in the rule file rather than in engine code.
+
+A suppression written this way SHALL apply only to events matching every test in it. An event differing in any one of those tests SHALL still match the rule.
+
+#### Scenario: The suppression applies only to what it names
+
+- **GIVEN** a rule whose condition subtracts a named set of field tests
+- **WHEN** an event matches the rule's selection but differs from the suppression in one of its tests
+- **THEN** the rule matches
+
+### Requirement: Destroyed sudo policy is its own detection
+
+The system SHALL detect destruction of sudo policy: a file sudo will parse being emptied or removed. It SHALL report that separately from the rule covering a sudoers file being written or renamed into place.
+
+The separation is required rather than stylistic. Writing sudo policy is an escalation, and the rule covering it maps to the ATT&CK technique for abusing elevation control. Destroying it grants nothing: it removes access, and it removes whatever record was written. Reporting destruction under the escalation technique would place it on a coverage page under a heading that misdescribes what happened, so the two SHALL carry different technique mappings.
+
+Destruction SHALL be detected only for files sudo would actually load. This is the same restriction that applies to tampering and it carries more weight here: editors remove their own temporary files as a routine part of committing a change, so a rule matching any file under the sensitive directory would report ordinary administration as policy deletion.
+
+#### Scenario: Emptying a sudoers file fires
+
+- **GIVEN** a `file_truncate` event for a path sudo will load
+- **WHEN** the rule evaluates it
+- **THEN** a finding is produced, reporting that the file was emptied
+
+#### Scenario: Deleting a sudoers file fires
+
+- **GIVEN** a `file_delete` event for a path sudo will load
+- **WHEN** the rule evaluates it
+- **THEN** a finding is produced, reporting that the file was deleted
+
+#### Scenario: Destroying a file sudo ignores does not fire
+
+- **GIVEN** a `file_delete` event for a name sudo skips, such as an editor's temporary file
+- **WHEN** the rule evaluates it
+- **THEN** no finding is produced, because no policy was destroyed
+
+#### Scenario: Destruction and tampering carry different techniques
+
+- **GIVEN** the rule covering destroyed sudo policy and the rule covering tampered sudo policy
+- **WHEN** their ATT&CK mappings are read
+- **THEN** they do not name the same technique, because one describes gaining elevated execution and the other describes removing access and evidence
+
+### Requirement: Sudoers tampering matches the files sudo loads
+
+The `sudoers_tamper` rule SHALL fire when a process creates, writes, or renames into place a file that sudo will parse as policy, and SHALL NOT fire for a path sudo ignores.
+
+`sudoers(5)` defines what sudo parses: `/etc/sudoers` itself, and each file in `/etc/sudoers.d` whose name neither contains a `.` nor ends in `~`. A file sudo skips grants nothing, so an alert on one reports a privilege escalation that cannot have happened. The rule SHALL therefore match `/etc/sudoers` and those direct children of `/etc/sudoers.d/` that sudo will load, in either the bare or the `/private` form.
+
+A rename SHALL be evaluated on its destination, because the destination is what determines whether the file is now policy. A rename whose destination sudo will load SHALL fire regardless of where the source was, since promoting a scratch file into live policy is the escalation whether it came from `/tmp` or from a sibling in the watched directory.
+
+Narrowing the matched paths and observing renames are one change, not two. The narrowing alone would remove a detection that currently works by accident: writes to `<name>.tmp` fire today under the broader pattern, which is the only reason a write-then-rename sequence is caught at all. Removing that without observing the rename would make the sequence silent.
+
+#### Scenario: A drop into a loadable name fires
+
+- **GIVEN** a file event for a path sudo will load, such as `/etc/sudoers` or `/etc/sudoers.d/evil`
+- **WHEN** the rule evaluates it
+- **THEN** a finding is produced
+
+#### Scenario: A write to a name sudo ignores does not fire
+
+- **GIVEN** a file event for `/etc/sudoers.d/evil.tmp`, whose name contains a `.`
+- **WHEN** the rule evaluates it
+- **THEN** no finding is produced
+- **AND** the same holds for a name ending in `~`, which sudo also skips
+
+#### Scenario: A rename that makes a file loadable fires
+
+- **GIVEN** a `file_rename` event whose source is a path sudo ignores or a path outside the sensitive set
+- **AND** whose destination is a name sudo will load
+- **WHEN** the rule evaluates it
+- **THEN** a finding is produced, reporting the destination as the tampered path
+
+#### Scenario: A rename to a name sudo ignores does not fire
+
+- **GIVEN** a `file_rename` event whose destination is `/etc/sudoers.d/backup.old`, a name sudo skips
+- **WHEN** the rule evaluates it
+- **THEN** no finding is produced, because the destination is not policy sudo will parse
