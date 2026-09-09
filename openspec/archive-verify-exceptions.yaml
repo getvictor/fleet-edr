@@ -431,28 +431,3 @@
     the useradmin handler and a second list in the users page, neither derived from the roles the server seeds. The role model
     itself is specified and built by server-identity-authorization; what is missing is the way to read it, which is why both
     copies exist.
-
-# ---------------------------------------------------------------------------------------------------------------------------
-# The two requirements #952 was filed for. They do NOT need scenario-level keys after all: canonical superseded each whole
-# requirement with what the product actually does, so naming that survivor excuses every finding honestly and the deletion
-# guard still works. The unbuilt half of each is Detect mode, named in the reason and tracked by #929.
-# ---------------------------------------------------------------------------------------------------------------------------
-
-- requirement: server-detection-rules-engine/alert-dedup-key-depends-on-source
-  covered_by: server-detection-rules-engine/alert-dedup-by-subject
-  reason: >-
-    Superseded, and the archived text describes behaviour the product deliberately does not have. It specifies a
-    (source, host_id, rule_id) key for application control that EXCLUDES the process id, so repeated blocks collapse across
-    executions; that key exists to make the would_block-to-block lifecycle land in one row, which is Detect mode. What shipped
-    is the survivor's (source, host id, rule id, subject), and application_control_block.go says an app-control alert's subject
-    IS its process id, so blocks collapse per process rather than across executions. The survivor also states that for a
-    process-backed finding the subject preserves the historical (host, rule, process) dedup, which is this requirement's
-    source='detection' half verbatim. The cross-execution half belongs to #929.
-
-- requirement: server-detection-rules-engine/alerts-list-filters-by-source-and-subtype
-  covered_by: server-rest-api/filterable-alerts-list
-  reason: >-
-    Split cleanly, and the half that shipped is being restored rather than excused. The source filter is real: the handler
-    reads the query parameter and the store applies it, with an end-to-end test, and the in-flight alerts-list-filters-by-source
-    change adds it to the survivor named here, which had never mentioned it. The subtype half filters blocks from would-blocks
-    and there are no subtypes, because Detect mode was never built; that half stays with #929.
