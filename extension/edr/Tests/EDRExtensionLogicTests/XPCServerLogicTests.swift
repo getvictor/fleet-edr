@@ -132,12 +132,13 @@ final class XPCServerLogicTests: XCTestCase {
 
     // MARK: Requirement: Inbound policy update
 
-    // spec:extension-xpc-server/inbound-policy-update/the-agent-pushes-a-new-blocklist
+    // spec:extension-xpc-server/inbound-policy-update/the-agent-pushes-a-new-snapshot
     func testApplicationControlUpdateWithDataDispatchesToApplyApplicationControl() {
         // The dispatcher's verdict for a well-formed application_control.update message is .applyApplicationControl
-        // carrying the bytes; XPCServer.handlePeerMessage maps that case to ApplicationControlStore.shared.apply
-        // (covered by ApplicationControlStoreTests). The cross-restart persistence the spec requires is enforced by
-        // ApplicationControlStore's atomic write to disk.
+        // carrying the bytes unread; XPCServer.handlePeerMessage maps that case to ApplicationControlStore.shared.apply.
+        // What the store then does with them, the recency gate and the atomic write that survives a restart, is the
+        // snapshot requirement's contract and is covered by ApplicationControlStoreTests. This test asserts only that the
+        // bytes arrive intact, which is what this capability owns.
         let payload = Data(#"{"version":1,"rules":[]}"#.utf8)
         switch dispatchInbound(type: "application_control.update", data: payload) {
         case .applyApplicationControl(let data):
@@ -149,9 +150,9 @@ final class XPCServerLogicTests: XCTestCase {
 
     // spec:extension-xpc-server/inbound-policy-update/an-application-control-update-with-no-data-is-rejected
     func testApplicationControlUpdateWithoutDataDispatchesToRejectMissingData() {
-        // The spec's two failure shapes (missing data field OR empty data) both surface as .rejectMissingData. The
-        // active policy is NOT touched and the connection stays open (the connection-open invariant is part of "the
-        // extension continues serving events to all peers").
+        // The two failure shapes (missing data field OR empty data) both surface as .rejectMissingData. The active
+        // snapshot is NOT touched and the connection stays open: a malformed push must not disarm enforcement, and must
+        // not cost the peer its event stream either.
         XCTAssertEqual(dispatchInbound(type: "application_control.update", data: nil), .rejectMissingData)
         XCTAssertEqual(dispatchInbound(type: "application_control.update", data: Data()), .rejectMissingData)
     }
