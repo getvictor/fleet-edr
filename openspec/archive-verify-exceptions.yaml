@@ -402,3 +402,27 @@
     and canonical followed: the emitted audit row's action is `authz.audit.read` (the archived copy named `audit.read`, which
     is the permission, not the row action) and the deny reason is `no_matching_rule` (formerly `no_role_grants_action`). Both
     canonical values are the ones the code uses today.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# The last two the audit could classify without new tooling. One is an invariant canonical states more precisely AND corrects;
+# the other is an endpoint that was never built.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: extension-network-response/default-network-action-is-forward-deny-only-on-explicit-match
+  covered_by: extension-network-response/dns-proxy-reports-forwarding-degradation-without-leaving-the-dns-path
+  reason: >-
+    Both of this requirement's scenarios, "No active policy allows resolution" and "A telemetry or forwarding degradation does
+    not deny a non-matching flow", are the fail-open invariant, and the survivor states it more precisely: a claimed flow stays
+    claimed, declining is never a recovery action, and the degradation report "MUST NOT change whether flows are claimed". It
+    also CORRECTS the archived text, which assumed not-denying was achievable by declining a flow; measured on edr-dev,
+    declining terminates the flow instead of returning it to the OS, which is why the survivor forbids declining outright. The
+    body's other half, denying on an explicit match against a blocklist or containment ruleset, describes an enforcement path
+    that does not exist and is tracked as #948 and #949, whose own requirements carry it.
+
+- requirement: server-admin-surface/read-the-role-catalog
+  tracked_by: "#956"
+  reason: >-
+    Never built. There is no GET /api/roles, and the assignable role set is instead a literal in two places, bindableRoles in
+    the useradmin handler and a second list in the users page, neither derived from the roles the server seeds. The role model
+    itself is specified and built by server-identity-authorization; what is missing is the way to read it, which is why both
+    copies exist.
