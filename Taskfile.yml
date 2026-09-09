@@ -1023,6 +1023,38 @@ tasks:
       is tracked as future work.
     deps: [build]
 
+  # -------- release --------
+
+  release:archive:
+    desc: |
+      Archive every pending OpenSpec change, in the order tools/spectrace computes.
+      Step 1 of docs/release-checklist.md; run it on the release-prep branch, after
+      capturing the archive-verify baseline.
+
+      The order is the hazard this removes from the human. `openspec archive` replaces
+      a MODIFIED requirement WHOLE, so when one pending change adds a requirement and
+      another modifies or retires it, the wrong order discards the later text with no
+      error and no downstream check notices (issue #901, and the losses #905 tracks).
+      `spectrace archive-order` computes a safe order; this applies it.
+
+      Hard stops, both of which archive nothing: archive-order exit 1 means no safe
+      order exists and a human must split one change or reconcile the requirements two
+      of them contend over, and exit 2 is a tool failure. There is no fallback to
+      alphabetical. A failed `openspec archive` stops the run where it is rather than
+      carrying on down the list.
+
+      Preview the sequence without touching the tree: `task release:archive -- --dry-run`.
+      Both dashes are required, and a bare word is refused rather than run as a real
+      archive, so a mistyped preview cannot become one.
+
+      It does NOT verify the archive was lossless; that is the separate before/after
+      archive-verify comparison in the checklist.
+    preconditions:
+      - sh: command -v openspec
+        msg: "openspec must be on PATH (npm i -g @fission-ai/openspec)"
+    cmds:
+      - go run ./tools/releasearchive {{.CLI_ARGS}}
+
   # -------- packaging --------
 
   pkg:dryrun:
