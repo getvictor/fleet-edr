@@ -127,11 +127,38 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     }
 }
 
-private func enableContentFilter(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
+/// toggleLatch decides the race between a toggle's own completion handler and the watchdog armed beside it, so a
+/// round-trip that lands exactly at the deadline reports one outcome rather than both.
+private let toggleLatch = PreferencesLatch()
+
+/// finishToggle ends a toggle subcommand. A drop-in for `exit`: it returns Never, so replacing an `exit` call with it
+/// cannot introduce a fall-through. Claiming the latch on the way out is what keeps the watchdog silent when the
+/// round-trip beat it by a hair.
+private func finishToggle(_ status: Int32) -> Never {
+    _ = toggleLatch.complete()
+    exit(status)
+}
+
+/// armPreferencesWatchdog bounds a toggle's NetworkExtension preferences round-trip (issue #905, specified by the
+/// archived resilient-network-enforcement change and never built).
+///
+/// `loadFromPreferences` and `saveToPreferences` take a completion handler that is simply never called when the save is
+/// waiting on a console-session approval that no one is there to give. The subcommand then sits in `dispatchMain()`
+/// forever. That is worst exactly where it matters: `disable-dns-proxy` is the operator's recovery lever for a host
+/// whose DNS our own proxy has broken, and it is reached over SSH, which is the case with no console session.
+private func armPreferencesWatchdog(for action: HostAppAction) {
+    DispatchQueue.global().asyncAfter(deadline: .now() + defaultPreferencesTimeout) {
+        guard toggleLatch.expire() else { return }
+        reporter.failure(preferencesTimeoutMessage(for: action, timeout: defaultPreferencesTimeout))
+        exit(EXIT_FAILURE)
+    }
+}
+
+private func enableContentFilter(then completion: @escaping () -> Void = { finishToggle(EXIT_SUCCESS) }) {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
             reporter.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE)
         }
         print("Loaded filter preferences, isEnabled=\(NEFilterManager.shared().isEnabled)")
 
@@ -147,7 +174,7 @@ private func enableContentFilter(then completion: @escaping () -> Void = { exit(
         NEFilterManager.shared().saveToPreferences { error in
             if let error {
                 reporter.failure("ERROR: Failed to save filter preferences: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE)
             }
             reporter.progress("Content filter enabled successfully")
             completion()
@@ -155,11 +182,11 @@ private func enableContentFilter(then completion: @escaping () -> Void = { exit(
     }
 }
 
-private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
+private func enableDNSProxy(then completion: @escaping () -> Void = { finishToggle(EXIT_SUCCESS) }) {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
             reporter.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE)
         }
 
         let proxyConfig = NEDNSProxyProviderProtocol()
@@ -172,7 +199,7 @@ private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
                 reporter.failure("ERROR: Failed to save DNS proxy preferences: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE)
             }
             reporter.progress("DNS proxy enabled successfully")
             completion()
@@ -184,16 +211,16 @@ private func disableContentFilter() {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
             reporter.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE)
         }
         NEFilterManager.shared().isEnabled = false
         NEFilterManager.shared().saveToPreferences { error in
             if let error {
                 reporter.failure("ERROR: Failed to disable filter: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE)
             }
             reporter.progress("Content filter disabled")
-            exit(EXIT_SUCCESS)
+            finishToggle(EXIT_SUCCESS)
         }
     }
 }
@@ -202,16 +229,16 @@ private func disableDNSProxy() {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
             reporter.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
-            exit(EXIT_FAILURE)
+            finishToggle(EXIT_FAILURE)
         }
         NEDNSProxyManager.shared().isEnabled = false
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
                 reporter.failure("ERROR: Failed to disable DNS proxy: \(error.localizedDescription)")
-                exit(EXIT_FAILURE)
+                finishToggle(EXIT_FAILURE)
             }
             reporter.progress("DNS proxy disabled")
-            exit(EXIT_SUCCESS)
+            finishToggle(EXIT_SUCCESS)
         }
     }
 }
@@ -260,18 +287,22 @@ guard let action = validateHostAppArgs(positionalArgs) else {
 switch action {
 case .enableFilter:
     print("Enabling content filter...")
+    armPreferencesWatchdog(for: .enableFilter)
     enableContentFilter()
     dispatchMain()
 case .disableFilter:
     print("Disabling content filter...")
+    armPreferencesWatchdog(for: .disableFilter)
     disableContentFilter()
     dispatchMain()
 case .enableDNSProxy:
     print("Enabling DNS proxy...")
+    armPreferencesWatchdog(for: .enableDNSProxy)
     enableDNSProxy()
     dispatchMain()
 case .disableDNSProxy:
     print("Disabling DNS proxy...")
+    armPreferencesWatchdog(for: .disableDNSProxy)
     disableDNSProxy()
     dispatchMain()
 case .notify:

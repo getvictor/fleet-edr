@@ -343,3 +343,56 @@ struct Reporter: Sendable {
         progress(approvalPendingMessage)
     }
 }
+
+/// defaultPreferencesTimeout bounds one NetworkExtension preferences round-trip (`loadFromPreferences` /
+/// `saveToPreferences`).
+///
+/// Two minutes, and the size is the whole design. A healthy round-trip is sub-second: measured on edr-dev (macOS 26.3)
+/// over SSH with no console session, both `enable-dns-proxy` and `disable-dns-proxy` returned in under a second against
+/// an already-approved configuration. What takes real time is the other case: saving a configuration the machine has not
+/// approved yet raises a system consent prompt and does not return until a human answers it. A bound tight enough to
+/// "fail fast" would abort that approval, turning a supported interactive flow into a failure.
+///
+/// So this is not a fast timeout. It is an upper bound on an otherwise unbounded wait: long enough that a person can
+/// read a prompt and click Allow, short enough that an unattended invocation reports something instead of blocking
+/// forever.
+let defaultPreferencesTimeout: TimeInterval = 120
+
+/// PreferencesLatch decides the race between a NetworkExtension completion handler and the watchdog that bounds it.
+/// Exactly one of `complete()` and `expire()` returns true, whichever runs first; every later call returns false.
+///
+/// The race is real rather than theoretical: the completion handler runs on an arbitrary framework queue and the
+/// watchdog on a timer queue, so a round-trip that finishes at the deadline could otherwise report success AND failure,
+/// or call `exit()` twice with different statuses.
+final class PreferencesLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settled = false
+
+    /// complete claims the latch for the framework's completion handler. Returns false when the watchdog already fired,
+    /// meaning the caller has already reported a timeout and this late result must be discarded.
+    func complete() -> Bool { claim() }
+
+    /// expire claims the latch for the watchdog. Returns false when the round-trip already finished.
+    func expire() -> Bool { claim() }
+
+    private func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if settled { return false }
+        settled = true
+        return true
+    }
+}
+
+/// preferencesTimeoutMessage is what the operator sees when a toggle's preferences round-trip does not complete in time.
+///
+/// It names the subcommand, the bound it exceeded, and what to do next, because the situation it reports is one an
+/// operator reaches while recovering a host whose DNS is already broken. The advice is the measured cause: saving a
+/// NetworkExtension configuration waits for a human to approve it, so the call never returns when it is made from a
+/// context with no console session (an SSH shell, an MDM script) rather than failing.
+func preferencesTimeoutMessage(for action: HostAppAction, timeout: TimeInterval) -> String {
+    "ERROR: \(action.rawValue) timed out after \(Int(timeout))s waiting for the network-extension preferences round-trip. "
+        + "If this machine has not yet approved the configuration, the save is waiting on a console consent prompt that "
+        + "nobody answered: re-run it as the console user (`launchctl asuser <uid> ...`) and approve the prompt. "
+        + "Otherwise the preferences daemon is not responding, and the setting can be changed in System Settings > Network."
+}
