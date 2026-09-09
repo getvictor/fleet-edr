@@ -1,0 +1,31 @@
+# spec:server-detection-rules-engine/destroyed-sudo-policy-is-its-own-detection/emptying-a-sudoers-file-fires
+# T1070.004 Indicator Removal: File Deletion (with T1531 Account Access Removal).
+#
+# The vector that produced NO telemetry at all before #934: `: > /etc/sudoers` empties the policy through open(2) with O_TRUNC,
+# which is a different kernel path from the CREATE/WRITE/RENAME the file-tamper client watched. Measured on macOS 26.3, three
+# separate O_TRUNC paths each took a 37-byte file to zero and emitted nothing.
+#
+# There is no `open` event in this timeline, deliberately. The whole point is that emptying a file is not a write.
+name: "T1070.004 sudo policy emptied by shell redirect"
+host:
+  id: AAAA1070-0004-0000-0000-000000000934
+  hostname: efficacy-t1070-004.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 4934
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 4934
+    ppid: 1
+    path: /bin/sh
+    args: ["sh", "-c", ": > /etc/sudoers"]
+    cwd: /tmp
+    uid: 0
+    gid: 0
+  - at: 20ms
+    type: file_truncate
+    pid: 4934
+    path: /etc/sudoers

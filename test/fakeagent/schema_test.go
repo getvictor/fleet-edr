@@ -56,6 +56,8 @@ var payloadFixtures = map[string]string{
 	"exit":                          `{"pid":101,"exit_code":0}`,
 	"open":                          `{"pid":101,"path":"/etc/sudoers","flags":1}`,
 	"file_rename":                   `{"pid":101,"source_path":"/tmp/staged","path":"/etc/sudoers"}`,
+	"file_truncate":                 `{"pid":101,"path":"/etc/sudoers"}`,
+	"file_delete":                   `{"pid":101,"path":"/etc/sudoers.d/admins"}`,
 	"network_connect":               `{"pid":101,"protocol":"tcp","direction":"outbound","remote_address":"93.184.216.34","remote_port":443}`,
 	"dns_query":                     `{"pid":101,"query_name":"example.com","query_type":"A"}`,
 	"snapshot_heartbeat":            `{"pid":101}`,
@@ -69,7 +71,7 @@ var payloadFixtures = map[string]string{
 
 // TestEventSchema_EveryEventTypeValidates is the regression test for issue #937. Under the previous `payload.oneOf` the schema
 // required EXACTLY ONE payload definition to match, and no definition set additionalProperties: false, so every payload carrying a
-// pid also satisfied snapshot_heartbeat_payload (whose sole requirement is pid). Ten of the fourteen event types matched two
+// pid also satisfied snapshot_heartbeat_payload (whose sole requirement is pid). Ten of the sixteen event types matched two
 // definitions and therefore failed. Each subtest here fails against that schema and passes against the event_type-keyed if/then.
 //
 // spec:endpoint-event-collection/event-payload-schema-is-selected-by-event-type/each-documented-event-type-validates

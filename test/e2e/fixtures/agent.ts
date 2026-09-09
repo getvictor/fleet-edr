@@ -291,6 +291,9 @@ function buildPayload(ev: ScenarioEvent): Record<string, unknown> {
       return { pid: ev.pid ?? 0, path: ev.path ?? "", flags: ev.flags ?? 0 };
     case "file_rename":
       return { pid: ev.pid ?? 0, source_path: ev.source_path ?? "", path: ev.path ?? "" };
+    case "file_truncate":
+    case "file_delete":
+      return { pid: ev.pid ?? 0, path: ev.path ?? "" };
     case "network_connect": {
       const p: Record<string, unknown> = {
         pid: ev.pid ?? 0,

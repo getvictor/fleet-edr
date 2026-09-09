@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "file_rename", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
+      "enum": ["exec", "fork", "exit", "open", "file_rename", "file_truncate", "file_delete", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
       "description": "Type of endpoint security event"
     },
     "platform": {
@@ -52,6 +52,14 @@
     {
       "if": { "properties": { "event_type": { "const": "file_rename" } }, "required": ["event_type"] },
       "then": { "properties": { "payload": { "$ref": "#/definitions/file_rename_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "file_truncate" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/file_truncate_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "file_delete" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/file_delete_payload" } } }
     },
     {
       "if": { "properties": { "event_type": { "const": "network_connect" } }, "required": ["event_type"] },
@@ -209,6 +217,28 @@
         "path": {
           "type": "string",
           "description": "Absolute path the file was renamed TO. Named `path` rather than `destination_path` so it lines up with every other file event's target field, which is what the detection layer reads as TargetFilename."
+        }
+      }
+    },
+    "file_truncate_payload": {
+      "type": "object",
+      "required": ["pid", "path"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": {
+          "type": "string",
+          "description": "Absolute path whose contents were discarded. Emitted for truncate(2)/ftruncate(2) and for an open(2) carrying O_TRUNC, which are different kernel paths reaching the same outcome: the file still exists and its contents are gone."
+        }
+      }
+    },
+    "file_delete_payload": {
+      "type": "object",
+      "required": ["pid", "path"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "path": {
+          "type": "string",
+          "description": "Absolute path that was unlinked."
         }
       }
     },

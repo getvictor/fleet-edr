@@ -76,6 +76,14 @@ type fileRenamePayload struct {
 	PID        *int   `json:"pid"`
 }
 
+// fileDestructionPayload is the wire shape shared by file_truncate and file_delete: the acting process, and the path it
+// destroyed. One struct for both because they carry the same fields; the envelope's event type is what says whether the file
+// was emptied or removed.
+type fileDestructionPayload struct {
+	Path string `json:"path"`
+	PID  *int   `json:"pid"`
+}
+
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
 // non-zero there means the descriptor can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND) do not affect the access mode.
 const writeAccessMask = 0x3
@@ -246,6 +254,16 @@ func NewEvent(ev api.Event) (*Event, error) {
 		// here completed and changed which name the file answers to, which is exactly what Sigma's file_rename category means.
 		e.targetFilename = presentString(p.Path)
 		e.sourceFilename = presentString(p.SourcePath)
+	case "file_truncate", "file_delete":
+		// One decode for both: they share a payload shape and differ in what they mean, not in what they carry. Supplied
+		// unconditionally for the same reason a rename's is: every one of these events describes a completed destruction, so
+		// there is no read-only or lock-shaped case to exclude the way an open has.
+		var p fileDestructionPayload
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			return nil, fmt.Errorf("decode %s payload for event %q: %w", ev.EventType, ev.EventID, err)
+		}
+		e.setPID(p.PID)
+		e.targetFilename = presentString(p.Path)
 	}
 	return e, nil
 }

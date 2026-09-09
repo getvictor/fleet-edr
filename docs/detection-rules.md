@@ -36,6 +36,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | alert | T1548.003 |
+| [`sudoers_destroyed`](#sudoers_destroyed) | Sudoers policy destroyed | high | alert | T1070.004, T1531 |
 | [`dns_c2_beacon`](#dns_c2_beacon) | Suspicious process phoning home | high | alert | T1071.004, T1568.002 |
 | [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | alert |  |
 | [`proc_creation_macos_applescript`](#proc_creation_macos_applescript) | MacOS Scripting Interpreter AppleScript | medium | monitor | T1059.002 |
@@ -393,6 +394,38 @@ The rule reads renames as well as writes, so an attacker who writes a temp file 
 - Truncation and deletion are not detected: `: > /etc/sudoers` destroys the policy and emits nothing at all, because open(O_TRUNC) is a different kernel path from the CREATE/WRITE/RENAME this rule reads. Tracked as #934.
 - A rename whose destination sudo will load fires whoever performed it, so an administrator committing a legitimate visudo edit of a /etc/sudoers.d/ fragment is reported alongside an attacker promoting a file into place. From the endpoint's view the two are the same operation on the same path, and the rule deliberately does not filter on platform-binary status (see the description). Operators tune with a path-glob exclusion on the writer.
 - On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.
+
+## sudoers_destroyed
+
+**Sudoers policy destroyed**  
+Flags a program that empties or deletes a sudoers file that sudo would have loaded.
+
+| | |
+| --- | --- |
+| Rule ID | `sudoers_destroyed` |
+| Severity | `high` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1070.004`](https://attack.mitre.org/techniques/T1070/004/), [`T1531`](https://attack.mitre.org/techniques/T1531/) |
+| Event types | `file_delete`, `file_truncate` |
+
+### Description
+
+Detects destruction of sudo policy: a file sudo parses is truncated to nothing, or removed. Either takes away access that was granted, and either can be an attacker removing the evidence of a grant they added earlier.
+
+Emptying is detected however it is done. `truncate(2)` and a shell's `: > file` redirect are different kernel operations reaching the same outcome, and the redirect is the common one; before this rule existed it produced no telemetry at all.
+
+Only files sudo would actually load are considered: sudoers(5) skips names in /etc/sudoers.d that contain a `.` or end in `~`, and destroying a file sudo ignores destroys no policy. That also keeps `visudo` quiet, since it removes its own temporary file on every run.
+
+### Known false-positive sources
+
+- A configuration manager that rewrites a fragment by deleting and recreating it rather than writing in place. Add a path-glob exclusion for its absolute path.
+- An administrator retiring a sudoers fragment by hand. This is a real administrative action and the rule cannot distinguish it from an attacker doing the same thing; the writer's identity is what separates them.
+
+### Limitations
+
+- Destruction of /etc/sudoers.d itself, rather than of a file within it, is not detected: the watched set is the files, not the directory.
+- A file sudo already ignores (a name containing a `.` or ending in `~`) is deliberately not reported, so an attacker removing their own `.tmp` staging file leaves no finding from this rule.
 
 ## dns_c2_beacon
 

@@ -70,6 +70,19 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		"SourceFilename": func(e *Event) ([]string, bool) { return e.sourceFilename, e.sourceFilename != nil },
 		"Image":          func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
 	},
+	// Destruction of a watched file. Both carry only the path they acted on, so both expose the same single field, and
+	// TargetFilename is the right name for it: it is the file the event happened TO, which is what Sigma means by it.
+	//
+	// Sigma has a file_delete category and no truncate equivalent, so a rule reading file_delete stays standard taxonomy while
+	// one reading file_truncate is ours. The exporter reports that difference rather than this table (#917).
+	"file_truncate": {
+		"TargetFilename": func(e *Event) ([]string, bool) { return e.targetFilename, e.targetFilename != nil },
+		"Image":          func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
+	},
+	"file_delete": {
+		"TargetFilename": func(e *Event) ([]string, bool) { return e.targetFilename, e.targetFilename != nil },
+		"Image":          func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
+	},
 }
 
 // EventTypeForCategory maps a Sigma logsource category onto the event type this package supplies fields for.

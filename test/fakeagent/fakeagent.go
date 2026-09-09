@@ -226,7 +226,11 @@ var knownEventTypes = map[string]bool{
 	"open": true,
 	// A rename touching the sensitive path set (issue #917). Carries two paths, which is what lets a corpus scenario express
 	// the atomic-replace evasion: writing a temp file elsewhere and renaming it onto a sudoers path produces no open at all.
-	"file_rename":         true,
+	"file_rename": true,
+	// Destruction of a watched file (issue #934). Both carry only pid and path; the type is what distinguishes emptied from
+	// removed, which is exactly the distinction a corpus scenario needs to express.
+	"file_truncate":       true,
+	"file_delete":         true,
 	"network_connect":     true,
 	"dns_query":           true,
 	"snapshot_heartbeat":  true,

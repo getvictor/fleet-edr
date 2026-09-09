@@ -241,6 +241,28 @@ struct FileRenamePayload: Codable, Sendable {
     }
 }
 
+/// FileTruncatePayload is the wire shape of a `file_truncate` event: the contents of a watched file were discarded while the
+/// file itself remains.
+///
+/// One payload for two kernel paths that reach the same outcome. `truncate(2)` and `ftruncate(2)` surface as
+/// NOTIFY_TRUNCATE; a shell redirect and most language runtimes instead `open(2)` with O_TRUNC, which emits no truncate event
+/// at all and is the common case. A rule cares that the policy was emptied, not which syscall emptied it, so the distinction
+/// stays out of the wire (#934).
+struct FileTruncatePayload: Codable, Sendable {
+    let pid: pid_t
+    let path: String
+}
+
+/// FileDeletePayload is the wire shape of a `file_delete` event: a watched file was unlinked.
+///
+/// Separate from truncation because the outcomes differ in a way an analyst acts on: a truncated sudoers file still exists and
+/// still parses, as an empty policy, while a deleted one is gone. Sigma models deletion as its own `file_delete` category, so
+/// keeping them apart also keeps a rule over these events readable as standard Sigma.
+struct FileDeletePayload: Codable, Sendable {
+    let pid: pid_t
+    let path: String
+}
+
 /// ApplicationControlResyncPayload is the wire shape of the event the extension emits when it accepts a snapshot whose
 /// policy_version regressed below the active snapshot's but whose policy_epoch advanced (#322). That pairing is the signature
 /// of a server database restore-from-backup or reset: policy_version restarts low while the host retains a higher persisted

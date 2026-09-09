@@ -412,6 +412,13 @@ func categoryIsInert(category string) (string, bool) {
 		// which is what makes this refusal necessary rather than theoretical.
 		return "category file_rename maps to file_rename, but this agent emits renames only for /etc/sudoers paths " +
 			"(#917), so a file_rename rule watching anything else could never fire", true
+	case "file_delete":
+		// And again for deletion (#934). The pattern is now three deep, and it is the same pattern every time: adding an
+		// event type to the export mapping makes imported rules in that category LOADABLE, and this client emits that
+		// event type for the sudoers set alone. Any category added to sigmaCategory whose events come from
+		// FileTamperSubscriber belongs here in the same commit.
+		return "category file_delete maps to file_delete, but this agent emits deletions only for /etc/sudoers paths " +
+			"(#934), so a file_delete rule watching anything else could never fire", true
 	}
 	return "", false
 }

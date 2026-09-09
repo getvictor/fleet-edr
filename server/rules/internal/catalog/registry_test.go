@@ -45,6 +45,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
+		"sudoers_destroyed",
 		"application_control_block",
 		"dns_c2_beacon",
 		"sensor_tamper",
@@ -299,7 +300,8 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 		// came off; the shell is known to be a Unix shell, so the parent T1059 became the sub-technique.
 		"suspicious_exec": {"T1059.004"},
 		// Observes sudoers being modified.
-		"sudoers_tamper": {"T1548.003"},
+		"sudoers_tamper":    {"T1548.003"},
+		"sudoers_destroyed": {"T1070.004", "T1531"},
 	}
 
 	got := make(map[string][]string)
@@ -323,7 +325,13 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 // A parent is not always wrong. ATT&CK has techniques with no sub-techniques at all, and a rule matching one of those has no
 // sub-technique to prefer. When that rule arrives it goes here with its reason, which is the point of an exception list over a
 // blanket ban: the entry is where somebody says why.
-var detectionsClaimingAParentTechnique = map[string]string{}
+var detectionsClaimingAParentTechnique = map[string]string{
+	// T1531 (Account Access Removal) has no sub-techniques in ATT&CK, so naming it is as specific as the framework allows.
+	// It is the second of this rule's two mappings and it earns its place: T1070.004 covers an attacker deleting the sudoers
+	// fragment they added, and T1531 covers the other reading of the same event, emptying /etc/sudoers to revoke every
+	// administrator's elevated access at once. The rule cannot tell those apart, and both are worth naming.
+	"sudoers_destroyed": "T1531 Account Access Removal has no sub-techniques",
+}
 
 // TestAll_AuthoredTechniquesAreNotParentOnly closes the hole the pair below leaves open, which review found: they catch a rule
 // that declares a parent ALONGSIDE its sub-technique, and they catch a rule whose mapping departs from the pinned table. What

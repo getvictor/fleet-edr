@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Destroying sudo policy is now detected.** Emptying `/etc/sudoers` (or a fragment under `/etc/sudoers.d/`) and deleting one both raise a new `Sudoers policy destroyed` alert. Neither produced any telemetry before: emptying a file through a shell redirect is a different operation from writing to it, and the endpoint was not watching for it. The new alert is separate from `Sudoers tamper` because the two mean opposite things: one grants root access, the other takes access away and removes the record of what was there.
+
 ### Changed
 
 - **The `dns_c2_beacon` rule is now called "Suspicious process phoning home".** It never detected beaconing: it looks for a program launched from a temporary or world-writable folder that resolves a domain and then connects to the address that lookup returned, with no measurement of periodicity. The old name suggested beaconing was covered, and that alerts had observed a repeating pattern; neither was true. The rule identifier is unchanged, so existing exclusions and per-rule settings keep working and historical alerts are unaffected. Alert titles raised from now on carry the new name.

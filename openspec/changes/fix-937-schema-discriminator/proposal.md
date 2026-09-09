@@ -2,7 +2,7 @@
 
 ## Why
 
-`schema/events.json` picked the payload with `payload.oneOf`, which requires EXACTLY ONE subschema to match. No payload definition sets `additionalProperties: false`, and `snapshot_heartbeat_payload` requires only `pid`, so every payload carrying a `pid` matched two definitions and `oneOf` failed. Ten of the fourteen documented event types were affected: `exec`, `exit`, `open`, `file_rename`, `network_connect`, `dns_query`, `application_control_block` and `application_control_undecided`, plus `file_truncate` and `file_delete` once #940 lands. An `exec` envelope has never validated against the document.
+`schema/events.json` picked the payload with `payload.oneOf`, which requires EXACTLY ONE subschema to match. No payload definition sets `additionalProperties: false`, and `snapshot_heartbeat_payload` requires only `pid`, so every payload carrying a `pid` matched two definitions and `oneOf` failed. Ten of the sixteen documented event types were affected: `exec`, `exit`, `open`, `file_rename`, `file_truncate`, `file_delete`, `network_connect`, `dns_query`, `application_control_block` and `application_control_undecided`. An `exec` envelope has never validated against the document.
 
 Nothing validated against it at runtime, so the defect was invisible. That is the reason to fix it rather than shrug: the document is cited as the wire contract in eight places across the agent, the extension, the server and the UI, and three emitters mirror it by hand (`test/fakeagent`, `test/e2e/fixtures/agent.ts`, and the extension's Swift payload structs). A reader is entitled to expect it validates the events we actually send.
 

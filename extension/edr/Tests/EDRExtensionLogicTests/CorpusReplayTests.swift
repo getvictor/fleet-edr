@@ -73,6 +73,8 @@ final class CorpusReplayTests: XCTestCase {
         ("exit.json", encodeExit),
         ("open.json", encodeOpen),
         ("file_rename.json", encodeFileRename),
+        ("file_truncate.json", encodeFileTruncate),
+        ("file_delete.json", encodeFileDelete),
         ("application_control_block.json", encodeApplicationControlBlock)
     ]
 
@@ -194,6 +196,10 @@ final class CorpusReplayTests: XCTestCase {
             return try encoder.encode(decoder.decode(EventEnvelope<OpenPayload>.self, from: bytes))
         case "file_rename":
             return try encoder.encode(decoder.decode(EventEnvelope<FileRenamePayload>.self, from: bytes))
+        case "file_truncate":
+            return try encoder.encode(decoder.decode(EventEnvelope<FileTruncatePayload>.self, from: bytes))
+        case "file_delete":
+            return try encoder.encode(decoder.decode(EventEnvelope<FileDeletePayload>.self, from: bytes))
         case "application_control_block":
             return try encoder.encode(decoder.decode(EventEnvelope<ApplicationControlBlockPayload>.self, from: bytes))
         default:
@@ -335,6 +341,24 @@ final class CorpusReplayTests: XCTestCase {
             eventID: "77777777-7777-7777-7777-777777777777",
             eventType: "file_rename",
             payload: payload
+        )
+    }
+
+    // The two destruction shapes (#934). Distinct fixtures rather than one, because the envelope carries the event type and
+    // that type is the only thing separating "the policy is empty" from "the policy is gone".
+    private static func encodeFileTruncate() throws -> Data {
+        return try encodeEnvelope(
+            eventID: "88888888-8888-8888-8888-888888888888",
+            eventType: "file_truncate",
+            payload: FileTruncatePayload(pid: 4242, path: "/etc/sudoers")
+        )
+    }
+
+    private static func encodeFileDelete() throws -> Data {
+        return try encodeEnvelope(
+            eventID: "99999999-9999-9999-9999-999999999999",
+            eventType: "file_delete",
+            payload: FileDeletePayload(pid: 4242, path: "/etc/sudoers.d/admins")
         )
     }
 
