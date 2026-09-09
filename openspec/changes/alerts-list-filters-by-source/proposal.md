@@ -18,7 +18,9 @@ The two existing scenarios are kept verbatim; both carry markers in `server/dete
 
 ## What is deliberately NOT restored
 
-The archived requirement's other half is the `subtype` filter, which separates blocks from would-blocks. There are no subtypes: nothing persists or serves one, because Detect mode was never built. That half stays with #929, and the archived requirement is recorded in the exceptions file pointing here for the part that shipped.
+The archived requirement's other half is the `subtype` filter, which separates blocks from would-blocks. There are no subtypes: nothing persists or serves one, because Detect mode was never built. That half belongs to #929.
+
+The archived requirement is NOT recorded in `openspec/archive-verify-exceptions.yaml`, and deliberately so. Exceptions match per requirement, so an entry pointing at the restored survivor would also classify the unbuilt subtype findings as surviving under it, which is false. It stays outstanding until #952 settles how a requirement whose findings are part-surviving and part-unbuilt can be classified honestly.
 
 ## Impact
 
