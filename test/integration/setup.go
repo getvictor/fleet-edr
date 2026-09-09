@@ -29,6 +29,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/coordination/leader"
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
@@ -86,7 +87,41 @@ func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Ser
 //   - CookieSecure = false because httptest is plain HTTP.
 func Setup(t *testing.T, opts ...Option) *Stack {
 	t.Helper()
-	return setupReplica(t, full.Open(t), opts...)
+	db := full.Open(t)
+	// Size the pool BEFORE the stack is wired, because the processor's fan-out is clamped to what the pool can afford at
+	// construction time and cannot be raised afterwards. The suite default is four connections, which cannot serve even one
+	// processor worker once a coordinator exists: a worker pins two (one for the host advisory lock across claim-fold-flush,
+	// one for the statements themselves) and the fleet is capped at half the pool, with more reserved for the leader loops.
+	if n := processConcurrencyOf(opts); n > 1 {
+		db.SetMaxOpenConns(poolForWorkers(n))
+		db.SetMaxIdleConns(poolForWorkers(n))
+	}
+	return setupReplica(t, db, opts...)
+}
+
+// coordinatorFor returns the advisory-lock coordinator a multi-worker processor requires, or nil for the single-worker default.
+func coordinatorFor(concurrency int, db *sqlx.DB, logger *slog.Logger) leader.Coordinator {
+	if concurrency <= 1 {
+		return nil
+	}
+	return leader.NewMySQL(db, logger)
+}
+
+// poolForWorkers is the pool a stack needs to actually run n processor workers: two connections each, doubled because workers
+// take at most half the pool, plus headroom for the leader loops and the request path. Deliberately generous, since the cost of
+// being wrong is a silent clamp to fewer workers rather than an error.
+func poolForWorkers(n int) int { return n*4 + 8 }
+
+// processConcurrencyOf reads the requested fan-out out of the options without applying them, so Setup can provision for it.
+func processConcurrencyOf(opts []Option) int {
+	var cfg setupConfig
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&cfg)
+	}
+	return cfg.processConcurrency
 }
 
 // Option customises the stack Setup builds. Defaults reproduce the historical Setup behaviour (a single processor worker, the
@@ -148,10 +183,15 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 		ProcessInterval:    20 * time.Millisecond,
 		ProcessBatch:       100,
 		ProcessConcurrency: cfg.processConcurrency,
-		UserExists:         identityCtx.Service().UserExists,
-		AuthZ:              identityCtx.AuthZ(),
-		EventLog:           visibilityCtx.EventLog(),
-		EventArchive:       detectiontestkit.NewMemArchive(),
+		// A coordinator is what makes a multi-worker processor legal: without one, nothing keeps two workers off a single host's
+		// stream, so the processor clamps itself to one worker and only logs a warning. A harness that asks for the production
+		// fan-out and wires no coordinator therefore measures a single worker while believing it measures four (issue #962).
+		// Single-worker callers keep the historical nil, which is the shape those tests were written against.
+		Coordinator:  coordinatorFor(cfg.processConcurrency, db, logger),
+		UserExists:   identityCtx.Service().UserExists,
+		AuthZ:        identityCtx.AuthZ(),
+		EventLog:     visibilityCtx.EventLog(),
+		EventArchive: detectiontestkit.NewMemArchive(),
 	})
 	require.NoError(t, err, "open detection")
 
