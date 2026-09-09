@@ -327,3 +327,77 @@ func TestArchiveConstraints_TwoChangesAddingTheSameRequirement(t *testing.T) {
 	assert.Equal(t, []string{"adds-it", "also-adds-it"}, cycle,
 		"no order saves both bodies, so the pair is reported rather than sequenced")
 }
+
+// TestPrintArchiveOrderPorcelain covers the machine-readable form `task release:archive` drives the batch archive from. The
+// split matters more than the formatting: stdout is the list a caller acts on, stderr is the narrative a human reads, and a run
+// with no safe order must leave stdout empty rather than hand over the partial order Kahn's algorithm managed before it stalled.
+func TestPrintArchiveOrderPorcelain(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		changes     []string
+		constraints []archiveConstraint
+		wantCode    int
+		wantStdout  string
+		wantStderr  []string
+	}{
+		{
+			name:       "one name per line and nothing else on stdout",
+			changes:    []string{"b", "a"},
+			wantCode:   0,
+			wantStdout: "a\nb\n",
+			wantStderr: []string{"no ordering constraints"},
+		},
+		{
+			name:    "the constrained order, not the alphabetical one",
+			changes: []string{"a-refines-it", "z-introduces-it"},
+			constraints: []archiveConstraint{
+				{before: "z-introduces-it", after: "a-refines-it", requirement: "cap/the-thing"},
+			},
+			wantCode:   0,
+			wantStdout: "z-introduces-it\na-refines-it\n",
+			wantStderr: []string{"must be archived before a-refines-it", "cap/the-thing"},
+		},
+		{
+			name:    "a cycle leaves stdout empty",
+			changes: []string{"a", "b", "free"},
+			constraints: []archiveConstraint{
+				{before: "a", after: "b", requirement: "cap/one"},
+				{before: "b", after: "a", requirement: "cap/two"},
+			},
+			wantCode:   1,
+			wantStdout: "",
+			wantStderr: []string{"No order satisfies all of them"},
+		},
+		{
+			name:       "an empty tree archives nothing and says so on stderr",
+			changes:    nil,
+			wantCode:   0,
+			wantStdout: "",
+			wantStderr: []string{"0 pending change(s)"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			assert.Equal(t, tc.wantCode, printArchiveOrderPorcelain(&stdout, &stderr, tc.changes, tc.constraints))
+			assert.Equal(t, tc.wantStdout, stdout.String())
+			for _, want := range tc.wantStderr {
+				assert.Contains(t, stderr.String(), want)
+			}
+			// The numbered listing is stdout's job here. A copy of it in the narrative is a third rendering of the same
+			// sequence for a release engineer to reconcile against the caller's own plan and its progress lines.
+			assert.NotContains(t, stderr.String(), "Archive in this order")
+		})
+	}
+
+	// A truncated list is a write failure, not an order, for the same reason the human printer treats one that way: a caller
+	// that archives what it did receive would apply a prefix of the plan and call it done.
+	t.Run("a truncated list fails rather than returning a short order", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		w := &stubbornWriter{err: errors.New("pipe closed")}
+		assert.Equal(t, 2, printArchiveOrderPorcelain(w, &stderr, []string{"a", "b"}, nil))
+	})
+}

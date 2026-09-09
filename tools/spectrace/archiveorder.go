@@ -294,6 +294,22 @@ func (t *tarjan) closeComponent(v string) {
 // tell a real prerequisite from an alphabetical accident, and the whole point is that they can see why two changes are sequenced
 // before they archive a release's worth of them.
 func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConstraint) int {
+	return printArchiveReport(w, changes, constraints, withOrderedList)
+}
+
+// printfTo writes one line of the report, or drops it once an earlier write failed.
+type printfTo func(format string, args ...any)
+
+// withOrderedList and withoutOrderedList say whether the report ends with the numbered order.
+//
+// It is omitted only under --porcelain, where the caller already has that list on stdout and is going to echo it as it archives.
+// Printing it a third time in the narrative is noise a release engineer then has to reconcile against the other two.
+const (
+	withOrderedList    = true
+	withoutOrderedList = false
+)
+
+func printArchiveReport(w io.Writer, changes []string, constraints []archiveConstraint, listOrder bool) int {
 	order, cycle := archiveOrder(changes, constraints)
 
 	// Every write is checked, and a failed one fails the command with 2 rather than the 1 a cycle uses. The caller is a release
@@ -307,43 +323,55 @@ func printArchiveOrder(w io.Writer, changes []string, constraints []archiveConst
 		_, werr = fmt.Fprintf(w, format, args...)
 	}
 
-	if len(constraints) == 0 {
-		p("spectrace: %d pending change(s), no ordering constraints between them\n", len(changes))
-		p("Any order archives correctly. This one is alphabetical:\n\n")
-	} else {
-		p("spectrace: %d pending change(s), %d ordering constraint(s)\n\n", len(changes), len(constraints))
-		p("%s\n%s\n", "Constraints. Applying the pair the other way round loses what one of the two changes says about the",
-			"requirement they share, with no error:")
-		for _, c := range constraints {
-			p("  %s\n    must be archived before %s\n    because both touch %s\n", c.before, c.after, c.requirement)
-		}
-	}
-
+	printConstraints(p, len(changes), constraints, listOrder)
 	if cycle != nil {
-		sort.Strings(cycle)
-		p("\nNo order satisfies all of them. These changes each have to precede another in the set:\n")
-		for _, c := range cycle {
-			p("  %s\n", c)
-		}
-		p("\nSplit one of them, or reconcile the requirements they contend over, before archiving.\n")
+		printCycle(p, cycle)
 		if werr != nil {
 			return writeFailure(werr)
 		}
 		return 1
 	}
-
-	// Printed even when nothing is constrained, because the checklist tells the operator to archive in the order this prints and
-	// there is no other listing step left to fall back on.
-	if len(constraints) > 0 {
-		p("\nArchive in this order:\n")
-	}
-	for i, c := range order {
-		p("  %3d. %s\n", i+1, c)
+	if listOrder {
+		// Printed even when nothing is constrained, because the checklist tells the operator to archive in the order this
+		// prints and there is no other listing step left to fall back on.
+		if len(constraints) > 0 {
+			p("\nArchive in this order:\n")
+		}
+		for i, c := range order {
+			p("  %3d. %s\n", i+1, c)
+		}
 	}
 	if werr != nil {
 		return writeFailure(werr)
 	}
 	return 0
+}
+
+// printConstraints renders the header and the prerequisites that shaped the order.
+func printConstraints(p printfTo, changes int, constraints []archiveConstraint, listOrder bool) {
+	if len(constraints) == 0 {
+		p("spectrace: %d pending change(s), no ordering constraints between them\n", changes)
+		if listOrder {
+			p("Any order archives correctly. This one is alphabetical:\n\n")
+		}
+		return
+	}
+	p("spectrace: %d pending change(s), %d ordering constraint(s)\n\n", changes, len(constraints))
+	p("%s\n%s\n", "Constraints. Applying the pair the other way round loses what one of the two changes says about the",
+		"requirement they share, with no error:")
+	for _, c := range constraints {
+		p("  %s\n    must be archived before %s\n    because both touch %s\n", c.before, c.after, c.requirement)
+	}
+}
+
+// printCycle names the changes that each have to precede another, which is a human decision rather than an order to pick.
+func printCycle(p printfTo, cycle []string) {
+	sort.Strings(cycle)
+	p("\nNo order satisfies all of them. These changes each have to precede another in the set:\n")
+	for _, c := range cycle {
+		p("  %s\n", c)
+	}
+	p("\nSplit one of them, or reconcile the requirements they contend over, before archiving.\n")
 }
 
 // writeFailure separates a broken pipe from a dependency cycle, which review caught sharing exit 1 with no diagnostic. The usage
@@ -385,6 +413,8 @@ func runArchiveOrder(args []string) int {
 	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree holding the pending changes")
 	specsDir := fs.String("specs-dir", defaultSpecsDir,
 		"root of the openspec/specs tree, read to tell a new requirement from an existing one")
+	porcelain := fs.Bool("porcelain", false,
+		"print one change name per line on stdout for a scripted caller; the human report goes to stderr")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -421,5 +451,32 @@ func runArchiveOrder(args []string) int {
 		return 2
 	}
 
-	return printArchiveOrder(os.Stdout, changes, archiveConstraints(sections, canonical))
+	constraints := archiveConstraints(sections, canonical)
+	if *porcelain {
+		return printArchiveOrderPorcelain(os.Stdout, os.Stderr, changes, constraints)
+	}
+	return printArchiveOrder(os.Stdout, changes, constraints)
+}
+
+// printArchiveOrderPorcelain writes the order as one change name per line on stdout, for a caller that drives `openspec archive`
+// with it rather than reading it.
+//
+// The constraints still go to stderr, on every run and not only a failing one. That split is what lets the release archive take
+// the order from a SINGLE invocation: the caller reads stdout, the release engineer watching the terminal still sees why two
+// changes are sequenced, and neither has to trust a parse of the other's format.
+//
+// Nothing reaches stdout when no safe order exists. A caller piping this into an archive run must get an empty list rather than
+// the partial order Kahn's algorithm managed before it stalled, because a partial order applied in full is the loss this command
+// exists to prevent.
+func printArchiveOrderPorcelain(stdout, stderr io.Writer, changes []string, constraints []archiveConstraint) int {
+	if code := printArchiveReport(stderr, changes, constraints, withoutOrderedList); code != 0 {
+		return code
+	}
+	order, _ := archiveOrder(changes, constraints)
+	for _, c := range order {
+		if _, err := fmt.Fprintln(stdout, c); err != nil {
+			return writeFailure(err)
+		}
+	}
+	return 0
 }

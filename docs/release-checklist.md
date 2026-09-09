@@ -10,22 +10,29 @@ OpenSpec deltas are NOT archived per-merge (see CLAUDE.md). They accumulate in `
 
 On a release-prep branch off `main`:
 
-1. Capture the baseline, then get the order:
+1. Capture the baseline, and preview the sequence:
 
    ```sh
    go run ./tools/spectrace archive-verify > /tmp/archive-verify-before.txt
-   go run ./tools/spectrace archive-order
+   task release:archive -- --dry-run
    ```
 
    The baseline has to be taken NOW, because step 2 archives and moves every pending change and there is no way back to this state afterwards. Step 4 compares against it.
 
-   `archive-order` lists the pending changes in an order that is safe to apply, and prints the constraints that shaped it.
+   The dry run prints the order the archive will use and the constraints that shaped it, and changes nothing. Read it before step 2: this is the last point at which a change that should not ship in this release can be pulled out.
 
-   **Archive in that order, not alphabetically and not in whatever order `ls` prints.** `openspec archive` applies a `## MODIFIED Requirements` entry by replacing the canonical requirement WHOLE, so when one pending change adds a requirement and another modifies or retires it, applying them the wrong way round discards the later text with no error and nothing downstream notices: `openspec validate --strict` passes on a truncated requirement, and `spectrace check --strict` passes as long as the surviving scenarios still have markers. This is issue #901, and the v0.4.0 archive lost scenarios to the same class.
+2. Run `task release:archive`. It takes the order from `spectrace archive-order` and applies `openspec archive <name> -y` to each pending change in it, merging each delta into `openspec/specs/**` and moving the folder to `openspec/changes/archive/<date>-<name>/`.
 
-   Exit 1 means two changes each have to precede the other, which no order fixes: split one or reconcile the requirements they contend over before going further. Exit 2 is a usage, path, or write failure, and a mistyped `--changes-dir` is refused rather than read as an empty tree.
+   **The order is the whole point, and it is not alphabetical and not the order `ls` prints.** `openspec archive` applies a `## MODIFIED Requirements` entry by replacing the canonical requirement WHOLE, so when one pending change adds a requirement and another modifies or retires it, applying them the wrong way round discards the later text with no error and nothing downstream notices: `openspec validate --strict` passes on a truncated requirement, and `spectrace check --strict` passes as long as the surviving scenarios still have markers. This is issue #901, and the v0.4.0 archive lost scenarios to the same class. The task removes that ordering decision from the operator. It does NOT check that the archive was lossless; item 4 is what does that.
 
-2. For each completed change, in that order, run `openspec archive <name> -y` (NO `--skip-specs`). This merges the delta into `openspec/specs/**` and moves the folder to `openspec/changes/archive/<date>-<name>/`. Use `--skip-specs` ONLY for a tooling/doc-only change that shipped no spec delta.
+   Three things stop the run, and none of them archives anything after the stop:
+
+   - `archive-order` exit 1 means two changes each have to precede the other, which no order fixes. Split one or reconcile the requirements they contend over, then re-run. Nothing has been archived.
+   - `archive-order` exit 2 is a usage, path, or write failure, and a mistyped path is refused rather than read as an empty tree. Nothing has been archived.
+   - A failing `openspec archive` stops the run where it is rather than continuing down the list, because the changes after it may be the ones that had to follow the one that did not land. The tree is half-archived: fix the failure and re-run the task, which re-derives the order over what is left.
+
+   Never pass `--skip-specs`, and the task never does. It skips the merge into `openspec/specs/**` that is the point of this step. For a tooling/doc-only change that shipped no spec delta, archive that one change by hand with `openspec archive <name> -y --skip-specs` and re-run the task for the rest.
+
 3. If a merged change is genuinely deferred to a later release (incomplete, intentionally held), it must not ship its delta into the canonical specs yet. Decide explicitly: either finish + archive it, or back its delta out of this release. The release gate (`openspec-archived` in `release.yml`) does not let an un-archived change ride silently into a release.
 4. Verify the canonical tree is well-formed and fully traced after archiving:
 

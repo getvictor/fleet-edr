@@ -77,7 +77,7 @@ Usage:
   spectrace check    [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--strict] [--by-layer] [--new-code]
                      [--marker-line-length] [--gate-inflight] [--base-ref REF]
   spectrace list-ids [--specs-dir DIR] [--normative-only]
-  spectrace archive-order [--changes-dir DIR] [--specs-dir DIR]
+  spectrace archive-order [--changes-dir DIR] [--specs-dir DIR] [--porcelain]
   spectrace archive-verify [--specs-dir DIR] [--changes-dir DIR]
   spectrace report   [--specs-dir DIR] [--changes-dir DIR] [--root DIR] [--format md] [--output FILE] [--normative-only]
 
@@ -106,6 +106,11 @@ Subcommands:
             ADDED for an existing requirement is left to openspec validate.
             Exit code 0 when an order exists, 1 when two changes each have to precede the other,
             2 on a usage or write failure.
+            --porcelain  Print one change name per line on stdout and the human report on
+                           stderr, so a scripted caller reads the order from stdout while the
+                           operator still sees the constraints. The task release:archive target
+                           drives the batch archive from it. Nothing is printed on stdout when no safe
+                           order exists, so a caller cannot archive a partial one.
   archive-verify
             Run BEFORE archiving and again after, and diff the two. Checks that everything the
             last archived delta for a requirement said is still in the canonical spec, which is
