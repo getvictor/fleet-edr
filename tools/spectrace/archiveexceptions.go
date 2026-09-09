@@ -28,9 +28,14 @@ type archiveException struct {
 	// Requirement is `<capability>/<requirement-slug>`, matching the finding prefix the report prints.
 	Requirement string `yaml:"requirement"`
 
-	// CoveredBy names the canonical requirement that carries this behaviour now, as `<capability>/<requirement-slug>`. Use it
-	// when the behaviour survives under another name, in another capability, or in a copy the archive happened to keep.
-	CoveredBy string `yaml:"covered_by"`
+	// CoveredBy names the canonical requirement(s) that carry this behaviour now, each as `<capability>/<requirement-slug>`.
+	// Use it when the behaviour survives under another name, in another capability, or in a copy the archive happened to keep.
+	//
+	// A list, because a requirement is sometimes SPLIT rather than renamed, and then every half has to be checked. Review caught
+	// this on the session-timeout entry, whose reason said the reauthentication half lives in another capability while only the
+	// idle-and-absolute half was named: deleting the unnamed half would have gone unnoticed, which is the failure this file is
+	// supposed to prevent. Accepts a bare string too, so the common single-survivor case stays readable.
+	CoveredBy stringOrList `yaml:"covered_by"`
 
 	// TrackedBy names the issue tracking a capability that was specified and never built. Restoring such a requirement would
 	// write a spec that claims what the product does not do, which is worse than the current silence: it breaks the traceability
@@ -39,6 +44,26 @@ type archiveException struct {
 
 	// Reason is the evidence for the claim, in the author's own words. Reviewed the way a `no-behavior-change` label is.
 	Reason string `yaml:"reason"`
+}
+
+// stringOrList accepts either a single YAML scalar or a sequence, so an entry with one survivor reads as plainly as one with two.
+type stringOrList []string
+
+func (s *stringOrList) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var one string
+		if err := value.Decode(&one); err != nil {
+			return err
+		}
+		*s = stringOrList{one}
+		return nil
+	}
+	var many []string
+	if err := value.Decode(&many); err != nil {
+		return err
+	}
+	*s = many
+	return nil
 }
 
 // excusedFinding pairs a finding with the entry that excused it, so the report can show both.
@@ -83,7 +108,7 @@ func validateExceptions(exceptions []archiveException, canonical map[string]stru
 		}
 		seen[e.Requirement] = i
 
-		hasCovered, hasTracked := e.CoveredBy != "", e.TrackedBy != ""
+		hasCovered, hasTracked := len(e.CoveredBy) > 0, e.TrackedBy != ""
 		switch {
 		case hasCovered && hasTracked:
 			problems = append(problems, where+": sets both covered_by and tracked_by; an excused finding is one or the other")
@@ -99,8 +124,14 @@ func validateExceptions(exceptions []archiveException, canonical map[string]stru
 		// The claim that keeps this file honest. A survivor that no longer exists means the behaviour is now genuinely
 		// unspecified, and the entry would otherwise go on hiding that.
 		if hasCovered {
-			if _, ok := canonical[e.CoveredBy]; !ok {
-				problems = append(problems, fmt.Sprintf("%s: covered_by %q is not a requirement in the canonical spec", where, e.CoveredBy))
+			var unresolved bool
+			for _, target := range e.CoveredBy {
+				if _, ok := canonical[target]; !ok {
+					problems = append(problems, fmt.Sprintf("%s: covered_by %q is not a requirement in the canonical spec", where, target))
+					unresolved = true
+				}
+			}
+			if unresolved {
 				continue
 			}
 		}
@@ -111,19 +142,33 @@ func validateExceptions(exceptions []archiveException, canonical map[string]stru
 	return problems
 }
 
+// requirementKey reduces a finding's first line to the requirement it belongs to. A finding is reported either against a
+// requirement (`<capability>/<requirement>`) or against one of its scenarios (`<capability>/<requirement>/<scenario>`), and both
+// slugs are alphanumeric-and-dash, so the requirement is always the first two segments.
+func requirementKey(head string) string {
+	parts := strings.SplitN(head, "/", 3)
+	if len(parts) < 2 {
+		return head
+	}
+	return parts[0] + "/" + parts[1]
+}
+
 // applyExceptions splits findings into the ones still outstanding and the ones an entry excuses, and reports how many findings
 // each entry matched so a stale entry can be caught.
 //
-// Matching is by requirement prefix, because one requirement produces findings at several granularities: its own body text, each
-// scenario under it, and its retirement. Excusing a requirement excuses all of them, which is the unit a reviewer actually
-// decides on. The boundary check is what keeps `web-ui/alerts-list` from swallowing `web-ui/alerts-list-filters-by-subtype`.
+// Matching is on the exact requirement key, never a prefix. One requirement produces findings at several granularities (its own
+// body text, each scenario under it, its retirement) and excusing it excuses all of them, which is the unit a reviewer decides
+// on. Prefix matching would reach further than that: review caught that `endpoint-event-collection` alone would then excuse every
+// finding in the capability, pass the not-stale check because it matched plenty, and quietly turn this file into the blanket mute
+// it exists not to be.
 func applyExceptions(findings []string, exceptions []archiveException) (outstanding []string, excused []excusedFinding, matched map[int]int) {
 	matched = make(map[int]int, len(exceptions))
 	for _, f := range findings {
 		head, _, _ := strings.Cut(f, "\n")
+		key := requirementKey(head)
 		idx := -1
 		for i, e := range exceptions {
-			if head == e.Requirement || strings.HasPrefix(head, e.Requirement+"/") {
+			if key == e.Requirement {
 				idx = i
 				break
 			}
@@ -162,7 +207,7 @@ func printExcused(p func(string, ...any), excused []excusedFinding) {
 		len(excused), defaultExceptionsFile)
 	for _, k := range keys {
 		e := entries[k]
-		where := "covered by " + e.CoveredBy
+		where := "covered by " + strings.Join(e.CoveredBy, " and ")
 		if e.TrackedBy != "" {
 			where = "tracked by " + e.TrackedBy
 		}

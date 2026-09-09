@@ -33,6 +33,24 @@ func TestApplyExceptions(t *testing.T) {
 		assert.Equal(t, 2, matched[0])
 	})
 
+	t.Run("a capability-only entry excuses nothing", func(t *testing.T) {
+		t.Parallel()
+		// Review caught this: with prefix matching, `web-ui` alone swallowed every finding in the capability AND passed the
+		// not-stale check because it matched plenty, turning an audit record into the blanket mute it exists not to be.
+		out, excused, matched := applyExceptions(findings, []archiveException{{Requirement: "web-ui"}})
+		assert.Equal(t, findings, out)
+		assert.Empty(t, excused)
+		assert.Equal(t, 0, matched[0], "a capability-only entry must read as stale, not as excusing the capability")
+	})
+
+	t.Run("a scenario-level entry excuses nothing", func(t *testing.T) {
+		t.Parallel()
+		// The unit is the requirement. Naming a scenario is a mistake that should surface as stale rather than half-work.
+		out, _, matched := applyExceptions(findings, []archiveException{{Requirement: "web-ui/alerts-list/a-scenario"}})
+		assert.Equal(t, findings, out)
+		assert.Equal(t, 0, matched[0])
+	})
+
 	t.Run("no entries leaves every finding outstanding", func(t *testing.T) {
 		t.Parallel()
 		out, excused, _ := applyExceptions(findings, nil)
@@ -63,7 +81,7 @@ func TestValidateExceptions(t *testing.T) {
 	}{
 		{
 			name:    "a covered_by that resolves and excuses a finding is accepted",
-			entry:   archiveException{Requirement: "a/b", CoveredBy: "extension-application-control/block-event-emission", Reason: "why"},
+			entry:   archiveException{Requirement: "a/b", CoveredBy: stringOrList{"extension-application-control/block-event-emission"}, Reason: "why"},
 			matched: 1,
 			want:    "",
 		},
@@ -75,7 +93,7 @@ func TestValidateExceptions(t *testing.T) {
 		},
 		{
 			name:    "a covered_by that does not resolve is an error",
-			entry:   archiveException{Requirement: "a/b", CoveredBy: "gone/missing", Reason: "why"},
+			entry:   archiveException{Requirement: "a/b", CoveredBy: stringOrList{"gone/missing"}, Reason: "why"},
 			matched: 1,
 			want:    "is not a requirement in the canonical spec",
 		},
@@ -93,7 +111,7 @@ func TestValidateExceptions(t *testing.T) {
 		},
 		{
 			name:    "setting both dispositions is an error",
-			entry:   archiveException{Requirement: "a/b", CoveredBy: "extension-application-control/block-event-emission", TrackedBy: "#929", Reason: "w"},
+			entry:   archiveException{Requirement: "a/b", CoveredBy: stringOrList{"extension-application-control/block-event-emission"}, TrackedBy: "#929", Reason: "w"},
 			matched: 1,
 			want:    "sets both covered_by and tracked_by",
 		},
@@ -122,6 +140,20 @@ func TestValidateExceptions(t *testing.T) {
 			assert.Contains(t, problems[0], tc.want)
 		})
 	}
+
+	t.Run("every survivor of a split requirement is verified", func(t *testing.T) {
+		t.Parallel()
+		// A requirement is sometimes split rather than renamed. Naming only the half that still resolves would let the other
+		// half be deleted unnoticed, which is the failure this file exists to prevent.
+		entry := archiveException{
+			Requirement: "a/b",
+			CoveredBy:   stringOrList{"extension-application-control/block-event-emission", "gone/missing"},
+			Reason:      "split in two",
+		}
+		problems := validateExceptions([]archiveException{entry}, canonical, map[int]int{0: 1})
+		require.Len(t, problems, 1)
+		assert.Contains(t, problems[0], `covered_by "gone/missing" is not a requirement`)
+	})
 
 	t.Run("a duplicate requirement is an error", func(t *testing.T) {
 		t.Parallel()
@@ -153,7 +185,18 @@ func TestLoadArchiveExceptions(t *testing.T) {
 		got, err := loadArchiveExceptions(path)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
-		assert.Equal(t, archiveException{Requirement: "a/b", CoveredBy: "c/d", Reason: "because"}, got[0])
+		assert.Equal(t, archiveException{Requirement: "a/b", CoveredBy: stringOrList{"c/d"}, Reason: "because"}, got[0])
+	})
+
+	t.Run("covered_by accepts a list as well as a scalar", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "e.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"- requirement: a/b\n  covered_by: [c/d, e/f]\n  reason: split\n"), 0o600))
+		got, err := loadArchiveExceptions(path)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, stringOrList{"c/d", "e/f"}, got[0].CoveredBy)
 	})
 
 	t.Run("malformed yaml is an error", func(t *testing.T) {
@@ -173,7 +216,7 @@ func TestPrintArchiveVerifyWithExceptions(t *testing.T) {
 		var buf bytes.Buffer
 		excused := []excusedFinding{{
 			finding:   "a/b/s\n    listed by x",
-			exception: archiveException{Requirement: "a/b", CoveredBy: "c/d", Reason: "kept the other copy"},
+			exception: archiveException{Requirement: "a/b", CoveredBy: stringOrList{"c/d"}, Reason: "kept the other copy"},
 		}}
 		assert.Equal(t, 0, printArchiveVerify(&buf, nil, excused, nil, 5))
 		out := buf.String()
