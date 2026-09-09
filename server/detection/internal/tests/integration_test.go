@@ -2835,6 +2835,8 @@ func TestOperatorHTTP_ListAlerts_Empty(t *testing.T) {
 	assert.Empty(t, alerts)
 }
 
+// spec:server-rest-api/filterable-alerts-list/an-operator-filters-alerts-by-source
+//
 // TestOperatorHTTP_ListAlerts_SourceFilter pins the GET /api/alerts ?source= query-param contract end to end. The UI's alert-list
 // source filter relies on the handler parsing the param and the store applying it to the WHERE clause; dropping either layer would
 // silently regress the "filter by app-control vs detection" demo beat, which is precisely what step 9 exists to land.
