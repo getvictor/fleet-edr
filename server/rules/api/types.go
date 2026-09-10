@@ -611,7 +611,7 @@ func IsValidFallbackPosture(s FallbackPosture) bool {
 }
 
 // ApplicationControlPolicy mirrors a row in app_control_policies. Used by the REST surface for list/get responses and by the fan-out
-// code when constructing the `set_application_control` agent command. Rules is populated by GetWithRules and the rule listing
+// code when constructing the `set_application_control` agent command. Rules is populated by GetPolicyWithRules and the rule listing
 // endpoints; bare Get omits it. AssignmentCount is a derived field every policy fetch path populates (GetPolicyByName,
 // GetPolicyByID, ListPolicies) so the UI's policies-list view can render "N host groups" without an N+1 round trip.
 // RuleCount is derived the same way and for the same reason. Other
