@@ -668,6 +668,17 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
     expect(await screen.findByText(/Showing the whole host/)).toBeVisible();
   });
 
+  // findAlertChain returns an EMPTY set when the alerted process is not in the fetched tree, and that empty chain used to fall
+  // through as ordinary unscoped-by-choice: focus requested, whole host shown, nothing said. Same silence, one case over.
+  it("says the alerted process is not in the window when the chain resolves to nothing", async () => {
+    // process=999 is not a node in `forest`, so findAlertChain finds no path and returns an empty set.
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
+    renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
+
+    expect(await screen.findByText(/not in this time window/)).toBeVisible();
+    expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
+  });
+
   // A chain where only some processes carry a generation. The scope applies, so the old code reported it as fully scoped while
   // dropping the ungenerationed process's events; the wiring has to distinguish "scoped" from "scoped, minus part of the chain".
   it("reports how much of a mixed chain the timeline could not reach", async () => {

@@ -10,7 +10,14 @@ Real agent data is not immune: on a live macOS host 534 of 14,099 process rows c
 
 ## What changes
 
-The timeline already labels itself "Scoped to the alert chain" when the scope is applied. It now also says something when the scope was requested and could not be applied, naming the reason. No change to which events are listed: the fallback behaviour is unchanged, only its visibility.
+No change to which events are listed. The fallback behaviour is unchanged; only its visibility is. The timeline already labelled itself "Scoped to the alert chain" when the scope applied, and it now distinguishes every outcome that label used to cover:
+
+- **Scoped in full**: unchanged, the existing label.
+- **Scoped in part**: the scope applied, but some of the chain's processes carry no generation and their events are absent. This is the worst case to leave silent, because a scoped list gives no reason to suspect anything is missing. It now states how many processes were omitted.
+- **Not scoped, no generations**: nothing in the chain carries one. Full host stream, said so.
+- **Not scoped, chain empty**: `findAlertChain` resolved nothing because the alerted process is not in the fetched tree. Also the full host stream, but a different cause with a different fix, so it gets its own wording rather than being told it has a generation problem.
+
+The last two were found by review after the first draft handled only the all-missing case.
 
 ## Impact
 

@@ -44,6 +44,11 @@ async function buildEventTechniques(hostID: string): Promise<EventTechniques> {
   return map;
 }
 
+// ChainScopeGap says why the timeline could not reproduce the graph's alert-chain focus at all. Two distinct causes with two
+// distinct fixes: "no-generations" means the chain's processes predate the generation identifier the scope matches on, while
+// "chain-not-in-window" means findAlertChain resolved nothing because the alerted process is outside the fetched tree.
+export type ChainScopeGap = "no-generations" | "chain-not-in-window";
+
 interface Props {
   readonly hostId: string;
   // The active event-time window, shared with the graph so both views reflect one window.
@@ -54,11 +59,11 @@ interface Props {
   // plus its ancestors and descendants), matched by the (pid, pidversion) pair, mirroring the graph's "Alert chain" focus. Undefined
   // shows the full host stream.
   readonly chainGenerations?: ChainGeneration[];
-  // True when the graph IS focused on an alert chain but that focus cannot be reproduced here, because none of the chain's
-  // processes carry a pidversion and the scope is keyed on the (pid, pidversion) pair. The list then shows the whole host, which
-  // is the honest thing to render but the wrong thing to render silently: the graph beside it shows four processes, so an
-  // unexplained thousand-row list reads as a product defect rather than as missing data.
-  readonly chainScopeUnavailable?: boolean;
+  // Set when the graph IS focused on an alert chain but that focus cannot be reproduced here at all. The list then shows the
+  // whole host, which is the honest thing to render but the wrong thing to render silently: the graph beside it shows four
+  // processes, so an unexplained thousand-row list reads as a product defect rather than as missing data. The value says WHICH
+  // reason, because the two are fixed by different things and telling the operator the wrong one wastes their time.
+  readonly chainScopeUnavailable?: ChainScopeGap;
   // How many of the alert chain's processes the scope could NOT reach, when it did scope. Non-zero means the list is narrowed
   // to the chain but silently missing those processes' events, which is worse than showing too much: nothing about a scoped
   // list suggests part of it is absent. Ignored when chainScopeUnavailable is true, where nothing was scoped at all.
@@ -197,9 +202,11 @@ export function HostTimeline(
             not listed.
           </span>
         )}
-        {!scopeChain && chainScopeUnavailable === true && (
+        {!scopeChain && chainScopeUnavailable !== undefined && (
           <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
-            Showing the whole host: this alert&apos;s processes carry no generation data, so the timeline cannot narrow to the chain.
+            {chainScopeUnavailable === "no-generations"
+              ? "Showing the whole host: this alert's processes carry no generation data, so the timeline cannot narrow to the chain."
+              : "Showing the whole host: the alerted process is not in this time window, so there is no chain to narrow to."}
           </span>
         )}
       </div>

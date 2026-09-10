@@ -221,7 +221,7 @@ describe("HostTimeline alert-chain scope", () => {
   // spec:web-ui/host-event-timeline-view/timeline-says-so-when-it-cannot-scope-to-the-chain
   it("says the scope was dropped when the chain carries no generations", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
-    renderScoped({ chainScopeUnavailable: true });
+    renderScoped({ chainScopeUnavailable: "no-generations" });
     expect(await screen.findByText(/Showing the whole host/)).toBeVisible();
     // And does not simultaneously claim the opposite.
     expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
@@ -234,6 +234,15 @@ describe("HostTimeline alert-chain scope", () => {
     expect(screen.queryByText(/Showing the whole host/)).not.toBeInTheDocument();
     // The scope has to reach the query, not just the label.
     expect(spy.mock.calls[0][1].chain).toEqual([{ pid: 42, pidversion: 7 }]);
+  });
+
+  // spec:web-ui/host-event-timeline-view/timeline-distinguishes-an-absent-chain-from-a-chain-without-generations
+  it("names the other reason: the alerted process is not in the window", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
+    renderScoped({ chainScopeUnavailable: "chain-not-in-window" });
+    expect(await screen.findByText(/not in this time window/)).toBeVisible();
+    // The two causes have different fixes, so it must not offer the generation-data explanation here.
+    expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
   });
 
   // The dangerous middle case: scoped, but silently missing a process's events. Claiming "Scoped to the alert chain" here is

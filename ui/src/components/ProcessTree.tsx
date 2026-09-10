@@ -9,7 +9,7 @@ import {
 import { ProcessDetail } from "./ProcessDetail";
 import { AlertTriageActions } from "./AlertTriageActions";
 import { HostHeader } from "./HostHeader";
-import { HostTimeline } from "./HostTimeline";
+import { HostTimeline, type ChainScopeGap } from "./HostTimeline";
 import { type NodeTooltip } from "./node-tooltip";
 import { TechniqueTags } from "./TechniqueTags";
 import { TimeRangeControl } from "./TimeRangeControl";
@@ -221,10 +221,15 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // The middle case is the dangerous one and review caught it: claiming "Scoped to the alert chain" while dropping a process's
   // events is worse than showing too much, because nothing suggests anything is missing. Live data produces it: 534 of 14,099
   // process rows on a real host carry no generation, so any chain touching one of them lands here.
-  const chainCoverage = useMemo(() => {
-    if (!alertChainIds || alertChainIds.size === 0) return { unavailable: false, omitted: 0 };
+  const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; omitted: number } => {
+    // No focus requested: the full stream is what was asked for and needs no explanation.
+    if (!alertChainIds) return { omitted: 0 };
+    // Focus requested, but findAlertChain resolved nothing: the alerted process is not in the fetched tree, so there is no
+    // chain to narrow to. Review caught this one reporting as unscoped-by-choice, which is the same silence one case over.
+    if (alertChainIds.size === 0) return { unavailable: "chain-not-in-window", omitted: 0 };
     const resolved = alertChainGenerations?.length ?? 0;
-    return { unavailable: resolved === 0, omitted: alertChainIds.size - resolved };
+    if (resolved === 0) return { unavailable: "no-generations", omitted: 0 };
+    return { omitted: alertChainIds.size - resolved };
   }, [alertChainIds, alertChainGenerations]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
