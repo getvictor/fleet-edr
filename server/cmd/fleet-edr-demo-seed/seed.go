@@ -25,16 +25,9 @@ import (
 const (
 	appControlEventType = "application_control_block"
 	appControlRuleID    = "demo_blocklist_binary"
-	// PATH, not BINARY. The identifier below is the executable's path, and a BINARY rule identifier must be 64 lowercase hex
-	// characters (a SHA-256) per appcontrol.ValidateIdentifier: the demo used to post a BINARY block carrying a path, which no
-	// real rule could ever have produced. PATH is the rule type whose identifier IS a path, and it is what the seeded rule uses,
-	// so the block now names a rule shape that could actually exist.
-	appControlRuleType = "PATH"
-	appControlSeverity = "high"
-	appControlMessage  = "Blocked by Acme Corp application-control policy."
-	// appControlPolicyID is the policy the block event attributes itself to AND the policy the matching rule is seeded into.
-	// Shared so the two cannot drift into a block that cites a policy holding no rule for it.
-	appControlPolicyID = 1
+	appControlRuleType  = "BINARY"
+	appControlSeverity  = "high"
+	appControlMessage   = "Blocked by Acme Corp application-control policy."
 
 	// keychainRuleID is the marker the already-seeded check looks for: if a credential_keychain_dump alert exists, the demo data
 	// is present and replay is skipped (unless --force).
@@ -99,13 +92,6 @@ func (s *seeder) run(ctx context.Context) error {
 		return err
 	}
 
-	// Before any block event is posted, give the policy it cites a rule that denies the binary. The block is fabricated (the
-	// real verdict is the extension's), so nothing downstream forces these to agree; seeding the rule is what keeps the alert
-	// from pointing at an empty policy.
-	if err := seedAppControlRule(ctx, s.db, s.logger); err != nil {
-		return err
-	}
-
 	// Replay each rich captured host (deep real process tree + correlated network_connect/dns_query) and weave its attacks
 	// in, so every detection fires inside genuine ambient activity rather than on a 2-event stub host.
 	for _, host := range hostManifest {
@@ -146,11 +132,6 @@ func (s *seeder) maybeRefreshExisting(ctx context.Context) (bool, error) {
 		return true, fmt.Errorf("refresh demo timestamps: %w", err)
 	}
 	s.logger.InfoContext(ctx, "demo data already present, refreshed timestamps to recent (pass --force to re-seed)")
-	// A demo volume seeded before this rule existed still shows an alert with no matching policy, so the refresh path has to
-	// backfill it too rather than only fresh seeds getting a coherent Application control page.
-	if err := seedAppControlRule(ctx, s.db, s.logger); err != nil {
-		return true, err
-	}
 	return true, s.seedUserIfConfigured(ctx)
 }
 
@@ -165,7 +146,7 @@ func buildBlockEnvelope(hostID string, pid int, execPath string, tsNs int64) fak
 		"identifier":     execPath,
 		"severity":       appControlSeverity,
 		"custom_msg":     appControlMessage,
-		"policy_id":      appControlPolicyID,
+		"policy_id":      1,
 		"policy_version": 1,
 	}
 	// map[string]any of scalars + strings always marshals; the error is unreachable.

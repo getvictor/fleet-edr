@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -571,63 +570,6 @@ func TestVerifyReportsMissingRule(t *testing.T) {
 	assert.Contains(t, err.Error(), withheld, "the timeout error names the missing rule")
 }
 
-// The demo's application-control alert is fabricated, so nothing downstream forces a matching rule to exist. It did not, and the
-// Application control page showed a Default policy with zero rules beside an alert claiming a policy had blocked CoinMiner.
-func TestSeedAppControlRule(t *testing.T) {
-	t.Parallel()
-	db := full.Open(t)
-	ctx := t.Context()
-	_, err := db.ExecContext(ctx,
-		`INSERT INTO app_control_policies (id, name, description) VALUES (?, 'Default', 'demo')`, appControlPolicyID)
-	require.NoError(t, err)
-
-	require.NoError(t, seedAppControlRule(ctx, db, discardLogger()))
-
-	var ruleType, identifier, action, enforcement, severity, customMsg string
-	var enabled bool
-	require.NoError(t, db.QueryRowContext(ctx, `
-		SELECT rule_type, identifier, action, enforcement, enabled, severity, custom_msg
-		FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID,
-	).Scan(&ruleType, &identifier, &action, &enforcement, &enabled, &severity, &customMsg))
-
-	// The rule has to describe the same denial the block event reports, or the operator clicking through from the alert lands
-	// on a policy that does not mention the binary.
-	// The literal, not the constant: comparing appControlRuleType to itself would pass whatever it is changed to, including
-	// back to BINARY. BINARY is the shape this demo used to claim and could never have produced, because a BINARY identifier
-	// must be 64 lowercase hex characters (appcontrol.ValidateIdentifier) and this one is a path.
-	assert.Equal(t, "PATH", ruleType, "a PATH rule is the only type whose identifier is legally a path")
-	assert.Equal(t, appControlRuleType, ruleType, "and the block event cites the same type the rule carries")
-	assert.Equal(t, blockedBinaryPath, identifier, "and the same binary it says was denied")
-	assert.True(t, strings.HasPrefix(identifier, "/"), "a PATH identifier has to be absolute to canonicalize")
-	assert.Equal(t, appControlSeverity, severity)
-	assert.Equal(t, appControlMessage, customMsg)
-	assert.Equal(t, "BLOCK", action)
-	assert.Equal(t, "PROTECT", enforcement, "the alert says the exec was denied, not merely recorded")
-	assert.True(t, enabled)
-
-	// Idempotent: the seeder re-runs on every container start.
-	require.NoError(t, seedAppControlRule(ctx, db, discardLogger()))
-	var count int
-	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID).Scan(&count))
-	assert.Equal(t, 1, count)
-}
-
-// A rule hung off a policy id nothing else knows about would recreate the same disconnect one level down, so the seeder does not
-// invent the policy. It also must not abort over it: the rule is a coherence nicety, and failing the seed would cost the operator
-// the entire demo to fix a page they might not open.
-func TestSeedAppControlRule_SkipsWhenThePolicyIsMissing(t *testing.T) {
-	t.Parallel()
-	db := full.Open(t)
-	ctx := t.Context()
-
-	require.NoError(t, seedAppControlRule(ctx, db, discardLogger()), "a missing policy is a skip, not a failed seed")
-
-	var count int
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_control_rules`).Scan(&count))
-	assert.Zero(t, count, "and it invents neither the policy nor a rule pointing at one that does not exist")
-}
-
 // payloadRecordingServer is recordingEventsServer's sibling for assertions about payload CONTENT rather than batch shape: it keeps
 // every posted envelope whole, so a test can inspect the JSON the seeder actually put on the wire.
 func payloadRecordingServer(t *testing.T) (*httptest.Server, func() []fakeagent.Envelope) {
@@ -719,38 +661,4 @@ func TestWeaveAttack_StampsPIDVersionsOnTheWire(t *testing.T) {
 	}
 	require.Positive(t, lifecycle, "the attack must contain process lifecycle events for this to prove anything")
 	assert.Equal(t, lifecycle, stamped, "every woven fork and exec reaches the server carrying a process generation")
-}
-
-// The two failure paths that are not a missing policy. Both are real: a schema the seeder runs against before migrations have
-// finished, or a table it lacks rights on. Neither should be swallowed the way a missing policy deliberately is.
-func TestSeedAppControlRule_ReportsDatabaseFailures(t *testing.T) {
-	t.Parallel()
-
-	t.Run("policy lookup fails for a reason other than absence", func(t *testing.T) {
-		t.Parallel()
-		db := full.Open(t)
-		ctx := t.Context()
-		// Other tables carry foreign keys onto policies, so the drop needs the checks off. The per-test database is thrown
-		// away afterwards, so mutilating its schema costs nothing.
-		_, err := db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`)
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `DROP TABLE app_control_policies`)
-		require.NoError(t, err)
-		assert.Error(t, seedAppControlRule(ctx, db, discardLogger()),
-			"a lookup that fails for any reason other than absence is reported, not swallowed like a missing policy")
-	})
-
-	t.Run("the insert fails", func(t *testing.T) {
-		t.Parallel()
-		db := full.Open(t)
-		ctx := t.Context()
-		_, err := db.ExecContext(ctx,
-			`INSERT INTO app_control_policies (id, name, description) VALUES (?, 'Default', 'demo')`, appControlPolicyID)
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`)
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `DROP TABLE app_control_rules`)
-		require.NoError(t, err)
-		assert.Error(t, seedAppControlRule(ctx, db, discardLogger()), "a failed insert is reported")
-	})
 }
