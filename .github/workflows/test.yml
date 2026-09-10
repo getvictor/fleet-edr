@@ -50,6 +50,7 @@ jobs:
       go: ${{ steps.detect.outputs.go }}
       ui: ${{ steps.detect.outputs.ui }}
       e2e: ${{ steps.detect.outputs.e2e }}
+      uat: ${{ steps.detect.outputs.uat }}
       any: ${{ steps.detect.outputs.any }}
     steps:
       - id: detect
@@ -61,9 +62,15 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # EVERY output the dependent jobs gate on, not just the language pair. The line below claims this runs all
+            # test jobs, and it only did so for `e2e` by accident: that job's gate is `go || ui || e2e`, so the two it
+            # did emit carried it. A job gating on its own output alone, as the L5 driver tests do, was skipped on main
+            # and on manual runs while this block reported the opposite.
             {
               echo "go=true"
               echo "ui=true"
+              echo "e2e=true"
+              echo "uat=true"
               echo "any=true"
             } >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running all test jobs."
@@ -85,7 +92,11 @@ jobs:
           # A PR adding only a spec under test/e2e/tests/ matched neither, so the E2E job was SKIPPED and with it the check that
           # every spec is named by a phase: the one change that check exists to catch was the one change that bypassed it.
           E2E_PATTERN='^test/e2e/|^scripts/(test-e2e-coverage|check-e2e-spec-coverage)\.sh$|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
-          go=false; ui=false; any=false; e2e=false
+          # UAT_PATTERN exists for the same reason E2E_PATTERN does, and the L5 harness is where that reason bites hardest:
+          # its job is to report honestly on a release candidate, and a PR touching only scripts/uat matched no pattern, so
+          # the checks guarding that reporting would have been skipped by exactly the changes that can break it.
+          UAT_PATTERN='^scripts/(uat|qa)/|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
+          go=false; ui=false; any=false; e2e=false; uat=false
           if echo "$files" | grep -qE "$GO_PATTERN"; then
             go=true; any=true
             echo "go relevant; will run Go test jobs."
@@ -104,6 +115,12 @@ jobs:
           else
             echo "e2e not touched; skipping the Playwright job unless go/ui fire."
           fi
+          if echo "$files" | grep -qE "$UAT_PATTERN"; then
+            uat=true; any=true
+            echo "uat harness relevant; will run the L5 driver tests."
+          else
+            echo "uat harness not touched; skipping the L5 driver tests."
+          fi
           if echo "$files" | grep -qE "$ANY_EXTRA_PATTERN"; then
             any=true
             echo "Sonar/Codecov-relevant non-language file changed."
@@ -112,6 +129,7 @@ jobs:
             echo "go=$go"
             echo "ui=$ui"
             echo "e2e=$e2e"
+            echo "uat=$uat"
             echo "any=$any"
           } >> "$GITHUB_OUTPUT"
 
@@ -259,6 +277,40 @@ jobs:
           path: coverage-server.out
           if-no-files-found: error
           retention-days: 1
+
+  # The L5 release-gate driver's own tests. Cheap (about two seconds, no VM, no server, no database): the driver's
+  # --dry-run mode loads a scenario and short-circuits every remote call, which reaches the logic that decides whether a
+  # rule passed, missed, or was never exercised. That decision is what issues #965 and #966 were about, so it is worth a
+  # check that runs without anyone remembering to.
+  #
+  # ubuntu-latest, though the harness only ever drives a macOS VM: nothing under test here is platform-specific, and the
+  # suite was verified on Debian before this job was added rather than assumed to be portable.
+  uat-driver-test:
+    name: L5 driver tests
+    needs: changes
+    if: >-
+      !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.uat == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+        with:
+          version: 3.50.0
+
+      - name: Run L5 driver tests
+        run: task test:uat:driver
+
+      - name: Shellcheck the UAT / QA harness
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          task lint:sh
 
   # Single source of test execution for the UI bundle. Uploads the
   # coverage-ui artifact that sonarcloud + codecov below consume.

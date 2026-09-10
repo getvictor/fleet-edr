@@ -66,6 +66,21 @@ mkdir -p "$WORKDIR"
 
 EXPECTED_ALERTS=()
 
+# skip_step records a step that could not run, in BOTH forms it needs to reach.
+#
+# The human line goes in the summary an operator reads after running this over SSH by hand, which is what this script is
+# still for. The machine line is what scripts/uat/scenarios/attack-runbook/attack.sh greps so the L5 driver can tell an
+# unrun attack from an undetected one: before it existed, an absent prerequisite surfaced as "miss: <rule>", which reads as
+# the EDR failing to detect something that never happened, and cost real diagnosis time on the v0.5.0-rc.1 run (issue #965).
+#
+# Two lines rather than teaching the driver to parse the human one: the summary is prose meant to be reworded, and a parser
+# reading it would break silently the next time someone improved the wording.
+skip_step() {
+  local rule_id="$1" reason="$2"
+  echo "[runbook] SKIP rule_id=$rule_id reason=$reason"
+  EXPECTED_ALERTS+=("$rule_id - SKIPPED ($reason)")
+}
+
 # Demo pacing: how long to pause between steps so a live audience can see each
 # alert land in the UI before the next attack fires. 0 disables (lab use), 8
 # is the right cadence for a live demo. Override with --pace=N or
@@ -125,8 +140,7 @@ step_suspicious_exec() {
 echo "synthetic payload ran $(date -u)" >> "$0.log"
 PAYLOAD
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "[runbook] python3 not installed - skipping suspicious_exec step"
-    EXPECTED_ALERTS+=("suspicious_exec - SKIPPED (no python3 on this host)")
+    skip_step suspicious_exec "no python3 on this host"
     return 0
   fi
   /usr/bin/env python3 -c "import subprocess; subprocess.Popen(['/bin/sh', '-c', '$payload && true']).wait()" || true
@@ -223,15 +237,16 @@ step_privilege_launchd_plist_write() {
   # instigator for a `launchctl bootstrap` is Apple's smd, ground-truthed on edr-dev), so this locally-built, unsigned
   # daemon executable fires regardless of the platform-binary instigator (see ADR-0008 and its 2026-05-29 amendment).
   if ! command -v go >/dev/null 2>&1; then
-    echo "[runbook] go not installed - skipping privilege_launchd_plist_write step"
-    EXPECTED_ALERTS+=("privilege_launchd_plist_write - SKIPPED (no Go toolchain on this host)")
+    skip_step privilege_launchd_plist_write "no Go toolchain on this host"
     return 0
   fi
   local src="$WORKDIR/synthetic_dropper.go"
   # Unique binary path per run. BTM keys its launch-item identity (and thus whether a registration emits a fresh
   # NOTIFY_BTM_LAUNCH_ITEM_ADD) on the registered executable path: re-registering an executable path BTM already knows
   # is silent. A per-run path guarantees a fresh ADD every run, complementing the per-run label in the dropper below.
-  local bin="$WORKDIR/synthetic_dropper_$(date +%s)_$$"
+  # Declared before assignment so the substitution's exit status is the statement's own, which `local x=$(...)` masks.
+  local bin
+  bin="$WORKDIR/synthetic_dropper_$(date +%s)_$$"
   cat > "$src" <<'GO'
 package main
 
@@ -288,8 +303,7 @@ func main() {
 }
 GO
   if ! go build -o "$bin" "$src"; then
-    echo "[runbook] go build failed - skipping step"
-    EXPECTED_ALERTS+=("privilege_launchd_plist_write - SKIPPED (go build failed)")
+    skip_step privilege_launchd_plist_write "go build failed"
     return 0
   fi
   if [[ "$(id -u)" -ne 0 ]]; then
@@ -297,8 +311,7 @@ GO
     # -n (non-interactive) bails immediately when sudo would otherwise prompt for a password. The runbook runs over SSH
     # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive prompt would deadlock the whole script.
     if ! sudo -n "$bin"; then
-      echo "[runbook] sudo -n unavailable or dropper failed - alert may not have fired"
-      EXPECTED_ALERTS+=("privilege_launchd_plist_write - SKIPPED (no NOPASSWD sudo)")
+      skip_step privilege_launchd_plist_write "no NOPASSWD sudo for the dropper (see scripts/uat/README.md)"
       return 0
     fi
   else

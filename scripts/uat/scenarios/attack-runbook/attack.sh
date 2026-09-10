@@ -48,6 +48,22 @@ uat_log attack-runbook "executing runbook on VM"
 # official macOS pkg puts the toolchain, and it installs no symlink, so listing only /usr/local/bin silently skipped the step on a
 # VM that had Go all along and reported the scenario as a detection miss rather than an unrun attack. $PATH is
 # single-quoted so it expands on the VM, not locally.
-uat_ssh "$UAT_VM_SSH_TARGET" 'PATH=/usr/local/go/bin:/usr/local/bin:$PATH EDR_RUNBOOK_PACE_SECONDS=0 bash /tmp/attack-runbook.sh'
+#
+# Piped through tee rather than run bare so the operator still sees the runbook's output live while the skip lines are
+# also captured. `set -o pipefail` is on, so a failing ssh still fails the wrapper: the tee cannot mask it.
+RUNBOOK_LOG="${UAT_TMPDIR:-/tmp}/attack-runbook.log"
+# shellcheck disable=SC2016  # $PATH is deliberately unexpanded here: it must expand on the VM, not on the driver's host
+uat_ssh "$UAT_VM_SSH_TARGET" 'PATH=/usr/local/go/bin:/usr/local/bin:$PATH EDR_RUNBOOK_PACE_SECONDS=0 bash /tmp/attack-runbook.sh' \
+  | tee "$RUNBOOK_LOG"
+
+# Hand the driver the steps that could not run, so it can tell an unrun attack from an undetected one (issue #965).
+# grep exits 1 when nothing matched, which is the ordinary case of a fully-exercised run, so it must not fail the wrapper.
+if [[ -n "${UAT_SKIP_FILE:-}" ]]; then
+  grep -E '^\[runbook\] SKIP rule_id=' "$RUNBOOK_LOG" > "$UAT_SKIP_FILE" || true
+  skip_count=$(wc -l < "$UAT_SKIP_FILE" | tr -d ' ')
+  if [[ "$skip_count" != "0" ]]; then
+    uat_log attack-runbook "runbook skipped $skip_count step(s); the driver will report them as never exercised"
+  fi
+fi
 
 uat_log attack-runbook "runbook complete"
