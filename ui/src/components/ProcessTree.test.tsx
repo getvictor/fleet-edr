@@ -679,6 +679,23 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
     expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
   });
 
+  // An empty chain has several causes and only one of them is "outside the window". Claiming that reading while the tree is
+  // still loading, or after a failed read, or on a host with nothing in the window, sends the operator to change a time range
+  // that is not the problem. Review caught the condition claiming more than it proves.
+  it.each([
+    ["the tree came back empty", () => { vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse([])); }],
+    ["the tree failed to load", () => { vi.spyOn(api, "getProcessTree").mockRejectedValue(new Error("boom")); }],
+  ])("stays silent when %s, rather than blaming the time window", async (_label, arrange) => {
+    arrange();
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
+    renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
+
+    // Wait for the view to settle before asserting an absence, so this cannot pass merely by running early.
+    await waitFor(() => { expect(screen.getByRole("searchbox", { name: /Filter timeline by text/i })).toBeVisible(); });
+    expect(screen.queryByText(/not in this time window/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
+  });
+
   // A chain where only some processes carry a generation. The scope applies, so the old code reported it as fully scoped while
   // dropping the ungenerationed process's events; the wiring has to distinguish "scoped" from "scoped, minus part of the chain".
   it("reports how much of a mixed chain the timeline could not reach", async () => {

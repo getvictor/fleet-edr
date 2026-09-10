@@ -224,13 +224,19 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; omitted: number } => {
     // No focus requested: the full stream is what was asked for and needs no explanation.
     if (!alertChainIds) return { omitted: 0 };
-    // Focus requested, but findAlertChain resolved nothing: the alerted process is not in the fetched tree, so there is no
-    // chain to narrow to. Review caught this one reporting as unscoped-by-choice, which is the same silence one case over.
-    if (alertChainIds.size === 0) return { unavailable: "chain-not-in-window", omitted: 0 };
+    // Focus requested, but findAlertChain resolved nothing. Only ONE reading of that is safe to report. An empty chain also
+    // happens while the tree is still loading, after a failed read, and on a host with no processes in the window at all, and
+    // telling the operator their alerted process is outside the window in any of those cases would send them to change a time
+    // range that is not the problem. Review caught this claiming more than the condition proves. Say nothing unless a tree
+    // actually came back with processes in it and the alerted one is simply not among them.
+    if (alertChainIds.size === 0) {
+      const treeResolved = !loading && error === null && roots.length > 0;
+      return treeResolved ? { unavailable: "chain-not-in-window", omitted: 0 } : { omitted: 0 };
+    }
     const resolved = alertChainGenerations?.length ?? 0;
     if (resolved === 0) return { unavailable: "no-generations", omitted: 0 };
     return { omitted: alertChainIds.size - resolved };
-  }, [alertChainIds, alertChainGenerations]);
+  }, [alertChainIds, alertChainGenerations, loading, error, roots]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
