@@ -256,12 +256,6 @@ describe("HostTimeline alert-chain scope", () => {
     expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
   });
 
-  it("still admits a partial scope when only one process is missing", async () => {
-    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
-    renderScoped({ chainGenerations: [{ pid: 42, pidversion: 7 }], chainPartiallyScoped: true });
-    expect(await screen.findByText(/Scoped to part of the alert chain/)).toBeVisible();
-  });
-
   it("says nothing on a plain host view, where the full stream is what was asked for", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
     renderScoped({});

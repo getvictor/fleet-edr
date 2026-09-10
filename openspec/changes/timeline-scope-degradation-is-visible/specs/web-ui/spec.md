@@ -36,6 +36,13 @@ While a first read is in flight or has failed, so that no tree has resolved at a
 - **AND** it states that it is showing the whole host because the chain cannot be narrowed
 - **AND** it does not simultaneously claim to be scoped to the alert chain
 
+#### Scenario: Timeline says nothing until a tree has resolved
+
+- **GIVEN** the host page entered for an alert, with the process tree read still in flight or having failed
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline makes no claim about why the chain is unresolved
+- **AND** it does so for a pending read and a failed read alike, since neither has produced a tree to be absent from
+
 #### Scenario: Timeline distinguishes an absent chain from a chain without generations
 
 - **GIVEN** the host page entered for an alert whose alerted process is absent from the loaded process tree, including when that tree was truncated by its row limit

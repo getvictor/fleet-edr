@@ -655,7 +655,9 @@ describe("ProcessTreeView alert attribution", () => {
 // WIRING: ProcessTreeView deciding which of those two situations it is in and telling the Timeline. Deleting the computation
 // leaves the HostTimeline unit tests green, because those pass the prop in directly.
 describe("ProcessTreeView alert-chain timeline scope", () => {
-  const chainAlert: AlertDetail = { ...launchDaemonAlert, id: 9, process_id: 2, rule_id: "suspicious_exec", title: "Suspicious exec chain" };
+  const chainAlert: AlertDetail = {
+    ...launchDaemonAlert, id: 9, process_id: 2, rule_id: "suspicious_exec", title: "Suspicious exec chain",
+  };
 
   beforeEach(() => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue(chainAlert);
@@ -690,6 +692,7 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
     ["the first read is still pending", () => {
       vi.spyOn(api, "getProcessTree").mockReturnValue(new Promise(() => { /* pending for the life of the test */ }));
     }],
+  // spec:web-ui/host-event-timeline-view/timeline-says-nothing-until-a-tree-has-resolved
   ])("stays silent while %s, rather than naming an absence it cannot see yet", async (_label, arrange) => {
     arrange();
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
