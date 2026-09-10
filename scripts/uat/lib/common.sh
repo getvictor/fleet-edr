@@ -374,6 +374,14 @@ uat_skip_reason() {
 # are different machines and the comparison is meaningless across their skew.
 uat_wait_for_pkg_receipt() {
   local vm="$1" pkg_id="$2" since="$3" within="$4"
+  # The mark is validated HERE as well as at the call site, because this is the function that decides whether an install
+  # counts. A non-numeric mark is what a failed VM clock read produces, and the failure mode it used to cause is the worst
+  # one available: `0` is older than every receipt, so the previous install's receipt certified the current one. Refusing
+  # is the only safe reading, and putting the refusal at the point of use means a future caller cannot reintroduce it.
+  if ! [[ "$since" =~ ^[0-9]+$ ]]; then
+    uat_log driver "receipt check needs a numeric install mark, got \"$since\": refusing to certify the install"
+    return 1
+  fi
   local deadline installed
   deadline=$(( $(date +%s) + within ))
   # `installed` is declared with `deadline` above rather than inside the loop, matching the other pollers here. Not style:

@@ -44,7 +44,13 @@
 #   1  Driver error (bad args, missing env, scenario not found, etc).
 #   2  Scenario ran but at least one assertion failed (the scenario's
 #      attack.sh exited non-zero OR an expected alert did not appear within
-#      its SLA).
+#      its SLA OR the PKG install did not complete).
+#   3  INCOMPLETE. Every rule that ran alerted, but at least one was never
+#      exercised because a prerequisite was missing on the VM. Distinct from 2
+#      because the fix is on the VM rather than in the product, and because
+#      reporting an unrun step as a detection miss pointed at the wrong
+#      subsystem for long enough to be worth its own code. Not 0: a rule that
+#      did not run has not been certified, and this is a release gate.
 
 set -eEuo pipefail
 
@@ -81,7 +87,11 @@ trap 'rc=$?; rm -rf "$UAT_TMPDIR"; exit $rc' EXIT
 # ---------------------------------------------------------------------------
 
 usage() {
-  sed -n '3,42p' "$0" | sed 's/^# //;s/^#//'
+  # Prints the header comment block, from line 3 to the first line that is neither a comment nor blank. Previously a
+  # hardcoded `3,42p`, which had already drifted: the exit-code list started at line 42, so --help ended on a bare
+  # "Exit codes:" heading with nothing under it. Deriving the end from the file's own shape means adding to the header
+  # cannot silently truncate the help again.
+  awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } /^[[:space:]]*$/ { print; next } { exit }' "$0"
   exit "${1:-1}"
 }
 
@@ -192,7 +202,24 @@ if [[ "$UAT_SKIP_INSTALL" != "1" ]]; then
 
   # Read the clock from the VM, not from here. The receipt check below compares against install-time as the VM recorded it,
   # and the driver's host is a different machine whose clock is not the same one.
-  INSTALL_STARTED_UNIX=$(uat_ssh "$VM_SSH_TARGET" "date +%s" 2>/dev/null || echo 0)
+  #
+  # A failure here is fatal rather than defaulted. An earlier version fell back to 0, which every pre-existing receipt
+  # satisfies, so a failed install would have been certified by the receipt left behind by the PREVIOUS one: the exact
+  # false positive this whole check exists to prevent, reintroduced by its own error path. There is no safe default for
+  # this value, so there is no default.
+  #
+  # Not read in dry-run: uat_ssh logs its DRY-RUN line to stdout there, so the command substitution would capture that
+  # sentence rather than a timestamp, and the numeric check below would then abort a mode whose whole contract is that it
+  # touches nothing and never fails. The value is unused in dry-run anyway, since the receipt wait short-circuits.
+  if [[ "$UAT_DRY_RUN" == "1" ]]; then
+    INSTALL_STARTED_UNIX=0
+  else
+    INSTALL_STARTED_UNIX=$(uat_ssh "$VM_SSH_TARGET" "date +%s" 2>/dev/null || true)
+    if ! [[ "$INSTALL_STARTED_UNIX" =~ ^[0-9]+$ ]]; then
+      uat_log driver "could not read the VM clock before installing; without it a stale receipt would pass for a fresh install"
+      exit 1
+    fi
+  fi
 
   # The installer's exit code is NOT the outcome here, and treating it as one is what issue #966 reported. The install
   # completes and then drops the SSH session as the network-extension swap tears down established TCP, so `sudo installer`

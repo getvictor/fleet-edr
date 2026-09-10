@@ -600,8 +600,8 @@ tasks:
       and the rest of the tree's scripts have not been brought to a clean baseline yet. The packaging scripts have their
       own shellcheck step in .github/workflows/pkg-dryrun.yml and are deliberately not duplicated here.
 
-      Not wired into CI as its own workflow: it runs as part of `task lint`, and adding a check that does not gate the
-      merge is a decision worth making on its own rather than as a side effect of a bug fix.
+      Runs in CI inside the `L5 driver tests` job in test.yml, alongside the driver's own test suite, rather than as a
+      workflow of its own: the two guard the same harness and there is no reason to spend a second checkout on it.
     cmds:
       - shellcheck scripts/uat/system-test.sh scripts/uat/system-test.test.sh scripts/uat/lib/common.sh
           scripts/uat/scenarios/*/attack.sh scripts/qa/attack-runbook.sh

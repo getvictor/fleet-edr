@@ -7,9 +7,12 @@
 # --dry-run mode loads the scenario and short-circuits every remote call, which
 # is enough to exercise the part that decides pass / miss / skipped.
 #
-# Not covered here, because a shell harness cannot honestly reach it: the
-# install path itself. `uat_wait_for_pkg_receipt` is exercised against a real
-# receipt on edr-qa, and the PR that added it says so.
+# The receipt helper is covered here too, against a stubbed uat_ssh. It decides
+# whether a failed installer command counts as a successful install, so leaving
+# it to manual VM verification would leave the release gate's most consequential
+# branch unguarded between runs.
+#
+# Still not covered: the installer invocation itself, which needs a real VM.
 #
 # Run: bash scripts/uat/system-test.test.sh   (or `task test:uat:driver`)
 
@@ -111,6 +114,66 @@ check "does not report the skipped rule as a miss" "0" \
 check "counts the skip" "1" "$(grep -c 'rules_skipped=1' <<<"$DRIVER_OUT")"
 # And the rules that DID run are still asserted rather than abandoned once one rule is skipped.
 check "still checks the other five rules" "1" "$(grep -c 'rules_passed=5' <<<"$DRIVER_OUT")"
+
+echo
+echo "uat_wait_for_pkg_receipt"
+
+# sleep is stubbed to a no-op so the negative cases, which must run to their deadline, do not each cost five seconds.
+# Test-local: the helper keeps its real pacing in production.
+# shellcheck disable=SC2329  # invoked indirectly: the helper under test calls `sleep`, which this shadows
+sleep() { :; }
+
+# uat_ssh is stubbed rather than reaching a VM. RECEIPT_OUT is what pkgutil would print through the helper's awk, so
+# "" stands for a package with no receipt at all, which is what an install that never landed looks like.
+RECEIPT_OUT=""
+# Recorded to a FILE, not a variable: the helper calls uat_ssh inside a command substitution, which is a subshell, so an
+# assignment here would never reach the assertion below.
+RECEIPT_SAW="$TMP/receipt-cmd.txt"
+# shellcheck disable=SC2329  # invoked indirectly: the helper under test calls `uat_ssh`, which this shadows
+uat_ssh() { printf '%s' "$*" > "$RECEIPT_SAW"; printf '%s' "$RECEIPT_OUT"; }
+
+RECEIPT_OUT="2000"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 1 && got=0 || got=1
+check "accepts a receipt newer than the mark" "0" "$got"
+
+# Equal counts as fresh: an install that lands in the same second as the mark did happen, and rejecting it would make
+# the gate flaky on a fast install rather than catching anything.
+RECEIPT_OUT="1000"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 1 && got=0 || got=1
+check "accepts a receipt exactly at the mark" "0" "$got"
+
+# The case the whole check exists for: the previous install's receipt must not certify this one.
+RECEIPT_OUT="999"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 1 && got=0 || got=1
+check "rejects the receipt left by an earlier install" "1" "$got"
+
+# No receipt at all: the package was never installed, which must not read as success.
+RECEIPT_OUT=""
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 1 && got=0 || got=1
+check "rejects an absent receipt" "1" "$got"
+
+# Anything non-numeric is a broken read, not a timestamp. Without the numeric test, bash's `>=` on a string would
+# either error under `set -e` or compare as zero, and a zero compares older than any real mark by luck rather than by
+# intent.
+RECEIPT_OUT="not-a-timestamp"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 1 && got=0 || got=1
+check "rejects a malformed receipt value" "1" "$got"
+
+# A non-numeric mark is what a failed VM clock read produces. It must refuse rather than certify: the old fallback of 0
+# is older than every receipt, so the PREVIOUS install's receipt proved the current one, which is the false positive the
+# receipt check exists to prevent.
+RECEIPT_OUT="2000"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent "" 1 >/dev/null 2>&1 && got=0 || got=1
+check "refuses an empty install mark" "1" "$got"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent "[driver] DRY-RUN ssh" 1 >/dev/null 2>&1 && got=0 || got=1
+check "refuses a non-numeric install mark" "1" "$got"
+
+# The helper must ask about the package it was given, not a hardcoded one.
+RECEIPT_OUT="2000"
+uat_wait_for_pkg_receipt vm com.example.other 1000 1 >/dev/null
+check "queries the package id it was passed" "1" "$(grep -c 'com.example.other' "$RECEIPT_SAW")"
+
+unset -f sleep uat_ssh
 
 echo
 echo "ran $TESTS_RUN checks, $TESTS_FAILED failed"
