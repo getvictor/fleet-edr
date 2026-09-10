@@ -720,3 +720,37 @@ func TestWeaveAttack_StampsPIDVersionsOnTheWire(t *testing.T) {
 	require.Positive(t, lifecycle, "the attack must contain process lifecycle events for this to prove anything")
 	assert.Equal(t, lifecycle, stamped, "every woven fork and exec reaches the server carrying a process generation")
 }
+
+// The two failure paths that are not a missing policy. Both are real: a schema the seeder runs against before migrations have
+// finished, or a table it lacks rights on. Neither should be swallowed the way a missing policy deliberately is.
+func TestSeedAppControlRule_ReportsDatabaseFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("policy lookup fails for a reason other than absence", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		ctx := t.Context()
+		// Other tables carry foreign keys onto policies, so the drop needs the checks off. The per-test database is thrown
+		// away afterwards, so mutilating its schema costs nothing.
+		_, err := db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE app_control_policies`)
+		require.NoError(t, err)
+		assert.Error(t, seedAppControlRule(ctx, db, discardLogger()),
+			"a lookup that fails for any reason other than absence is reported, not swallowed like a missing policy")
+	})
+
+	t.Run("the insert fails", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		ctx := t.Context()
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO app_control_policies (id, name, description) VALUES (?, 'Default', 'demo')`, appControlPolicyID)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE app_control_rules`)
+		require.NoError(t, err)
+		assert.Error(t, seedAppControlRule(ctx, db, discardLogger()), "a failed insert is reported")
+	})
+}

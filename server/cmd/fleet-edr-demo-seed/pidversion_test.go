@@ -140,3 +140,41 @@ func TestPIDVersionStamper_LeavesUnrelatedEventTypesAlone(t *testing.T) {
 	require.NoError(t, newPIDVersionStamper().stamp(envs))
 	assert.JSONEq(t, original, string(envs[0].Payload), "an event type the schema declares no pidversion on is untouched")
 }
+
+// A literal `null` payload decodes to a nil map with no error, and assigning into a nil map panics. nilaway caught this before
+// a corrupt corpus line could crash a seed mid-replay.
+func TestPIDVersionStamper_RefusesANullPayloadInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	envs := []fakeagent.Envelope{env("exec", 10, `null`)}
+	assert.Error(t, newPIDVersionStamper().stamp(envs), "a payload that is not an object is corrupt, not something to stamp")
+}
+
+func TestPIDVersionStamper_SkipsAPIDItCannotRead(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		// Both are shapes a scrubber could produce. Neither is a pid this can key a generation on, and guessing one would
+		// attach the flow to whichever process happens to own that number.
+		{"pid is a string", `{"pid":"100","path":"/bin/zsh"}`},
+		{"pid is fractional", `{"pid":1.5,"path":"/bin/zsh"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			envs := []fakeagent.Envelope{env("exec", 10, tc.payload)}
+			require.NoError(t, newPIDVersionStamper().stamp(envs), "an unreadable pid is skipped, not an error")
+			_, ok := pidVersionOf(t, envs[0])
+			assert.False(t, ok, "and nothing is stamped onto it")
+		})
+	}
+}
+
+func TestPIDVersionStamper_ReportsAMalformedPayload(t *testing.T) {
+	t.Parallel()
+	envs := []fakeagent.Envelope{env("exec", 10, `{"pid":100,`)}
+	err := newPIDVersionStamper().stamp(envs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exec", "the message names the event so a corrupt corpus line can be found")
+}

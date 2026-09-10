@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -135,6 +136,11 @@ func decodePayload(raw json.RawMessage) (map[string]any, error) {
 	var payload map[string]any
 	if err := dec.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode payload: %w", err)
+	}
+	// A literal `null` payload decodes to a NIL map with no error, and assigning into a nil map panics rather than failing. A
+	// corpus line shaped that way is corrupt, so say so instead of crashing the seeder mid-replay. nilaway caught this.
+	if payload == nil {
+		return nil, errors.New("payload is not a JSON object")
 	}
 	return payload, nil
 }
