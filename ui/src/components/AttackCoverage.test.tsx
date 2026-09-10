@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AttackCoverage } from "./AttackCoverage";
 import * as api from "../api";
+import { PermissionsContext, PermissionAction } from "../permissions-core";
 import type { AttackNavigatorLayer } from "../api";
 
 // AttackCoverage had no component test before the StatCard extraction. These
@@ -88,6 +89,71 @@ describe("AttackCoverage summary strip", () => {
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
     expect(within(cardFor("techniques alerting by default")).getByText("1")).toBeInTheDocument();
-    expect(within(cardFor("techniques not alerting by default")).getByText("2")).toBeInTheDocument();
+
+    // The silent-rule card carries the number AND somewhere to act on it. Left bare the figure reads as a defect to switch
+    // off, when those rules ship in monitor mode deliberately, so the link is part of what the card is for.
+    const silent = within(strip).getByText(/covered only by rules that ship silent/).closest(".stat-card") as HTMLElement;
+    expect(within(silent).getByText("2")).toBeVisible();
+    const tune = within(silent).getByRole("link", { name: /promote or tune/i });
+    expect(tune).toBeVisible();
+    expect(tune).toHaveAttribute("href", "/detection-config");
+  });
+});
+
+// The Coverage page is open to every operator; Detection tuning is not. Offering a link that lands on the no-access page is
+// worse than not offering it, so the card keeps its number and drops the affordance.
+describe("AttackCoverage tuning link", () => {
+  // The card only renders when something is covered ONLY by silent rules, so the fixture needs a sub-1 score; the default
+  // layer is all-alerting and would hide the card, making both assertions below pass for the wrong reason.
+  beforeEach(() => {
+    vi.mocked(api.fetchAttackNavigatorLayer).mockResolvedValue({
+      ...layer,
+      techniques: [
+        { techniqueID: "T1059", score: 1, comment: "Covered by: rule_a" },
+        { techniqueID: "T1016", score: 0.5, comment: "No rule covering this raises an alert as shipped. Covered by: rule_b" },
+      ],
+    });
+  });
+
+  const renderWithPerms = (perms: readonly string[] | undefined) =>
+    render(
+      <PermissionsContext.Provider value={perms}>
+        <MemoryRouter>
+          <AttackCoverage />
+        </MemoryRouter>
+      </PermissionsContext.Provider>,
+    );
+
+  it("offers the link to an operator who can reach Detection tuning", async () => {
+    renderWithPerms([PermissionAction.DetectionConfigRead]);
+    const link = await screen.findByRole("link", { name: /promote or tune/i });
+    expect(link).toHaveAttribute("href", "/detection-config");
+  });
+
+  // spec:web-ui/att-ck-coverage-page/a-tuning-action-is-offered-only-where-it-can-be-followed
+  it("withholds the link, but not the number, from an operator who cannot", async () => {
+    renderWithPerms([]);
+    // The count still renders: it is the fact worth knowing even for someone who cannot act on it themselves.
+    expect(await screen.findByText(/covered only by rules that ship silent/)).toBeVisible();
+    expect(screen.queryByRole("link", { name: /promote or tune/i })).not.toBeInTheDocument();
+  });
+});
+
+// A technique belongs to every tactic ATT&CK gives it. Listing it under only the first made the others look uncovered when a
+// rule covers them, and the upstream matrix repeats the technique the same way.
+describe("AttackCoverage multi-tactic techniques", () => {
+  // spec:web-ui/att-ck-coverage-page/a-technique-appears-under-every-tactic-it-belongs-to
+  it("lists a multi-tactic technique under each of its tactics", async () => {
+    vi.mocked(api.fetchAttackNavigatorLayer).mockResolvedValue({
+      ...layer,
+      // T1543.004 is Launch Daemon: Persistence AND Privilege Escalation in ATT&CK v19.
+      techniques: [{ techniqueID: "T1543.004", score: 1, comment: "Covered by: rule_a" }],
+    });
+    render(<MemoryRouter><AttackCoverage /></MemoryRouter>);
+
+    await waitFor(() => { expect(screen.getAllByText("T1543.004").length).toBeGreaterThan(0); });
+    expect(screen.getByText("Persistence")).toBeVisible();
+    expect(screen.getByText("Privilege Escalation")).toBeVisible();
+    expect(screen.getAllByText("T1543.004")).toHaveLength(2);
   });
 });

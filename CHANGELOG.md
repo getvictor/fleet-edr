@@ -7,6 +7,8 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Fixed
 
 - **The event timeline now says when it could not narrow to an alert's chain.** Opening an alert's timeline shows only that alert's processes, but it can only do that for processes carrying the generation identifier it matches on. Where none of them do it lists the whole host, which is why a four-process graph could sit beside a timeline of everything with nothing to explain the difference; where only some do, it lists a partial chain while looking complete. It now says which of these you are looking at. Which events are listed is unchanged.
+- **The ATT&CK coverage page names techniques and groups them by tactic.** It previously showed most of them as "Unmapped" with the bare technique id for a name: the page carried a hand-maintained list of 12 techniques while the rules covered 65. It now reads from the published ATT&CK data, so all 65 are named and grouped, under the current tactics (v19 replaced Defense Evasion with Stealth and Defense Impairment, which the old list predated).
+- **The count of techniques covered only by silent rules links to where you tune them.** The number itself was right and stays: most of the shipped catalog records without alerting, and reading only the "alerting" figure overstates coverage by about five times.
 - **Demo process events carry a process generation.** Without it the demo's alert timelines could not narrow to the alerting process's own chain and listed the whole host instead.
 
 ## [0.5.0] (2026-09-09)
