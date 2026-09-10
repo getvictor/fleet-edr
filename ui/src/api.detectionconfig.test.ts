@@ -158,7 +158,7 @@ describe("detection-config API client", () => {
   it("listDetectionRuleEvalStats accepts a well-formed row", async () => {
     const row = {
       rule_id: "suspicious_exec", evaluations: 400, retryable_misses: 12,
-      mean_eval_ns: 1_500_000, max_eval_ns: 90_000_000, last_seen: GOOD_TS,
+      mean_eval_ns: 1_500_000, max_eval_ns: 90_000_000, total_eval_ns: 600_000_000, last_seen: GOOD_TS,
     };
     stubFetch({ eval_stats: [row], days: 7 });
     expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
@@ -168,7 +168,7 @@ describe("detection-config API client", () => {
   it("listDetectionRuleEvalStats accepts zero misses and zero timings", async () => {
     const row = {
       rule_id: "suspicious_exec", evaluations: 1, retryable_misses: 0,
-      mean_eval_ns: 0, max_eval_ns: 0, last_seen: GOOD_TS,
+      mean_eval_ns: 0, max_eval_ns: 0, total_eval_ns: 0, last_seen: GOOD_TS,
     };
     stubFetch({ eval_stats: [row], days: 7 });
     expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
@@ -202,7 +202,7 @@ describe("detection-config API client", () => {
   // fixture set drifts the moment one field changes and starts failing for reasons the case name does not claim.
   const validEvalRow = {
     rule_id: "r", evaluations: 1, retryable_misses: 0,
-    mean_eval_ns: 1, max_eval_ns: 1, last_seen: GOOD_TS,
+    mean_eval_ns: 1, max_eval_ns: 1, total_eval_ns: 1, last_seen: GOOD_TS,
   };
   const rowWith = (over: Record<string, unknown>) => ({ eval_stats: [{ ...validEvalRow, ...over }], days: 7 });
   // Built by filtering rather than by deleting a computed key, which is the same result without the dynamic-index sink eslint
@@ -228,6 +228,7 @@ describe("detection-config API client", () => {
     ["a row missing retryable_misses", rowWithout("retryable_misses")],
     ["a row missing mean_eval_ns", rowWithout("mean_eval_ns")],
     ["a row missing max_eval_ns", rowWithout("max_eval_ns")],
+    ["a row missing total_eval_ns", rowWithout("total_eval_ns")],
     ["a row missing last_seen", rowWithout("last_seen")],
     ["a row whose last_seen is unparseable", rowWith({ last_seen: "not-a-date" })],
     ["a row with a negative timing", rowWith({ mean_eval_ns: -1 })],
@@ -236,6 +237,8 @@ describe("detection-config API client", () => {
     // breaking one is a response that is not what it claims rather than a rule with unusual numbers.
     ["a row with more undecided attempts than attempts", rowWith({ evaluations: 2, retryable_misses: 3 })],
     ["a row whose mean exceeds its maximum", rowWith({ mean_eval_ns: 900, max_eval_ns: 100 })],
+    // The total is a sum over at least one attempt, each at most the maximum, so it cannot be the smaller of the two.
+    ["a row whose total is below its maximum", rowWith({ mean_eval_ns: 100, max_eval_ns: 900, total_eval_ns: 100 })],
     ["a row that is null", { eval_stats: [null], days: 7 }],
     ["an empty row", { eval_stats: [{}], days: 7 }],
   ] as [string, unknown][]) {

@@ -11,6 +11,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 - **The count of techniques covered only by silent rules links to where you tune them.** The number itself was right and stays: most of the shipped catalog records without alerting, and reading only the "alerting" figure overstates coverage by about five times.
 - **The application control policy list shows how many rules each policy holds.** It showed a dash for every policy, so telling which ones hold any rules meant opening each in turn.
 - **The Mac-free demo's application-control alert names a rule that exists.** The demo showed an alert saying a policy had blocked CoinMiner beside a Default policy holding no rules. The demo now seeds the matching rule, and the alert cites that rule's own identifier rather than a name nothing else uses, so the Application control page shows the rule the alert is about.
+- **Detection tuning reports what each rule cost, not just its average.** The Cost column showed a mean per evaluation attempt with no volume behind it, so a rule that evaluated once outranked one that evaluated two dozen times for a fraction of the cost. It now leads with the total for the window and sorts on that, keeping the mean beside it. The column notes were corrected at the same time: they described figures the cells do not show.
 - **Demo process events carry a process generation.** Without it the demo's alert timelines could not narrow to the alerting process's own chain and listed the whole host instead.
 
 ## [0.5.0] (2026-09-09)

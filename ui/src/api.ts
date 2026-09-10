@@ -1228,6 +1228,9 @@ export interface RuleEvalSummary {
   retryable_misses: number;
   mean_eval_ns: number;
   max_eval_ns: number;
+  // What the rule's evaluations cost over the whole window. The figure the column sorts on: a mean carries no volume, so
+  // without this a rule evaluated once ranks above one evaluated two dozen times for a fraction of the cost.
+  total_eval_ns: number;
   last_seen: string;
 }
 
@@ -1254,12 +1257,19 @@ function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
   const withinAttempts = wholeCount(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
   const meanWithinMax =
     wholeCount(r.mean_eval_ns) && wholeCount(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
+  // The total is a sum over at least one attempt, each of them at most the maximum, so a total BELOW the maximum is
+  // arithmetically impossible and means the response is not what it claims. Checked against the maximum rather than against
+  // mean x evaluations: that product is the reconstruction the store deliberately does not do, and asserting it here would
+  // re-derive the rounded figure this field exists to replace.
+  const totalCoversMax =
+    wholeCount(r.total_eval_ns) && wholeCount(r.max_eval_ns) && (r.total_eval_ns as number) >= (r.max_eval_ns as number);
   return (
     typeof r.rule_id === "string" &&
     r.rule_id !== "" &&
     atLeastOne(r.evaluations) &&
     withinAttempts &&
     meanWithinMax &&
+    totalCoversMax &&
     parseableTime(r.last_seen)
   );
 }

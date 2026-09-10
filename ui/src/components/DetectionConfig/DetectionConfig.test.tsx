@@ -773,6 +773,7 @@ describe("DetectionConfig observed column", () => {
             evaluations: 900,
             mean_eval_ns: 1_500_000,
             max_eval_ns: 90_000_000,
+            total_eval_ns: 1_350_000_000,
             retryable_misses: 0,
             last_seen: new Date().toISOString(),
           },
@@ -819,20 +820,30 @@ describe("DetectionConfig observed column", () => {
       retryable_misses: 0,
       mean_eval_ns: 1_500_000,
       max_eval_ns: 90_000_000,
+      // 400 attempts averaging 1.5ms. Kept consistent with the mean and count so a case reading one against the others is
+      // testing the component rather than an impossible row the wire validator would have rejected.
+      total_eval_ns: 600_000_000,
       last_seen: "2026-09-01T00:00:00Z",
       ...over,
     });
 
     // The MEAN is what is displayed and the maximum rides in the label. Scanning a column of maxima finds the rule with one bad
     // batch; scanning means finds the rule that is expensive every time, which is the one an operator is looking for.
-    it("shows the mean, and carries the worst case and the attempt count in the label", async () => {
+    // spec:web-ui/the-detection-tuning-cost-column-reports-the-total-cost/the-cell-leads-with-the-total-and-keeps-the-mean
+    it("leads with the total, keeps the mean beside it, and carries the worst case in the label", async () => {
       stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
       renderPage();
 
+      // 400 attempts averaging 1.5ms: 600ms of work, which is the figure a tuning decision is made against.
       await waitFor(() => {
-        expect(screen.getByText("1.5ms")).toBeVisible();
+        expect(screen.getByText("600.0ms")).toBeVisible();
       });
-      expect(screen.getByTitle(/1\.5ms on average and 90\.0ms at worst, across 400 evaluations in the last 7 days/)).toBeVisible();
+      const row = screen.getByRole("row", { name: /suspicious_exec/ });
+      expect(row).toHaveTextContent("600.0ms total");
+      expect(row).toHaveTextContent("1.5ms avg");
+      expect(
+        screen.getByTitle(/600\.0ms in total across 400 evaluations in the last 7 days, 1\.5ms on average and 90\.0ms at worst/),
+      ).toBeVisible();
     });
 
     // The unit follows the magnitude, because sub-millisecond is the normal case and a column of "0.0ms" would hide every
@@ -845,10 +856,15 @@ describe("DetectionConfig observed column", () => {
       ["milliseconds below a second", 1_500_000, "1.5ms"],
       ["seconds above one", 1_500_000_000, "1.5s"],
     ])("renders %s", async (_name, ns, want) => {
-      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ mean_eval_ns: ns, max_eval_ns: ns })] });
+      // One attempt, so the total equals the mean equals the maximum and the row stays arithmetically possible. Asserted
+      // through the cell's text rather than getByText, because all three figures format to the same string here.
+      stubReads({
+        rules: [makeRuleEntry()],
+        evalStats: [stat({ evaluations: 1, mean_eval_ns: ns, max_eval_ns: ns, total_eval_ns: ns })],
+      });
       renderPage();
       await waitFor(() => {
-        expect(screen.getByText(want)).toBeVisible();
+        expect(screen.getByRole("row", { name: /suspicious_exec/ })).toHaveTextContent(`${want} total`);
       });
     });
 
@@ -867,7 +883,7 @@ describe("DetectionConfig observed column", () => {
       stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 0 })] });
       renderPage();
       await waitFor(() => {
-        expect(screen.getByText("1.5ms")).toBeVisible();
+        expect(screen.getByText("600.0ms")).toBeVisible();
       });
       // Scoped to the row for the same reason as above: the column note mentions undecided attempts by design.
       expect(within(screen.getByRole("row", { name: /suspicious_exec/ })).queryByText(/undecided/)).not.toBeInTheDocument();
@@ -927,13 +943,14 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByLabelText("match counts unavailable for suspicious_exec")).toBeVisible();
       });
-      expect(screen.getByText("1.5ms")).toBeVisible();
+      expect(screen.getByText("600.0ms")).toBeVisible();
       expect(screen.queryByLabelText("evaluation statistics unavailable for suspicious_exec")).not.toBeInTheDocument();
     });
 
     // Sorting is what makes the column answer "which rule should I look at". Without it the slowest rule sits wherever its
     // severity puts it, which is fine in thirteen rows and useless in a thousand, and the issue's criterion is finding the rule
     // rather than reading one you already chose.
+    // spec:web-ui/the-detection-tuning-cost-column-reports-the-total-cost/sorting-by-cost-ranks-by-total-rather-than-by-mean
     it("sorts the table by cost, slowest first, and leaves rules with no statistics last", async () => {
       // The "measured" rule records a mean of ZERO, which is legal and is what makes this fixture able to fail. A first version
       // used only rules with positive means, where treating an absent rule as zero sorts it last anyway: the assertion held for
@@ -943,17 +960,20 @@ describe("DetectionConfig observed column", () => {
       // Severities are chosen so a stable sort would put the absent rule ABOVE the zero one if the two compared equal: "silent" is
       // high and "measured" is low, so severity order separates them in the direction opposite to the assertion below.
       const rules = [
-        makeRuleEntry({ id: "cheap", doc: makeRuleDoc({ title: "Cheap rule", severity: "critical" }) }),
+        makeRuleEntry({ id: "bursty", doc: makeRuleDoc({ title: "Bursty rule", severity: "critical" }) }),
         makeRuleEntry({ id: "silent", doc: makeRuleDoc({ title: "Silent rule", severity: "high" }) }),
-        makeRuleEntry({ id: "slow", doc: makeRuleDoc({ title: "Slow rule", severity: "medium" }) }),
+        makeRuleEntry({ id: "steady", doc: makeRuleDoc({ title: "Steady rule", severity: "medium" }) }),
         makeRuleEntry({ id: "measured", doc: makeRuleDoc({ title: "Measured rule", severity: "low" }) }),
       ];
+      // Bursty and steady are the pair that separates the two candidate sort keys, and without such a pair this case passes
+      // just as well against the mean it used to sort by. Bursty has by far the higher mean and ran once; steady is nine
+      // times cheaper per attempt and ran 24 times, costing the server nearly three times as much in the window.
       stubReads({
         rules,
         evalStats: [
-          stat({ rule_id: "cheap", mean_eval_ns: 1_000 }),
-          stat({ rule_id: "slow", mean_eval_ns: 900_000_000 }),
-          stat({ rule_id: "measured", mean_eval_ns: 0, max_eval_ns: 0 }),
+          stat({ rule_id: "bursty", evaluations: 1, mean_eval_ns: 900_000_000, max_eval_ns: 900_000_000, total_eval_ns: 900_000_000 }),
+          stat({ rule_id: "steady", evaluations: 24, mean_eval_ns: 100_000_000, max_eval_ns: 100_000_000, total_eval_ns: 2_400_000_000 }),
+          stat({ rule_id: "measured", evaluations: 1, mean_eval_ns: 0, max_eval_ns: 0, total_eval_ns: 0 }),
         ],
       });
       renderPage();
@@ -966,15 +986,17 @@ describe("DetectionConfig observed column", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /^Cost/ })).toBeVisible();
       });
-      // Severity order first: critical, high, medium, low. The slow rule is third, which is the problem being fixed.
-      expect(titles()[0]).toContain("Cheap rule");
-      expect(titles()[2]).toContain("Slow rule");
+      // Severity order first: critical, high, medium, low. The costliest rule is third, which is the problem being fixed.
+      expect(titles()[0]).toContain("Bursty rule");
+      expect(titles()[2]).toContain("Steady rule");
 
       fireEvent.click(screen.getByRole("button", { name: /^Cost/ }));
 
       const sorted = titles();
-      expect(sorted[0]).toContain("Slow rule");
-      expect(sorted[1]).toContain("Cheap rule");
+      // Steady first: it cost 2.4s against bursty's 900ms. Ranking by the mean would invert this pair, which is the whole
+      // reason the column reports a total.
+      expect(sorted[0]).toContain("Steady rule");
+      expect(sorted[1]).toContain("Bursty rule");
       // A measured zero outranks an absent one, because absence is not a measurement of nothing. This is the pair that fails if
       // an absent rule is treated as zero.
       expect(sorted[2]).toContain("Measured rule");
@@ -1074,12 +1096,13 @@ describe("DetectionConfig observed column", () => {
       renderPage();
 
       await waitFor(() => {
-        expect(screen.getByText(/Cost is the mean wall time per evaluation attempt/)).toBeVisible();
+        expect(screen.getByText(/Cost leads with the total wall time/)).toBeVisible();
       });
       expect(screen.getByText(/most are retried, but one whose batch is set aside is not/)).toBeVisible();
       // The note must point at the HOVER for the worst case. renderCost shows the mean and suppresses the undecided
       // annotation at zero, so an earlier wording promising both "in each cell" described a cell that does not exist.
       expect(screen.getByText(/hover a cell for the worst case/)).toBeVisible();
+      expect(screen.getByText(/Sorting ranks by the total/)).toBeVisible();
       expect(screen.queryByText(/undecided count in each cell/)).not.toBeInTheDocument();
     });
 
@@ -1146,7 +1169,10 @@ describe("DetectionConfig observed column", () => {
       stubReads({
         rules,
         settings: [makeSetting({ rule_id: "cheap", mode: "monitor" })],
-        evalStats: [stat({ rule_id: "cheap", mean_eval_ns: 1_000 }), stat({ rule_id: "slow", mean_eval_ns: 900_000_000 })],
+        evalStats: [
+          stat({ rule_id: "cheap", evaluations: 400, mean_eval_ns: 1_000, max_eval_ns: 1_000, total_eval_ns: 400_000 }),
+          stat({ rule_id: "slow", evaluations: 1, mean_eval_ns: 900_000_000, max_eval_ns: 900_000_000, total_eval_ns: 900_000_000 }),
+        ],
       });
       renderPage();
 

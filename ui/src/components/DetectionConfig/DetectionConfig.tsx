@@ -138,9 +138,10 @@ const MODE_COLUMN_TOOLTIP =
 // one alert rather than of one evaluation attempt. It points at the HOVER for the worst case and the totals, because that is
 // where renderCost puts them: an earlier wording promised both "in each cell", which the cell never showed.
 const COST_COLUMN_TOOLTIP =
-  "Cost is the mean wall time per evaluation attempt; hover a cell for the worst case and the totals behind it. A replayed " +
-  "batch evaluates again and counts as another attempt, so this is the server's bill for the rule, not the work it completed. " +
-  "Undecided attempts reached no verdict: most are retried, but one whose batch is set aside is not.";
+  "Cost leads with the total wall time a rule's evaluations took over the window, and carries the mean per attempt behind " +
+  "it; hover a cell for the worst case. Sorting ranks by the total. A replayed batch evaluates again and counts as another " +
+  "attempt, so this is the server's bill for the rule, not the work it completed. Undecided attempts reached no verdict: " +
+  "most are retried, but one whose batch is set aside is not.";
 
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
@@ -298,12 +299,13 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
   // gets it. Only the VISIBLE annotation is suppressed at zero, since "0 undecided" on every row spends width saying nothing.
   const misses = `, ${stat.retryable_misses.toLocaleString()} of which could not decide`;
   const title =
-    `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst, ` +
-    `across ${evaluations} in the last ${String(days)} days${misses}`;
+    `${formatDuration(stat.total_eval_ns)} in total across ${evaluations} in the last ${String(days)} days, ` +
+    `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst${misses}`;
   return (
     <AbbreviatedFigure full={title}>
-      {formatDuration(stat.mean_eval_ns)}
-      <span className="detection-config__observed-hosts"> avg</span>
+      {formatDuration(stat.total_eval_ns)}
+      <span className="detection-config__observed-hosts"> total</span>
+      <span className="detection-config__observed-hosts"> &middot; {formatDuration(stat.mean_eval_ns)} avg</span>
       {stat.retryable_misses === 0 ? null : (
         <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} undecided</span>
       )}
@@ -455,7 +457,9 @@ export function DetectionConfig() {
       if (left === undefined && right === undefined) return 0;
       if (left === undefined) return 1;
       if (right === undefined) return -1;
-      return right.mean_eval_ns - left.mean_eval_ns;
+      // Total, not mean. Ranking by mean puts a rule that evaluated once above one that evaluated two dozen times for a
+      // fraction of the cost, so the operator who sorts this column to find what to tune is handed the wrong rule first.
+      return right.total_eval_ns - left.total_eval_ns;
     });
   }, [sortActive, rulesBySeverity, cost]);
 
