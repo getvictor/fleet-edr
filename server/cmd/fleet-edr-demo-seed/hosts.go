@@ -199,6 +199,12 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 	// per-batch network latency cannot drift the attacks forward relative to the ambient events (deterministic relative timing).
 	now := time.Now()
 	shiftEnvelopesToRecent(envs, now)
+	// One counter for the whole host, shared with the attacks woven on below: a woven exec against a pid this capture already
+	// started has to advance THAT pid's generation, or the flows and the alert-chain timeline scope correlate to nothing.
+	stamper := newPIDVersionStamper()
+	if err := stamper.stamp(envs); err != nil {
+		return fmt.Errorf("stamp host %s: %w", host.File, err)
+	}
 	for start := 0; start < len(envs); start += hostReplayBatchSize {
 		end := min(start+hostReplayBatchSize, len(envs))
 		if err := s.postEnvelopes(ctx, token, envs[start:end]); err != nil {
@@ -209,7 +215,7 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 		"file", host.File, "host_id", hostID, "hostname", host.Hostname, "events", len(envs), "attack_anchor_pid", anchorPID)
 
 	for i, atk := range host.Attacks {
-		if err := s.weaveAttack(ctx, hostID, token, atk, i, now, anchorPID); err != nil {
+		if err := s.weaveAttack(ctx, hostID, token, atk, i, now, anchorPID, stamper); err != nil {
 			return fmt.Errorf("weave %s onto %s: %w", atk.File, host.File, err)
 		}
 	}
@@ -275,7 +281,9 @@ func reparentAttackToHost(sc *fakeagent.Scenario, anchorPID int) {
 // nests in the host's genuine tree instead of rooting at launchd, overrides the host_id to the captured host, and posts the events
 // at a recent, per-attack-staggered time. For an app-control scenario it then posts the fabricated block event against the offset
 // pid (after the process materialises), exactly as the standalone path used to.
-func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wovenAttack, idx int, now time.Time, anchorPID int) error {
+func (s *seeder) weaveAttack(
+	ctx context.Context, hostID, token string, atk wovenAttack, idx int, now time.Time, anchorPID int, stamper *pidVersionStamper,
+) error {
 	sc, err := loadAttackScenario(atk.File)
 	if err != nil {
 		return err
@@ -289,6 +297,9 @@ func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wove
 	envs, err := sc.Envelopes(fakeagent.WithStartTime(atkStart), fakeagent.WithHostID(hostID))
 	if err != nil {
 		return fmt.Errorf("materialise %s: %w", atk.File, err)
+	}
+	if err := stamper.stamp(envs); err != nil {
+		return fmt.Errorf("stamp %s: %w", atk.File, err)
 	}
 	if err := s.postWovenEnvelopes(ctx, hostID, token, atk.File, envs); err != nil {
 		return err

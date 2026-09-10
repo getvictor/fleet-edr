@@ -569,3 +569,96 @@ func TestVerifyReportsMissingRule(t *testing.T) {
 	require.Error(t, err, "verify must fail when one expected rule never fired")
 	assert.Contains(t, err.Error(), withheld, "the timeout error names the missing rule")
 }
+
+// payloadRecordingServer is recordingEventsServer's sibling for assertions about payload CONTENT rather than batch shape: it keeps
+// every posted envelope whole, so a test can inspect the JSON the seeder actually put on the wire.
+func payloadRecordingServer(t *testing.T) (*httptest.Server, func() []fakeagent.Envelope) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []fakeagent.Envelope
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/api/enroll", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(map[string]any{"host_id": req["hardware_uuid"], "host_token": "tok"})
+	})
+	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
+		var envs []fakeagent.Envelope
+		if err := json.NewDecoder(r.Body).Decode(&envs); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		got = append(got, envs...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts, func() []fakeagent.Envelope {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]fakeagent.Envelope, len(got))
+		copy(out, got)
+		return out
+	}
+}
+
+// The stamper's own tests call stamp() directly, so they stay green if replayHost stops calling it. This drives the real replay
+// path and reads the wire, which is the only thing that catches the wiring going missing: a corpus replayed without generations
+// is what left every demo alert's timeline unable to narrow to its chain.
+func TestReplayHost_StampsPIDVersionsOnTheWire(t *testing.T) {
+	t.Parallel()
+	ts, posted := payloadRecordingServer(t)
+	// db is nil: a host with no woven attacks touches no database, and this is about the captured replay.
+	s := newSeeder(runTestConfig(ts.URL), nil, testHTTPClient(), discardLogger())
+	require.NoError(t, s.replayHost(t.Context(), demoHost{File: "alex-mbp.jsonl", Hostname: "alex-mbp.local"}))
+
+	var lifecycle, stamped int
+	for _, e := range posted() {
+		if e.EventType != "exec" && e.EventType != "fork" {
+			continue
+		}
+		lifecycle++
+		var p struct {
+			PIDVersion *int64 `json:"pidversion"`
+		}
+		require.NoError(t, json.Unmarshal(e.Payload, &p))
+		if p.PIDVersion != nil {
+			stamped++
+		}
+	}
+	require.Positive(t, lifecycle, "the capture must contain process lifecycle events for this to prove anything")
+	assert.Equal(t, lifecycle, stamped, "every replayed fork and exec reaches the server carrying a process generation")
+}
+
+// The woven attacks are the processes the demo's alerts actually fire on, so their generations are exactly what an alert-chain
+// timeline scope needs. Stamping the captured replay but not the woven attack would leave every alert's own chain unscopeable,
+// which is the defect this whole change exists to fix.
+func TestWeaveAttack_StampsPIDVersionsOnTheWire(t *testing.T) {
+	t.Parallel()
+	ts, posted := payloadRecordingServer(t)
+	// keychain-dump emits no network_connect, so postWovenEnvelopes takes its single-batch path and never touches a database.
+	s := newSeeder(runTestConfig(ts.URL), nil, testHTTPClient(), discardLogger())
+	atk := wovenAttack{File: "keychain-dump.yaml", Kind: kindAttack, ExpectRule: "credential_keychain_dump"}
+
+	require.NoError(t, s.weaveAttack(t.Context(), "h1", "tok", atk, 0, time.Now(), 0, newPIDVersionStamper()))
+
+	var lifecycle, stamped int
+	for _, e := range posted() {
+		if e.EventType != "exec" && e.EventType != "fork" {
+			continue
+		}
+		lifecycle++
+		var p struct {
+			PIDVersion *int64 `json:"pidversion"`
+		}
+		require.NoError(t, json.Unmarshal(e.Payload, &p))
+		if p.PIDVersion != nil {
+			stamped++
+		}
+	}
+	require.Positive(t, lifecycle, "the attack must contain process lifecycle events for this to prove anything")
+	assert.Equal(t, lifecycle, stamped, "every woven fork and exec reaches the server carrying a process generation")
+}
