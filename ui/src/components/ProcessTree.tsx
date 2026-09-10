@@ -9,7 +9,7 @@ import {
 import { ProcessDetail } from "./ProcessDetail";
 import { AlertTriageActions } from "./AlertTriageActions";
 import { HostHeader } from "./HostHeader";
-import { HostTimeline } from "./HostTimeline";
+import { HostTimeline, type ChainScopeGap } from "./HostTimeline";
 import { type NodeTooltip } from "./node-tooltip";
 import { TechniqueTags } from "./TechniqueTags";
 import { TimeRangeControl } from "./TimeRangeControl";
@@ -210,6 +210,36 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     const gens = chainGenerations(roots, alertChainIds);
     return gens.length > 0 ? gens : null;
   }, [roots, alertChainIds]);
+
+  // How much of the chain the timeline can actually reach. The scope is keyed on the (pid, pidversion) pair, so a chain process
+  // with no pidversion cannot be scoped to, and there are three outcomes rather than two:
+  //
+  //   none resolved     -> the timeline shows the whole host (unavailable)
+  //   some resolved     -> the timeline is scoped, but silently WITHOUT the unresolved processes' events (partial)
+  //   all resolved      -> the timeline mirrors the graph exactly
+  //
+  // The middle case is the dangerous one and review caught it: claiming "Scoped to the alert chain" while dropping a process's
+  // events is worse than showing too much, because nothing suggests anything is missing. Live data produces it: 534 of 14,099
+  // process rows on a real host carry no generation, so any chain touching one of them lands here.
+  const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; partial: boolean } => {
+    // No focus requested: the full stream is what was asked for and needs no explanation.
+    if (!alertChainIds) return { partial: false };
+    // Focus requested, but findAlertChain resolved nothing. This reports THAT, and no longer tries to report why. Four review
+    // rounds went into narrowing the cause and each precondition admitted a case it did not cover, most recently a truncated
+    // response, where the process is in the window but past the row limit BuildTree applies before aggregation. The remaining
+    // gate is only about timing: while the read is in flight or after it failed there is no loaded tree to be absent from, and
+    // a message that appears and then disappears is its own kind of wrong.
+    if (alertChainIds.size === 0) {
+      const treeLoaded = !loading && error === null;
+      return treeLoaded ? { unavailable: "chain-unresolved", partial: false } : { partial: false };
+    }
+    const resolved = alertChainGenerations?.length ?? 0;
+    if (resolved === 0) return { unavailable: "no-generations", partial: false };
+    // Whether anything was left out, not how much. alertChainIds counts tree NODES, and the response aggregates identical leaf
+    // descendants into synthetic group nodes, so subtracting resolved generations from it counts groups as processes. The
+    // comparison still detects the shortfall reliably; only the magnitude was unsound.
+    return { partial: resolved < alertChainIds.size };
+  }, [alertChainIds, alertChainGenerations, loading, error]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
@@ -624,7 +654,14 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       />
 
       {view === "timeline" ? (
-        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} chainGenerations={alertChainGenerations ?? undefined} />
+        <HostTimeline
+          hostId={hostId}
+          bounds={bounds}
+          emphasizePid={emphasizePid}
+          chainGenerations={alertChainGenerations ?? undefined}
+          chainScopeUnavailable={chainCoverage.unavailable}
+          chainPartiallyScoped={chainCoverage.partial}
+        />
       ) : (
         <>
           {graphControls}
