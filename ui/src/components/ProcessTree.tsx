@@ -221,9 +221,9 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // The middle case is the dangerous one and review caught it: claiming "Scoped to the alert chain" while dropping a process's
   // events is worse than showing too much, because nothing suggests anything is missing. Live data produces it: 534 of 14,099
   // process rows on a real host carry no generation, so any chain touching one of them lands here.
-  const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; omitted: number } => {
+  const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; partial: boolean } => {
     // No focus requested: the full stream is what was asked for and needs no explanation.
-    if (!alertChainIds) return { omitted: 0 };
+    if (!alertChainIds) return { partial: false };
     // Focus requested, but findAlertChain resolved nothing. This reports THAT, and no longer tries to report why. Four review
     // rounds went into narrowing the cause and each precondition admitted a case it did not cover, most recently a truncated
     // response, where the process is in the window but past the row limit BuildTree applies before aggregation. The remaining
@@ -231,11 +231,14 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     // a message that appears and then disappears is its own kind of wrong.
     if (alertChainIds.size === 0) {
       const treeLoaded = !loading && error === null;
-      return treeLoaded ? { unavailable: "chain-unresolved", omitted: 0 } : { omitted: 0 };
+      return treeLoaded ? { unavailable: "chain-unresolved", partial: false } : { partial: false };
     }
     const resolved = alertChainGenerations?.length ?? 0;
-    if (resolved === 0) return { unavailable: "no-generations", omitted: 0 };
-    return { omitted: alertChainIds.size - resolved };
+    if (resolved === 0) return { unavailable: "no-generations", partial: false };
+    // Whether anything was left out, not how much. alertChainIds counts tree NODES, and the response aggregates identical leaf
+    // descendants into synthetic group nodes, so subtracting resolved generations from it counts groups as processes. The
+    // comparison still detects the shortfall reliably; only the magnitude was unsound.
+    return { partial: resolved < alertChainIds.size };
   }, [alertChainIds, alertChainGenerations, loading, error]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
@@ -657,7 +660,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           emphasizePid={emphasizePid}
           chainGenerations={alertChainGenerations ?? undefined}
           chainScopeUnavailable={chainCoverage.unavailable}
-          chainOmittedProcesses={chainCoverage.omitted}
+          chainPartiallyScoped={chainCoverage.partial}
         />
       ) : (
         <>

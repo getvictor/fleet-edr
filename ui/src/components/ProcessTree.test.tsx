@@ -709,7 +709,7 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
 
   // A chain where only some processes carry a generation. The scope applies, so the old code reported it as fully scoped while
   // dropping the ungenerationed process's events; the wiring has to distinguish "scoped" from "scoped, minus part of the chain".
-  it("reports how much of a mixed chain the timeline could not reach", async () => {
+  it("reports that a mixed chain was only partly reached", async () => {
     const mixed: ProcessNode[] = [
       {
         // The root carries no generation; its child, the alerted process, does.
@@ -720,7 +720,7 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
     vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(mixed));
     renderTree("?alert=9&process=2&at=1750248000000&view=timeline");
 
-    expect(await screen.findByText(/without 1 process that carries no generation data/)).toBeVisible();
+    expect(await screen.findByText(/Scoped to part of the alert chain/)).toBeVisible();
     expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
     expect(screen.queryByText(/Showing the whole host/)).not.toBeInTheDocument();
   });

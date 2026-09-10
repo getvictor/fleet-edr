@@ -70,10 +70,14 @@ interface Props {
   // processes, so an unexplained thousand-row list reads as a product defect rather than as missing data. The value says WHICH
   // reason, because the two are fixed by different things and telling the operator the wrong one wastes their time.
   readonly chainScopeUnavailable?: ChainScopeGap;
-  // How many of the alert chain's processes the scope could NOT reach, when it did scope. Non-zero means the list is narrowed
-  // to the chain but silently missing those processes' events, which is worse than showing too much: nothing about a scoped
-  // list suggests part of it is absent. Ignored when chainScopeUnavailable is true, where nothing was scoped at all.
-  readonly chainOmittedProcesses?: number;
+  // True when the scope applied but could not reach every process in the chain, so the list is narrowed and silently missing
+  // those processes' events. That is worse than showing too much: nothing about a scoped list suggests part of it is absent.
+  //
+  // A flag rather than a count, deliberately. The obvious count is chain nodes minus resolved generations, and a tree node is
+  // not a process: the response aggregates identical leaf descendants into synthetic group nodes ("bash x11"), so that
+  // subtraction counts groups as processes. Review caught the count claiming a precision the structure does not support, and a
+  // number that might be wrong is worse than no number when the actionable part is just "some events are missing".
+  readonly chainPartiallyScoped?: boolean;
 }
 
 // How long after the last keystroke the text filter commits to the URL (and thus the query). Keeps a fast typist to one fetch.
@@ -90,7 +94,7 @@ const EVENT_TYPES: { key: string; label: string }[] = [
 // active window, newest-first, filterable by type chips and a text box (both in the URL), keyset-paginated via the shared list hook.
 // A row links to its process node in the graph; connection/DNS rows carry the fleet-wide "search" pivot.
 export function HostTimeline(
-  { hostId, bounds, emphasizePid, chainGenerations, chainScopeUnavailable, chainOmittedProcesses }: Props,
+  { hostId, bounds, emphasizePid, chainGenerations, chainScopeUnavailable, chainPartiallyScoped }: Props,
 ) {
   const [searchParams, setSearchParams] = useSearchParams();
   // Sorted so a semantically-equal selection (e.g. a type toggled off then back on) yields one canonical order; otherwise the
@@ -198,14 +202,12 @@ export function HostTimeline(
         />
         {/* Reflect the shared alert-scope so the analyst knows why fewer events show; the "Alert chain / Full tree" toggle in the
             breadcrumb drives both this and the graph. */}
-        {scopeChain && (chainOmittedProcesses ?? 0) === 0 && (
+        {scopeChain && chainPartiallyScoped !== true && (
           <span className="host-timeline__scope-note">Scoped to the alert chain</span>
         )}
-        {scopeChain && (chainOmittedProcesses ?? 0) > 0 && (
+        {scopeChain && chainPartiallyScoped === true && (
           <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
-            Scoped to the alert chain, without {chainOmittedProcesses}{" "}
-            {chainOmittedProcesses === 1 ? "process that carries" : "processes that carry"} no generation data: their events are
-            not listed.
+            Scoped to part of the alert chain: some of its processes carry no generation data, so their events are not listed.
           </span>
         )}
         {!scopeChain && chainScopeUnavailable !== undefined && (

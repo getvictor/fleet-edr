@@ -5,7 +5,7 @@ import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
 import { Button } from "./ui/Button";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
-import { TECHNIQUE_CATALOG, type TechniqueMeta } from "./attack-techniques";
+import { TECHNIQUE_CATALOG, TACTIC_ORDER, type TechniqueMeta } from "./attack-techniques.generated";
 import "./AttackCoverage.scss";
 
 // AttackCoverage renders the MITRE ATT&CK technique coverage that the
@@ -34,23 +34,6 @@ interface CoverageGroup {
 // All 14 enterprise tactics in MITRE's canonical kill-chain order. Anything
 // the catalog or server emits that isn't on this list lands at the end via
 // the "leftover" pass below, never silently dropped.
-const TACTIC_ORDER = [
-  "Reconnaissance",
-  "Resource Development",
-  "Initial Access",
-  "Execution",
-  "Persistence",
-  "Privilege Escalation",
-  "Defense Evasion",
-  "Credential Access",
-  "Discovery",
-  "Lateral Movement",
-  "Collection",
-  "Command and Control",
-  "Exfiltration",
-  "Impact",
-];
-
 export function AttackCoverage() {
   const [layer, setLayer] = useState<AttackNavigatorLayer | null>(null);
   const [error, setError] = useState<string | null>(null);
