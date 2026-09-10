@@ -181,6 +181,34 @@ tasks:
     cmds:
       - go run ./tools/gen-attack-layer
 
+  attack:table:
+    desc: |
+      Regenerate the vendored ATT&CK technique table (ui/src/components/attack-techniques.generated.ts) from MITRE's
+      published STIX bundle. Downloads the bundle to tmp/ first; the bundle itself is 53MB and is NOT committed, only the
+      extract is.
+
+      Pass the release to cut from, defaulting to the version the table already records:
+        task attack:table ATTACK_VERSION=19.2
+
+      After regenerating, check navigatorATTACKVersion in server/rules/api/navigator.go still matches the major, and run
+      `task docs:attack-layer` if the layer's declared version changed. Two tests in server/rules/bootstrap enforce both the
+      version agreement and that every technique a rule maps has a table entry.
+    vars:
+      ATTACK_VERSION: '{{.ATTACK_VERSION | default "19.2"}}'
+    cmds:
+      - mkdir -p tmp
+      - test -f tmp/enterprise-attack-{{.ATTACK_VERSION}}.json || curl -fsSL -o tmp/enterprise-attack-{{.ATTACK_VERSION}}.json
+        https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-{{.ATTACK_VERSION}}.json
+      - go run ./tools/attacktable -bundle tmp/enterprise-attack-{{.ATTACK_VERSION}}.json
+
+  attack:latest-check:
+    desc: |
+      Fail if the vendored ATT&CK table is not cut from MITRE's newest published Enterprise release. Release-checklist step;
+      needs the network, which is why it is a task rather than a unit test (a test reaching the internet fails on an
+      air-gapped runner and becomes noise). Regenerate with `task attack:table ATTACK_VERSION=<new>` when it fails.
+    cmds:
+      - go run ./tools/attacktable -check-latest
+
   proto:
     desc: |
       Regenerate the gRPC control-channel Go code from internal/control/control.proto.

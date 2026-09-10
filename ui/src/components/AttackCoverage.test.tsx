@@ -88,6 +88,13 @@ describe("AttackCoverage summary strip", () => {
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
     expect(within(cardFor("techniques alerting by default")).getByText("1")).toBeInTheDocument();
-    expect(within(cardFor("techniques not alerting by default")).getByText("2")).toBeInTheDocument();
+
+    // The silent-rule card carries the number AND somewhere to act on it. Left bare the figure reads as a defect to switch
+    // off, when those rules ship in monitor mode deliberately, so the link is part of what the card is for.
+    const silent = within(strip).getByText(/covered only by rules that ship silent/).closest(".stat-card") as HTMLElement;
+    expect(within(silent).getByText("2")).toBeVisible();
+    const tune = within(silent).getByRole("link", { name: /promote or tune/i });
+    expect(tune).toBeVisible();
+    expect(tune).toHaveAttribute("href", "/detection-config");
   });
 });
