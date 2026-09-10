@@ -187,14 +187,17 @@ tasks:
       published STIX bundle. Downloads the bundle to tmp/ first; the bundle itself is 53MB and is NOT committed, only the
       extract is.
 
-      Pass the release to cut from, defaulting to the version the table already records:
-        task attack:table ATTACK_VERSION=19.2
+      Pass the release to cut from. The default is READ FROM the generated table, not hardcoded, so running this bare
+      re-cuts the version already vendored and can never silently revert the catalog to an older release:
+        task attack:table ATTACK_VERSION=19.3
 
       After regenerating, check navigatorATTACKVersion in server/rules/api/navigator.go still matches the major, and run
       `task docs:attack-layer` if the layer's declared version changed. Two tests in server/rules/bootstrap enforce both the
       version agreement and that every technique a rule maps has a table entry.
     vars:
-      ATTACK_VERSION: '{{.ATTACK_VERSION | default "19.2"}}'
+      VENDORED_ATTACK_VERSION:
+        sh: sed -n 's/^export const ATTACK_VERSION = "\(.*\)";$/\1/p' ui/src/components/attack-techniques.generated.ts
+      ATTACK_VERSION: '{{.ATTACK_VERSION | default .VENDORED_ATTACK_VERSION}}'
     cmds:
       - mkdir -p tmp
       - test -f tmp/enterprise-attack-{{.ATTACK_VERSION}}.json || curl -fsSL -o tmp/enterprise-attack-{{.ATTACK_VERSION}}.json
@@ -242,7 +245,10 @@ tasks:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
       EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
-      - go test -race -count=1 -timeout=10m ./server/... ./agent/... ./internal/...
+      # ./tools/... is in scope because the repo's build-time tools carry real logic that nothing else exercises: the
+      # ATT&CK version comparison, for one, where a string compare would sort "9.0" after "19.2" and pass a stale
+      # table forever. Tests that no CI lane runs are not a gate (review caught exactly that on tools/attacktable).
+      - go test -race -count=1 -timeout=10m ./server/... ./agent/... ./internal/... ./tools/...
 
   test:go:agent:
     desc: |

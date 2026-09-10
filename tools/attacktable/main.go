@@ -16,7 +16,7 @@
 //
 // Usage:
 //
-//	go run ./tools/attacktable -bundle enterprise-attack-19.1.json
+//	go run ./tools/attacktable -bundle enterprise-attack-19.2.json
 //
 // Download the bundle from
 // https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-<version>.json

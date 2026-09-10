@@ -108,7 +108,7 @@ func TestTechniqueTableMatchesTheLayerATTACKVersion(t *testing.T) {
 	_, tableVersion := generatedTechniqueIDs(t)
 	require.NotEmpty(t, tableVersion, "the vendored table must record the ATT&CK version it was cut from")
 
-	// The layer pins the major ("19"); the table records the exact release it was generated from ("19.1"). Comparing the
+	// The layer pins the major ("19"); the table records the exact release it was generated from ("19.2"). Comparing the
 	// major is what keeps a v20 table from shipping under a layer still claiming v19.
 	major, _, _ := strings.Cut(tableVersion, ".")
 	require.Equal(t, layerVersion, major,

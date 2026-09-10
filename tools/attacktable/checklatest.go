@@ -57,9 +57,11 @@ func checkLatest(tablePath string) error {
 	}
 	switch {
 	case cmp < 0:
+		// The command has to name the NEW version. The task's default is the version already vendored, so telling the operator
+		// to run it bare would have them re-cut the release the check just rejected.
 		return fmt.Errorf(
-			"the vendored ATT&CK table is v%s but MITRE has published v%s; regenerate with `task attack:table` "+
-				"(download enterprise-attack-%s.json first) and re-check navigatorATTACKVersion in server/rules/api/navigator.go",
+			"the vendored ATT&CK table is v%s but MITRE has published v%s; regenerate with "+
+				"`task attack:table ATTACK_VERSION=%s` and re-check navigatorATTACKVersion in server/rules/api/navigator.go",
 			have, latest, latest)
 	case cmp > 0:
 		// Ahead of the index usually means a hand-edited version string, which would make the layer claim a release that does
