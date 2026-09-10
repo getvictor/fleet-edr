@@ -73,6 +73,14 @@ type RuleEvalSummary struct {
 	// rather than stored, so it stays correct as days are added to the window and as the retention sweep removes them.
 	MeanEvalNs int64 `db:"mean_eval_ns" json:"mean_eval_ns"`
 	MaxEvalNs  int64 `db:"max_eval_ns" json:"max_eval_ns"`
+	// TotalEvalNs is what the rule's evaluations cost over the whole window, and is the figure a tuning decision is made
+	// against: a mean carries no volume, so a rule evaluated once at 4ms outranks one evaluated 24 times at 2.5ms despite
+	// costing a fourteenth as much.
+	//
+	// Summed from the same stored per-day durations MeanEvalNs divides, NOT reconstructed as mean x count. The mean is an
+	// integer division, so the product drifts by up to one nanosecond per attempt, and it drifts most for the high-attempt
+	// rules that are the reason to look at the column.
+	TotalEvalNs int64 `db:"total_eval_ns" json:"total_eval_ns"`
 	// LastSeen is the most recent evaluation in the window. Always set, for the same reason RuleMatchCount.LastSeen is: a rule
 	// that never evaluated is absent from the result rather than present with a zero row.
 	LastSeen time.Time `db:"last_seen" json:"last_seen"`

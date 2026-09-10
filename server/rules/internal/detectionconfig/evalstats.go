@@ -156,6 +156,12 @@ func foldEvalStats(stats api.RuleEvalStats) map[string]api.RuleEvalStat {
 // 2us and overstating the cost. NULLIF guards the divide even though a stored row cannot have zero evaluations (foldEvalStats drops those),
 // because SUM over an empty group is NULL rather than 0 and a future caller filtering rows harder should not get a division error instead
 // of no rows.
+//
+// The total is SUMmed rather than left to the caller to reconstruct as mean x count, and the truncation above is exactly why: that product
+// is short by up to one nanosecond per attempt, and is furthest out for the high-attempt rules the figure exists to find.
+//
+// Ordered by that total, not by the mean. The mean ranks a rule that evaluated once above one that evaluated two dozen times for a
+// fraction of the cost, which is the wrong rule to hand an operator first.
 func (s *Store) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.RuleEvalSummary, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -int(days)+1).Format(time.DateOnly)
 
@@ -165,12 +171,13 @@ func (s *Store) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.
 		       SUM(evaluations)                                  AS evaluations,
 		       SUM(retryable_misses)                             AS retryable_misses,
 		       SUM(eval_ns_sum) DIV NULLIF(SUM(evaluations), 0)   AS mean_eval_ns,
+		       SUM(eval_ns_sum)                                  AS total_eval_ns,
 		       MAX(eval_ns_max)                                  AS max_eval_ns,
 		       MAX(last_seen)                                    AS last_seen
 		FROM detection_rule_eval_stats
 		WHERE day >= ?
 		GROUP BY rule_id
-		ORDER BY mean_eval_ns DESC, rule_id`, cutoff)
+		ORDER BY total_eval_ns DESC, rule_id`, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("read rule eval stats: %w", err)
 	}

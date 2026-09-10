@@ -1179,6 +1179,23 @@ export interface RuleMatchCount {
 // states the same bound rather than promising an int64 range the wire cannot carry.
 const wholeCount = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 
+// wholeDuration is wholeCount's bound relaxed for a SUMMED duration, and the difference from the counters is deliberate.
+//
+// A count above 2^53-1 is nonsense, so refusing one is right. A summed nanosecond duration is not: the evaluation workers
+// across the longest retained window accumulate more than 2^53 nanoseconds between them, so a merely busy deployment reaches
+// it. Above that a JSON parser rounds, and the error is nanoseconds on a figure rendered to a tenth of a unit, while refusing
+// the row would take the whole column to "unavailable" and tell an operator hunting the expensive rule that there isn't one.
+// Number.isInteger still rejects a fraction or a non-finite value, which are the shapes that mean the response is malformed,
+// and the ceiling still rejects a value no int64 could have held: without it 1e100 is a nonnegative integer and would render
+// and SORT as a plausible cost, which is worse than the unavailable path because it looks like an answer.
+//
+// One above the int64 maximum, deliberately. 2^63-1 is not representable as a double, so writing it out silently rounds to
+// this same value and eslint's no-loss-of-precision rightly rejects the literal. The slack is harmless: the bound exists to
+// catch a magnitude the server could not have produced, and no int64 lands in the one-unit gap at 9.2e18.
+const int64Ceiling = 9_223_372_036_854_775_808;
+const wholeDuration = (v: unknown): boolean =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= int64Ceiling;
+
 // Checked for PARSEABILITY, not merely for being a string. Date.parse rather than an RFC 3339 regex: Go marshals time.Time with
 // nanosecond precision and a Z offset, which Date.parse handles, and a hand-rolled pattern here would more likely reject valid
 // server output than catch a real fault.
@@ -1228,6 +1245,9 @@ export interface RuleEvalSummary {
   retryable_misses: number;
   mean_eval_ns: number;
   max_eval_ns: number;
+  // What the rule's evaluations cost over the whole window. The figure the column sorts on: a mean carries no volume, so
+  // without this a rule evaluated once ranks above one evaluated two dozen times for a fraction of the cost.
+  total_eval_ns: number;
   last_seen: string;
 }
 
@@ -1254,12 +1274,19 @@ function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
   const withinAttempts = wholeCount(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
   const meanWithinMax =
     wholeCount(r.mean_eval_ns) && wholeCount(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
+  // The total is a sum over at least one attempt, each of them at most the maximum, so a total BELOW the maximum is
+  // arithmetically impossible and means the response is not what it claims. Checked against the maximum rather than against
+  // mean x evaluations: that product is the reconstruction the store deliberately does not do, and asserting it here would
+  // re-derive the rounded figure this field exists to replace.
+  const totalCoversMax =
+    wholeDuration(r.total_eval_ns) && wholeCount(r.max_eval_ns) && (r.total_eval_ns as number) >= (r.max_eval_ns as number);
   return (
     typeof r.rule_id === "string" &&
     r.rule_id !== "" &&
     atLeastOne(r.evaluations) &&
     withinAttempts &&
     meanWithinMax &&
+    totalCoversMax &&
     parseableTime(r.last_seen)
   );
 }

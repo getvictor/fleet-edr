@@ -54,12 +54,15 @@
   text-transform: capitalize;
 }
 
-// The Observed caveat, rendered as visible text under the heading rather than hidden in a header tooltip.
+// The Observed and Cost caveats, rendered as visible text under the heading rather than hidden in a header tooltip.
+//
+// Full width, matching the table below rather than wrapping at a reading measure. These are not body prose to be read once:
+// they are the legend for the two columns directly beneath them, and a 70ch column set them wrapping three lines short of the
+// table's edge, which read as an unrelated block of text rather than as that table's key.
 .detection-config__note {
-  font-size: $xx-small;
+  font-size: $x-small;
   color: $ui-fleet-black-50;
   margin: 0 0 $pad-small;
-  max-width: 70ch;
 }
 
 // The Observed column: the count leads, the reach and recency ride behind it at a lower weight, so the column scans by volume.

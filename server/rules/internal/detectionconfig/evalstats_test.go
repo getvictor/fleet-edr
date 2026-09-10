@@ -62,6 +62,8 @@ func TestRecordAndReadRuleEvalStats(t *testing.T) {
 			"per-day averages")
 	assert.Equal(t, int64(1_100_000), pricey.MaxEvalNs,
 		"the worst case is the largest attempt seen, not the most recent: a faster attempt landing later must not erase it")
+	// 900_000 + 1_100_000 + 100_000. The figure the tuning column sorts on, and the one the mean above is derived from.
+	assert.Equal(t, int64(2_100_000), pricey.TotalEvalNs, "the total accumulates across calls alongside the attempt count")
 	assert.False(t, pricey.LastSeen.IsZero(), "a row that exists has been seen")
 
 	cheap := got["cheap"]
@@ -71,6 +73,61 @@ func TestRecordAndReadRuleEvalStats(t *testing.T) {
 	// Ordered by cost, because the read exists to answer "which rule is expensive" and a reader should not have to sort it.
 	require.Len(t, rows, 2)
 	assert.Equal(t, "pricey", rows[0].RuleID, "the most expensive rule comes first")
+}
+
+// spec:web-ui/the-detection-tuning-cost-column-reports-the-total-cost/the-total-is-exact-rather-than-derived-from-the-rounded-mean
+// spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/the-total-is-reported-alongside-the-mean-and-the-maximum
+//
+// TestRuleEvalStatsTotalIsSummedNotRebuiltFromTheMean pins the total against the reconstruction a caller would otherwise do.
+//
+// The mean is an integer division, so mean x attempts is short by up to one nanosecond per attempt. This fixture chooses
+// durations that do not divide evenly, which is the only shape where the summed total and the reconstructed one differ: with
+// evenly divisible inputs the assertion holds for both and proves nothing.
+func TestRuleEvalStatsTotalIsSummedNotRebuiltFromTheMean(t *testing.T) {
+	t.Parallel()
+	store, _ := openStore(t)
+	ctx := t.Context()
+
+	// 1_000 + 1_000 + 1_001 = 3_001 over three attempts. The mean truncates to 1_000, so the product is 3_000.
+	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
+		{RuleID: "uneven", Evaluations: 2, EvalNs: 2_000, MaxEvalNs: 1_000},
+	}))
+	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
+		{RuleID: "uneven", Evaluations: 1, EvalNs: 1_001, MaxEvalNs: 1_001},
+	}))
+
+	rows, err := store.EvalStats(ctx, api.DefaultEvalStatsWindow)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	assert.Equal(t, int64(3), rows[0].Evaluations)
+	assert.Equal(t, int64(1_000), rows[0].MeanEvalNs, "the mean truncates, which is what makes the product wrong")
+	assert.Equal(t, int64(3_001), rows[0].TotalEvalNs, "the total is the stored sum")
+	assert.NotEqual(t, rows[0].MeanEvalNs*rows[0].Evaluations, rows[0].TotalEvalNs,
+		"and it is not the rounded mean multiplied back up, which is the whole reason the field is served")
+}
+
+// TestRuleEvalStatsOrdersByTotalNotMean pins the ordering against the figure it used to use.
+//
+// The fixture needs a pair whose mean order and total order disagree, or it passes just as well against the old ORDER BY. A
+// rule evaluated once at 900us has by far the higher mean; one evaluated twenty times at 100us cost more than twice as much.
+func TestRuleEvalStatsOrdersByTotalNotMean(t *testing.T) {
+	t.Parallel()
+	store, _ := openStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
+		{RuleID: "bursty", Evaluations: 1, EvalNs: 900_000, MaxEvalNs: 900_000},
+		{RuleID: "steady", Evaluations: 20, EvalNs: 2_000_000, MaxEvalNs: 100_000},
+	}))
+
+	rows, err := store.EvalStats(ctx, api.DefaultEvalStatsWindow)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+
+	assert.Equal(t, "steady", rows[0].RuleID,
+		"the rule that consumed the most time comes first, though its mean per attempt is the lower of the two")
+	assert.Greater(t, rows[1].MeanEvalNs, rows[0].MeanEvalNs, "and the pair really does disagree on the mean")
 }
 
 // TestRuleEvalStatsAcceptsTheLongestShippedRuleID is the regression for what live QA caught and every unit test above missed.
