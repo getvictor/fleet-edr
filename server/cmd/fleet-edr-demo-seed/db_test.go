@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/testdb/full"
 	"github.com/fleetdm/edr/test/fakeagent"
 )
@@ -368,6 +370,9 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 		insertAlert(t, db, acHost, rule, "detection", "high")
 	}
 	insertAlert(t, db, acHost, "demo_blocklist_binary", "application_control", "high")
+	// The server seeds this at boot; without it the app-control rule seeding logs a skip, and this test would pass whether
+	// or not run() still calls it. That is how the fresh-seed wiring came to be uncovered (issue #971).
+	insertDemoPolicy(t, db, 1)
 
 	var enrollCalls atomic.Int32
 	ts := demoServer(t, &enrollCalls)
@@ -385,6 +390,16 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM users WHERE email = 'demo@fleet-edr.local'`).Scan(&userCount))
 	assert.Equal(t, 1, userCount, "SSO demo user provisioned")
+
+	// The fresh-seed path must actually seed the app-control rule and carry its wire id, or the demo's block alert cites a
+	// policy holding nothing. Asserted here rather than only on the helper, because the helper's own tests stay green if
+	// run() stops calling it.
+	var ruleID int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT id FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID).Scan(&ruleID),
+		"run() seeds the application-control rule the fabricated block cites")
+	assert.Equal(t, rulesapi.ApplicationControlRuleID(ruleID), s.appControlWireRuleID,
+		"and carries that rule's wire identity into the block it posts")
 }
 
 // TestRefreshTimestamps confirms the already-seeded restart path slides every replayed timestamp forward by one delta: the newest
@@ -661,4 +676,119 @@ func TestWeaveAttack_StampsPIDVersionsOnTheWire(t *testing.T) {
 	}
 	require.Positive(t, lifecycle, "the attack must contain process lifecycle events for this to prove anything")
 	assert.Equal(t, lifecycle, stamped, "every woven fork and exec reaches the server carrying a process generation")
+}
+
+// insertDemoPolicy creates the Default policy the server would have seeded at boot, at a known version.
+func insertDemoPolicy(t *testing.T, db dbExecQuerier, version int64) {
+	t.Helper()
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO app_control_policies (id, name, description, version) VALUES (?, 'Default', 'demo', ?)`,
+		appControlPolicyID, version)
+	require.NoError(t, err)
+}
+
+func policyVersion(t *testing.T, db dbExecQuerier) int64 {
+	t.Helper()
+	var v int64
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT version FROM app_control_policies WHERE id = ?`, appControlPolicyID).Scan(&v))
+	return v
+}
+
+// The demo's application-control alert is fabricated, so nothing downstream forces a matching rule to exist. It did not, and
+// the page showed a Default policy with zero rules beside an alert claiming a policy had blocked CoinMiner.
+func TestSeedAppControlRule(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+	insertDemoPolicy(t, db, 1)
+
+	wireID, err := seedAppControlRule(ctx, db, discardLogger())
+	require.NoError(t, err)
+
+	var ruleID int64
+	var ruleType, identifier, action, enforcement, severity, customMsg, sourceRef string
+	var enabled bool
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT id, rule_type, identifier, action, enforcement, enabled, severity, custom_msg, source_ref
+		FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID,
+	).Scan(&ruleID, &ruleType, &identifier, &action, &enforcement, &enabled, &severity, &customMsg, &sourceRef))
+
+	// The identity the block must cite is derived from the ROW ID, not from source_ref. An earlier attempt paired the block
+	// with source_ref, producing two things that looked related and were not (issue #971).
+	assert.Equal(t, rulesapi.ApplicationControlRuleID(ruleID), wireID)
+	assert.Equal(t, appControlSourceRef, sourceRef, "source_ref stays the provenance marker, and is not the identity")
+
+	// PATH is the only type whose identifier may legally be a path; a BINARY identifier must be 64 hex characters.
+	assert.Equal(t, "PATH", ruleType)
+	assert.True(t, strings.HasPrefix(identifier, "/Applications/"), "the rule denies the binary the scenario execs")
+	assert.Equal(t, "BLOCK", action)
+	assert.Equal(t, "PROTECT", enforcement, "the alert says the exec was denied, not merely recorded")
+	assert.Equal(t, appControlSeverity, severity)
+	assert.Equal(t, appControlMessage, customMsg)
+	assert.True(t, enabled)
+}
+
+// CreateRule inserts a rule and bumps the owning policy's version in one transaction, and its comment names the contract that
+// keeps: "version changes imply snapshot changes". A rule added under an unchanged version is invisible to the snapshot the
+// agent and extension receive. The seeder cannot call CreateRule, so it has to keep the same contract itself.
+func TestSeedAppControlRule_BumpsThePolicyVersionOnceRuleActuallyChanges(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+	insertDemoPolicy(t, db, 4)
+
+	_, err := seedAppControlRule(ctx, db, discardLogger())
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), policyVersion(t, db), "inserting the rule is a snapshot change and moves the version")
+
+	// The seeder re-runs on every container start. A version that climbs on each restart would report snapshot changes that
+	// did not happen, which is the same lie as not bumping at all, pointed the other way.
+	_, err = seedAppControlRule(ctx, db, discardLogger())
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), policyVersion(t, db), "a re-run that changes nothing must not move the version")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID).Scan(&count))
+	assert.Equal(t, 1, count, "and must not duplicate the rule")
+}
+
+// A rule hung off a policy id nothing else knows about would recreate the same disconnect one level down, so the seeder does
+// not invent the policy. It also must not abort over it: the rule is a coherence nicety, and failing the seed would cost the
+// operator the entire demo to fix a page they might not open.
+func TestSeedAppControlRule_SkipsWhenThePolicyIsMissing(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+
+	wireID, err := seedAppControlRule(ctx, db, discardLogger())
+	require.NoError(t, err, "a missing policy is a skip, not a failed seed")
+	assert.Empty(t, wireID, "and yields no rule id, so the block falls back rather than citing one that does not exist")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_control_rules`).Scan(&count))
+	assert.Zero(t, count)
+}
+
+// The path must come from the scenario the block is built from. A second copy in the seeder drifts on the next corpus edit,
+// leaving a rule that denies one binary beside an alert about another.
+func TestBlockedBinaryPath_ComesFromTheScenario(t *testing.T) {
+	t.Parallel()
+	got, err := blockedBinaryPath()
+	require.NoError(t, err)
+
+	var want string
+	for _, host := range hostManifest {
+		for _, atk := range host.Attacks {
+			if atk.Kind != kindAppControl {
+				continue
+			}
+			sc, scErr := loadAttackScenario(atk.File)
+			require.NoError(t, scErr)
+			_, want, _ = firstExec(sc)
+		}
+	}
+	require.NotEmpty(t, want, "the manifest must carry an app-control scenario for this to prove anything")
+	assert.Equal(t, want, got)
 }

@@ -320,7 +320,7 @@ func (s *seeder) weaveAttack(
 	// Stamp the block one second past the scenario start so it sits after the fork/exec; the scenario emits no exit, so the
 	// live process resolves at this timestamp.
 	blockTS := atkStart.Add(time.Second).UnixNano()
-	if err := s.postEnvelopes(ctx, token, []fakeagent.Envelope{buildBlockEnvelope(hostID, pid, execPath, blockTS)}); err != nil {
+	if err := s.postEnvelopes(ctx, token, []fakeagent.Envelope{buildBlockEnvelope(hostID, pid, execPath, s.appControlWireRuleID, blockTS)}); err != nil {
 		return fmt.Errorf("post application_control_block for %s: %w", atk.File, err)
 	}
 	s.logger.InfoContext(ctx, "posted application-control block", "host_id", hostID, "pid", pid, "path", execPath)
