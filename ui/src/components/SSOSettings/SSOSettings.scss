@@ -1,8 +1,9 @@
 @use "../../styles/var/colors" as *;
+@use "../../styles/var/global" as *;
 
 .sso-settings {
   display: block;
-  max-width: 880px;
+  max-width: $settings-form-max-width;
 
   &__status {
     padding: 24px;

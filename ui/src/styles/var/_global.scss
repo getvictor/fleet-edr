@@ -10,3 +10,11 @@ $border-radius-xxlarge: 16px;
 
 // box shadow
 $box-shadow: 0px 3px 0px rgba(226, 228, 234, 0.4);
+
+// Settings-form width. Admin settings forms read as a single column of labelled fields, so they are capped rather than allowed to
+// span an ultrawide display, where a 2000px-wide row puts a field's label and its input a screen apart. 880px is what the SSO
+// form was already using and is the width the design was drawn at; the other settings forms are being brought onto it.
+//
+// It is a form standard, NOT a settings-page standard: Users and Service accounts sit in the same SettingsLayout but render wide
+// tables that legitimately want the full viewport, so this must not move onto .settings-layout__content.
+$settings-form-max-width: 880px;
