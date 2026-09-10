@@ -54,6 +54,11 @@ interface Props {
   // plus its ancestors and descendants), matched by the (pid, pidversion) pair, mirroring the graph's "Alert chain" focus. Undefined
   // shows the full host stream.
   readonly chainGenerations?: ChainGeneration[];
+  // True when the graph IS focused on an alert chain but that focus cannot be reproduced here, because none of the chain's
+  // processes carry a pidversion and the scope is keyed on the (pid, pidversion) pair. The list then shows the whole host, which
+  // is the honest thing to render but the wrong thing to render silently: the graph beside it shows four processes, so an
+  // unexplained thousand-row list reads as a product defect rather than as missing data.
+  readonly chainScopeUnavailable?: boolean;
 }
 
 // How long after the last keystroke the text filter commits to the URL (and thus the query). Keeps a fast typist to one fetch.
@@ -69,7 +74,7 @@ const EVENT_TYPES: { key: string; label: string }[] = [
 // HostTimeline is the flat, filterable event stream beside the process graph (issue #583): the host's exec/network/DNS events for the
 // active window, newest-first, filterable by type chips and a text box (both in the URL), keyset-paginated via the shared list hook.
 // A row links to its process node in the graph; connection/DNS rows carry the fleet-wide "search" pivot.
-export function HostTimeline({ hostId, bounds, emphasizePid, chainGenerations }: Props) {
+export function HostTimeline({ hostId, bounds, emphasizePid, chainGenerations, chainScopeUnavailable }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   // Sorted so a semantically-equal selection (e.g. a type toggled off then back on) yields one canonical order; otherwise the
   // Set-insertion order would churn filterKey and reset the cursor list on a no-op change.
@@ -177,6 +182,11 @@ export function HostTimeline({ hostId, bounds, emphasizePid, chainGenerations }:
         {/* Reflect the shared alert-scope so the analyst knows why fewer events show; the "Alert chain / Full tree" toggle in the
             breadcrumb drives both this and the graph. */}
         {scopeChain && <span className="host-timeline__scope-note">Scoped to the alert chain</span>}
+        {!scopeChain && chainScopeUnavailable === true && (
+          <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
+            Showing the whole host: this alert&apos;s processes carry no generation data, so the timeline cannot narrow to the chain.
+          </span>
+        )}
       </div>
 
       <SearchResultsFrame

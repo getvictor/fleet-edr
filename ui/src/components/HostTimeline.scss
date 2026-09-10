@@ -51,6 +51,16 @@
     white-space: nowrap;
   }
 
+  // The degraded variant explains why the list is NOT scoped, so it is a sentence rather than a three-word label and has to be
+  // allowed to wrap; inheriting the nowrap above would push the filter row off the side of the page.
+  &__scope-note--degraded {
+    color: $ui-fleet-black-75;
+    white-space: normal;
+    max-width: 34rem;
+    border-left: 3px solid $ui-warning;
+    padding-left: 8px;
+  }
+
   &__mono {
     font-family: ui-monospace, sfmono-regular, Menlo, monospace;
     font-size: 0.85rem;

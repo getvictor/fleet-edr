@@ -205,3 +205,42 @@ describe("HostTimeline", () => {
     expect(await screen.findByText("No events in this time range.")).toBeInTheDocument();
   });
 });
+
+// The graph and the timeline share one "Alert chain / Full tree" focus, but the timeline can only honour it when the chain's
+// processes carry a pidversion: the scope is keyed on the (pid, pidversion) pair. When they do not, the timeline shows the whole
+// host, and doing that silently is what made a four-node graph sit beside a thousand-row timeline with nothing to explain it.
+describe("HostTimeline alert-chain scope", () => {
+  function renderScoped(props: Partial<Parameters<typeof HostTimeline>[0]>) {
+    return render(
+      <MemoryRouter initialEntries={["/hosts/H1"]}>
+        <HostTimeline hostId="H1" bounds={BOUNDS} {...props} />
+      </MemoryRouter>,
+    );
+  }
+
+  // spec:web-ui/host-event-timeline-view/timeline-says-so-when-it-cannot-scope-to-the-chain
+  it("says the scope was dropped when the chain carries no generations", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
+    renderScoped({ chainScopeUnavailable: true });
+    expect(await screen.findByText(/Showing the whole host/)).toBeVisible();
+    // And does not simultaneously claim the opposite.
+    expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
+  });
+
+  it("claims the scope, and not the fallback, when generations did resolve", async () => {
+    const spy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
+    renderScoped({ chainGenerations: [{ pid: 42, pidversion: 7 }] });
+    expect(await screen.findByText("Scoped to the alert chain")).toBeVisible();
+    expect(screen.queryByText(/Showing the whole host/)).not.toBeInTheDocument();
+    // The scope has to reach the query, not just the label.
+    expect(spy.mock.calls[0][1].chain).toEqual([{ pid: 42, pidversion: 7 }]);
+  });
+
+  it("says nothing on a plain host view, where the full stream is what was asked for", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
+    renderScoped({});
+    await screen.findByText("sh (42)");
+    expect(screen.queryByText(/Showing the whole host/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
+  });
+});

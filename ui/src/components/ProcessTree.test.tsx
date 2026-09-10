@@ -649,3 +649,42 @@ describe("ProcessTreeView alert attribution", () => {
   });
 });
 
+
+// The Graph and the Timeline are meant to share one alert focus. The Timeline's scope is keyed on the (pid, pidversion) pair, so
+// a chain whose processes carry no pidversion cannot be scoped and the whole host stream is shown instead. These cover the
+// WIRING: ProcessTreeView deciding which of those two situations it is in and telling the Timeline. Deleting the computation
+// leaves the HostTimeline unit tests green, because those pass the prop in directly.
+describe("ProcessTreeView alert-chain timeline scope", () => {
+  const chainAlert: AlertDetail = { ...launchDaemonAlert, id: 9, process_id: 2, rule_id: "suspicious_exec", title: "Suspicious exec chain" };
+
+  beforeEach(() => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(chainAlert);
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+  });
+
+  it("tells the timeline the chain cannot be scoped when the tree carries no pidversion", async () => {
+    // `process()` builds nodes without pidversion, which is exactly the demo corpus's shape: every row NULL.
+    renderTree("?alert=9&process=2&at=1750248000000&view=timeline");
+    expect(await screen.findByText(/Showing the whole host/)).toBeVisible();
+  });
+
+  it("scopes the timeline when the tree does carry pidversion", async () => {
+    const withGen: ProcessNode[] = [
+      {
+        ...process(1, 100, 1, "/sbin/launchd"), pidversion: 11,
+        children: [{ ...process(2, 200, 100, "/usr/local/bin/fleet-edr-agent"), pidversion: 22 }],
+      },
+    ];
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(withGen));
+    const spy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    renderTree("?alert=9&process=2&at=1750248000000&view=timeline");
+
+    expect(await screen.findByText("Scoped to the alert chain")).toBeVisible();
+    expect(screen.queryByText(/Showing the whole host/)).not.toBeInTheDocument();
+    // The generations must reach the query, not just the label.
+    await waitFor(() => {
+      const lastCall = spy.mock.calls[spy.mock.calls.length - 1];
+      expect(lastCall[1].chain).toEqual(expect.arrayContaining([{ pid: 200, pidversion: 22 }]));
+    });
+  });
+});

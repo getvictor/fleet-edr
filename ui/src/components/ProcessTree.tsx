@@ -211,6 +211,12 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     return gens.length > 0 ? gens : null;
   }, [roots, alertChainIds]);
 
+  // The graph resolved a chain but the timeline cannot scope to it: every process in the chain is missing the pidversion the
+  // (pid, pidversion) scope is keyed on. Falling back to the whole host stream is right, doing it silently is not. The graph and
+  // the timeline then disagree with no explanation, which is what the demo corpus (no pidversion on any row) looks like: four
+  // nodes in the graph, the entire host in the timeline.
+  const chainScopeUnavailable = alertChainIds !== null && alertChainIds.size > 0 && alertChainGenerations === null;
+
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
   const preservedIds = useMemo(() => buildPreservedIds(roots, alertProcessIds), [roots, alertProcessIds]);
@@ -624,7 +630,13 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       />
 
       {view === "timeline" ? (
-        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} chainGenerations={alertChainGenerations ?? undefined} />
+        <HostTimeline
+          hostId={hostId}
+          bounds={bounds}
+          emphasizePid={emphasizePid}
+          chainGenerations={alertChainGenerations ?? undefined}
+          chainScopeUnavailable={chainScopeUnavailable}
+        />
       ) : (
         <>
           {graphControls}
