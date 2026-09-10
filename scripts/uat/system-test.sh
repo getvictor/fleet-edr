@@ -55,6 +55,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 UAT_TMPDIR="$(mktemp -d)"
 export UAT_TMPDIR
+
+# The agent component's installer identifier, as packaging/pkg/build.sh passes it to pkgbuild --identifier. The receipt
+# check after the install reads this, so the two have to stay in step; a rename there makes the gate report an install that
+# never landed.
+UAT_PKG_ID="com.fleetdm.edr.agent"
+
+# Where the scenario's attack.sh records the steps it could not run. Exported so attack.sh writes to the same path the
+# rule classification below reads, and inside UAT_TMPDIR so the EXIT trap takes it with everything else.
+# Overridable so the classification can be exercised without a VM: the test seeds a file and runs the driver in dry-run.
+# Same shape as UAT_VM_HOST_ID above it, which exists for the same reason.
+UAT_SKIP_FILE="${UAT_SKIP_FILE:-$UAT_TMPDIR/skipped-rules.txt}"
+export UAT_SKIP_FILE
 # Capture $? at trap entry and re-exit with it so the EXIT trap's cleanup
 # does not overwrite a failure status. Without `exit $rc`, the trap's `rm`
 # succeeds (status 0) and the shell exits 0 even when the script body
@@ -177,7 +189,32 @@ if [[ "$UAT_SKIP_INSTALL" != "1" ]]; then
   fi
   uat_log driver "installing PKG: $UAT_PKG_PATH"
   uat_scp "$UAT_PKG_PATH" "$VM_SSH_TARGET:/tmp/edr-uat.pkg"
+
+  # Read the clock from the VM, not from here. The receipt check below compares against install-time as the VM recorded it,
+  # and the driver's host is a different machine whose clock is not the same one.
+  INSTALL_STARTED_UNIX=$(uat_ssh "$VM_SSH_TARGET" "date +%s" 2>/dev/null || echo 0)
+
+  # The installer's exit code is NOT the outcome here, and treating it as one is what issue #966 reported. The install
+  # completes and then drops the SSH session as the network-extension swap tears down established TCP, so `sudo installer`
+  # returns 255 through a dead connection on a run that worked. Both v0.5.0 RC gates were completed by installing by hand
+  # and passing --skip-install, which meant the release gate never covered upgrade-plus-detect as one flow.
+  #
+  # So: record whatever the connection reported, then decide on the receipt. A genuine install failure still fails, one
+  # step later and for a reason that names what was actually checked.
+  set +e
   uat_ssh "$VM_SSH_TARGET" "sudo installer -pkg /tmp/edr-uat.pkg -target /"
+  INSTALLER_EXIT=$?
+  set -e
+  if [[ "$INSTALLER_EXIT" != "0" ]]; then
+    uat_log driver "installer connection ended with $INSTALLER_EXIT; verifying by receipt rather than trusting it"
+  fi
+
+  uat_log driver "waiting up to 120s for the $UAT_PKG_ID receipt to record this install"
+  if ! uat_wait_for_pkg_receipt "$VM_SSH_TARGET" "$UAT_PKG_ID" "$INSTALL_STARTED_UNIX" 120; then
+    uat_log driver "no fresh $UAT_PKG_ID receipt on the VM: the install did not complete (connection exit was $INSTALLER_EXIT)"
+    exit 2
+  fi
+  uat_log driver "install recorded by pkgutil receipt"
 
   # 60s extension-activation budget per extension-testing.md L5 spec. Catches
   # signing / notarization regressions: an unsigned PKG installs but the
@@ -325,7 +362,19 @@ fi
 uat_log driver "polling for ${#SCENARIO_RULES[@]} expected alerts within ${SCENARIO_WINDOW}s"
 PASSED=0
 FAILED=0
+SKIPPED=0
+SKIPPED_RULES=()
 for rule_id in "${SCENARIO_RULES[@]}"; do
+  # A rule whose attack step never ran is classified BEFORE polling, and not polled at all. Polling it would spend the
+  # full window waiting for an alert nothing could have raised, and then report the wait as a detection miss: the exact
+  # misattribution issue #965 was filed for. It also makes the run fail a window sooner per skipped rule.
+  skip_reason="$(uat_skip_reason "$rule_id")"
+  if [[ -n "$skip_reason" ]]; then
+    uat_log driver "  skipped: $rule_id (prerequisite: $skip_reason)"
+    SKIPPED_RULES+=("$rule_id (prerequisite: $skip_reason)")
+    SKIPPED=$(( SKIPPED + 1 ))
+    continue
+  fi
   if uat_poll_alerts "$HOST_ID" "$rule_id" "$SCENARIO_WINDOW" "$SCENARIO_STARTED_UNIX"; then
     uat_log driver "  hit: $rule_id"
     PASSED=$(( PASSED + 1 ))
@@ -335,10 +384,25 @@ for rule_id in "${SCENARIO_RULES[@]}"; do
   fi
 done
 
-uat_log driver "scenario=$SCENARIO_ID rules_passed=$PASSED rules_failed=$FAILED"
+uat_log driver "scenario=$SCENARIO_ID rules_passed=$PASSED rules_failed=$FAILED rules_skipped=$SKIPPED"
+
+# A real miss outranks a skip. Both can happen in one run, and the missing detection is the more serious finding, so it
+# picks the verdict and the exit code.
 if [[ "$FAILED" -gt 0 ]]; then
   uat_log driver "FAIL scenario=$SCENARIO_ID"
   exit 2
+fi
+
+# A skip is NOT a pass: a rule that was never exercised has not been certified, and this is a release gate. It gets its
+# own exit code and a verdict naming the PREREQUISITE rather than the rule, because the previous behaviour failed for the
+# right overall reason while pointing at the wrong subsystem, and that is what cost the diagnosis time.
+if [[ "$SKIPPED" -gt 0 ]]; then
+  for entry in "${SKIPPED_RULES[@]}"; do
+    uat_log driver "  never exercised: $entry"
+  done
+  uat_log driver "INCOMPLETE scenario=$SCENARIO_ID: $SKIPPED of ${#SCENARIO_RULES[@]} rules were never exercised"
+  uat_log driver "fix the prerequisites named above and re-run; a rule that did not run has not been certified"
+  exit 3
 fi
 
 uat_log driver "PASS scenario=$SCENARIO_ID"

@@ -558,6 +558,14 @@ tasks:
     cmds:
       - bash scripts/test-e2e-coverage.sh
 
+  test:uat:driver:
+    desc: |
+      Tests for the L5 driver's rule classification and the runbook's skip propagation (issues #965, #966). Needs no VM
+      and no server: the driver's --dry-run mode loads the scenario and short-circuits every remote call, which reaches
+      the part that decides pass / miss / skipped. The install path is not covered here and is exercised on edr-qa.
+    cmds:
+      - bash scripts/uat/system-test.test.sh
+
   test:short:
     desc: Fast Go tests only (no -race, no DB-dependent suites)
     cmds:
@@ -583,7 +591,20 @@ tasks:
       Run every fast linter. Does NOT include lint:nilaway (inter-procedural
       analysis, ~tens of seconds) or lint:vulncheck (network-bound; queries
       the vulnerability DB); run those explicitly when needed.
-    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md, lint:md:prose, lint:dashes]
+    deps: [lint:go, lint:ui, lint:swift, lint:actions, lint:md, lint:md:prose, lint:dashes, lint:sh]
+
+  lint:sh:
+    desc: |
+      shellcheck over the UAT / QA shell harness. Scoped to those scripts rather than every .sh in the tree: they are
+      release-gate infrastructure whose failures are silent (a driver that misclassifies a result still exits cleanly),
+      and the rest of the tree's scripts have not been brought to a clean baseline yet. The packaging scripts have their
+      own shellcheck step in .github/workflows/pkg-dryrun.yml and are deliberately not duplicated here.
+
+      Not wired into CI as its own workflow: it runs as part of `task lint`, and adding a check that does not gate the
+      merge is a decision worth making on its own rather than as a side effect of a bug fix.
+    cmds:
+      - shellcheck scripts/uat/system-test.sh scripts/uat/system-test.test.sh scripts/uat/lib/common.sh
+          scripts/uat/scenarios/*/attack.sh scripts/qa/attack-runbook.sh
 
   lint:dashes:
     desc: |

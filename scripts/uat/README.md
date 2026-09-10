@@ -54,6 +54,31 @@ Or call the driver directly (the task target is a thin pass-through):
 
     scripts/uat/system-test.sh attack-runbook --skip-install
 
+## VM prerequisites
+
+Beyond the SIP / Gatekeeper posture described under "Why edr-qa and not edr-dev", the runbook's `privilege_launchd_plist_write` step needs passwordless sudo for the dropper it compiles. Without it the step is skipped and the driver reports the scenario as INCOMPLETE rather than certifying a rule it never exercised.
+
+The dropper is built at a fresh path on every run, because BTM keys launch-item identity on the executable path and a fixed path would fire the rule only on the host's first ever run. So the sudoers entry needs a glob:
+
+    victor ALL=(ALL) NOPASSWD: /private/tmp/edr-attack-runbook/synthetic_dropper_*, /tmp/edr-attack-runbook/synthetic_dropper_*
+
+Both prefixes are required, not one. macOS resolves `/tmp` to `/private/tmp`, and a sudoers `*` does not span `/`, so a single-prefix rule looks correct and silently matches nothing.
+
+Install it as `/etc/sudoers.d/edr-uat-dropper`, mode 0440 root:wheel, and validate with `visudo -c -f /etc/sudoers.d/edr-uat-dropper` before it goes live. The filename must contain no `.`: sudo silently ignores any file in `sudoers.d` whose name has one.
+
+This is recorded here rather than only on the VM because it has been lost once already, when `edr-qa` was reprovisioned after it was first applied for v0.1.1-rc.13.
+
+## Exit codes
+
+| Code | Meaning                                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------------------ |
+| 0    | PASS. Every expected rule was exercised and alerted.                                                               |
+| 1    | Usage or setup error: bad scenario, missing env, missing `expected.yaml`.                                          |
+| 2    | FAIL. An expected rule was exercised and did not alert, the attack script failed, or the install did not complete. |
+| 3    | INCOMPLETE. Every rule that ran alerted, but at least one was never exercised because a prerequisite was missing.  |
+
+A skip is deliberately not a pass. A rule the run never exercised has not been certified, and this is a release gate, so 3 is a failure for the purposes of shipping. It is distinguished from 2 because the fix is on the VM rather than in the product, and reporting an unrun step as a detection miss pointed at the wrong subsystem for long enough to be worth its own exit code.
+
 ## Running
 
 Required environment:

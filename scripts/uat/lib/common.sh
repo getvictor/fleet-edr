@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+#
 # scripts/uat/lib/common.sh: shared helpers for the L5 system-test driver.
 #
 # Sourced (not executed) by scripts/uat/system-test.sh and by scenario attack.sh
@@ -326,6 +328,64 @@ uat_wait_for_host_enrolment() {
     fi
     if [[ "${UAT_DRY_RUN:-0}" == "1" ]]; then
       echo "00000000-0000-0000-0000-DRYRUNDRYRUN"
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+# uat_skip_reason <rule_id>: echo the prerequisite that stopped a rule's attack
+# step from running, or nothing if the step ran.
+#
+# Reads UAT_SKIP_FILE, which the scenario's attack.sh fills from the runbook's
+# `[runbook] SKIP rule_id=<id> reason=<text>` lines. A rule with no entry ran,
+# and its absence of an alert is a real detection miss.
+#
+# The distinction is the whole point of issue #965: polling for a rule whose
+# attack never fired reports "miss: privilege_launchd_plist_write", which reads
+# as the EDR failing to detect a LaunchDaemon registration when what actually
+# happened is that no LaunchDaemon was ever registered. On the v0.5.0-rc.1 run
+# two separate environmental gaps each surfaced that way.
+#
+# Matching is anchored on `rule_id=<id> ` with a trailing space so a rule whose
+# id is a prefix of another's cannot claim its neighbour's skip.
+uat_skip_reason() {
+  local rule_id="$1"
+  local file="${UAT_SKIP_FILE:-}"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  sed -n "s/^.*rule_id=${rule_id} reason=//p" "$file" | head -1
+}
+
+# uat_wait_for_pkg_receipt <target> <pkg_id> <since_unix> <within_seconds>:
+# poll until the VM's installer receipt for <pkg_id> reports an install-time at
+# or after <since_unix>, over a FRESH connection each attempt.
+#
+# This exists because the install drops the driver's SSH session (issue #966).
+# The install itself completes; `sudo installer` returns through a connection
+# the network-extension swap has already torn down, so the driver saw exit 255
+# and gave up on an install that had worked. Verifying the outcome is therefore
+# the honest check, and the exit code is not.
+#
+# Keyed on install-time rather than on the version string, so a reinstall of the
+# SAME version is still proved to have happened. A version comparison passes
+# vacuously there, which is exactly the case a re-run of a failed gate hits.
+# <since_unix> must come from the VM's own clock: the driver's host and the VM
+# are different machines and the comparison is meaningless across their skew.
+uat_wait_for_pkg_receipt() {
+  local vm="$1" pkg_id="$2" since="$3" within="$4"
+  local deadline installed
+  deadline=$(( $(date +%s) + within ))
+  # `installed` is declared with `deadline` above rather than inside the loop, matching the other pollers here. Not style:
+  # zsh ECHOES a `local` re-declaration on the second iteration, so a loop-local would print `installed=<epoch>` to stdout
+  # on every retry. The scripts all run under bash, but common.sh is sourced by hand during triage on a machine whose login
+  # shell is zsh, and stray stdout from a helper is the kind of thing that corrupts whatever captures it next.
+  while (( $(date +%s) < deadline )); do
+    installed=$(uat_ssh "$vm" "pkgutil --pkg-info '$pkg_id' 2>/dev/null | awk '/^install-time:/{print \$2}'" 2>/dev/null || echo "")
+    if [[ -n "$installed" && "$installed" =~ ^[0-9]+$ ]] && (( installed >= since )); then
+      return 0
+    fi
+    if [[ "${UAT_DRY_RUN:-0}" == "1" ]]; then
       return 0
     fi
     sleep 5
