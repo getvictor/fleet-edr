@@ -214,8 +214,8 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // How much of the chain the timeline can actually reach. The scope is keyed on the (pid, pidversion) pair, so a chain process
   // with no pidversion cannot be scoped to, and there are three outcomes rather than two:
   //
-  //   none resolved     -> the timeline shows the whole host (chainScopeUnavailable)
-  //   some resolved     -> the timeline is scoped, but silently WITHOUT the unresolved processes' events (chainOmitted > 0)
+  //   none resolved     -> the timeline shows the whole host (unavailable)
+  //   some resolved     -> the timeline is scoped, but silently WITHOUT the unresolved processes' events (partial)
   //   all resolved      -> the timeline mirrors the graph exactly
   //
   // The middle case is the dangerous one and review caught it: claiming "Scoped to the alert chain" while dropping a process's

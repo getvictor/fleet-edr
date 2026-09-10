@@ -248,7 +248,7 @@ describe("HostTimeline alert-chain scope", () => {
   // The dangerous middle case: scoped, but silently missing a process's events. Claiming "Scoped to the alert chain" here is
   // worse than showing too much, because a scoped list gives the analyst no reason to suspect anything is absent.
   // spec:web-ui/host-event-timeline-view/timeline-admits-an-alert-chain-it-could-only-partly-scope
-  it("admits which processes are missing when only part of the chain could be scoped", async () => {
+  it("admits that part of the chain is missing, without claiming how much", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
     renderScoped({ chainGenerations: [{ pid: 42, pidversion: 7 }], chainPartiallyScoped: true });
     expect(await screen.findByText(/Scoped to part of the alert chain/)).toBeVisible();

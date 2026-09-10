@@ -684,6 +684,12 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
   // that is not the problem. Review caught the condition claiming more than it proves.
   it.each([
     ["the tree failed to load", () => { vi.spyOn(api, "getProcessTree").mockRejectedValue(new Error("boom")); }],
+    // The requirement covers a pending FIRST read as well as a failed one, and they reach the guard by different fields
+    // (loading vs error), so exercising only the failure would leave half of it unverified. Never resolves, which is exactly
+    // the state under test.
+    ["the first read is still pending", () => {
+      vi.spyOn(api, "getProcessTree").mockReturnValue(new Promise(() => { /* pending for the life of the test */ }));
+    }],
   ])("stays silent while %s, rather than naming an absence it cannot see yet", async (_label, arrange) => {
     arrange();
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
