@@ -211,11 +211,21 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     return gens.length > 0 ? gens : null;
   }, [roots, alertChainIds]);
 
-  // The graph resolved a chain but the timeline cannot scope to it: every process in the chain is missing the pidversion the
-  // (pid, pidversion) scope is keyed on. Falling back to the whole host stream is right, doing it silently is not. The graph and
-  // the timeline then disagree with no explanation, which is what the demo corpus (no pidversion on any row) looks like: four
-  // nodes in the graph, the entire host in the timeline.
-  const chainScopeUnavailable = alertChainIds !== null && alertChainIds.size > 0 && alertChainGenerations === null;
+  // How much of the chain the timeline can actually reach. The scope is keyed on the (pid, pidversion) pair, so a chain process
+  // with no pidversion cannot be scoped to, and there are three outcomes rather than two:
+  //
+  //   none resolved     -> the timeline shows the whole host (chainScopeUnavailable)
+  //   some resolved     -> the timeline is scoped, but silently WITHOUT the unresolved processes' events (chainOmitted > 0)
+  //   all resolved      -> the timeline mirrors the graph exactly
+  //
+  // The middle case is the dangerous one and review caught it: claiming "Scoped to the alert chain" while dropping a process's
+  // events is worse than showing too much, because nothing suggests anything is missing. Live data produces it: 534 of 14,099
+  // process rows on a real host carry no generation, so any chain touching one of them lands here.
+  const chainCoverage = useMemo(() => {
+    if (!alertChainIds || alertChainIds.size === 0) return { unavailable: false, omitted: 0 };
+    const resolved = alertChainGenerations?.length ?? 0;
+    return { unavailable: resolved === 0, omitted: alertChainIds.size - resolved };
+  }, [alertChainIds, alertChainGenerations]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
@@ -635,7 +645,8 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           bounds={bounds}
           emphasizePid={emphasizePid}
           chainGenerations={alertChainGenerations ?? undefined}
-          chainScopeUnavailable={chainScopeUnavailable}
+          chainScopeUnavailable={chainCoverage.unavailable}
+          chainOmittedProcesses={chainCoverage.omitted}
         />
       ) : (
         <>

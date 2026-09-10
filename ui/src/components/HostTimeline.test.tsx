@@ -236,6 +236,23 @@ describe("HostTimeline alert-chain scope", () => {
     expect(spy.mock.calls[0][1].chain).toEqual([{ pid: 42, pidversion: 7 }]);
   });
 
+  // The dangerous middle case: scoped, but silently missing a process's events. Claiming "Scoped to the alert chain" here is
+  // worse than showing too much, because a scoped list gives the analyst no reason to suspect anything is absent.
+  // spec:web-ui/host-event-timeline-view/timeline-admits-an-alert-chain-it-could-only-partly-scope
+  it("admits which processes are missing when only part of the chain could be scoped", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
+    renderScoped({ chainGenerations: [{ pid: 42, pidversion: 7 }], chainOmittedProcesses: 2 });
+    expect(await screen.findByText(/without 2 processes that carry no generation data/)).toBeVisible();
+    // It must not also show the unqualified label, which is the claim being corrected.
+    expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
+  });
+
+  it("says process, not processes, when exactly one is missing", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
+    renderScoped({ chainGenerations: [{ pid: 42, pidversion: 7 }], chainOmittedProcesses: 1 });
+    expect(await screen.findByText(/without 1 process that carries no generation data/)).toBeVisible();
+  });
+
   it("says nothing on a plain host view, where the full stream is what was asked for", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
     renderScoped({});

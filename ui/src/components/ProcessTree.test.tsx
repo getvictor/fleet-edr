@@ -668,6 +668,24 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
     expect(await screen.findByText(/Showing the whole host/)).toBeVisible();
   });
 
+  // A chain where only some processes carry a generation. The scope applies, so the old code reported it as fully scoped while
+  // dropping the ungenerationed process's events; the wiring has to distinguish "scoped" from "scoped, minus part of the chain".
+  it("reports how much of a mixed chain the timeline could not reach", async () => {
+    const mixed: ProcessNode[] = [
+      {
+        // The root carries no generation; its child, the alerted process, does.
+        ...process(1, 100, 1, "/sbin/launchd"),
+        children: [{ ...process(2, 200, 100, "/usr/local/bin/fleet-edr-agent"), pidversion: 22 }],
+      },
+    ];
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(mixed));
+    renderTree("?alert=9&process=2&at=1750248000000&view=timeline");
+
+    expect(await screen.findByText(/without 1 process that carries no generation data/)).toBeVisible();
+    expect(screen.queryByText("Scoped to the alert chain")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing the whole host/)).not.toBeInTheDocument();
+  });
+
   it("scopes the timeline when the tree does carry pidversion", async () => {
     const withGen: ProcessNode[] = [
       {

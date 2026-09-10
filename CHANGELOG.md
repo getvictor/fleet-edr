@@ -6,7 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
-- **The event timeline now says when it could not narrow to an alert's chain.** Opening an alert's timeline shows only that alert's processes, but it can only do that when those processes carry the generation identifier it matches on. Where they do not, it lists the whole host, which is why a four-process graph could sit beside a timeline of everything with nothing to explain the difference. It now says so, and why. Which events are listed is unchanged.
+- **The event timeline now says when it could not narrow to an alert's chain.** Opening an alert's timeline shows only that alert's processes, but it can only do that for processes carrying the generation identifier it matches on. Where none of them do it lists the whole host, which is why a four-process graph could sit beside a timeline of everything with nothing to explain the difference; where only some do, it lists a partial chain while looking complete. It now says which of these you are looking at, and how many processes were left out. Which events are listed is unchanged.
 
 ## [0.5.0] (2026-09-09)
 

@@ -4,7 +4,7 @@
 
 ### Requirement: Host event timeline view
 
-The host page SHALL offer a timeline view alongside the process graph, selectable from the page with the active view reflected in the URL so a switch is bookmarkable and preserves the active time window and any alert anchor. The graph SHALL remain the default view. The timeline view SHALL render the host's exec, network-connection, and DNS-query events for the active time window as a flat table in descending event-time order, showing per event the time, the event type, the originating process, and the type-specific detail (for a connection the remote address and port; for a DNS query the query name and resolved addresses). The timeline SHALL be filterable by event type and by a text match, SHALL page additional results on demand rather than replacing the current rows, and SHALL show the total number of matching events. Switching between the graph and the timeline SHALL NOT change the active time window. When the page is entered for an alert with the alert-chain focus active, the timeline SHALL scope to the alert chain (only events from the alerted process and its ancestors and descendants), mirroring the graph's focus, and the shared "Alert chain / Full tree" control SHALL switch the scope for both views at once; when the focus is off, the timeline SHALL show the full host event stream. When the alert-chain focus is active but the chain cannot be scoped, because none of its processes carry the process generation the scope is keyed on, the timeline SHALL show the full host event stream and SHALL state that it is doing so and why, so the operator is never left to infer a defect from a graph and a timeline that disagree without explanation.
+The host page SHALL offer a timeline view alongside the process graph, selectable from the page with the active view reflected in the URL so a switch is bookmarkable and preserves the active time window and any alert anchor. The graph SHALL remain the default view. The timeline view SHALL render the host's exec, network-connection, and DNS-query events for the active time window as a flat table in descending event-time order, showing per event the time, the event type, the originating process, and the type-specific detail (for a connection the remote address and port; for a DNS query the query name and resolved addresses). The timeline SHALL be filterable by event type and by a text match, SHALL page additional results on demand rather than replacing the current rows, and SHALL show the total number of matching events. Switching between the graph and the timeline SHALL NOT change the active time window. When the page is entered for an alert with the alert-chain focus active, the timeline SHALL scope to the alert chain (only events from the alerted process and its ancestors and descendants), mirroring the graph's focus, and the shared "Alert chain / Full tree" control SHALL switch the scope for both views at once; when the focus is off, the timeline SHALL show the full host event stream. The scope is keyed on each process's generation, which not every process carries, so the timeline SHALL distinguish three outcomes rather than two. When no process in the chain carries a generation, the timeline SHALL show the full host event stream and SHALL state that it is doing so and why, so the operator is never left to infer a defect from a graph and a timeline that disagree without explanation. When only some of them do, the timeline SHALL scope to the processes it can reach and SHALL state how many it omitted, because a list that presents itself as the alert chain while silently dropping part of that chain is worse than one that shows too much. When all of them do, the timeline SHALL scope without qualification.
 
 #### Scenario: Timeline view lists window events filterable by type
 
@@ -27,6 +27,14 @@ The host page SHALL offer a timeline view alongside the process graph, selectabl
 - **THEN** the timeline lists the full host event stream
 - **AND** it states that it is showing the whole host because the chain cannot be narrowed
 - **AND** it does not simultaneously claim to be scoped to the alert chain
+
+#### Scenario: Timeline admits an alert chain it could only partly scope
+
+- **GIVEN** the host page entered for an alert whose chain carries a process generation on some of its processes but not all
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline scopes to the processes it can reach
+- **AND** it states how many processes it omitted
+- **AND** it does not present itself as scoped to the whole alert chain
 
 #### Scenario: The graph and timeline share one time window
 
