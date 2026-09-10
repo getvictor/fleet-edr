@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **The event timeline now says when it could not narrow to an alert's chain.** Opening an alert's timeline shows only that alert's processes, but it can only do that when those processes carry the generation identifier it matches on. Where they do not, it lists the whole host, which is why a four-process graph could sit beside a timeline of everything with nothing to explain the difference. It now says so, and why. Which events are listed is unchanged.
+
 ## [0.5.0] (2026-09-09)
 
 Feature release on top of 0.4.0. The headline is rule content: the detection rules a deployment runs move out of the binary and into the database, so an upgrade delivers new rules, you can write your own through an audited API, and a rule set that turns out wrong can be rolled back. Also in this release: per-rule match counts and cost in the detection-tuning table, capture-provider health per host, a new alert for destruction of sudo policy, and a long list of detection-accuracy fixes.
