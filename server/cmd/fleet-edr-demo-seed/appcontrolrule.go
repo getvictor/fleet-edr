@@ -112,8 +112,13 @@ func upsertRuleAndBumpPolicy(ctx context.Context, db dbExecQuerier, policyID int
 //
 // Not a constant. The block derives its identifier from this scenario at runtime, so a second copy of the path in the seeder
 // would drift silently the moment the corpus is edited, leaving a rule that denies one binary beside an alert about another.
-func blockedBinaryPath() (string, error) {
-	for _, host := range hostManifest {
+func blockedBinaryPath() (string, error) { return blockedBinaryPathIn(hostManifest) }
+
+// blockedBinaryPathIn is blockedBinaryPath over a given manifest, so its two failure branches are reachable from a test. Both
+// describe a real misconfiguration a corpus edit can produce (the app-control scenario removed, or its exec deleted), which is
+// why they are errors rather than something to shrug at, and why they should not be untestable.
+func blockedBinaryPathIn(manifest []demoHost) (string, error) {
+	for _, host := range manifest {
 		for _, atk := range host.Attacks {
 			if atk.Kind != kindAppControl {
 				continue

@@ -359,3 +359,14 @@ func TestWaitReady(t *testing.T) {
 		assert.Contains(t, err.Error(), "not met within")
 	})
 }
+
+// When no rule could be seeded there is no wire id to cite, and the block falls back to the provenance marker. That keeps the
+// demo exactly as incoherent as it was before rather than making it worse by citing an id that resolves to nothing.
+func TestBuildBlockEnvelope_FallsBackWhenNoRuleWasSeeded(t *testing.T) {
+	t.Parallel()
+	env := buildBlockEnvelope("HOST-1", 6123, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", "", 1700000000000000000)
+
+	var p map[string]any
+	require.NoError(t, json.Unmarshal(env.Payload, &p))
+	assert.Equal(t, appControlSourceRef, p["rule_id"], "no seeded rule means the block names the marker, not an invented id")
+}

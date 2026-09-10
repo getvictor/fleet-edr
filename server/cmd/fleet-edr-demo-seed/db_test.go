@@ -792,3 +792,65 @@ func TestBlockedBinaryPath_ComesFromTheScenario(t *testing.T) {
 	require.NotEmpty(t, want, "the manifest must carry an app-control scenario for this to prove anything")
 	assert.Equal(t, want, got)
 }
+
+// The two database failures that are not a missing policy. Both are real: a schema the seeder meets before migrations have
+// finished, or a table it lacks rights on. Neither should be swallowed the way a genuinely absent policy deliberately is.
+func TestSeedAppControlRule_ReportsDatabaseFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the policy lookup fails for a reason other than absence", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		ctx := t.Context()
+		// Other tables carry foreign keys onto policies, so the drop needs the checks off. The per-test database is thrown
+		// away afterwards, so mutilating its schema costs nothing.
+		_, err := db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE app_control_policies`)
+		require.NoError(t, err)
+
+		_, err = seedAppControlRule(ctx, db, discardLogger())
+		assert.Error(t, err, "a lookup failing for any reason other than absence is reported, not treated as a skip")
+	})
+
+	t.Run("the rule write fails", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		ctx := t.Context()
+		insertDemoPolicy(t, db, 1)
+		_, err := db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE app_control_rules`)
+		require.NoError(t, err)
+
+		_, err = seedAppControlRule(ctx, db, discardLogger())
+		assert.Error(t, err, "a failed write is reported rather than leaving the caller believing a rule exists")
+	})
+}
+
+// A manifest with no application-control scenario is a real misconfiguration a corpus edit can produce, so it is an error
+// rather than a silent fallback, and taking the manifest as a parameter is what makes it reachable from a test.
+//
+// The sibling branch, an app-control scenario carrying no exec, is deliberately left uncovered: every scenario in the corpus
+// has one, so reaching it would mean inventing a fixture whose only purpose is to be wrong. The guard stays because a corpus
+// edit can still produce that state; a contrived test for it would prove nothing about the corpus we ship.
+func TestBlockedBinaryPathIn_RefusesAManifestItCannotReadThePathFrom(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		manifest []demoHost
+		wantErr  string
+	}{
+		{"no application-control scenario", []demoHost{{File: "alex-mbp.jsonl", Attacks: []wovenAttack{
+			{File: "keychain-dump.yaml", Kind: kindAttack},
+		}}}, "no application-control scenario"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := blockedBinaryPathIn(tc.manifest)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
