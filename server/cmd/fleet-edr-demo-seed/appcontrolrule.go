@@ -82,11 +82,11 @@ func upsertRuleAndBumpPolicy(ctx context.Context, db dbExecQuerier, policyID int
 	if err != nil {
 		return 0, fmt.Errorf("upsert demo app-control rule: %w", err)
 	}
+	// A driver that cannot report the affected count leaves us unable to tell an insert from a no-op, and the safe reading is
+	// that the snapshot changed: bumping a version nothing needed costs a redundant fan-out, while not bumping one that did
+	// change hides the rule from every agent. Not an error path, because there is a correct answer without one.
 	affected, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("app-control rule rows affected: %w", err)
-	}
-	if affected != 0 {
+	if err != nil || affected != 0 {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE app_control_policies SET version = version + 1 WHERE id = ?`, policyID); err != nil {
 			return 0, fmt.Errorf("bump demo app-control policy version: %w", err)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -853,4 +855,34 @@ func TestBlockedBinaryPathIn_RefusesAManifestItCannotReadThePathFrom(t *testing.
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+// failingBeginTx is a dbExecQuerier whose transaction cannot be opened, standing in for a database that has gone away between
+// the policy lookup and the write. The rule write and the version bump have to happen together, so failing to get a
+// transaction is a hard stop rather than something to paper over with two loose statements.
+type failingBeginTx struct{ dbExecQuerier }
+
+func (failingBeginTx) BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) {
+	return nil, errors.New("database is closed")
+}
+
+func TestSeedAppControlRule_ReportsAnUnopenableTransaction(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	insertDemoPolicy(t, db, 1)
+
+	_, err := seedAppControlRule(t.Context(), failingBeginTx{dbExecQuerier: db}, discardLogger())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "begin app-control rule tx")
+}
+
+// A manifest naming a scenario the corpus does not contain is the other way a corpus edit breaks this: renaming the file
+// without updating the manifest. The seeder must say which file it could not read rather than seeding a rule for nothing.
+func TestBlockedBinaryPathIn_ReportsAnUnreadableScenario(t *testing.T) {
+	t.Parallel()
+	_, err := blockedBinaryPathIn([]demoHost{{File: "alex-mbp.jsonl", Attacks: []wovenAttack{
+		{File: "does-not-exist.yaml", Kind: kindAppControl},
+	}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does-not-exist.yaml")
 }
