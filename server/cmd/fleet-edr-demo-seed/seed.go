@@ -163,14 +163,15 @@ func (s *seeder) maybeRefreshExisting(ctx context.Context) (bool, error) {
 	return true, s.seedUserIfConfigured(ctx)
 }
 
-// buildBlockEnvelope constructs the application_control_block wire envelope the ApplicationControlBlock rule consumes. Payload shape
-// mirrors server/rules/internal/catalog/application_control_block.go's applicationControlBlockPayload.
-// buildBlockEnvelope fabricates the application_control_block the extension would have emitted.
+// buildBlockEnvelope fabricates the application_control_block wire envelope the extension would have emitted, in the shape the
+// ApplicationControlBlock rule consumes (see applicationControlBlockPayload in server/rules/internal/catalog).
 //
 // wireRuleID is the seeded rule's identity as the extension would report it (rulesapi.ApplicationControlRuleID of its row id).
-// Passing it in rather than naming a constant is the whole point: the alert has to cite the rule that exists, so that an
-// operator clicking through from it reaches a rule denying the same binary. Empty when no rule could be seeded, in which case
-// the block falls back to the provenance marker and the demo is merely as incoherent as it was before, not more so.
+// Passing it in rather than naming a constant is the whole point: the alert has to cite a rule that exists, so that the
+// identifier on the alert resolves to the rule on the Application control page rather than to nothing. The alert title itself
+// is NOT a link to it: the UI links a title only for rules the catalog documents, and app-control rule ids never appear there
+// (ProcessTree.tsx says why, and issue #975 tracks giving them a route of their own). Empty when no rule could be seeded, in
+// which case the block falls back to the provenance marker and the demo is merely as incoherent as it was before, not more so.
 func buildBlockEnvelope(hostID string, pid int, execPath, wireRuleID string, tsNs int64) fakeagent.Envelope {
 	ruleID := wireRuleID
 	if ruleID == "" {

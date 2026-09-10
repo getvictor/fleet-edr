@@ -15,8 +15,9 @@ import (
 //
 // The demo fabricates the block event, because the real verdict is made on-device by the extension's AUTH_EXEC walker and no
 // fake agent emits one. Fabricating it alone left the Application control page showing a Default policy with zero rules beside
-// an alert claiming a policy had blocked CoinMiner: the story had no middle, and an operator clicking through from the alert
-// found nothing that explained it.
+// an alert claiming a policy had blocked CoinMiner: the story had no middle, and an operator who went looking for the rule
+// behind the alert found an empty policy. This gives the two ends something to meet at; it does not make the alert title a
+// link, which is a separate UI gap tracked in issue #975.
 //
 // Two things this has to get right, both of which an earlier attempt got wrong (issue #971):
 //

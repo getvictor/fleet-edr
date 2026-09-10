@@ -7,7 +7,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Fixed
 
 - **The event timeline now says when it could not narrow to an alert's chain.** Opening an alert's timeline shows only that alert's processes, but it can only do that for processes carrying the generation identifier it matches on. Where none of them do it lists the whole host, which is why a four-process graph could sit beside a timeline of everything with nothing to explain the difference; where only some do, it lists a partial chain while looking complete. It now says which of these you are looking at. Which events are listed is unchanged.
-- **The Mac-free demo's application-control alert leads to the rule behind it.** The demo showed an alert saying a policy had blocked CoinMiner beside a policy holding no rules, so clicking through explained nothing. It now seeds the matching rule, and the alert cites that rule's own identifier rather than a name nothing else uses.
+- **The Mac-free demo's application-control alert names a rule that exists.** The demo showed an alert saying a policy had blocked CoinMiner beside a Default policy holding no rules. The demo now seeds the matching rule, and the alert cites that rule's own identifier rather than a name nothing else uses, so the Application control page shows the rule the alert is about.
 - **Demo process events carry a process generation.** Without it the demo's alert timelines could not narrow to the alerting process's own chain and listed the whole host instead.
 
 ## [0.5.0] (2026-09-09)
