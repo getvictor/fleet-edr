@@ -67,3 +67,12 @@
     }
   }
 }
+
+// The tuning link inside the "ship silent" stat card. Sized down from the caption so the card still reads as a metric rather
+// than a call to action, which would overstate a number that is fine as it stands for a deployment that has not tuned.
+.attack-coverage__tune-link {
+  display: inline-block;
+  text-transform: none;
+  font-weight: 600;
+  white-space: nowrap;
+}

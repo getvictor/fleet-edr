@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
+import { useCan, PermissionAction } from "../permissions-core";
 import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
 import { Button } from "./ui/Button";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
-import { TECHNIQUE_CATALOG, type TechniqueMeta } from "./attack-techniques";
+import { TECHNIQUE_CATALOG, TACTIC_ORDER, type TechniqueMeta } from "./attack-techniques.generated";
 import "./AttackCoverage.scss";
 
 // AttackCoverage renders the MITRE ATT&CK technique coverage that the
@@ -34,24 +35,11 @@ interface CoverageGroup {
 // All 14 enterprise tactics in MITRE's canonical kill-chain order. Anything
 // the catalog or server emits that isn't on this list lands at the end via
 // the "leftover" pass below, never silently dropped.
-const TACTIC_ORDER = [
-  "Reconnaissance",
-  "Resource Development",
-  "Initial Access",
-  "Execution",
-  "Persistence",
-  "Privilege Escalation",
-  "Defense Evasion",
-  "Credential Access",
-  "Discovery",
-  "Lateral Movement",
-  "Collection",
-  "Command and Control",
-  "Exfiltration",
-  "Impact",
-];
-
 export function AttackCoverage() {
+  // The Coverage page is deliberately open to every operator, but Detection tuning is not. Offering the link to someone
+  // who would land on the no-access page is worse than not offering it: the card still carries the number, which is the
+  // part they can act on by asking someone who has the permission.
+  const canTune = useCan()(PermissionAction.DetectionConfigRead);
   const [layer, setLayer] = useState<AttackNavigatorLayer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,7 +122,26 @@ export function AttackCoverage() {
         <>
           <SummaryStrip>
             <StatCard accent="green" value={alerting} label="techniques alerting by default" />
-            {notAlerting > 0 && <StatCard accent="neutral" value={notAlerting} label="techniques not alerting by default" />}
+            {notAlerting > 0 && (
+              <StatCard
+                accent="neutral"
+                value={notAlerting}
+                // The number stays. It is the single most load-bearing fact on this page: most of the catalog ships silent,
+                // and a reader who takes "techniques alerting" as the coverage figure is off by a factor of five. What it
+                // needed was somewhere to go. Left bare it reads as a defect to switch off, when these rules ship in monitor
+                // mode deliberately, because promoting them without tuning buries the alerts that matter under theirs.
+                label={(
+                  <>
+                    techniques covered only by rules that ship silent{canTune && (
+                      <>
+                        {" "}
+                        <Link className="attack-coverage__tune-link" to="/detection-config">promote or tune</Link>
+                      </>
+                    )}
+                  </>
+                )}
+              />
+            )}
             <StatCard accent="green" value={distinctRules.size} label="detection rules" />
             <StatCard accent="green" value={groups.length} label="tactics with coverage" />
           </SummaryStrip>
@@ -242,12 +249,21 @@ function buildCoverageGroups(layer: AttackNavigatorLayer | null): { groups: Cove
       id: t.techniqueID,
       name: t.techniqueID,
       tactic: "Unmapped",
+      tactics: ["Unmapped"],
     };
     const rules = parseCoveringRules(t.comment);
     for (const r of rules) distinctRules.add(r);
-    const list = byTactic.get(meta.tactic) ?? [];
-    list.push({ ...meta, coveringRules: rules, color: t.color ?? "" });
-    byTactic.set(meta.tactic, list);
+    // Under EVERY tactic ATT&CK gives it, not just the first. T1543.004 is both Persistence and Privilege Escalation, and
+    // listing it under one made the other look uncovered when a rule covers it. The upstream matrix repeats a technique the
+    // same way, so a reader comparing the two pages sees the same shape. The stat cards count layer.techniques and are
+    // unaffected; "tactics with coverage" now counts the tactics actually covered rather than the ones that happened to be
+    // listed first.
+    const tactics = meta.tactics.length > 0 ? meta.tactics : [meta.tactic];
+    for (const tactic of tactics) {
+      const list = byTactic.get(tactic) ?? [];
+      list.push({ ...meta, coveringRules: rules, color: t.color ?? "" });
+      byTactic.set(tactic, list);
+    }
   }
 
   const seen = new Set<string>();
