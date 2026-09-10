@@ -17,6 +17,7 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
   updated_by: "user:1",
   // Default fixture mirrors the Phase A seed: Default policy assigned to all-hosts is exactly 1 assignment.
   assignment_count: 1,
+  rule_count: 0,
   ...over,
 });
 
@@ -92,20 +93,27 @@ describe("PoliciesList", () => {
     });
   });
 
-  it("shows a dash when the rule count isn't available (list endpoint omits it)", async () => {
-    (api.listAppControlPolicies as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePolicy(),
+  // The list used to render "-" for every policy, because the endpoint omits the rules array and a fake 0 would have been
+  // worse than an honest unknown. It now carries a server-computed rule_count, so the column answers the question the admin
+  // came to the page with: which policies actually hold rules.
+  it("renders the server's rule count rather than a placeholder", async () => {
+    vi.mocked(api.listAppControlPolicies).mockResolvedValue([
+      makePolicy({ name: "Holds rules", rule_count: 3 }),
+      makePolicy({ id: 2, name: "Holds none", rule_count: 0 }),
     ]);
     render(
       <MemoryRouter>
         <PoliciesList />
       </MemoryRouter>,
     );
-    await waitFor(() => {
-      expect(screen.getByText("Default")).toBeInTheDocument();
-    });
-    // The "Rules" column should render the dash placeholder.
-    expect(screen.getByText("-")).toBeInTheDocument();
+    await waitFor(() => { expect(screen.getByText("Holds rules")).toBeVisible(); });
+
+    const cellFor = (name: string) =>
+      screen.getByText(name).closest("tr")?.querySelectorAll("td")[1]?.textContent;
+    expect(cellFor("Holds rules")).toBe("3");
+    // An empty policy reads as 0, not as an unknown: the server knows, so the page should say so.
+    expect(cellFor("Holds none")).toBe("0");
+    expect(screen.queryByText("-")).not.toBeInTheDocument();
   });
 
   it("renders the rule count when the policy carries a rules array", async () => {

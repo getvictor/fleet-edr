@@ -303,6 +303,9 @@ export interface ApplicationControlPolicy {
   // The seeded Default policy starts at 1 (its assignment to all-hosts); policies created via the create endpoint start
   // at 0 and grow as Phase B opens up multi-group assignment editing. The UI handles 0/1/N as singular/plural/zero labels.
   assignment_count: number;
+  // rule_count is every rule attached to the policy, enabled or not. Server-decorated the same way as assignment_count, so
+  // the policies list can say what a policy holds without fetching each policy's rules.
+  rule_count: number;
   rules?: ApplicationControlRule[];
 }
 

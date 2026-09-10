@@ -6,6 +6,8 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
+- **The application control policy list shows how many rules each policy holds.** It showed a dash for every policy, so telling which ones actually enforce something meant opening each in turn.
+
 - **Demo process events carry a process generation.** Without it the demo's alert timelines could not narrow to the alerting process's own chain and listed the whole host instead.
 
 ## [0.5.0] (2026-09-09)
