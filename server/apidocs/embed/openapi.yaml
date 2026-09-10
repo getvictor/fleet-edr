@@ -2102,6 +2102,9 @@ components:
           type: integer
           format: int64
           minimum: 0
+          # Bounded at the signed-int64 ceiling rather than at 2^53-1 like the
+          # counters above, and the difference is the point.
+          maximum: 9223372036854775807
           # Deliberately NOT bounded at 2^53-1 like the counters above, and the
           # difference is the point. A count beyond that range is nonsense, so
           # refusing one is right. A summed duration is not: several evaluation

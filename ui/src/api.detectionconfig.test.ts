@@ -254,6 +254,9 @@ describe("detection-config API client", () => {
     ["a row whose mean exceeds its maximum", rowWith({ mean_eval_ns: 900, max_eval_ns: 100 })],
     // The total is a sum over at least one attempt, each at most the maximum, so it cannot be the smaller of the two.
     ["a row whose total is below its maximum", rowWith({ mean_eval_ns: 100, max_eval_ns: 900, total_eval_ns: 100 })],
+    // The total's bound is relaxed past 2^53-1, not removed. A magnitude no int64 could have held is malformed, and
+    // rendering it would put a plausible-looking cost at the top of the ordering.
+    ["a row whose total exceeds the int64 wire contract", rowWith({ total_eval_ns: 1e100 })],
     ["a row that is null", { eval_stats: [null], days: 7 }],
     ["an empty row", { eval_stats: [{}], days: 7 }],
   ] as [string, unknown][]) {

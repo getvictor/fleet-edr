@@ -1185,8 +1185,16 @@ const wholeCount = (v: unknown): boolean => typeof v === "number" && Number.isSa
 // across the longest retained window accumulate more than 2^53 nanoseconds between them, so a merely busy deployment reaches
 // it. Above that a JSON parser rounds, and the error is nanoseconds on a figure rendered to a tenth of a unit, while refusing
 // the row would take the whole column to "unavailable" and tell an operator hunting the expensive rule that there isn't one.
-// Number.isInteger still rejects a fraction or a non-finite value, which are the shapes that mean the response is malformed.
-const wholeDuration = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 0;
+// Number.isInteger still rejects a fraction or a non-finite value, which are the shapes that mean the response is malformed,
+// and the ceiling still rejects a value no int64 could have held: without it 1e100 is a nonnegative integer and would render
+// and SORT as a plausible cost, which is worse than the unavailable path because it looks like an answer.
+//
+// One above the int64 maximum, deliberately. 2^63-1 is not representable as a double, so writing it out silently rounds to
+// this same value and eslint's no-loss-of-precision rightly rejects the literal. The slack is harmless: the bound exists to
+// catch a magnitude the server could not have produced, and no int64 lands in the one-unit gap at 9.2e18.
+const int64Ceiling = 9_223_372_036_854_775_808;
+const wholeDuration = (v: unknown): boolean =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= int64Ceiling;
 
 // Checked for PARSEABILITY, not merely for being a string. Date.parse rather than an RFC 3339 regex: Go marshals time.Time with
 // nanosecond precision and a Z offset, which Date.parse handles, and a hand-rolled pattern here would more likely reject valid

@@ -29,5 +29,5 @@ The mean stays visible, and the worst case stays in the hover. A rule that is us
 
 ## Impact
 
-- Affected specs: `web-ui`
+- Affected specs: `web-ui`, `observability-instrumentation`
 - Affected code: `server/rules/api/evalstats.go`, `server/rules/internal/detectionconfig/evalstats.go`, `ui/src/api.ts`, `ui/src/components/DetectionConfig/DetectionConfig.tsx`
