@@ -236,7 +236,7 @@ func TestFirstExec(t *testing.T) {
 
 func TestBuildBlockEnvelope(t *testing.T) {
 	t.Parallel()
-	env := buildBlockEnvelope("HOST-1", 6123, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", 1700000000000000000)
+	env := buildBlockEnvelope("HOST-1", 6123, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", "app_control:7", 1700000000000000000)
 	assert.Equal(t, "HOST-1", env.HostID)
 	assert.Equal(t, appControlEventType, env.EventType)
 	assert.Equal(t, int64(1700000000000000000), env.TimestampNs)
@@ -247,7 +247,9 @@ func TestBuildBlockEnvelope(t *testing.T) {
 	assert.EqualValues(t, 6123, p["pid"])
 	assert.Equal(t, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", p["path"])
 	assert.Equal(t, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", p["identifier"])
-	assert.Equal(t, appControlRuleID, p["rule_id"])
+	// The block cites the SEEDED rule's wire identity. A constant here would look right and correspond to nothing: the
+	// extension derives this from the rule's row id (issue #971).
+	assert.Equal(t, "app_control:7", p["rule_id"])
 	assert.Equal(t, appControlRuleType, p["rule_type"])
 	assert.Equal(t, appControlSeverity, p["severity"])
 	assert.Equal(t, appControlMessage, p["custom_msg"])
@@ -311,7 +313,7 @@ func TestPostEnvelopes(t *testing.T) {
 		}))
 		defer ts.Close()
 		err := httpSeeder(ts.URL).postEnvelopes(context.Background(), "tok",
-			[]fakeagent.Envelope{buildBlockEnvelope("H", 1, "/x", 1)})
+			[]fakeagent.Envelope{buildBlockEnvelope("H", 1, "/x", "app_control:1", 1)})
 		require.NoError(t, err)
 	})
 
@@ -356,4 +358,15 @@ func TestWaitReady(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not met within")
 	})
+}
+
+// When no rule could be seeded there is no wire id to cite, and the block falls back to the provenance marker. That keeps the
+// demo exactly as incoherent as it was before rather than making it worse by citing an id that resolves to nothing.
+func TestBuildBlockEnvelope_FallsBackWhenNoRuleWasSeeded(t *testing.T) {
+	t.Parallel()
+	env := buildBlockEnvelope("HOST-1", 6123, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", "", 1700000000000000000)
+
+	var p map[string]any
+	require.NoError(t, json.Unmarshal(env.Payload, &p))
+	assert.Equal(t, appControlSourceRef, p["rule_id"], "no seeded rule means the block names the marker, not an invented id")
 }

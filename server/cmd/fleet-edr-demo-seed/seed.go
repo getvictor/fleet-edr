@@ -24,10 +24,19 @@ import (
 // walker; the demo fabricates one so the unified alerts view shows an application_control source alongside detection alerts.
 const (
 	appControlEventType = "application_control_block"
-	appControlRuleID    = "demo_blocklist_binary"
-	appControlRuleType  = "BINARY"
-	appControlSeverity  = "high"
-	appControlMessage   = "Blocked by Acme Corp application-control policy."
+	// appControlSourceRef is the provenance marker on the seeded rule row, which is what source_ref is for. It is NOT the
+	// rule's identity on the wire: that is derived from the row id by rulesapi.ApplicationControlRuleID, and a block citing
+	// anything else does not correspond to the rule however similar the two strings look (issue #971).
+	appControlSourceRef = "demo_blocklist_binary"
+	// PATH, not BINARY. The identifier is the executable's path, and a BINARY rule identifier must be 64 lowercase hex
+	// characters (a SHA-256) per appcontrol.ValidateIdentifier: the demo used to post a BINARY block carrying a path, which no
+	// real rule could ever have produced. PATH is the rule type whose identifier IS a path.
+	appControlRuleType = "PATH"
+	appControlSeverity = "high"
+	appControlMessage  = "Blocked by Acme Corp application-control policy."
+	// appControlPolicyID is the policy the block event attributes itself to AND the policy the matching rule is seeded into.
+	// Shared so the two cannot drift into a block that cites a policy holding no rule for it.
+	appControlPolicyID = 1
 
 	// keychainRuleID is the marker the already-seeded check looks for: if a credential_keychain_dump alert exists, the demo data
 	// is present and replay is skipped (unless --force).
@@ -53,6 +62,10 @@ type seeder struct {
 	chDB   *sql.DB
 	client *http.Client
 	logger *slog.Logger
+	// appControlWireRuleID is the seeded rule's identity as the extension would report it, set by seedAppControlRule before
+	// any replay and read when the fabricated block is built. Held on the seeder rather than threaded through replayHost
+	// because it is one value for the whole run, and the block that cites it is posted several call frames down.
+	appControlWireRuleID string
 }
 
 // newSeeder wires a seeder with a pre-built HTTP client (built in main so config errors surface at the wiring boundary).
@@ -91,6 +104,15 @@ func (s *seeder) run(ctx context.Context) error {
 	if handled, err := s.maybeRefreshExisting(ctx); handled || err != nil {
 		return err
 	}
+
+	// Before any block event is posted, give the policy it cites a rule that denies the binary, and take that rule's wire id
+	// so the block can name it. The block is fabricated, so nothing downstream forces the two to correspond; this is what
+	// makes the alert lead somewhere.
+	wireRuleID, err := seedAppControlRule(ctx, s.db, s.logger)
+	if err != nil {
+		return err
+	}
+	s.appControlWireRuleID = wireRuleID
 
 	// Replay each rich captured host (deep real process tree + correlated network_connect/dns_query) and weave its attacks
 	// in, so every detection fires inside genuine ambient activity rather than on a 2-event stub host.
@@ -132,21 +154,38 @@ func (s *seeder) maybeRefreshExisting(ctx context.Context) (bool, error) {
 		return true, fmt.Errorf("refresh demo timestamps: %w", err)
 	}
 	s.logger.InfoContext(ctx, "demo data already present, refreshed timestamps to recent (pass --force to re-seed)")
+	// A demo volume seeded before this rule existed still shows an alert with no matching policy, so the refresh path
+	// backfills it too. The already-posted block keeps whatever id it was written with; this is about the policy page no
+	// longer being empty, which is the half a refresh can still fix.
+	if _, err := seedAppControlRule(ctx, s.db, s.logger); err != nil {
+		return true, err
+	}
 	return true, s.seedUserIfConfigured(ctx)
 }
 
-// buildBlockEnvelope constructs the application_control_block wire envelope the ApplicationControlBlock rule consumes. Payload shape
-// mirrors server/rules/internal/catalog/application_control_block.go's applicationControlBlockPayload.
-func buildBlockEnvelope(hostID string, pid int, execPath string, tsNs int64) fakeagent.Envelope {
+// buildBlockEnvelope fabricates the application_control_block wire envelope the extension would have emitted, in the shape the
+// ApplicationControlBlock rule consumes (see applicationControlBlockPayload in server/rules/internal/catalog).
+//
+// wireRuleID is the seeded rule's identity as the extension would report it (rulesapi.ApplicationControlRuleID of its row id).
+// Passing it in rather than naming a constant is the whole point: the alert has to cite a rule that exists, so that the
+// identifier on the alert resolves to the rule on the Application control page rather than to nothing. The alert title itself
+// is NOT a link to it: the UI links a title only for rules the catalog documents, and app-control rule ids never appear there
+// (ProcessTree.tsx says why, and issue #975 tracks giving them a route of their own). Empty when no rule could be seeded, in
+// which case the block falls back to the provenance marker and the demo is merely as incoherent as it was before, not more so.
+func buildBlockEnvelope(hostID string, pid int, execPath, wireRuleID string, tsNs int64) fakeagent.Envelope {
+	ruleID := wireRuleID
+	if ruleID == "" {
+		ruleID = appControlSourceRef
+	}
 	payload := map[string]any{
 		"pid":            pid,
 		"path":           execPath,
-		"rule_id":        appControlRuleID,
+		"rule_id":        ruleID,
 		"rule_type":      appControlRuleType,
 		"identifier":     execPath,
 		"severity":       appControlSeverity,
 		"custom_msg":     appControlMessage,
-		"policy_id":      1,
+		"policy_id":      appControlPolicyID,
 		"policy_version": 1,
 	}
 	// map[string]any of scalars + strings always marshals; the error is unreachable.
