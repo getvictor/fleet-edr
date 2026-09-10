@@ -9,3 +9,7 @@
 - [x] Integration coverage that the total is exact across days rather than a rounded product
 - [x] UI coverage that the cell shows both figures and that the sort orders by total
 - [x] Mutation-test the sort key and the total's exactness
+- [x] Restate the observability API-contract requirement so archiving carries the new field
+- [x] Add `total_eval_ns` to the published OpenAPI schema and re-embed it
+- [x] Accept a total beyond exact JSON range rather than reporting the column unavailable
+- [x] Apply only the latest load's results when reloads overlap

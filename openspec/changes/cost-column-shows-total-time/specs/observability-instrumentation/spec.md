@@ -1,0 +1,79 @@
+# observability-instrumentation
+
+## MODIFIED Requirements
+
+### Requirement: Evaluation statistics are readable per rule
+
+The system SHALL expose the recorded per-rule evaluation statistics through the operator API and present them beside the rule they describe, aggregated over a caller-specified window, so a slow or churning rule is identifiable where its tuning is done rather than only in a metrics backend.
+
+This is the consumer half the durable-recording requirement deliberately left to whatever surface presents the figures. A record no interface reads answers nothing: at a thousand rules, the rule holding up the drain loop cannot be found by reading logs, and it is invisible to the match counts, because a rule can be perfectly quiet and still be the expensive one.
+
+Each rule's entry SHALL report its evaluation attempts, how many of those ended without a decision, the total time those attempts consumed, the mean time per attempt, and the worst single attempt. The three durations are all required because each alone misleads: a mean hides the rule that is usually fast and occasionally terrible, a maximum alone promotes the rule that had one bad batch over the one that is expensive every time, and either without the total ranks a rule that evaluated once above one that evaluated two dozen times for a fraction of the cost.
+
+The total SHALL be summed from the same recorded durations the mean is derived from, and SHALL NOT be left to a reader to reconstruct by multiplying the mean by the attempt count. The mean is a truncating division, so that product is short by up to one unit per attempt, and it is furthest from the truth for exactly the high-attempt rules the figure exists to find.
+
+A duration SHALL be carried on the wire in a form its readers can represent. Unlike the counters beside it, a summed duration in nanoseconds can exceed the range a JSON number carries exactly, since a deployment evaluating on several workers across the longest retained window can accumulate more than that. A reader SHALL therefore accept a total above that range rather than reject the entry: the precision lost is far below what the figure is displayed to, while rejecting it would report the whole column as unavailable, which is the one reading this requirement forbids.
+
+The mean SHALL be computed from the recorded totals rather than stored, so it stays correct as the window widens and as retention prunes days out of it.
+
+Attempts SHALL be reported as attempts, not as logical batches, matching how they are recorded. A replayed batch really did evaluate again, and contributes its own duration. The mean therefore remains a mean per ATTEMPT, which is what keeps it from being inflated by replay the way a per-batch figure would be; it is not invariant under replay, since an attempt that ran faster or slower than the others moves it. A reader comparing attempt counts between rules is comparing work performed rather than events seen, and the surface SHALL say so rather than let the count read as a fire count.
+
+A rule that did not evaluate in the window SHALL be absent from the response rather than present with zeros, and the response SHALL be an empty list rather than null when no rule evaluated.
+
+The window SHALL default when unspecified and SHALL be capped at the deployment's own retention, and the response SHALL state the window it covers, for the same reasons the match-count read does: the cap can make the served window narrower than the one requested, and a figure labelled with a period it does not cover is a misreport rather than an approximation. A window that is not a positive whole number SHALL be rejected rather than defaulted.
+
+A failure to read SHALL be reported as an error rather than as an empty result, and SHALL be distinguished from a rule having no recorded evaluations wherever the statistics are presented. An empty result reads as a cheap rule, so rendering a failed read as absence tells an operator hunting the slow rule that there isn't one. A surface that has no statistics to present SHALL NOT go on ordering or ranking by ones it read before, and SHALL NOT offer an ordering it is not producing. That covers a failed read and an empty successful one alike: they are different states to report, and neither is something to sort by. A ranking an operator can act on is not distinguishable from a current one by looking at it.
+
+What the figures mean, and any caveat on reading them, SHALL be available without a pointer. A native tooltip on an element that cannot take focus reaches neither a keyboard nor a touch user, so the sentence that stops a number being misread is the one they would not get.
+
+A control offered in a column header SHALL still read as that column's header. Making the ordering reachable by keyboard means the header is a real control rather than text, and a control carries a user-agent presentation of its own that overrides what the surrounding header sets; a header that stops matching the row it sits in reads as a stray button and stops naming its column. This is a presentation obligation the layers below the browser cannot check, since neither a component test nor a type checker applies a user-agent stylesheet.
+
+This read and the match-count read SHALL fail independently. They describe different populations over different questions, and a rule that never matches still evaluates, so one failing SHALL NOT suppress the other.
+
+#### Scenario: Statistics are readable per rule over a window
+
+- **GIVEN** recorded evaluations for two rules, one cheap and frequent and one expensive
+- **WHEN** the statistics are read for a window covering them
+- **THEN** each rule reports its attempts, its undecided attempts, its mean time and its worst attempt
+- **AND** a rule whose evaluations all fall outside the window is absent rather than reported as zero
+
+#### Scenario: A failed read is not presented as no cost
+
+- **GIVEN** a reader whose attempt to load the statistics fails
+- **WHEN** the statistics are presented
+- **THEN** they are shown as unavailable rather than as no evaluations recorded
+- **AND** the rule's tuning controls remain usable
+
+#### Scenario: One read failing does not suppress the other
+
+- **GIVEN** a surface presenting both the evaluation statistics and the monitor-match counts
+- **WHEN** one of the two reads fails and the other succeeds
+- **THEN** the failed one is shown as unavailable
+- **AND** the one that succeeded is still presented
+
+#### Scenario: The window is stated and bounded
+
+- **GIVEN** a caller requesting a window longer than the deployment retains
+- **WHEN** the statistics are read
+- **THEN** the response covers the retained window and states which window it covers
+- **AND** a window that is not a positive whole number is rejected
+
+#### Scenario: The ordering control still reads as a column header
+
+- **GIVEN** a column whose header carries a control for ordering by that column
+- **WHEN** the table is rendered in a browser
+- **THEN** the header is presented the same way as the table's other column headers
+
+#### Scenario: The total is reported alongside the mean and the maximum
+
+- **GIVEN** a rule evaluated many times whose recorded durations do not divide evenly by its attempt count
+- **WHEN** the statistics are read
+- **THEN** its entry reports the total time its attempts consumed, summed from the recorded durations
+- **AND** that total is not the product of the reported mean and the attempt count
+
+#### Scenario: A total beyond exact JSON range is still presented
+
+- **GIVEN** a rule whose total exceeds the range a JSON number carries exactly
+- **WHEN** the statistics are presented
+- **THEN** the entry is presented rather than rejected as malformed
+- **AND** the column is not reported as unavailable

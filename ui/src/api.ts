@@ -1179,6 +1179,15 @@ export interface RuleMatchCount {
 // states the same bound rather than promising an int64 range the wire cannot carry.
 const wholeCount = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 
+// wholeDuration is wholeCount's bound relaxed for a SUMMED duration, and the difference from the counters is deliberate.
+//
+// A count above 2^53-1 is nonsense, so refusing one is right. A summed nanosecond duration is not: the evaluation workers
+// across the longest retained window accumulate more than 2^53 nanoseconds between them, so a merely busy deployment reaches
+// it. Above that a JSON parser rounds, and the error is nanoseconds on a figure rendered to a tenth of a unit, while refusing
+// the row would take the whole column to "unavailable" and tell an operator hunting the expensive rule that there isn't one.
+// Number.isInteger still rejects a fraction or a non-finite value, which are the shapes that mean the response is malformed.
+const wholeDuration = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 0;
+
 // Checked for PARSEABILITY, not merely for being a string. Date.parse rather than an RFC 3339 regex: Go marshals time.Time with
 // nanosecond precision and a Z offset, which Date.parse handles, and a hand-rolled pattern here would more likely reject valid
 // server output than catch a real fault.
@@ -1262,7 +1271,7 @@ function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
   // mean x evaluations: that product is the reconstruction the store deliberately does not do, and asserting it here would
   // re-derive the rounded figure this field exists to replace.
   const totalCoversMax =
-    wholeCount(r.total_eval_ns) && wholeCount(r.max_eval_ns) && (r.total_eval_ns as number) >= (r.max_eval_ns as number);
+    wholeDuration(r.total_eval_ns) && wholeCount(r.max_eval_ns) && (r.total_eval_ns as number) >= (r.max_eval_ns as number);
   return (
     typeof r.rule_id === "string" &&
     r.rule_id !== "" &&

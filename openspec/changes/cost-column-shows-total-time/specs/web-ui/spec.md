@@ -32,3 +32,18 @@ The worst case SHALL remain reachable from the cell without being its leading fi
 - **WHEN** the Cost column reports its total for the window
 - **THEN** the total equals the sum of the stored per-day durations
 - **AND** it is not the product of the reported mean and the attempt count
+
+### Requirement: The detection tuning view presents the most recent load
+
+The detection configuration view SHALL present the results of its most recent load, and SHALL discard the results of an earlier load that completes after it.
+
+Loads overlap in practice: a mode or severity change reloads the view while an earlier load may still be in flight. An earlier response arriving later would otherwise replace newer data with older, with no error and nothing on screen to indicate it, leaving an operator reading a table that disagrees with the change they just made.
+
+Being mounted is not the same question as being current, so a guard that only asks whether the view is still alive does not answer this: both responses pass it, and the slower one wins whichever was started first.
+
+#### Scenario: An earlier load completing later does not replace newer data
+
+- **GIVEN** two loads of the detection configuration view in flight, the earlier one returning different data from the later
+- **WHEN** the earlier load completes after the later one has already been presented
+- **THEN** the view still presents the later load's data
+- **AND** the earlier load's data is not presented

@@ -383,6 +383,11 @@ export function DetectionConfig() {
       mountedRef.current = false;
     };
   }, []);
+  // reloadSeqRef makes the LATEST reload the one whose results are applied. mountedRef cannot do this on its own: it answers
+  // "is this component alive", not "is this response still the current one", so two overlapping reloads both write and the
+  // SLOWER one wins whichever order they were started in. Two reach that state: StrictMode's double-invoke starts one per
+  // effect run, and a mode or severity mutation reloads while an earlier reload may still be in flight.
+  const reloadSeqRef = useRef(0);
 
   // Add-exclusion form state. formExpires is an optional YYYY-MM-DD from a date input; converted to an RFC3339 end-of-day instant.
   const [formRuleID, setFormRuleID] = useState("");
@@ -464,6 +469,7 @@ export function DetectionConfig() {
   }, [sortActive, rulesBySeverity, cost]);
 
   const reload = useCallback(async (): Promise<void> => {
+    const seq = ++reloadSeqRef.current;
     const [excl, ruleDocs, ruleSettings, matchCounts, evalStats] = await Promise.all([
       listDetectionExclusions(),
       fetchRuleDocs(),
@@ -475,7 +481,7 @@ export function DetectionConfig() {
       // beside a control, and a table that will not render is worse than a table with one column saying it has nothing to say.
       listDetectionRuleEvalStats().catch(() => null),
     ]);
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || seq !== reloadSeqRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);

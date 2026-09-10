@@ -76,6 +76,7 @@ func TestRecordAndReadRuleEvalStats(t *testing.T) {
 }
 
 // spec:web-ui/the-detection-tuning-cost-column-reports-the-total-cost/the-total-is-exact-rather-than-derived-from-the-rounded-mean
+// spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/the-total-is-reported-alongside-the-mean-and-the-maximum
 //
 // TestRuleEvalStatsTotalIsSummedNotRebuiltFromTheMean pins the total against the reconstruction a caller would otherwise do.
 //

@@ -1130,6 +1130,50 @@ describe("DetectionConfig observed column", () => {
       });
     });
 
+    // The other half of the double-invoke. Resetting mountedRef on the second setup also re-enables the FIRST setup's
+    // in-flight reload, so if that one resolves last it writes its results over the second's. Both mount effects fetch the
+    // same data, which is why the case above cannot see this: the two responses have to differ, and the stale one has to
+    // land last, before the guard is doing anything.
+    // spec:web-ui/the-detection-tuning-view-presents-the-most-recent-load/an-earlier-load-completing-later-does-not-replace-newer-data
+    it("applies the latest reload's results when an earlier one resolves after it", async () => {
+      stubReads({});
+      let call = 0;
+      const stale = [makeRuleEntry({ id: "stale_rule", doc: makeRuleDoc({ title: "Stale rule" }) })];
+      const fresh = [makeRuleEntry({ id: "fresh_rule", doc: makeRuleDoc({ title: "Fresh rule" }) })];
+      let releaseStale: () => void = () => undefined;
+      const stalePending = new Promise<RuleDocEntry[]>((resolve) => {
+        releaseStale = () => {
+          resolve(stale);
+        };
+      });
+      vi.spyOn(api, "fetchRuleDocs").mockImplementation(() => {
+        call += 1;
+        return call === 1 ? stalePending : Promise.resolve(fresh);
+      });
+
+      render(
+        <StrictMode>
+          <MemoryRouter>
+            <PermissionsProvider permissions={[PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite]}>
+              <DetectionConfig />
+            </PermissionsProvider>
+          </MemoryRouter>
+        </StrictMode>,
+      );
+
+      // The second mount's reload resolves first and paints.
+      await waitFor(() => {
+        expect(screen.getByRole("row", { name: /fresh_rule/ })).toBeVisible();
+      });
+
+      // Now let the first one land. It is superseded, so its results must be dropped rather than painted over the newer ones.
+      releaseStale();
+      await waitFor(() => {
+        expect(screen.getByRole("row", { name: /fresh_rule/ })).toBeVisible();
+      });
+      expect(screen.queryByRole("row", { name: /stale_rule/ })).not.toBeInTheDocument();
+    });
+
     it("says visibly that the cost figures are unavailable, not only on hover", async () => {
       stubReads({ rules: [makeRuleEntry()] });
       vi.spyOn(api, "listDetectionRuleEvalStats").mockRejectedValue(new Error("db down"));

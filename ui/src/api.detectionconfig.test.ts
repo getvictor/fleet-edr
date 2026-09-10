@@ -164,6 +164,21 @@ describe("detection-config API client", () => {
     expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
   });
 
+  // A summed duration is the one field here that a merely busy deployment pushes past 2^53-1: several evaluation workers
+  // across the longest retained 30-day window accumulate more nanoseconds than a JSON number carries exactly. Rejecting the
+  // row would take the whole Cost column to "unavailable", which is the reading the spec forbids, so it is accepted with the
+  // rounding a parser already applied. The counters beside it keep the strict bound, because a count that large is nonsense.
+  // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/a-total-beyond-exact-json-range-is-still-presented
+  it("listDetectionRuleEvalStats accepts a total beyond exact JSON range", async () => {
+    const row = {
+      rule_id: "suspicious_exec", evaluations: 400, retryable_misses: 0,
+      mean_eval_ns: 1_500_000, max_eval_ns: 90_000_000, total_eval_ns: 1.04e16, last_seen: GOOD_TS,
+    };
+    expect(Number.isSafeInteger(row.total_eval_ns)).toBe(false);
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
   // Zero misses and zero timings are real: a rule can evaluate cheaply and never miss. Only `evaluations` has a floor.
   it("listDetectionRuleEvalStats accepts zero misses and zero timings", async () => {
     const row = {
