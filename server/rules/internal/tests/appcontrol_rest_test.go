@@ -1654,8 +1654,8 @@ func TestAppControlREST_HostGroupMutations_ReadOnlyInPhaseA(t *testing.T) {
 }
 
 // The policies list rendered "-" in its RULES column for every policy, because the list response carried no rule count and
-// the UI would not invent a 0 it could not verify. An admin scanning for "which policies actually enforce something" had to
-// open each one. This pins the count as live: it moves when a rule is added, so it cannot be satisfied by a hardcoded zero.
+// the UI would not invent a 0 it could not verify. An admin scanning for which policies hold any rules had to open each
+// one. This pins the count as live: it moves when a rule is added, so it cannot be satisfied by a hardcoded zero.
 func TestAppControlREST_ListPolicies_CarriesRuleCount(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})

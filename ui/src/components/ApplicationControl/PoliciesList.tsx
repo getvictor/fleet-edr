@@ -38,7 +38,7 @@ export function PoliciesList() {
   // ruleCount returns the number of rules attached to the policy.
   //
   // The list endpoint still omits the rules array, but it now carries a server-computed rule_count, so this no longer has to
-  // render "-" for every policy and leave the admin to click into each one to find out which enforce anything. Prefers the
+  // render "-" for every policy and leave the admin to click into each one to find out which hold any rules. Prefers the
   // fetched array when a caller does supply it, so a policy fetched with its rules cannot disagree with its own count.
   const ruleCount = (p: ApplicationControlPolicy): string =>
     String(p.rules ? p.rules.length : p.rule_count);
