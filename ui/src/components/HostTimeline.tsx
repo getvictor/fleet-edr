@@ -44,6 +44,17 @@ async function buildEventTechniques(hostID: string): Promise<EventTechniques> {
   return map;
 }
 
+// ChainScopeGap says why the timeline could not reproduce the graph's alert-chain focus at all.
+//
+// Only one of these two names a cause, deliberately. "no-generations" is provable: the chain resolved and not one of its
+// processes carried the identifier the scope matches on. "chain-unresolved" is everything else, and it stays vague on purpose.
+// Four review rounds went into trying to say WHY the chain came back empty, and each precondition turned out to admit a case it
+// did not cover: a tree still loading, a failed read, a host with nothing in the window, and finally a TRUNCATED response,
+// where the process is in the window but past the row limit BuildTree applies. A message that names the wrong cause sends the
+// operator to fix the wrong thing, so this one reports what is certain (the chain could not be located in what was loaded) and
+// leaves the cause to the operator, who can see the truncation notice and the time window for themselves.
+export type ChainScopeGap = "no-generations" | "chain-unresolved";
+
 interface Props {
   readonly hostId: string;
   // The active event-time window, shared with the graph so both views reflect one window.
@@ -54,6 +65,19 @@ interface Props {
   // plus its ancestors and descendants), matched by the (pid, pidversion) pair, mirroring the graph's "Alert chain" focus. Undefined
   // shows the full host stream.
   readonly chainGenerations?: ChainGeneration[];
+  // Set when the graph IS focused on an alert chain but that focus cannot be reproduced here at all. The list then shows the
+  // whole host, which is the honest thing to render but the wrong thing to render silently: the graph beside it shows four
+  // processes, so an unexplained thousand-row list reads as a product defect rather than as missing data. The value says WHICH
+  // reason, because the two are fixed by different things and telling the operator the wrong one wastes their time.
+  readonly chainScopeUnavailable?: ChainScopeGap;
+  // True when the scope applied but could not reach every process in the chain, so the list is narrowed and silently missing
+  // those processes' events. That is worse than showing too much: nothing about a scoped list suggests part of it is absent.
+  //
+  // A flag rather than a count, deliberately. The obvious count is chain nodes minus resolved generations, and a tree node is
+  // not a process: the response aggregates identical leaf descendants into synthetic group nodes ("bash x11"), so that
+  // subtraction counts groups as processes. Review caught the count claiming a precision the structure does not support, and a
+  // number that might be wrong is worse than no number when the actionable part is just "some events are missing".
+  readonly chainPartiallyScoped?: boolean;
 }
 
 // How long after the last keystroke the text filter commits to the URL (and thus the query). Keeps a fast typist to one fetch.
@@ -69,7 +93,9 @@ const EVENT_TYPES: { key: string; label: string }[] = [
 // HostTimeline is the flat, filterable event stream beside the process graph (issue #583): the host's exec/network/DNS events for the
 // active window, newest-first, filterable by type chips and a text box (both in the URL), keyset-paginated via the shared list hook.
 // A row links to its process node in the graph; connection/DNS rows carry the fleet-wide "search" pivot.
-export function HostTimeline({ hostId, bounds, emphasizePid, chainGenerations }: Props) {
+export function HostTimeline(
+  { hostId, bounds, emphasizePid, chainGenerations, chainScopeUnavailable, chainPartiallyScoped }: Props,
+) {
   const [searchParams, setSearchParams] = useSearchParams();
   // Sorted so a semantically-equal selection (e.g. a type toggled off then back on) yields one canonical order; otherwise the
   // Set-insertion order would churn filterKey and reset the cursor list on a no-op change.
@@ -176,7 +202,21 @@ export function HostTimeline({ hostId, bounds, emphasizePid, chainGenerations }:
         />
         {/* Reflect the shared alert-scope so the analyst knows why fewer events show; the "Alert chain / Full tree" toggle in the
             breadcrumb drives both this and the graph. */}
-        {scopeChain && <span className="host-timeline__scope-note">Scoped to the alert chain</span>}
+        {scopeChain && chainPartiallyScoped !== true && (
+          <span className="host-timeline__scope-note">Scoped to the alert chain</span>
+        )}
+        {scopeChain && chainPartiallyScoped === true && (
+          <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
+            Scoped to part of the alert chain: some of its processes carry no generation data, so their events are not listed.
+          </span>
+        )}
+        {!scopeChain && chainScopeUnavailable !== undefined && (
+          <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
+            {chainScopeUnavailable === "no-generations"
+              ? "Showing the whole host: this alert's processes carry no generation data, so the timeline cannot narrow to the chain."
+              : "Showing the whole host: this alert's process is not in the loaded process tree, so there is no chain to narrow to."}
+          </span>
+        )}
       </div>
 
       <SearchResultsFrame

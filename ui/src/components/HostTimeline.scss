@@ -51,6 +51,17 @@
     white-space: nowrap;
   }
 
+  // The degraded variant carries the two messages that explain a scope the operator did not get in full: the list is not
+  // scoped at all, or it is scoped to only part of the chain. Both are sentences rather than three-word labels and have to be
+  // allowed to wrap; inheriting the nowrap above would push the filter row off the side of the page.
+  &__scope-note--degraded {
+    color: $ui-fleet-black-75;
+    white-space: normal;
+    max-width: 34rem;
+    border-left: 3px solid $ui-warning;
+    padding-left: 8px;
+  }
+
   &__mono {
     font-family: ui-monospace, sfmono-regular, Menlo, monospace;
     font-size: 0.85rem;
