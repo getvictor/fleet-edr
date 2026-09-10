@@ -670,12 +670,12 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
 
   // findAlertChain returns an EMPTY set when the alerted process is not in the fetched tree, and that empty chain used to fall
   // through as ordinary unscoped-by-choice: focus requested, whole host shown, nothing said. Same silence, one case over.
-  it("says the alerted process is not in the window when the chain resolves to nothing", async () => {
+  it("says the chain could not be located when it resolves to nothing", async () => {
     // process=999 is not a node in `forest`, so findAlertChain finds no path and returns an empty set.
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
     renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
 
-    expect(await screen.findByText(/not in this time window/)).toBeVisible();
+    expect(await screen.findByText(/not in the loaded process tree/)).toBeVisible();
     expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
   });
 
@@ -683,17 +683,28 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
   // still loading, or after a failed read, or on a host with nothing in the window, sends the operator to change a time range
   // that is not the problem. Review caught the condition claiming more than it proves.
   it.each([
-    ["the tree came back empty", () => { vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse([])); }],
     ["the tree failed to load", () => { vi.spyOn(api, "getProcessTree").mockRejectedValue(new Error("boom")); }],
-  ])("stays silent when %s, rather than blaming the time window", async (_label, arrange) => {
+  ])("stays silent while %s, rather than naming an absence it cannot see yet", async (_label, arrange) => {
     arrange();
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
     renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
 
     // Wait for the view to settle before asserting an absence, so this cannot pass merely by running early.
     await waitFor(() => { expect(screen.getByRole("searchbox", { name: /Filter timeline by text/i })).toBeVisible(); });
-    expect(screen.queryByText(/not in this time window/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not in the loaded process tree/)).not.toBeInTheDocument();
     expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
+  });
+
+  // The case that broke the previous wording. BuildTree applies its row limit before aggregation, so a truncated response can
+  // omit a process that IS in the window. Saying "not in this time window" there sent the operator to widen a range that was
+  // never the problem. The message now claims only what truncation cannot falsify: absence from the tree that was loaded.
+  it("does not blame the time window when the tree was truncated", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest, { truncated: true }));
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
+    renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
+
+    expect(await screen.findByText(/not in the loaded process tree/)).toBeVisible();
+    expect(screen.queryByText(/time window/)).not.toBeInTheDocument();
   });
 
   // A chain where only some processes carry a generation. The scope applies, so the old code reported it as fully scoped while

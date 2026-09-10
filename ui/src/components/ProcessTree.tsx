@@ -224,19 +224,19 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; omitted: number } => {
     // No focus requested: the full stream is what was asked for and needs no explanation.
     if (!alertChainIds) return { omitted: 0 };
-    // Focus requested, but findAlertChain resolved nothing. Only ONE reading of that is safe to report. An empty chain also
-    // happens while the tree is still loading, after a failed read, and on a host with no processes in the window at all, and
-    // telling the operator their alerted process is outside the window in any of those cases would send them to change a time
-    // range that is not the problem. Review caught this claiming more than the condition proves. Say nothing unless a tree
-    // actually came back with processes in it and the alerted one is simply not among them.
+    // Focus requested, but findAlertChain resolved nothing. This reports THAT, and no longer tries to report why. Four review
+    // rounds went into narrowing the cause and each precondition admitted a case it did not cover, most recently a truncated
+    // response, where the process is in the window but past the row limit BuildTree applies before aggregation. The remaining
+    // gate is only about timing: while the read is in flight or after it failed there is no loaded tree to be absent from, and
+    // a message that appears and then disappears is its own kind of wrong.
     if (alertChainIds.size === 0) {
-      const treeResolved = !loading && error === null && roots.length > 0;
-      return treeResolved ? { unavailable: "chain-not-in-window", omitted: 0 } : { omitted: 0 };
+      const treeLoaded = !loading && error === null;
+      return treeLoaded ? { unavailable: "chain-unresolved", omitted: 0 } : { omitted: 0 };
     }
     const resolved = alertChainGenerations?.length ?? 0;
     if (resolved === 0) return { unavailable: "no-generations", omitted: 0 };
     return { omitted: alertChainIds.size - resolved };
-  }, [alertChainIds, alertChainGenerations, loading, error, roots]);
+  }, [alertChainIds, alertChainGenerations, loading, error]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.

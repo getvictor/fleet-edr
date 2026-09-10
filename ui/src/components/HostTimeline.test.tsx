@@ -237,10 +237,10 @@ describe("HostTimeline alert-chain scope", () => {
   });
 
   // spec:web-ui/host-event-timeline-view/timeline-distinguishes-an-absent-chain-from-a-chain-without-generations
-  it("names the other reason: the alerted process is not in the window", async () => {
+  it("names the other case: the chain is not in the loaded tree", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("x", 42, "/bin/sh")], total_matched: 1 });
-    renderScoped({ chainScopeUnavailable: "chain-not-in-window" });
-    expect(await screen.findByText(/not in this time window/)).toBeVisible();
+    renderScoped({ chainScopeUnavailable: "chain-unresolved" });
+    expect(await screen.findByText(/not in the loaded process tree/)).toBeVisible();
     // The two causes have different fixes, so it must not offer the generation-data explanation here.
     expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
   });

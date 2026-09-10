@@ -44,10 +44,16 @@ async function buildEventTechniques(hostID: string): Promise<EventTechniques> {
   return map;
 }
 
-// ChainScopeGap says why the timeline could not reproduce the graph's alert-chain focus at all. Two distinct causes with two
-// distinct fixes: "no-generations" means the chain's processes predate the generation identifier the scope matches on, while
-// "chain-not-in-window" means findAlertChain resolved nothing because the alerted process is outside the fetched tree.
-export type ChainScopeGap = "no-generations" | "chain-not-in-window";
+// ChainScopeGap says why the timeline could not reproduce the graph's alert-chain focus at all.
+//
+// Only one of these two names a cause, deliberately. "no-generations" is provable: the chain resolved and not one of its
+// processes carried the identifier the scope matches on. "chain-unresolved" is everything else, and it stays vague on purpose.
+// Four review rounds went into trying to say WHY the chain came back empty, and each precondition turned out to admit a case it
+// did not cover: a tree still loading, a failed read, a host with nothing in the window, and finally a TRUNCATED response,
+// where the process is in the window but past the row limit BuildTree applies. A message that names the wrong cause sends the
+// operator to fix the wrong thing, so this one reports what is certain (the chain could not be located in what was loaded) and
+// leaves the cause to the operator, who can see the truncation notice and the time window for themselves.
+export type ChainScopeGap = "no-generations" | "chain-unresolved";
 
 interface Props {
   readonly hostId: string;
@@ -206,7 +212,7 @@ export function HostTimeline(
           <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
             {chainScopeUnavailable === "no-generations"
               ? "Showing the whole host: this alert's processes carry no generation data, so the timeline cannot narrow to the chain."
-              : "Showing the whole host: the alerted process is not in this time window, so there is no chain to narrow to."}
+              : "Showing the whole host: this alert's process is not in the loaded process tree, so there is no chain to narrow to."}
           </span>
         )}
       </div>
