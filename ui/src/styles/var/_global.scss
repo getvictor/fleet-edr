@@ -1,4 +1,8 @@
-// Global tokens copied verbatim from Fleet's styles/var/_global.scss.
+// Global design tokens.
+//
+// The border-radius and box-shadow values below are copied verbatim from Fleet's styles/var/_global.scss so the two
+// products stay visually consistent. Tokens added after that import are Fleet EDR's own and are marked as such; do not
+// assume everything here has an upstream counterpart.
 
 // border radius
 $border-radius-small: 3px;
