@@ -4,6 +4,11 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Mac-free demo's application-control alert now has the policy rule behind it.** The demo showed an alert saying a policy had blocked CoinMiner next to a policy holding no rules, so clicking through explained nothing. It seeds the matching rule, and the block now names a rule type whose identifier can legally be a path.
+- **Demo process events carry a process generation.** Without it the demo's alert timelines could not narrow to the alerting process's own chain and listed the whole host instead.
+
 ## [0.5.0] (2026-09-09)
 
 Feature release on top of 0.4.0. The headline is rule content: the detection rules a deployment runs move out of the binary and into the database, so an upgrade delivers new rules, you can write your own through an audited API, and a rule set that turns out wrong can be rolled back. Also in this release: per-rule match counts and cost in the detection-tuning table, capture-provider health per host, a new alert for destruction of sudo policy, and a long list of detection-accuracy fixes.

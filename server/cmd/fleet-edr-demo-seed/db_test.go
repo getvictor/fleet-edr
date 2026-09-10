@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -568,4 +569,154 @@ func TestVerifyReportsMissingRule(t *testing.T) {
 	err := s.verify(ctx)
 	require.Error(t, err, "verify must fail when one expected rule never fired")
 	assert.Contains(t, err.Error(), withheld, "the timeout error names the missing rule")
+}
+
+// The demo's application-control alert is fabricated, so nothing downstream forces a matching rule to exist. It did not, and the
+// Application control page showed a Default policy with zero rules beside an alert claiming a policy had blocked CoinMiner.
+func TestSeedAppControlRule(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO app_control_policies (id, name, description) VALUES (?, 'Default', 'demo')`, appControlPolicyID)
+	require.NoError(t, err)
+
+	require.NoError(t, seedAppControlRule(ctx, db, discardLogger()))
+
+	var ruleType, identifier, action, enforcement, severity, customMsg string
+	var enabled bool
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT rule_type, identifier, action, enforcement, enabled, severity, custom_msg
+		FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID,
+	).Scan(&ruleType, &identifier, &action, &enforcement, &enabled, &severity, &customMsg))
+
+	// The rule has to describe the same denial the block event reports, or the operator clicking through from the alert lands
+	// on a policy that does not mention the binary.
+	// The literal, not the constant: comparing appControlRuleType to itself would pass whatever it is changed to, including
+	// back to BINARY. BINARY is the shape this demo used to claim and could never have produced, because a BINARY identifier
+	// must be 64 lowercase hex characters (appcontrol.ValidateIdentifier) and this one is a path.
+	assert.Equal(t, "PATH", ruleType, "a PATH rule is the only type whose identifier is legally a path")
+	assert.Equal(t, appControlRuleType, ruleType, "and the block event cites the same type the rule carries")
+	assert.Equal(t, blockedBinaryPath, identifier, "and the same binary it says was denied")
+	assert.True(t, strings.HasPrefix(identifier, "/"), "a PATH identifier has to be absolute to canonicalize")
+	assert.Equal(t, appControlSeverity, severity)
+	assert.Equal(t, appControlMessage, customMsg)
+	assert.Equal(t, "BLOCK", action)
+	assert.Equal(t, "PROTECT", enforcement, "the alert says the exec was denied, not merely recorded")
+	assert.True(t, enabled)
+
+	// Idempotent: the seeder re-runs on every container start.
+	require.NoError(t, seedAppControlRule(ctx, db, discardLogger()))
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+// A rule hung off a policy id nothing else knows about would recreate the same disconnect one level down, so the seeder does not
+// invent the policy. It also must not abort over it: the rule is a coherence nicety, and failing the seed would cost the operator
+// the entire demo to fix a page they might not open.
+func TestSeedAppControlRule_SkipsWhenThePolicyIsMissing(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+
+	require.NoError(t, seedAppControlRule(ctx, db, discardLogger()), "a missing policy is a skip, not a failed seed")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_control_rules`).Scan(&count))
+	assert.Zero(t, count, "and it invents neither the policy nor a rule pointing at one that does not exist")
+}
+
+// payloadRecordingServer is recordingEventsServer's sibling for assertions about payload CONTENT rather than batch shape: it keeps
+// every posted envelope whole, so a test can inspect the JSON the seeder actually put on the wire.
+func payloadRecordingServer(t *testing.T) (*httptest.Server, func() []fakeagent.Envelope) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []fakeagent.Envelope
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/api/enroll", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(map[string]any{"host_id": req["hardware_uuid"], "host_token": "tok"})
+	})
+	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
+		var envs []fakeagent.Envelope
+		if err := json.NewDecoder(r.Body).Decode(&envs); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		got = append(got, envs...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts, func() []fakeagent.Envelope {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]fakeagent.Envelope, len(got))
+		copy(out, got)
+		return out
+	}
+}
+
+// The stamper's own tests call stamp() directly, so they stay green if replayHost stops calling it. This drives the real replay
+// path and reads the wire, which is the only thing that catches the wiring going missing: a corpus replayed without generations
+// is what left every demo alert's timeline unable to narrow to its chain.
+func TestReplayHost_StampsPIDVersionsOnTheWire(t *testing.T) {
+	t.Parallel()
+	ts, posted := payloadRecordingServer(t)
+	// db is nil: a host with no woven attacks touches no database, and this is about the captured replay.
+	s := newSeeder(runTestConfig(ts.URL), nil, testHTTPClient(), discardLogger())
+	require.NoError(t, s.replayHost(t.Context(), demoHost{File: "alex-mbp.jsonl", Hostname: "alex-mbp.local"}))
+
+	var lifecycle, stamped int
+	for _, e := range posted() {
+		if e.EventType != "exec" && e.EventType != "fork" {
+			continue
+		}
+		lifecycle++
+		var p struct {
+			PIDVersion *int64 `json:"pidversion"`
+		}
+		require.NoError(t, json.Unmarshal(e.Payload, &p))
+		if p.PIDVersion != nil {
+			stamped++
+		}
+	}
+	require.Positive(t, lifecycle, "the capture must contain process lifecycle events for this to prove anything")
+	assert.Equal(t, lifecycle, stamped, "every replayed fork and exec reaches the server carrying a process generation")
+}
+
+// The woven attacks are the processes the demo's alerts actually fire on, so their generations are exactly what an alert-chain
+// timeline scope needs. Stamping the captured replay but not the woven attack would leave every alert's own chain unscopeable,
+// which is the defect this whole change exists to fix.
+func TestWeaveAttack_StampsPIDVersionsOnTheWire(t *testing.T) {
+	t.Parallel()
+	ts, posted := payloadRecordingServer(t)
+	// keychain-dump emits no network_connect, so postWovenEnvelopes takes its single-batch path and never touches a database.
+	s := newSeeder(runTestConfig(ts.URL), nil, testHTTPClient(), discardLogger())
+	atk := wovenAttack{File: "keychain-dump.yaml", Kind: kindAttack, ExpectRule: "credential_keychain_dump"}
+
+	require.NoError(t, s.weaveAttack(t.Context(), "h1", "tok", atk, 0, time.Now(), 0, newPIDVersionStamper()))
+
+	var lifecycle, stamped int
+	for _, e := range posted() {
+		if e.EventType != "exec" && e.EventType != "fork" {
+			continue
+		}
+		lifecycle++
+		var p struct {
+			PIDVersion *int64 `json:"pidversion"`
+		}
+		require.NoError(t, json.Unmarshal(e.Payload, &p))
+		if p.PIDVersion != nil {
+			stamped++
+		}
+	}
+	require.Positive(t, lifecycle, "the attack must contain process lifecycle events for this to prove anything")
+	assert.Equal(t, lifecycle, stamped, "every woven fork and exec reaches the server carrying a process generation")
 }
