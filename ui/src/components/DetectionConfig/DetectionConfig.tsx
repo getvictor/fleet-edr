@@ -135,11 +135,12 @@ const MODE_COLUMN_TOOLTIP =
 // Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
 // for the reader to infer from a column that says nothing was recorded.
 // COST_COLUMN_TOOLTIP explains what the mean is over, because "1.2ms" beside a promote control invites being read as the cost of
-// one alert rather than of one evaluation attempt.
+// one alert rather than of one evaluation attempt. It points at the HOVER for the worst case and the totals, because that is
+// where renderCost puts them: an earlier wording promised both "in each cell", which the cell never showed.
 const COST_COLUMN_TOOLTIP =
-  "Mean wall time per evaluation attempt, with the worst case and the undecided count in each cell. A replayed batch really " +
-  "does evaluate again and counts as another attempt, so this is what the rule costs the server rather than how much work it " +
-  "did. An undecided attempt is one that could not reach a verdict; most are retried, but one whose batch is set aside is not.";
+  "Cost is the mean wall time per evaluation attempt; hover a cell for the worst case and the totals behind it. A replayed " +
+  "batch evaluates again and counts as another attempt, so this is the server's bill for the rule, not the work it completed. " +
+  "Undecided attempts reached no verdict: most are retried, but one whose batch is set aside is not.";
 
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
@@ -367,13 +368,19 @@ export function DetectionConfig() {
   // row buttons disable, so a double-click can't double-submit and a second rule-mode change can't race a stale peer field in.
   const [mutating, setMutating] = useState(false);
   // mountedRef gates the state setters in reload() so a response landing after unmount doesn't set state on a dead component.
+  //
+  // Set true on EVERY run, not just at useRef's initial value. StrictMode runs an effect, its cleanup, then the effect again on
+  // the same instance, so a cleanup-only version latches false on first mount and every later reload() returns before its
+  // setters. The page then renders its headings and an empty table with no error, since nothing failed: the reads all return
+  // 200 and their results are dropped. Production never double-invokes, so this is invisible outside dev, which is exactly what
+  // makes it expensive: it presents as "the dev proxy is broken" and sends you looking at the network tab.
   const mountedRef = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   // Add-exclusion form state. formExpires is an optional YYYY-MM-DD from a date input; converted to an RFC3339 end-of-day instant.
   const [formRuleID, setFormRuleID] = useState("");
@@ -794,9 +801,9 @@ export function DetectionConfig() {
             <p className="detection-config__note">
               {observedUnavailable
                 ? OBSERVED_UNAVAILABLE_TOOLTIP
-                : `Observed counts what each rule matched in monitor mode over the last ${String(observedDays)} days. It is an ` +
-                  "indication of volume, not of how many alerts promoting the rule would raise: repeated matches on the same " +
-                  "process collapse into a single alert once a rule alerts."}
+                : `Observed is what each rule matched in monitor mode over the last ${String(observedDays)} days. It measures ` +
+                  "volume, not how many alerts promotion would raise: once a rule alerts, repeated matches on one process " +
+                  "collapse into a single alert."}
             </p>
             {/*
               The Cost caveat gets the same treatment for the same reason. It had been left in the header's `title`, which a

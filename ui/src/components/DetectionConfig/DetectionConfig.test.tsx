@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -1073,9 +1074,37 @@ describe("DetectionConfig observed column", () => {
       renderPage();
 
       await waitFor(() => {
-        expect(screen.getByText(/Mean wall time per evaluation attempt/)).toBeVisible();
+        expect(screen.getByText(/Cost is the mean wall time per evaluation attempt/)).toBeVisible();
       });
       expect(screen.getByText(/most are retried, but one whose batch is set aside is not/)).toBeVisible();
+      // The note must point at the HOVER for the worst case. renderCost shows the mean and suppresses the undecided
+      // annotation at zero, so an earlier wording promising both "in each cell" described a cell that does not exist.
+      expect(screen.getByText(/hover a cell for the worst case/)).toBeVisible();
+      expect(screen.queryByText(/undecided count in each cell/)).not.toBeInTheDocument();
+    });
+
+    // StrictMode runs an effect, its cleanup, then the effect again on the SAME instance. A mountedRef set false only in the
+    // cleanup latches there, and every reload() then returns before its setters: the page renders its headings and an empty
+    // table with no error, because nothing actually failed and all four reads returned 200. Production never double-invokes,
+    // so only a StrictMode render reproduces it, and renderPage deliberately does not use one. Rendered here rather than
+    // switching renderPage over, so the ~70 cases above keep asserting against the tree the app really mounts.
+    it("still loads its data when the mount effect is double-invoked", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat()] });
+      render(
+        <StrictMode>
+          <MemoryRouter>
+            <PermissionsProvider permissions={[PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite]}>
+              <DetectionConfig />
+            </PermissionsProvider>
+          </MemoryRouter>
+        </StrictMode>,
+      );
+
+      // The ROW, not the note: the notes render from static copy whether or not the reads landed, so asserting on them would
+      // pass against exactly the empty table this guards.
+      await waitFor(() => {
+        expect(screen.getByRole("row", { name: /suspicious_exec/ })).toBeVisible();
+      });
     });
 
     it("says visibly that the cost figures are unavailable, not only on hover", async () => {
@@ -1247,7 +1276,7 @@ describe("DetectionConfig observed column", () => {
     // toBeVisible, not toBeInTheDocument: the point of this fix is that the caveat is SEEN, not merely present. A mutation that
     // hid the note passed against toBeInTheDocument, which asserts the wrong property for a visibility requirement.
     await waitFor(() => {
-      expect(screen.getByText(/not of how many alerts promoting the rule would raise/)).toBeVisible();
+      expect(screen.getByText(/not how many alerts promotion would raise/)).toBeVisible();
     });
     expect(screen.getByText(/over the last 7 days/)).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "Observed (7d)" })).toBeVisible();
@@ -1293,7 +1322,7 @@ describe("DetectionConfig observed column", () => {
     await waitFor(() => {
       expect(screen.getByText(/Match counts could not be loaded/)).toBeVisible();
     });
-    expect(screen.queryByText(/not of how many alerts promoting the rule would raise/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not how many alerts promotion would raise/)).not.toBeInTheDocument();
     // And the header must not advertise a window it cannot cover.
     expect(screen.getByRole("columnheader", { name: "Observed" })).toBeInTheDocument();
   });
