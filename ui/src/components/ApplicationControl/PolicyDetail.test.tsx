@@ -33,6 +33,7 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
   created_by: "system",
   updated_by: "user:1",
   assignment_count: 1,
+  rule_count: 0,
   ...over,
 });
 

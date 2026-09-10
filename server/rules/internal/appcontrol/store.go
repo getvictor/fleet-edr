@@ -192,8 +192,8 @@ func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([
 	return out, nil
 }
 
-// policySelectWithAssignmentCount is the SELECT-list + FROM-clause every policy fetch uses. The correlated subquery in the
-// SELECT list computes the assignment count for each output row; MySQL's planner can use the (policy_id, host_group_id)
+// policySelectWithAssignmentCount is the SELECT-list + FROM-clause every policy fetch uses. The correlated subqueries in the
+// SELECT list compute the assignment and rule counts for each output row; MySQL's planner can use the (policy_id, host_group_id)
 // composite PK index on app_control_assignments to count without scanning the table. Cheaper than a LEFT JOIN against an
 // aggregate subquery for single-row PK lookups (GetPolicyByName, getPolicyByID) where that join would materialize counts for
 // every policy in the table; ListPolicies pays the per-row subquery cost N times but each one is the indexed COUNT(*) above.
@@ -201,7 +201,8 @@ func (s *Store) ListAssignmentsForPolicy(ctx context.Context, policyID int64) ([
 // is one source of truth.
 const policySelectWithAssignmentCount = `SELECT p.id, p.name, p.description, p.version, p.default_action,
 	p.created_at, p.updated_at, p.created_by, p.updated_by,
-	(SELECT COUNT(*) FROM app_control_assignments a WHERE a.policy_id = p.id) AS assignment_count
+	(SELECT COUNT(*) FROM app_control_assignments a WHERE a.policy_id = p.id) AS assignment_count,
+	(SELECT COUNT(*) FROM app_control_rules r WHERE r.policy_id = p.id) AS rule_count
 	FROM app_control_policies p`
 
 // scanPolicyRow consumes one row from a query built atop policySelectWithAssignmentCount. The column order is fixed by the
@@ -212,7 +213,7 @@ func scanPolicyRow(scanner interface{ Scan(...any) error }) (api.ApplicationCont
 	var p api.ApplicationControlPolicy
 	err := scanner.Scan(
 		&p.ID, &p.Name, &p.Description, &p.Version, &p.DefaultAction,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy, &p.AssignmentCount,
+		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy, &p.AssignmentCount, &p.RuleCount,
 	)
 	return p, err
 }
