@@ -1652,3 +1652,41 @@ func TestAppControlREST_HostGroupMutations_ReadOnlyInPhaseA(t *testing.T) {
 		})
 	}
 }
+
+// The policies list rendered "-" in its RULES column for every policy, because the list response carried no rule count and
+// the UI would not invent a 0 it could not verify. An admin scanning for which policies hold any rules had to open each
+// one. This pins the count as live: it moves when a rule is added, so it cannot be satisfied by a hardcoded zero.
+func TestAppControlREST_ListPolicies_CarriesRuleCount(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+
+	listCount := func() int {
+		t.Helper()
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var body struct {
+			Policies []rulesapi.ApplicationControlPolicy `json:"policies"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		require.Len(t, body.Policies, 1)
+		return body.Policies[0].RuleCount
+	}
+
+	assert.Equal(t, 0, listCount(), "a freshly seeded policy holds no rules, and the list should say 0 rather than nothing")
+
+	create := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"severity":   "high",
+			"actor":      "tester",
+			"reason":     "pin the list rule count",
+		})
+	defer create.Body.Close()
+	require.Equal(t, http.StatusCreated, create.StatusCode)
+
+	assert.Equal(t, 1, listCount(), "the count follows the policy's rules rather than being computed once")
+}

@@ -35,13 +35,13 @@ export function PoliciesList() {
     return () => { cancelled = true; };
   }, []);
 
-  // ruleCount returns the number of rules attached to the policy. The
-  // list endpoint omits the rules array so the count is unknown until
-  // someone opens the detail page; show "-" rather than a fake 0 so
-  // the admin knows they have to click in. Post-demo work adds a
-  // rule_count aggregate to the list response.
+  // ruleCount returns the number of rules attached to the policy.
+  //
+  // The list endpoint still omits the rules array, but it now carries a server-computed rule_count, so this no longer has to
+  // render "-" for every policy and leave the admin to click into each one to find out which hold any rules. Prefers the
+  // fetched array when a caller does supply it, so a policy fetched with its rules cannot disagree with its own count.
   const ruleCount = (p: ApplicationControlPolicy): string =>
-    p.rules ? String(p.rules.length) : "-";
+    String(p.rules ? p.rules.length : p.rule_count);
 
   // assignmentLabel formats the assignment_count column. The seed Default policy renders "1 host group" because its only
   // assignment row connects it to all-hosts; policies created without assignments render "no host groups" (an admin posture,

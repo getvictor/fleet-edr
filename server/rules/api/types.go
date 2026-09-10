@@ -611,9 +611,10 @@ func IsValidFallbackPosture(s FallbackPosture) bool {
 }
 
 // ApplicationControlPolicy mirrors a row in app_control_policies. Used by the REST surface for list/get responses and by the fan-out
-// code when constructing the `set_application_control` agent command. Rules is populated by GetWithRules and the rule listing
+// code when constructing the `set_application_control` agent command. Rules is populated by GetPolicyWithRules and the rule listing
 // endpoints; bare Get omits it. AssignmentCount is a derived field every policy fetch path populates (GetPolicyByName,
-// GetPolicyByID, ListPolicies) so the UI's policies-list view can render "N host groups" without an N+1 round trip. Other
+// GetPolicyByID, ListPolicies) so the UI's policies-list view can render "N host groups" without an N+1 round trip.
+// RuleCount is derived the same way and for the same reason. Other
 // internal callers (create/update audit paths) get a populated count they may ignore; the field is always authoritative.
 // The seeded Default policy starts at 1 (its assignment to the seed all-hosts group); policies created via CreatePolicy start
 // at 0 and grow when Phase B opens up assignment editing.
@@ -627,13 +628,17 @@ type ApplicationControlPolicy struct {
 	// kernel deadline budget. v0.1.0 has no DB column for this field; CreatePolicy/UpdatePolicy ignore it and the marshal
 	// substitutes DefaultFallbackPosture (fail-closed) on empty values. The v0.1.x follow-up that adds DB persistence + a REST
 	// surface to set the posture will start carrying real values through here.
-	DeadlineFallback FallbackPosture          `json:"deadline_fallback,omitempty"`
-	CreatedAt        time.Time                `json:"created_at"`
-	UpdatedAt        time.Time                `json:"updated_at"`
-	CreatedBy        string                   `json:"created_by"`
-	UpdatedBy        string                   `json:"updated_by"`
-	AssignmentCount  int                      `json:"assignment_count"`
-	Rules            []ApplicationControlRule `json:"rules,omitempty"`
+	DeadlineFallback FallbackPosture `json:"deadline_fallback,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	CreatedBy        string          `json:"created_by"`
+	UpdatedBy        string          `json:"updated_by"`
+	AssignmentCount  int             `json:"assignment_count"`
+	// RuleCount is every rule attached to the policy, enabled or not, so the policies list can say what a policy holds
+	// without fetching its rules. Deliberately not filtered to enabled rules: a policy holding three disabled rules would
+	// then read as empty, which is a worse impression than a count the detail page qualifies per rule.
+	RuleCount int                      `json:"rule_count"`
+	Rules     []ApplicationControlRule `json:"rules,omitempty"`
 }
 
 // ApplicationControlRule mirrors a row in app_control_rules.
