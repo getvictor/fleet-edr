@@ -120,7 +120,10 @@ echo "uat_wait_for_pkg_receipt"
 
 # sleep is stubbed to a no-op so the negative cases, which must run to their deadline, do not each cost five seconds.
 # Test-local: the helper keeps its real pacing in production.
-# shellcheck disable=SC2329  # invoked indirectly: the helper under test calls `sleep`, which this shadows
+# Both codes: shellcheck renamed this diagnostic, and the two versions in play disagree. 0.11 (brew, local) reports
+# SC2329; the older build apt ships on the CI runner reports SC2317 for the same construct, so listing one silences it
+# in exactly one of the two places it runs.
+# shellcheck disable=SC2317,SC2329  # invoked indirectly: the helper under test calls `sleep`, which this shadows
 sleep() { :; }
 
 # uat_ssh is stubbed rather than reaching a VM. RECEIPT_OUT is what pkgutil would print through the helper's awk, so
@@ -129,7 +132,7 @@ RECEIPT_OUT=""
 # Recorded to a FILE, not a variable: the helper calls uat_ssh inside a command substitution, which is a subshell, so an
 # assignment here would never reach the assertion below.
 RECEIPT_SAW="$TMP/receipt-cmd.txt"
-# shellcheck disable=SC2329  # invoked indirectly: the helper under test calls `uat_ssh`, which this shadows
+# shellcheck disable=SC2317,SC2329  # invoked indirectly: the helper under test calls `uat_ssh`, which this shadows
 uat_ssh() { printf '%s' "$*" > "$RECEIPT_SAW"; printf '%s' "$RECEIPT_OUT"; }
 
 RECEIPT_OUT="2000"

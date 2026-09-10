@@ -62,9 +62,15 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # EVERY output the dependent jobs gate on, not just the language pair. The line below claims this runs all
+            # test jobs, and it only did so for `e2e` by accident: that job's gate is `go || ui || e2e`, so the two it
+            # did emit carried it. A job gating on its own output alone, as the L5 driver tests do, was skipped on main
+            # and on manual runs while this block reported the opposite.
             {
               echo "go=true"
               echo "ui=true"
+              echo "e2e=true"
+              echo "uat=true"
               echo "any=true"
             } >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running all test jobs."
