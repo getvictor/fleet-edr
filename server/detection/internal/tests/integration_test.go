@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -3214,6 +3215,44 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 		assert.Zero(t, empty.TotalMatched)
 		assert.Zero(t, empty.Returned)
 	})
+}
+
+// TestProcessTree_PathologicalLimits pins that BuildTree survives a limit the HTTP handler would never send.
+//
+// Not a spec scenario, because nothing observable through the API changes: the handler clamps `?limit=` to [1, 5000] before it gets
+// here. It is pinned anyway because BuildTree sits on the cross-context Service interface, and the lookahead read made the limit
+// load-bearing arithmetic: limit+1 overflows at math.MaxInt and a negative limit makes the trim a negative slice bound, so a caller
+// outside the handler panics the server rather than getting an error back. Review caught it.
+func TestProcessTree_PathologicalLimits(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const host = "limit-clamp-host"
+	for _, pid := range []int{201, 202, 203} {
+		mustInsertProcess(t, ctx, d, host, pid)
+	}
+	window := api.TimeRange{FromNs: 0, ToNs: time.Now().UnixNano()}
+
+	for _, tc := range []struct {
+		name  string
+		limit int
+	}{
+		{name: "most negative", limit: math.MinInt},
+		{name: "negative", limit: -1},
+		{name: "zero", limit: 0},
+		{name: "one", limit: 1},
+		{name: "most positive, which overflows the lookahead", limit: math.MaxInt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res, err := d.Service().BuildTree(t.Context(), host, window, tc.limit, true, 0)
+			require.NoError(t, err, "a limit the handler would never send must not fail the read")
+			assert.Positive(t, res.Returned, "every clamp lands on at least one row, since the window has rows")
+			assert.GreaterOrEqual(t, res.TotalMatched, res.Returned,
+				"the denominator is never below the numerator, whichever clamp applied")
+		})
+	}
 }
 
 // TestProcessTree_WindowOverlapSemantics pins which processes a time range admits. The tree deliberately shows a process that was

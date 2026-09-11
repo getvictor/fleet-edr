@@ -12,3 +12,5 @@
 - [x] Count one row past the bound so "more than N" is true rather than "at least N"
 - [x] Spec the floor semantics on the UI side too, not only on the API
 - [x] Pin the new wire field in the round-trip PBT and the field-name test
+- [x] Clamp the limit inside BuildTree, since the lookahead made it load-bearing arithmetic
+- [x] Log a count that gives up, so a deployment can see the budget firing

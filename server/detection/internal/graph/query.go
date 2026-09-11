@@ -39,6 +39,13 @@ func NewQuery(s *mysql.Store) *Query {
 func (q *Query) BuildTree(
 	ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64,
 ) (api.ProcessTreeResult, error) {
+	// Clamp before the arithmetic below rather than trusting the caller. limit+1 overflows at math.MaxInt and a negative limit makes
+	// the trim a negative slice bound, and both PANIC rather than returning an error. The HTTP handler normalizes its own query
+	// parameter, but BuildTree sits on the cross-context Service interface, so the arithmetic here cannot assume a caller that did.
+	// The upper clamp also makes the "a page never reaches the counting bound" invariant hold for every caller rather than only for
+	// the one whose constant the compile-time guard in the handler checks.
+	limit = min(max(limit, 1), mysql.ProcessTreeCountBound-1)
+
 	// One row past the limit, so whether anything was left behind is PROVEN by the read itself rather than inferred from a count.
 	// Truncation is the claim the page acts on (it is what raises the "showing N of M" notice), and it has to hold even when the
 	// count is unaffordable: on a long history the count can give up on its time budget, and deriving truncation from the number it

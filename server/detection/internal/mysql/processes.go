@@ -614,6 +614,11 @@ func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.Time
 		append(processTreeWindowArgs(hostID, tr), ProcessTreeCountBound+1)...,
 	)
 	if countTimedOut(err) {
+		// Logged rather than silently swallowed. This is the part of the read that degrades as a host's history grows, and a
+		// deployment landing here routinely is paying the whole budget on every full page and showing a floor for it, while the
+		// request still succeeds and reports nothing. The message is stable so the rate can be alerted on.
+		s.logger.WarnContext(ctx, "process tree count gave up on its time budget, reporting a floor instead of a total",
+			"host_id", hostID, "from_ns", tr.FromNs, "to_ns", tr.ToNs, "budget_ms", processTreeCountBudgetMs)
 		// Not an error to the caller. The rows are already in hand and the request is answerable without this number, so spending
 		// the operator's page on a denominator would be the wrong trade. Zero with capped=true reports "at least what you can see":
 		// BuildTree floors TotalMatched at Returned, so the page reads "more than <the rows shown>" rather than inventing a total.
