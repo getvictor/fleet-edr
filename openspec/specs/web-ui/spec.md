@@ -54,6 +54,8 @@ The UI SHALL render the process tree page for a host as a hierarchical visualiza
 
 When the server reports the read as truncated, the UI MUST display a notice stating how many processes are shown out of how many matched the window, so the analyst is never shown a partial tree that looks complete. The notice MUST name the ways to see the rest, namely narrowing the time range or using search. The UI MUST take both counts from the server's result metadata rather than inferring them from the requested limit or from the number of rendered nodes. When the server does not report the read as truncated, the UI MUST NOT display the notice.
 
+The number that matched is not always affordable to establish, because counting every match over a long history is unbounded work, so the server MAY report it as a FLOOR rather than a total and says which it is. When the server reports the number as a floor, the notice MUST present it as a floor rather than as an exact count, so an analyst reading "of 10,000" is reading a number the server actually established. The UI MUST NOT infer the distinction from the number itself, such as by treating a round figure or the counting bound as a floor: only the server knows whether it finished counting.
+
 #### Scenario: Process tree renders for a host
 
 - **GIVEN** the operator opens a host's process tree page
@@ -85,6 +87,13 @@ When the server reports the read as truncated, the UI MUST display a notice stat
 - **GIVEN** a host whose window matched no more processes than the server returned
 - **WHEN** the process tree renders
 - **THEN** the UI shows no truncation notice
+
+#### Scenario: A total the server could not establish exactly is shown as a floor
+
+- **GIVEN** a truncated read whose result metadata reports the matched total as a floor rather than an exact count
+- **WHEN** the process tree renders
+- **THEN** the notice presents that number as a lower bound rather than as the number that matched
+- **AND** the same number reported as exact is presented without qualification
 
 ### Requirement: Process detail content
 
@@ -714,7 +723,9 @@ The scope is keyed on each process's generation, which not every process carries
 - **Some processes carry one.** The timeline SHALL scope to the processes it can reach and SHALL state that it reached only part of the chain, because a list that presents itself as the alert chain while silently dropping part of that chain is worse than one that shows too much. It SHALL NOT state how many processes were omitted: the tree it would count from aggregates identical leaf descendants into synthetic group nodes, so any such count would report groups as processes.
 - **Every process carries one.** The timeline SHALL scope without qualification.
 
-While a first read is in flight or has failed, so that no tree has resolved at all, the timeline SHALL NOT report an unresolved chain, because there is no loaded tree for anything to be absent from. That governs only the report: where a tree has resolved, the scope the timeline applies and the label describing it are both derived from that same resolved chain, so a later refetch leaves the two consistent with each other rather than letting the label describe a scope that is not in force.
+While a first read is in flight, so that no tree has resolved yet, the timeline SHALL NOT report an unresolved chain, because there is no loaded tree for anything to be absent from and a message that appears and then disappears is its own kind of wrong.
+
+A read that FAILED is a different outcome and SHALL be reported, in its own words rather than as an unresolved chain. The two were treated alike once and the page then contradicted itself: the graph rendered its error while the timeline listed the whole host with nothing to say it had stopped trying to narrow, so one surface reported failure and the other implied success. What the timeline SHALL NOT do is claim the chain is absent from a tree that never loaded, which is a claim about data nobody has seen. Saying the tree could not be loaded is both true and the thing the operator can act on. A failed read SHALL be reported whatever chain is still in hand. A refetch that fails leaves the chain resolved from the window before it, and reading that chain as evidence the scope still holds is how the same contradiction returns one window over: the graph reports the error while the timeline narrows the new window to the previous window's processes and calls itself scoped. Where the timeline reports that it cannot vouch for the scope, it SHALL also stop applying it, so the label and the events listed never disagree.
 
 #### Scenario: Timeline view lists window events filterable by type
 
@@ -738,12 +749,22 @@ While a first read is in flight or has failed, so that no tree has resolved at a
 - **AND** it states that it is showing the whole host because the chain cannot be narrowed
 - **AND** it does not simultaneously claim to be scoped to the alert chain
 
-#### Scenario: Timeline says nothing until a tree has resolved
+#### Scenario: Timeline says nothing while a tree read is in flight
 
-- **GIVEN** the host page entered for an alert, with the process tree read still in flight or having failed
+- **GIVEN** the host page entered for an alert, with the process tree read still in flight
 - **WHEN** the operator switches to the timeline view
 - **THEN** the timeline makes no claim about why the chain is unresolved
-- **AND** it does so for a pending read and a failed read alike, since neither has produced a tree to be absent from
+- **AND** it does not flash a message that a resolving tree would immediately replace
+
+#### Scenario: Timeline says the tree could not be loaded when its read failed
+
+- **GIVEN** the host page entered for an alert, with the process tree read having failed
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline states that the process tree could not be loaded and that it is therefore showing the whole host
+- **AND** it does not claim the chain is absent from the tree, which never loaded
+- **AND** the graph and the timeline no longer disagree about whether the read succeeded
+- **AND** this holds for a refetch that fails after an earlier read succeeded, where a chain resolved from the previous window is still in hand
+- **AND** in that case the timeline stops scoping to that chain rather than narrowing the new window to the previous window's processes
 
 #### Scenario: Timeline distinguishes an absent chain from a chain without generations
 

@@ -56,7 +56,13 @@ The change from the prior requirement is the addition of the host platform to ea
 
 The system SHALL expose `GET /api/hosts/{host_id}/tree` returning the process forest for that host. The response SHALL nest each process under its parent and SHALL attach the network connections and DNS queries that occurred during each process's lifetime. By default the response SHALL collapse repeated identical-path leaf siblings under the same parent into aggregated nodes, each carrying the group's count, its exited-versus-running split, its first and last fork times, and a capped sample of the underlying members, nested in the forest exactly where the collapsed siblings sat. The endpoint SHALL accept an optional `flatten` boolean query parameter; when set it returns the raw, un-aggregated forest with every node. The endpoint SHALL also accept an optional `pin` query parameter naming a single process by its id; that process SHALL be kept a first-class node, never folded into a sibling aggregate, so a client such as the alert view can always locate the alerted process by its real id even when it has identical siblings.
 
-The response SHALL additionally carry result metadata describing what the read did NOT return: `total_matched`, the count of every process row whose lifetime overlaps the requested window, computed independent of the row limit; `returned`, the count of rows the limit admitted, before any aggregation folded them; and `truncated`, whether the limit dropped rows. `total_matched` SHALL be counted with the same window predicate that selects the rows, so the two can never disagree. `total_matched` SHALL always be a real count for this endpoint; the tree read is scoped to a single host and window and MUST NOT return a not-counted sentinel. A client MUST be able to report what is missing using only these fields, without re-deriving the server's effective limit.
+The response SHALL additionally carry result metadata describing what the read did NOT return: `total_matched`, the count of process rows whose lifetime overlaps the requested window; `returned`, the count of rows the limit admitted, before any aggregation folded them; `total_matched_capped`, whether that count is a floor rather than a total; and `truncated`, whether the limit dropped rows. `total_matched` SHALL be counted with the same window predicate that selects the rows, so the two can never disagree. A client MUST be able to report what is missing using only these fields, without re-deriving the server's effective limit.
+
+`truncated` SHALL be established by the read itself, by fetching one row beyond the requested limit, and SHALL NOT be derived from `total_matched`. The count behind that number is bounded and may give up, so deriving truncation from it reports a partial forest as complete on exactly the hosts where the count cannot finish, which is where a partial forest is most likely. A read proven untruncated SHALL skip the count entirely, since it holds every row that matched, and SHALL NOT set `total_matched_capped`.
+
+Counting SHALL be bounded both by a row bound and by a time budget, and `total_matched` is therefore exact only when the count completed within both AND came back above the rows returned; it is a floor in every other case, with `total_matched_capped` saying which. The last of those conditions is not pedantry: the count and the row read are separate statements, so retention pruning between them can return a total below the rows already in hand, and "showing 2,000 of 1,998" under a truncation notice is not a claim the server can stand behind. A count that exhausts its time budget SHALL NOT fail the request: the rows are already in hand and the request is answerable without the number, so the rows returned become the floor and the response reports "more than what you can see". The row bound caps rows emitted rather than rows examined, so a window matching fewer rows than the bound still walks its whole range to prove it; the time budget is the backstop for that, and it is why a bound alone is not sufficient. An unbounded count is what this replaces, and it took the endpoint down: on a dogfood host carrying 5.2 million process rows, a 24-hour window matched 542,268 of them and the count ran past 120 seconds against a 30-second server write timeout, so the request returned 500 and the operator saw a failed graph. The row read itself was never slow, at about 0.1 seconds for the same window, because its `ORDER BY fork_time_ns DESC LIMIT` lets the scan stop early. Counting SHALL use that same access path so its cost is bounded by the bound rather than by how much the window matched.
+
+The exactness given up buys a request that always answers. A denominator past the bound tells an operator nothing they act on differently: the decision a truncated tree drives is to narrow the window, and "more than 10,000" drives it as well as "542,268" does. A number that sometimes takes two minutes and then fails is worth less than a bounded one that always arrives.
 
 #### Scenario: An operator views a host's process tree
 
@@ -94,7 +100,7 @@ The response SHALL additionally carry result metadata describing what the read d
 - **GIVEN** a logged-in operator and a host whose window overlaps more process rows than the effective row limit
 - **WHEN** the client calls `GET /api/hosts/{host_id}/tree`
 - **THEN** the response sets `truncated` to true
-- **AND** `total_matched` equals the true count of overlapping rows, not the limit
+- **AND** `total_matched` equals the true count of overlapping rows, not the limit, when that count is at or below the counting bound and completes
 - **AND** `returned` equals the number of rows the limit admitted
 
 #### Scenario: A window inside the limit is not reported as truncated
@@ -106,9 +112,20 @@ The response SHALL additionally carry result metadata describing what the read d
 
 #### Scenario: The reported total ignores the requested limit
 
-- **GIVEN** a logged-in operator and a host whose window overlaps a fixed number of process rows
+- **GIVEN** a logged-in operator and a host whose window overlaps a fixed number of process rows, and a count that completes
 - **WHEN** the client calls `GET /api/hosts/{host_id}/tree` twice with different `limit` values
 - **THEN** both responses report the same `total_matched`
+- **AND** the one exception is a count that could not complete, whose floor is the rows THAT request returned and therefore moves with the limit
+
+#### Scenario: Counting stops at its bound rather than scanning the whole window
+
+- **GIVEN** a host whose window overlaps far more process rows than the counting bound
+- **WHEN** the client calls `GET /api/hosts/{host_id}/tree`
+- **THEN** `total_matched` equals the counting bound rather than the true number of overlapping rows
+- **AND** `total_matched_capped` is true
+- **AND** the response is returned rather than failing on a server timeout
+- **AND** a window matching exactly the counting bound reports that number with `total_matched_capped` false, because nothing lies beyond it
+- **AND** a count that exhausts its time budget reports the rows returned as the floor, with `total_matched_capped` true and `truncated` still true
 
 ### Requirement: Per-process detail with re-exec chain
 
