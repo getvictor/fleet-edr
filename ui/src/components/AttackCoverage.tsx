@@ -121,18 +121,30 @@ export function AttackCoverage() {
       {!loading && layer && (
         <>
           <SummaryStrip>
-            <StatCard accent="green" value={alerting} label="techniques alerting by default" />
+            <StatCard
+              accent="green"
+              value={alerting}
+              label="techniques alerting by default"
+              hint="Techniques with at least one rule that alerts out of the box. Counted from each rule's catalog default, not from what this deployment has tuned."
+            />
             {notAlerting > 0 && (
               <StatCard
                 accent="neutral"
                 value={notAlerting}
                 // The number stays. It is the single most load-bearing fact on this page: most of the catalog ships silent,
-                // and a reader who takes "techniques alerting" as the coverage figure is off by a factor of five. What it
+                // and a reader who takes "alerting by default" as the coverage figure is off by a factor of five. What it
                 // needed was somewhere to go. Left bare it reads as a defect to switch off, when these rules ship in monitor
                 // mode deliberately, because promoting them without tuning buries the alerts that matter under theirs.
+                //
+                // The label is the short mirror of the card beside it, so the pair reads as one contrast rather than as a
+                // caption and a paragraph. Two words of it are not negotiable, though. "techniques" stays because this card
+                // sits beside a count of RULES and a count of TACTICS, and a bare "silent by default" reads as either.
+                // "by default" stays because the score comes from each rule's catalog default rather than from this
+                // deployment's settings. The detail moved to the hint, and the LINK stays visible: it is an action.
+                hint="Techniques covered only by rules that do not alert out of the box. Most ship in monitor mode, recording matches without raising an alert; a few ship disabled and record nothing. Promoting all of them at once buries the alerts that matter. Counted from catalog defaults, not from what this deployment has tuned."
                 label={(
                   <>
-                    techniques covered only by rules that ship silent{canTune && (
+                    techniques silent by default{canTune && (
                       <>
                         {" "}
                         <Link className="attack-coverage__tune-link" to="/detection-config">promote or tune</Link>

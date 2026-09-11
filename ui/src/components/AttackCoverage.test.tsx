@@ -54,6 +54,13 @@ describe("AttackCoverage summary strip", () => {
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
     expect(within(cardFor("techniques alerting by default")).getByText("2")).toBeInTheDocument();
+    // The hint is asserted at the CALL SITE, not only in StatCard's own test. That test proves the prop is forwarded,
+    // which stays true with the prop deleted from here: the page would ship two cards with no explanation and every
+    // test would still pass. What it says matters as much as that it exists, so the disabled case is pinned too, since
+    // an earlier version claimed every counted rule records matches, which is false of a rule that ships disabled.
+    expect(cardFor("techniques alerting by default")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Counted from each rule's catalog default"));
     // rule_a + rule_b are the two distinct covering rules across both techniques.
     expect(within(cardFor("detection rules")).getByText("2")).toBeInTheDocument();
     expect(within(cardFor("tactics with coverage")).getByText("2")).toBeInTheDocument();
@@ -92,8 +99,12 @@ describe("AttackCoverage summary strip", () => {
 
     // The silent-rule card carries the number AND somewhere to act on it. Left bare the figure reads as a defect to switch
     // off, when those rules ship in monitor mode deliberately, so the link is part of what the card is for.
-    const silent = within(strip).getByText(/covered only by rules that ship silent/).closest(".stat-card") as HTMLElement;
+    const silent = within(strip).getByText(/techniques silent by default/).closest(".stat-card") as HTMLElement;
     expect(within(silent).getByText("2")).toBeVisible();
+    // What the hint SAYS, not just that one is attached: an earlier version claimed every counted rule records matches,
+    // which is false of a rule shipping disabled, and BuildNavigatorLayer gives monitor and disabled the same score.
+    expect(silent).toHaveAttribute("title", expect.stringContaining("do not alert out of the box"));
+    expect(silent).toHaveAttribute("title", expect.stringContaining("a few ship disabled"));
     const tune = within(silent).getByRole("link", { name: /promote or tune/i });
     expect(tune).toBeVisible();
     expect(tune).toHaveAttribute("href", "/detection-config");
@@ -134,7 +145,7 @@ describe("AttackCoverage tuning link", () => {
   it("withholds the link, but not the number, from an operator who cannot", async () => {
     renderWithPerms([]);
     // The count still renders: it is the fact worth knowing even for someone who cannot act on it themselves.
-    expect(await screen.findByText(/covered only by rules that ship silent/)).toBeVisible();
+    expect(await screen.findByText(/techniques silent by default/)).toBeVisible();
     expect(screen.queryByRole("link", { name: /promote or tune/i })).not.toBeInTheDocument();
   });
 });

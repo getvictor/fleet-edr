@@ -134,14 +134,36 @@ const MODE_COLUMN_TOOLTIP =
 
 // Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
 // for the reader to infer from a column that says nothing was recorded.
-// COST_COLUMN_TOOLTIP explains what the mean is over, because "1.2ms" beside a promote control invites being read as the cost of
-// one alert rather than of one evaluation attempt. It points at the HOVER for the worst case and the totals, because that is
-// where renderCost puts them: an earlier wording promised both "in each cell", which the cell never showed.
-const COST_COLUMN_TOOLTIP =
-  "Cost leads with the total wall time a rule's evaluations took over the window, and carries the mean per attempt behind " +
-  "it; hover a cell for the worst case. Sorting ranks by the total. A replayed batch evaluates again and counts as another " +
-  "attempt, so this is the server's bill for the rule, not the work it completed. Undecided attempts reached no verdict: " +
-  "most are retried, but one whose batch is set aside is not.";
+// The notes say what the mean is over, because "1.2ms" beside a promote control invites being read as the cost of one
+// alert rather than of one run, and they point at the HOVER for the worst case because that is where renderCost puts it:
+// an earlier wording promised it "in each cell", which the cell never showed.
+//
+// Each note opens with its column's name, which is bolded where it renders. Unbolded, "Observed is what each rule
+// matched" reads as a sentence missing its subject until you notice the first word is a column header.
+//
+// The body is held separately from the name so the same sentence can be a `title` attribute, which cannot take markup,
+// without a second copy of the prose to drift out of step with the visible one.
+function observedNoteBody(days: number): string {
+  return (
+    `counts how often each rule matched while in monitor mode, over the last ${String(days)} days. It shows how noisy a ` +
+    "rule is, not how many alerts you would get by promoting it: once a rule alerts, repeated matches on the same " +
+    "process become one alert."
+  );
+}
+
+// Deliberately plainer than it was. An earlier version described the cell's layout ("leads with ... carries behind it")
+// and called the figure "the server's bill for the rule, not the work it completed", which is a riddle rather than an
+// explanation. What an operator needs is what the numbers are, which one the sort uses, and why that is the right one.
+function costNoteBody(days: number): string {
+  return (
+    `is how much server time each rule used over the last ${String(days)} days: the total first, then the average per ` +
+    "run. Hover a cell for the slowest single run. Sorting ranks by the total, because a cheap rule that runs constantly " +
+    "can cost more than an expensive one that rarely runs. Retries count as runs, so this is time spent rather than work " +
+    "completed, and a run that ends without deciding is counted too and shown as undecided."
+  );
+}
+
+const costColumnTooltip = (days: number): string => `Cost ${costNoteBody(days)}`;
 
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
@@ -809,18 +831,28 @@ export function DetectionConfig() {
               as a forecast of alert volume, so it is exactly the sentence that must not be the one only some readers get.
             */}
             <p className="detection-config__note">
-              {observedUnavailable
-                ? OBSERVED_UNAVAILABLE_TOOLTIP
-                : `Observed is what each rule matched in monitor mode over the last ${String(observedDays)} days. It measures ` +
-                  "volume, not how many alerts promotion would raise: once a rule alerts, repeated matches on one process " +
-                  "collapse into a single alert."}
+              {observedUnavailable ? (
+                OBSERVED_UNAVAILABLE_TOOLTIP
+              ) : (
+                <>
+                  <strong>Observed</strong> {observedNoteBody(observedDays)}
+                </>
+              )}
             </p>
             {/*
               The Cost caveat gets the same treatment for the same reason. It had been left in the header's `title`, which a
               non-focusable th only surfaces on pointer hover, so the sentence that stops the number reading as a per-alert cost
               was the one keyboard and touch users did not get.
             */}
-            <p className="detection-config__note">{costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}</p>
+            <p className="detection-config__note">
+              {costUnavailable ? (
+                COST_UNAVAILABLE_TOOLTIP
+              ) : (
+                <>
+                  <strong>Cost</strong> {costNoteBody(costDays)}
+                </>
+              )}
+            </p>
 
             <Table>
               <thead>
@@ -836,7 +868,7 @@ export function DetectionConfig() {
                     control; the th carries aria-sort so the order is stated rather than left implied by the label.
                   */}
                   <th
-                    title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : COST_COLUMN_TOOLTIP}
+                    title={costUnavailable ? COST_UNAVAILABLE_TOOLTIP : costColumnTooltip(costDays)}
                     aria-sort={sortActive ? "descending" : "none"}
                   >
                     <button
