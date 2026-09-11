@@ -9,7 +9,8 @@ import {
 import { ProcessDetail } from "./ProcessDetail";
 import { AlertTriageActions } from "./AlertTriageActions";
 import { HostHeader } from "./HostHeader";
-import { HostTimeline, type ChainScopeGap } from "./HostTimeline";
+import { HostTimeline } from "./HostTimeline";
+import { type ChainScopeGap } from "./chainScope";
 import { type NodeTooltip } from "./node-tooltip";
 import { TechniqueTags } from "./TechniqueTags";
 import { TimeRangeControl } from "./TimeRangeControl";
