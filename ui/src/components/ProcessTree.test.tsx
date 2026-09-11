@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vite
 import * as api from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import { ProcessTreeView } from "./ProcessTree";
+import { degradedScopeMessages } from "./chainScope";
 import { treeResponse } from "../test/factories";
 
 // spec:web-ui/alert-pivots-to-the-host-process-tree/operator-pivots-from-a-process-optional-alert
@@ -684,24 +685,78 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
   // An empty chain has several causes and only one of them is "outside the window". Claiming that reading while the tree is
   // still loading, or after a failed read, or on a host with nothing in the window, sends the operator to change a time range
   // that is not the problem. Review caught the condition claiming more than it proves.
-  it.each([
-    ["the tree failed to load", () => { vi.spyOn(api, "getProcessTree").mockRejectedValue(new Error("boom")); }],
-    // The requirement covers a pending FIRST read as well as a failed one, and they reach the guard by different fields
-    // (loading vs error), so exercising only the failure would leave half of it unverified. Never resolves, which is exactly
-    // the state under test.
-    ["the first read is still pending", () => {
-      vi.spyOn(api, "getProcessTree").mockReturnValue(new Promise(() => { /* pending for the life of the test */ }));
-    }],
-  // spec:web-ui/host-event-timeline-view/timeline-says-nothing-until-a-tree-has-resolved
-  ])("stays silent while %s, rather than naming an absence it cannot see yet", async (_label, arrange) => {
-    arrange();
+  // spec:web-ui/host-event-timeline-view/timeline-says-nothing-while-a-tree-read-is-in-flight
+  //
+  // Silence is right ONLY while the read is in flight: a note here would appear and then vanish as the tree lands. Asserted against
+  // the timeline's own list of degraded sentences, which has now outlived two weaker forms of the same assertion: naming two
+  // particular messages kept passing when a third was added to exactly this path, and querying the degraded CSS class would keep
+  // passing if the class were renamed. Enumerating the exported list covers a sentence added later without editing this test.
+  it("stays silent while the first read is still pending, rather than naming an absence it cannot see yet", async () => {
+    vi.spyOn(api, "getProcessTree").mockReturnValue(new Promise(() => { /* pending for the life of the test */ }));
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
     renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
 
     // Wait for the view to settle before asserting an absence, so this cannot pass merely by running early.
     await waitFor(() => { expect(screen.getByRole("searchbox", { name: /Filter timeline by text/i })).toBeVisible(); });
+    for (const message of degradedScopeMessages) {
+      expect(screen.queryByText(message)).not.toBeInTheDocument();
+    }
+  });
+
+  // spec:web-ui/host-event-timeline-view/timeline-says-the-tree-could-not-be-loaded-when-its-read-failed
+  //
+  // A failed read is a settled outcome and says so. Reported from the dogfood deployment: the graph showed `Error: API error: 502`
+  // while the timeline listed the whole host with nothing to say it had stopped trying to narrow, so one surface of the page
+  // reported failure and the other implied success.
+  it("says the tree could not be loaded when its read failed", async () => {
+    vi.spyOn(api, "getProcessTree").mockRejectedValue(new Error("boom"));
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...chainAlert, process_id: 999 });
+    renderTree("?alert=9&process=999&at=1750248000000&view=timeline");
+
+    expect(await screen.findByText(/process tree could not be loaded/)).toBeVisible();
+    // It must NOT claim absence from a tree that never loaded: that is a statement about data nobody has seen.
     expect(screen.queryByText(/not in the loaded process tree/)).not.toBeInTheDocument();
     expect(screen.queryByText(/carry no generation data/)).not.toBeInTheDocument();
+  });
+
+  // spec:web-ui/host-event-timeline-view/timeline-says-the-tree-could-not-be-loaded-when-its-read-failed
+  //
+  // The refetch half of the same failure, which the first version of this fix missed. fetchTree keeps the previous roots when a
+  // read rejects, so after one successful load a failed refetch leaves a chain resolved from the window before it. Gating the
+  // message on an empty chain therefore skipped it exactly when the operator had a tree on screen to be misled by: the graph
+  // rendered its error while the timeline narrowed the NEW window to the OLD window's generations and called itself scoped.
+  it("says the tree could not be loaded when a refetch fails after a successful load", async () => {
+    // Carries pidversion, so the first read resolves a chain the timeline can actually scope to. That fully-scoped first load is
+    // what leaves something stale behind for the failed refetch to misuse.
+    const scopableForest: ProcessNode[] = [
+      {
+        ...process(1, 100, 1, "/sbin/launchd"), pidversion: 11,
+        children: [{ ...process(2, 200, 100, "/usr/local/bin/fleet-edr-agent"), pidversion: 22 }],
+      },
+    ];
+    const treeSpy = vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(scopableForest));
+    const timelineSpy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    renderTree("?alert=9&process=2&at=1750248000000&view=timeline");
+
+    // The first load settles into a scoped timeline that says nothing, which is the precondition: there is no note yet for the
+    // refetch to leave standing, and a real chain for it to go stale. The timeline mounts before the tree resolves, so the
+    // scoped query is a later call, not the first.
+    const lastChain = () => timelineSpy.mock.calls[timelineSpy.mock.calls.length - 1][1].chain;
+    await waitFor(() => { expect(lastChain()).toEqual([{ pid: 100, pidversion: 11 }, { pid: 200, pidversion: 22 }]); });
+    for (const message of degradedScopeMessages) {
+      expect(screen.queryByText(message)).not.toBeInTheDocument();
+    }
+    const callsBeforeShift = timelineSpy.mock.calls.length;
+
+    // Shifting the window is the ordinary way an operator triggers a second read, and on the host this was reported from it is
+    // the read that 502s.
+    treeSpy.mockRejectedValue(new Error("API error: 502"));
+    fireEvent.click(screen.getByRole("button", { name: "Shift time window back" }));
+
+    expect(await screen.findByText(/process tree could not be loaded/)).toBeVisible();
+    // And it must stop scoping: a chain resolved from the previous window is not this window's chain.
+    await waitFor(() => { expect(timelineSpy.mock.calls.length).toBeGreaterThan(callsBeforeShift); });
+    expect(lastChain()).toBeUndefined();
   });
 
   // The case that broke the previous wording. BuildTree applies its row limit before aggregation, so a truncated response can
