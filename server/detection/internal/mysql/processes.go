@@ -541,7 +541,10 @@ func processTreeWindowArgs(hostID string, tr api.TimeRange) []any {
 // window so long-running processes still appear in short-window views. Bounded by limit; pair with CountProcessTree to learn whether
 // that bound dropped anything.
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.Process, error) {
-	var procs []api.Process
+	// Allocated rather than declared, so the result is never nil and a caller can slice it. BuildTree asks for one row past its
+	// limit and trims the extra, and nilaway cannot see that a length check makes that slice safe. The capacity is the caller's
+	// limit, which the handler has already clamped, so this also saves the append path its regrowth.
+	procs := make([]api.Process, 0, limit)
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
