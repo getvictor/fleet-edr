@@ -176,6 +176,10 @@ When the alert is not attributed to a single process (a process-optional finding
 
 The UI SHALL provide a coverage page that renders the rule-to-technique mapping in the same shape the upstream MITRE ATT&CK Navigator uses, grouped by tactic. Each covered technique MUST link to its upstream MITRE reference, and the rule identifiers that cover a technique MUST link to that rule's documentation page. The page MUST also expose a control to download the underlying Navigator layer JSON.
 
+Technique names and tactic assignments SHALL come from the published ATT&CK release the layer declares, not from a mapping maintained alongside the rules: a rule's tactic tags describe the rule rather than any one of its techniques, and a technique's tactics are a property of ATT&CK. A technique SHALL be rendered under every tactic ATT&CK assigns it, as the upstream matrix does, so a tactic covered only through a technique's secondary assignment is not shown as uncovered.
+
+Where the page offers an action whose destination requires a permission the coverage page itself does not, it SHALL offer that action only to operators holding the destination's permission, so no operator is sent to a page they cannot open. The information beside such an action SHALL remain visible regardless.
+
 #### Scenario: Coverage page renders technique groups
 
 - **GIVEN** the server reports at least one covered technique
@@ -183,6 +187,20 @@ The UI SHALL provide a coverage page that renders the rule-to-technique mapping 
 - **THEN** the UI renders technique rows grouped by ATT&CK tactic
 - **AND** each technique id links to its upstream MITRE page
 - **AND** each covering rule id links to that rule's documentation page
+
+#### Scenario: A technique appears under every tactic it belongs to
+
+- **GIVEN** a covered technique that ATT&CK assigns to more than one tactic
+- **WHEN** the operator opens the coverage page
+- **THEN** the technique is listed under each of those tactics
+- **AND** its name is the one the published ATT&CK release gives it, not its bare identifier
+
+#### Scenario: A tuning action is offered only where it can be followed
+
+- **GIVEN** an operator without permission to read detection tuning
+- **WHEN** the operator opens the coverage page
+- **THEN** the count of techniques covered only by silent rules is still shown
+- **AND** no link to the tuning page is offered
 
 #### Scenario: Operator exports the Navigator layer
 
@@ -690,6 +708,14 @@ The host detail page SHALL open with an identity header leading with the enrollm
 
 The host page SHALL offer a timeline view alongside the process graph, selectable from the page with the active view reflected in the URL so a switch is bookmarkable and preserves the active time window and any alert anchor. The graph SHALL remain the default view. The timeline view SHALL render the host's exec, network-connection, and DNS-query events for the active time window as a flat table in descending event-time order, showing per event the time, the event type, the originating process, and the type-specific detail (for a connection the remote address and port; for a DNS query the query name and resolved addresses). The timeline SHALL be filterable by event type and by a text match, SHALL page additional results on demand rather than replacing the current rows, and SHALL show the total number of matching events. Switching between the graph and the timeline SHALL NOT change the active time window. When the page is entered for an alert with the alert-chain focus active, the timeline SHALL scope to the alert chain (only events from the alerted process and its ancestors and descendants), mirroring the graph's focus, and the shared "Alert chain / Full tree" control SHALL switch the scope for both views at once; when the focus is off, the timeline SHALL show the full host event stream.
 
+The scope is keyed on each process's generation, which not every process carries, so the timeline SHALL distinguish three outcomes rather than two:
+
+- **No process in the chain carries a generation, or the chain resolves to nothing.** The timeline SHALL show the full host event stream and SHALL state that it is doing so. It SHALL name a cause only where that cause is established: the absence of generations is provable from the resolved chain, while an unresolved chain has several possible causes, including a response truncated by the tree's row limit, so the timeline SHALL report only that the process is absent from the tree that was loaded and SHALL NOT attribute it to the time window.
+- **Some processes carry one.** The timeline SHALL scope to the processes it can reach and SHALL state that it reached only part of the chain, because a list that presents itself as the alert chain while silently dropping part of that chain is worse than one that shows too much. It SHALL NOT state how many processes were omitted: the tree it would count from aggregates identical leaf descendants into synthetic group nodes, so any such count would report groups as processes.
+- **Every process carries one.** The timeline SHALL scope without qualification.
+
+While a first read is in flight or has failed, so that no tree has resolved at all, the timeline SHALL NOT report an unresolved chain, because there is no loaded tree for anything to be absent from. That governs only the report: where a tree has resolved, the scope the timeline applies and the label describing it are both derived from that same resolved chain, so a later refetch leaves the two consistent with each other rather than letting the label describe a scope that is not in force.
+
 #### Scenario: Timeline view lists window events filterable by type
 
 - **GIVEN** a host with exec, network, and DNS events in the active window
@@ -703,6 +729,37 @@ The host page SHALL offer a timeline view alongside the process graph, selectabl
 - **WHEN** the operator switches to the timeline view
 - **THEN** the timeline lists only events from the alert chain (the alerted process and its ancestors and descendants) and indicates it is scoped to the chain
 - **AND** turning the shared focus off widens the timeline to the full host event stream
+
+#### Scenario: Timeline says so when it cannot scope to the chain
+
+- **GIVEN** the host page entered for an alert whose chain processes carry no process generation
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline lists the full host event stream
+- **AND** it states that it is showing the whole host because the chain cannot be narrowed
+- **AND** it does not simultaneously claim to be scoped to the alert chain
+
+#### Scenario: Timeline says nothing until a tree has resolved
+
+- **GIVEN** the host page entered for an alert, with the process tree read still in flight or having failed
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline makes no claim about why the chain is unresolved
+- **AND** it does so for a pending read and a failed read alike, since neither has produced a tree to be absent from
+
+#### Scenario: Timeline distinguishes an absent chain from a chain without generations
+
+- **GIVEN** the host page entered for an alert whose alerted process is absent from the loaded process tree, including when that tree was truncated by its row limit
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline lists the full host event stream
+- **AND** it states that the process is absent from the loaded tree
+- **AND** it does not attribute the fallback to the time window or to missing generation data
+
+#### Scenario: Timeline admits an alert chain it could only partly scope
+
+- **GIVEN** the host page entered for an alert whose chain carries a process generation on some of its processes but not all
+- **WHEN** the operator switches to the timeline view
+- **THEN** the timeline scopes to the processes it can reach
+- **AND** it states that only part of the chain was reached, without claiming a count the tree cannot support
+- **AND** it does not present itself as scoped to the whole alert chain
 
 #### Scenario: The graph and timeline share one time window
 
@@ -877,3 +934,49 @@ The operator SHALL be able to override the inferred type on any line before subm
 - **GIVEN** a parsed paste in which at least one line has no resolved rule type
 - **WHEN** the operator attempts to submit
 - **THEN** submission is refused until every line has a type
+
+### Requirement: The detection tuning Cost column reports the total cost
+
+The detection tuning table's Cost column SHALL report the total wall time a rule's evaluations consumed over the window as its leading figure, and SHALL keep the mean per attempt as a secondary figure beside it. Sorting the column SHALL order by that total.
+
+A mean alone does not answer which rule is worth tuning, because it carries no volume: a rule evaluated once at 4ms outranks a rule evaluated twenty-four times at 2.5ms, having cost a fourteenth as much. The total is the figure an operator is deciding against, and the mean stays because it separates a rule that is expensive on every attempt from one with a single bad batch.
+
+The total SHALL be summed from the same stored per-day durations the mean is derived from, rather than reconstructed by multiplying the mean by the attempt count. The mean is an integer division, so the product drifts from the real total by up to one nanosecond per attempt, and the drift grows with exactly the attempt counts that make a rule worth looking at.
+
+The worst case SHALL remain reachable from the cell without being its leading figure, and the undecided count SHALL continue to be shown only when it is not zero. The column's explanatory note SHALL name which figure is the total and which is the mean, since two durations in one cell are otherwise ambiguous.
+
+#### Scenario: The cell leads with the total and keeps the mean
+
+- **GIVEN** a rule evaluated 24 times over the window, averaging 2.5ms per attempt
+- **WHEN** an operator opens the detection tuning view
+- **THEN** the rule's Cost cell shows the total for the window as its leading figure
+- **AND** it shows the mean per attempt as a secondary figure
+- **AND** the worst single evaluation is reachable from the cell without being its leading figure
+
+#### Scenario: Sorting by cost ranks by total rather than by mean
+
+- **GIVEN** one rule evaluated once at a high mean and another evaluated many times at a lower mean, the second having consumed more time in total
+- **WHEN** an operator sorts the table by Cost
+- **THEN** the rule that consumed more time in total is ranked first
+
+#### Scenario: The total is exact rather than derived from the rounded mean
+
+- **GIVEN** a rule whose stored per-day durations do not divide evenly by its attempt count
+- **WHEN** the Cost column reports its total for the window
+- **THEN** the total equals the sum of the stored per-day durations
+- **AND** it is not the product of the reported mean and the attempt count
+
+### Requirement: The detection tuning view presents the most recent load
+
+The detection configuration view SHALL present the results of its most recent load, and SHALL discard the results of an earlier load that completes after it.
+
+Loads overlap in practice: a mode or severity change reloads the view while an earlier load may still be in flight. An earlier response arriving later would otherwise replace newer data with older, with no error and nothing on screen to indicate it, leaving an operator reading a table that disagrees with the change they just made.
+
+Being mounted is not the same question as being current, so a guard that only asks whether the view is still alive does not answer this: both responses pass it, and the slower one wins whichever was started first.
+
+#### Scenario: An earlier load completing later does not replace newer data
+
+- **GIVEN** two loads of the detection configuration view in flight, the earlier one returning different data from the later
+- **WHEN** the earlier load completes after the later one has already been presented
+- **THEN** the view still presents the later load's data
+- **AND** the earlier load's data is not presented

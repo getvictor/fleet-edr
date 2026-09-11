@@ -501,7 +501,11 @@ The system SHALL expose the recorded per-rule evaluation statistics through the 
 
 This is the consumer half the durable-recording requirement deliberately left to whatever surface presents the figures. A record no interface reads answers nothing: at a thousand rules, the rule holding up the drain loop cannot be found by reading logs, and it is invisible to the match counts, because a rule can be perfectly quiet and still be the expensive one.
 
-Each rule's entry SHALL report its evaluation attempts, how many of those ended without a decision, the mean time per attempt, and the worst single attempt. The mean and the maximum are both required because either alone misleads: a mean hides the rule that is usually fast and occasionally terrible, and a maximum alone promotes the rule that had one bad batch over the one that is expensive every time.
+Each rule's entry SHALL report its evaluation attempts, how many of those ended without a decision, the total time those attempts consumed, the mean time per attempt, and the worst single attempt. The three durations are all required because each alone misleads: a mean hides the rule that is usually fast and occasionally terrible, a maximum alone promotes the rule that had one bad batch over the one that is expensive every time, and either without the total ranks a rule that evaluated once above one that evaluated two dozen times for a fraction of the cost.
+
+The total SHALL be summed from the same recorded durations the mean is derived from, and SHALL NOT be left to a reader to reconstruct by multiplying the mean by the attempt count. The mean is a truncating division, so that product is short by up to one unit per attempt, and it is furthest from the truth for exactly the high-attempt rules the figure exists to find.
+
+A duration SHALL be carried on the wire in a form its readers can represent. Unlike the counters beside it, a summed duration in nanoseconds can exceed the range a JSON number carries exactly, since a deployment evaluating on several workers across the longest retained window can accumulate more than that. A reader SHALL therefore accept a total above that range rather than reject the entry: the precision lost is far below what the figure is displayed to, while rejecting it would report the whole column as unavailable, which is the one reading this requirement forbids.
 
 The mean SHALL be computed from the recorded totals rather than stored, so it stays correct as the window widens and as retention prunes days out of it.
 
@@ -552,3 +556,17 @@ This read and the match-count read SHALL fail independently. They describe diffe
 - **GIVEN** a column whose header carries a control for ordering by that column
 - **WHEN** the table is rendered in a browser
 - **THEN** the header is presented the same way as the table's other column headers
+
+#### Scenario: The total is reported alongside the mean and the maximum
+
+- **GIVEN** a rule evaluated many times whose recorded durations do not divide evenly by its attempt count
+- **WHEN** the statistics are read
+- **THEN** its entry reports the total time its attempts consumed, summed from the recorded durations
+- **AND** that total is not the product of the reported mean and the attempt count
+
+#### Scenario: A total beyond exact JSON range is still presented
+
+- **GIVEN** a rule whose total exceeds the range a JSON number carries exactly
+- **WHEN** the statistics are presented
+- **THEN** the entry is presented rather than rejected as malformed
+- **AND** the column is not reported as unavailable
