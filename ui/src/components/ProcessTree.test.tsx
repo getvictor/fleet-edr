@@ -555,6 +555,22 @@ describe("ProcessTreeView truncation notice (issue #423)", () => {
 
   // spec:web-ui/process-tree-visualization/a-total-the-server-could-not-establish-exactly-is-shown-as-a-floor
   //
+  // spec:web-ui/process-tree-visualization/a-total-the-server-could-not-establish-exactly-is-shown-as-a-floor
+  //
+  // The degenerate shape the server reports when its count runs out of time: truncation is still proven by the lookahead row, but
+  // the only number left to report is the page itself. "Showing 2,000 of more than 2,000" looks odd and is exactly right, and it is
+  // the one case where the hedge is carrying the entire claim: drop it and the notice says the page holds everything that matched
+  // while also telling the analyst to narrow the window to see the rest.
+  it("hedges even when the floor is the page itself, which is what a count that gave up reports", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(
+      treeResponse(forest, { returned: 2000, total_matched: 2000, total_matched_capped: true, truncated: true }),
+    );
+    renderTree("");
+
+    const notice = await screen.findByText(/Showing/);
+    expect(notice).toHaveTextContent(/Showing 2,000 of more than 2,000 processes/i);
+  });
+
   // The uncapped case must NOT gain the hedge, or every ordinary truncated read starts understating a number the server does know.
   it("states an uncapped total exactly, with no hedge", async () => {
     vi.spyOn(api, "getProcessTree").mockResolvedValue(
