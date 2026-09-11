@@ -3203,8 +3203,8 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 
 	t.Run("a window matching nothing is empty rather than truncated", func(t *testing.T) {
 		t.Parallel()
-		// Guards the boundary the Returned < TotalMatched comparison could get wrong: 0 < 0 must be false, so an empty window
-		// reports no truncation rather than warning about rows that do not exist.
+		// Guards the boundary the lookahead could get wrong: zero rows back is not more than the limit, so an empty window reports
+		// no truncation rather than warning about rows that do not exist.
 		empty, err := d.Service().BuildTree(t.Context(), "no-such-host", window, 10, true, 0)
 		require.NoError(t, err)
 		assert.False(t, empty.Truncated)
