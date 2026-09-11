@@ -92,6 +92,8 @@ func TestCountProcessTree_ExactBelowTheBound(t *testing.T) {
 	assert.False(t, capped, "below the bound nothing was capped, and saying otherwise would hide a real total behind a floor")
 }
 
+// spec:server-rest-api/per-host-process-forest/counting-stops-at-its-bound-rather-than-scanning-the-whole-window
+//
 // The boundary Copilot caught on review: with EXACTLY ProcessTreeCountBound matching rows the old predicate (`total >= bound`)
 // reported capped, and the page then read "more than 10,000" over a window holding precisely 10,000. The count now probes one row
 // past the bound so "capped" means strictly more matched, and clamps the reported number back to the bound.
