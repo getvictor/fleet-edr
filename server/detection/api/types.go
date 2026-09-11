@@ -557,7 +557,7 @@ type ProcessTreeResult struct {
 	Roots    []ProcessNode `json:"roots"`
 	Returned int64         `json:"returned"`
 	// TotalMatched is the exact number of matching rows when the server could count them all, and a FLOOR otherwise, with
-	// TotalMatchedCapped saying which. It is not the unbounded count it once was: on a host with 5.4M process rows a 24-hour window
+	// TotalMatchedCapped saying which. It is not the unbounded count it once was: on a host with 5.2M process rows a 24-hour window
 	// matched 542,268 and counting them ran past 120s against a 30s write timeout, so the endpoint returned 500 and the graph
 	// rendered as an error. The row read was 0.089s for the same window, so the count alone was the outage.
 	TotalMatched int64 `json:"total_matched"`

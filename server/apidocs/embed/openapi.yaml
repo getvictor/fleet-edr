@@ -306,7 +306,7 @@ paths:
                     description: |
                       `total_matched` is a floor rather than a total, either because the window matched more rows than the
                       server's counting bound or because the count ran out of its time budget. Bounding it at all was forced: an
-                      unbounded count could not finish, and on a host with 5.4M process rows a 24-hour window matched 542,268
+                      unbounded count could not finish, and on a host with 5.2M process rows a 24-hour window matched 542,268
                       while the count ran past the server's write timeout and failed the request. A client MUST NOT present a
                       capped total as exact. Never set when `truncated` is false, since an untruncated read counted every row it
                       returned.

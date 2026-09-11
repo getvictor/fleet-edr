@@ -4,7 +4,7 @@
 
 `GET /api/hosts/{host_id}/tree` returns 500 on a real host, and the UI shows an empty graph and then `Error: API error: 502`.
 
-Found on the dogfood deployment against `v0.5.0-rc.4`, opening an alert on a host carrying 5.4 million process rows and 8.2GB of history. Measured on that host, with the alert's own 24-hour window:
+Found on the dogfood deployment against `v0.5.0-rc.4`, opening an alert on a host carrying 5.2 million process rows and 8.2GB of history. Measured on that host, with the alert's own 24-hour window:
 
 | query | time |
 | --- | --- |

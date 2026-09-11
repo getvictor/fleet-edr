@@ -582,7 +582,7 @@ const processTreeCountBudgetMs = 5000
 // Callers should still run this only when the limit actually bound (see graph.BuildTree) rather than on every tree read: bounded is
 // not free, and a read that returned fewer rows than its limit already knows its own total.
 //
-// Bounded because the unbounded version took the endpoint down. Measured on a dogfood host carrying 5.4M process rows: a 24-hour
+// Bounded because the unbounded version took the endpoint down. Measured on a dogfood host carrying 5.2M process rows: a 24-hour
 // window overlapped 542,268 of them, and COUNT(*) over that ran past 120 seconds against the server's 30-second write timeout, so
 // the request returned 500 and the operator saw a failed graph. The row read for the same window was 0.089s.
 //

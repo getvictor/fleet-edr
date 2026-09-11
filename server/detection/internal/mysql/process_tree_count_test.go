@@ -51,7 +51,7 @@ func seedProcesses(tb testing.TB, ctx context.Context, db *sqlx.DB, hostID strin
 // point is what the SQL does when the window matches more rows than the bound, and a fake store can only echo a number the test
 // already chose.
 //
-// This replaced an unbounded COUNT that took the endpoint down. On a dogfood host carrying 5.4M process rows, a 24-hour window
+// This replaced an unbounded COUNT that took the endpoint down. On a dogfood host carrying 5.2M process rows, a 24-hour window
 // matched 542,268 of them and the count ran past 120 seconds against a 30-second write timeout, so the request returned 500 and the
 // operator's process graph rendered as an error.
 func TestCountProcessTree_StopsAtItsBound(t *testing.T) {
