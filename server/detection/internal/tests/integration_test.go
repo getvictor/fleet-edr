@@ -3193,6 +3193,9 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 
 	t.Run("the reported total ignores the requested limit", func(t *testing.T) {
 		t.Parallel()
+		// Holds for a count that completes, which is every count on a seed this size. The one exception is a count that exhausts
+		// its time budget: its floor is the rows THAT request returned, so it moves with the limit by construction. That case is
+		// covered by resolveTotalMatched's table rather than here, since a database will not expire a budget on demand.
 		small, err := d.Service().BuildTree(t.Context(), host, window, 1, true, 0)
 		require.NoError(t, err)
 		large, err := d.Service().BuildTree(t.Context(), host, window, 1000, true, 0)

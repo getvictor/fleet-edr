@@ -62,9 +62,10 @@ The exactness given up buys a request that always answers. A denominator past th
 
 #### Scenario: The reported total ignores the requested limit
 
-- **GIVEN** a logged-in operator and a host whose window overlaps a fixed number of process rows
+- **GIVEN** a logged-in operator and a host whose window overlaps a fixed number of process rows, and a count that completes
 - **WHEN** the client calls `GET /api/hosts/{host_id}/tree` twice with different `limit` values
 - **THEN** both responses report the same `total_matched`
+- **AND** the one exception is a count that could not complete, whose floor is the rows THAT request returned and therefore moves with the limit
 
 #### Scenario: Counting stops at its bound rather than scanning the whole window
 
