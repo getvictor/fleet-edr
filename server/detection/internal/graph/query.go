@@ -39,33 +39,45 @@ func NewQuery(s *mysql.Store) *Query {
 func (q *Query) BuildTree(
 	ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64,
 ) (api.ProcessTreeResult, error) {
-	procs, err := q.store.GetProcessTree(ctx, hostID, tr, limit)
+	// Clamp before the arithmetic below rather than trusting the caller. limit+1 overflows at math.MaxInt and a negative limit makes
+	// the trim a negative slice bound, and both PANIC rather than returning an error. The HTTP handler normalizes its own query
+	// parameter, but BuildTree sits on the cross-context Service interface, so the arithmetic here cannot assume a caller that did.
+	// The upper clamp also makes the "a page never reaches the counting bound" invariant hold for every caller rather than only for
+	// the one whose constant the compile-time guard in the handler checks.
+	limit = min(max(limit, 1), mysql.ProcessTreeCountBound-1)
+
+	// One row past the limit, so whether anything was left behind is PROVEN by the read itself rather than inferred from a count.
+	// Truncation is the claim the page acts on (it is what raises the "showing N of M" notice), and it has to hold even when the
+	// count is unaffordable: on a long history the count can give up on its time budget, and deriving truncation from the number it
+	// failed to produce reported a full page as complete. Review caught exactly that. The lookahead also settles the boundary the
+	// old `len(procs) == limit` test got wrong in the other direction, where a window holding exactly `limit` rows paid for a count
+	// to discover it was not truncated.
+	procs, err := q.store.GetProcessTree(ctx, hostID, tr, limit+1)
 	if err != nil {
 		return api.ProcessTreeResult{}, err
+	}
+	truncated := len(procs) > limit
+	if truncated {
+		procs = procs[:limit]
 	}
 
 	// Returned counts the ROWS the limit admitted and is captured here, before aggregation: aggregateSiblingsPinned folds identical
 	// leaf siblings into "×N" headers, so counting the returned forest's nodes afterwards would report fewer processes than were
 	// actually read.
-	res := api.ProcessTreeResult{Returned: int64(len(procs)), TotalMatched: int64(len(procs))}
+	res := api.ProcessTreeResult{Returned: int64(len(procs)), TotalMatched: int64(len(procs)), Truncated: truncated}
 
-	// The COUNT runs ONLY when the limit actually bound. Fewer rows than the limit proves the limit did not bind, so the rows in
-	// hand are every row that matched and the total is already known. This matters because the two queries have very different
-	// costs: the row query walks idx_processes_host_time in fork-time order and stops after `limit` rows, while a COUNT has to
-	// evaluate every match in the window. Counting unconditionally would turn a limit-bounded read into a full window scan on every
-	// tree load, including the overwhelming majority that are nowhere near the cap. The extra scan is now paid only when the read
-	// was truncated, which is exactly when the analyst needs the number.
-	if len(procs) == limit {
-		total, cerr := q.store.CountProcessTree(ctx, hostID, tr)
+	// The COUNT runs ONLY when the lookahead proved the read truncated. An untruncated read holds every row that matched, so its
+	// total is already known. This matters because the two queries have very different costs: the row query walks
+	// idx_processes_host_time in fork-time order and stops after `limit` rows, while a COUNT has to evaluate every match in the
+	// window. Counting unconditionally would turn a limit-bounded read into a full window scan on every tree load, including the
+	// overwhelming majority nowhere near the cap. The scan is paid only when the analyst actually needs the number.
+	if truncated {
+		total, capped, cerr := q.store.CountProcessTree(ctx, hostID, tr)
 		if cerr != nil {
 			return api.ProcessTreeResult{}, cerr
 		}
-		// The row read and the count are separate statements, so retention pruning between them can return a total below the rows
-		// already in hand. Reporting "showing 2000 of 1998" would be incoherent, so the rows actually read are the floor. The
-		// opposite skew (ingest adding rows between the two) needs no guard: a larger total is a truthful denominator.
-		res.TotalMatched = max(total, res.Returned)
+		res.TotalMatched, res.TotalMatchedCapped = resolveTotalMatched(res.Returned, total, capped)
 	}
-	res.Truncated = res.Returned < res.TotalMatched
 
 	forest := buildForest(procs)
 	if flatten {
@@ -74,6 +86,28 @@ func (q *Query) BuildTree(
 	}
 	res.Roots = aggregateSiblingsPinned(forest, pinnedID)
 	return res, nil
+}
+
+// resolveTotalMatched composes what the count established with what the read already proved, for a page the lookahead showed was
+// truncated. It returns the number to report and whether that number is a FLOOR ("more than N") rather than the total.
+//
+// Split out from BuildTree because the interesting cases are the ones a live database will not produce on demand, and each of them
+// shipped a wrong page once:
+//
+//   - The count gives up on its time budget and reports nothing. Deriving truncation from that zero reported a full page as
+//     complete, which is the failure this whole change exists to prevent.
+//   - The count and the row read are separate statements, so retention pruning between them can return a total BELOW the rows
+//     already in hand. "Showing 2,000 of 1,998" is incoherent, so the rows read are the floor.
+//   - The count lands exactly on the rows read, for either reason above. Under a truncation notice "showing 5,000 of 5,000" is
+//     equally incoherent, so it too becomes "more than 5,000".
+//
+// The one direction needing no guard is ingest ADDING rows between the two statements: a larger total is a truthful denominator.
+func resolveTotalMatched(returned, total int64, capped bool) (int64, bool) {
+	if total > returned {
+		return total, capped
+	}
+	// The lookahead proved a row beyond the page, so a total that does not exceed the page cannot be the whole truth.
+	return returned, true
 }
 
 // flowClockSkewPadNs pads the generation's event-time life before it bounds the identity arm, absorbing the case where a process row

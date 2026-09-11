@@ -218,8 +218,9 @@ export interface ProcessDetail {
 
 // TreeResponse is the response from GET /api/hosts/{host_id}/tree: the forest plus the metadata that lets the page say what it is
 // NOT showing (issue #423). returned counts the process rows the server's limit admitted, before sibling aggregation folded any of
-// them into "×N" nodes; total_matched counts every row overlapping the window, independent of that limit; truncated reports whether
-// the limit dropped rows.
+// them into "×N" nodes; total_matched counts rows overlapping the window, independent of the ROW limit but bounded by the server's
+// own counting bound; total_matched_capped reports that it stopped at that bound, so the number is a floor rather than a total;
+// truncated reports whether the limit dropped rows.
 //
 // Both counts come from the server rather than being derived here, because both client-side derivations are wrong in the cases that
 // matter: the handler clamps the requested limit, so the limit this client sent is not reliably the effective one, and counting
@@ -228,6 +229,7 @@ export interface TreeResponse {
   roots: ProcessNode[];
   returned: number;
   total_matched: number;
+  total_matched_capped: boolean;
   truncated: boolean;
 }
 

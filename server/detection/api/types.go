@@ -538,26 +538,35 @@ type AlertFilter struct {
 }
 
 // ProcessTreeResult is one process-tree read plus the metadata that lets a client be honest about what it is NOT showing (issue
-// #423). Roots is the forest, aggregated unless the caller asked to flatten. TotalMatched counts every process row whose lifetime
-// overlaps the window, computed independent of the row limit. Returned counts the rows that limit admitted, captured before
-// aggregation folded any of them into a group header. Truncated reports whether the limit dropped rows.
+// #423). Roots is the forest, aggregated unless the caller asked to flatten. TotalMatched counts process rows whose lifetime
+// overlaps the window, independent of the ROW limit but bounded by its own counting bound, which TotalMatchedCapped reports.
+// Returned counts the rows the row limit admitted, captured before aggregation folded any of them into a group header. Truncated
+// reports whether the limit dropped rows.
 //
 // Returned is carried rather than left for the client to derive, because both obvious derivations are wrong in exactly the cases
 // that matter: the handler clamps the requested limit, so a client computing min(requestedLimit, TotalMatched) can print a number
 // the server never returned; and aggregation collapses identical leaf siblings into "×N" nodes, so counting rendered nodes
 // undercounts the rows. A client re-deriving this would reintroduce the miscount the field exists to prevent.
 //
-// Truncated is stated explicitly even though it equals Returned < TotalMatched, so clients key on the server's own judgment rather
-// than inferring it. Lazy expansion (issue #421) will truncate for a second reason, an unexpanded subtree rather than a row cap,
-// and a client keyed on the flag keeps working when that lands.
-//
-// Unlike ProcessSearchResult, TotalMatched here is always a real count: see CountProcessTree for why the not-counted sentinel does
-// not apply to a host-and-window-scoped read.
+// Truncated is the server's own judgment and is NOT derivable from Returned and TotalMatched, so clients MUST key on the flag. It
+// is proven by reading one row past the requested limit, which is why it holds even when the count behind TotalMatched is
+// unaffordable: deriving it from that number reported a full page as complete on exactly the hosts the count could not finish on.
+// Lazy expansion (issue #421) will truncate for a second reason, an unexpanded subtree rather than a row cap, and a client keyed on
+// the flag keeps working when that lands.
 type ProcessTreeResult struct {
-	Roots        []ProcessNode `json:"roots"`
-	Returned     int64         `json:"returned"`
-	TotalMatched int64         `json:"total_matched"`
-	Truncated    bool          `json:"truncated"`
+	Roots    []ProcessNode `json:"roots"`
+	Returned int64         `json:"returned"`
+	// TotalMatched is the exact number of matching rows when the server could count them all, and a FLOOR otherwise, with
+	// TotalMatchedCapped saying which. It is not the unbounded count it once was: on a host with 5.2M process rows a 24-hour window
+	// matched 542,268 and counting them ran past 120s against a 30s write timeout, so the endpoint returned 500 and the graph
+	// rendered as an error. The row read was 0.089s for the same window, so the count alone was the outage.
+	TotalMatched int64 `json:"total_matched"`
+	// TotalMatchedCapped reports that TotalMatched is a floor rather than a total, so a reader never has to guess whether a round
+	// number is real or a ceiling. Without it a client showing "2,000 of 10,000" would state a number the server never established.
+	// Two situations set it: the window matched more rows than the counting bound, or the count ran out of its time budget and the
+	// rows already read became the floor. Never set on an untruncated read, which counted every row it returned.
+	TotalMatchedCapped bool `json:"total_matched_capped"`
+	Truncated          bool `json:"truncated"`
 }
 
 // ProcessNode is the tree shape the UI's process-tree view renders.

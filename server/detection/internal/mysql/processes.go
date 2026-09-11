@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+
+	driver "github.com/go-sql-driver/mysql"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
@@ -538,7 +541,10 @@ func processTreeWindowArgs(hostID string, tr api.TimeRange) []any {
 // window so long-running processes still appear in short-window views. Bounded by limit; pair with CountProcessTree to learn whether
 // that bound dropped anything.
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.Process, error) {
-	var procs []api.Process
+	// Allocated rather than declared, so the result is never nil and a caller can slice it. BuildTree asks for one row past its
+	// limit and trims the extra, and nilaway cannot see that a length check makes that slice safe. The capacity is the caller's
+	// limit, which the handler has already clamped, so this also saves the append path its regrowth.
+	procs := make([]api.Process, 0, limit)
 	err := s.db.SelectContext(ctx, &procs, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
@@ -555,23 +561,94 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 	return procs, nil
 }
 
-// CountProcessTree returns how many process rows overlap the window, independent of any row limit, so a caller can report what a
-// limited read did not return (issue #423).
+// ProcessTreeCountBound is how far CountProcessTree counts before it stops and reports a floor. Five times the 2,000-row default
+// tree limit and twice the 5,000-row maximum: far enough that an ordinary truncated window still reports its real total, and near
+// enough that the read stays sub-second on a host whose window matches half a million rows.
+const ProcessTreeCountBound = 10000
+
+// processTreeCountBudgetMs is the wall-clock the count may spend before it gives up and reports a floor. Generous against the
+// measured cost (a full scan of a 5.2M-row host is about 1.7s) so it never fires in ordinary use, and far enough inside the
+// server's 30-second write timeout that an expiry still leaves the request answerable.
+const processTreeCountBudgetMs = 5000
+
+// CountProcessTree reports how many process rows overlap the window, counting at most ProcessTreeCountBound of them, so a caller can
+// report what a limited read did not return (issue #423). The second return is true when the number is a FLOOR rather than a total,
+// which happens two ways: the window matched more rows than the bound, or the count ran out of its time budget.
 //
-// Unlike GetProcessTree this cannot stop early: the row query walks idx_processes_host_time in fork-time order and stops once it has
-// `limit` rows, while counting has to evaluate every match. Callers should therefore run this only when the limit actually bound
-// (see graph.BuildTree), not on every tree read. There is no not-counted sentinel: when it does run, it returns the exact number.
-func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, error) {
+// It counts one row PAST the bound and clamps the answer back down, so "capped" means strictly more than ProcessTreeCountBound
+// matched rather than "at least". Reporting capped at exactly the bound would put "more than 10,000" on a window holding exactly
+// 10,000, which is the kind of small lie that costs a reader their trust in the rest of the number.
+//
+// Callers should still run this only when the limit actually bound (see graph.BuildTree) rather than on every tree read: bounded is
+// not free, and a read that returned fewer rows than its limit already knows its own total.
+//
+// Bounded because the unbounded version took the endpoint down. Measured on a dogfood host carrying 5.2M process rows: a 24-hour
+// window overlapped 542,268 of them, and COUNT(*) over that ran past 120 seconds against the server's 30-second write timeout, so
+// the request returned 500 and the operator saw a failed graph. The row read for the same window was 0.089s.
+//
+// The subquery is not decoration: it is what makes the cost bounded. COUNT(*) with this predicate has to evaluate every match, and
+// at 24 hours the optimizer also abandons idx_processes_exit_time (range, 642k rows) for uk_processes_source_event (ref, 2.9M rows,
+// a 1022-byte key). Wrapping the row query's own `ORDER BY fork_time_ns DESC LIMIT` borrows the access path that already stops
+// early, so the work is set by the bound rather than by the window: 0.148s for the window that used to hang.
+//
+// Two repairs that look right and are not, both measured on that host and window. Forcing the indexes still takes 74 seconds,
+// because the cost is the half-million rows rather than the plan. Splitting the OR does not help either: `exit_time_ns IS NULL` is
+// 3,552 rows and fast, and `exit_time_ns >= from` is the half-million-row branch that has to be counted either way.
+//
+// The bound caps rows EMITTED, not rows examined, so a window matching fewer rows than the bound still walks the whole
+// `fork_time_ns <= to` range to prove it. That cost scales with the host rather than with the bound: measured at about 1.7s for a
+// full scan of this host's 5.2M rows, and it would grow on a larger one. MAX_EXECUTION_TIME is the backstop for that, because a
+// count is not worth failing a request over. On expiry the read reports what it already knows rather than returning an error, which
+// is why countTimedOut is a nil-error path.
+func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, bool, error) {
 	var total int64
+	// ORDER BY inside the subquery, matching GetProcessTree, so the scan walks idx_processes_host_time backwards and stops at the
+	// bound. Without it the subquery is free to pick the plan that made this slow in the first place.
 	err := s.db.GetContext(ctx, &total, `
-		SELECT COUNT(*)
-		FROM processes`+processTreeWindowPredicate,
-		processTreeWindowArgs(hostID, tr)...,
+		SELECT /*+ MAX_EXECUTION_TIME(`+strconv.Itoa(processTreeCountBudgetMs)+`) */ COUNT(*) FROM (
+			SELECT 1
+			FROM processes`+processTreeWindowPredicate+`
+			ORDER BY fork_time_ns DESC
+			LIMIT ?
+		) AS bounded`,
+		append(processTreeWindowArgs(hostID, tr), ProcessTreeCountBound+1)...,
 	)
-	if err != nil {
-		return 0, fmt.Errorf("count process tree: %w", err)
+	if countTimedOut(err) {
+		// Logged rather than silently swallowed. This is the part of the read that degrades as a host's history grows, and a
+		// deployment landing here routinely is paying the whole budget on every full page and showing a floor for it, while the
+		// request still succeeds and reports nothing. The message is stable so the rate can be alerted on.
+		s.logger.WarnContext(ctx, "process tree count gave up on its time budget, reporting a floor instead of a total",
+			"host_id", hostID, "from_ns", tr.FromNs, "to_ns", tr.ToNs, "budget_ms", processTreeCountBudgetMs)
+		// Not an error to the caller. The rows are already in hand and the request is answerable without this number, so spending
+		// the operator's page on a denominator would be the wrong trade. Zero with capped=true reports "at least what you can see":
+		// BuildTree floors TotalMatched at Returned, so the page reads "more than <the rows shown>" rather than inventing a total.
+		// That the page was truncated at all is established by BuildTree's lookahead row and does not depend on this number, so an
+		// expiry here costs the operator the magnitude and nothing else.
+		return 0, true, nil
 	}
-	return total, nil
+	if err != nil {
+		return 0, false, fmt.Errorf("count process tree: %w", err)
+	}
+	if total > ProcessTreeCountBound {
+		return ProcessTreeCountBound, true, nil
+	}
+	return total, false, nil
+}
+
+// countTimedOut reports whether err is the counting budget expiring rather than a real failure.
+//
+// Both numbers, because the server reports the same event under two depending on how the statement was cut: 3024 when
+// MAX_EXECUTION_TIME expires, and 1317 when the kill arrives as an interrupt. Matching only one leaves the other surfacing as a
+// failed request, which is the outcome the budget exists to prevent.
+func countTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	var me *driver.MySQLError
+	if !errors.As(err, &me) {
+		return false
+	}
+	return me.Number == 3024 || me.Number == 1317
 }
 
 // EventAlreadyApplied reports whether a process row for (hostID, pid) already records eventID as the event that created it

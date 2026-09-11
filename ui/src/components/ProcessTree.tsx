@@ -113,7 +113,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // truncation carries the two counts the "showing N of M" notice needs (issue #423), and is non-null ONLY when the server reported
   // the read as truncated. Storing null in the untruncated case rather than the counts plus a flag keeps the notice's presence
   // exactly equal to the server's own judgment, so the page cannot invent a warning the server did not raise.
-  const [truncation, setTruncation] = useState<{ returned: number; totalMatched: number } | null>(null);
+  const [truncation, setTruncation] = useState<{ returned: number; totalMatched: number; capped: boolean } | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
   // techniquesByNodeId maps a process DB id to the deduped MITRE technique ids of its alerts (issue #585), so the hover tooltip can
   // show the technique mapping inline. Built from the same alert fetch that drives alertProcessIds.
@@ -312,7 +312,9 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       .then((res) => {
         if (cancelled) return;
         setRoots(res.roots);
-        setTruncation(res.truncated ? { returned: res.returned, totalMatched: res.total_matched } : null);
+        setTruncation(
+          res.truncated ? { returned: res.returned, totalMatched: res.total_matched, capped: res.total_matched_capped } : null,
+        );
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
@@ -709,7 +711,7 @@ interface GraphBodyProps {
   readonly onFocusAlertChain: (v: boolean) => void;
   readonly rootsEmpty: boolean;
   // truncation is non-null only when the server reported the read as truncated (issue #423).
-  readonly truncation: { returned: number; totalMatched: number } | null;
+  readonly truncation: { returned: number; totalMatched: number; capped: boolean } | null;
   readonly svgRef: RefObject<SVGSVGElement | null>;
   readonly hoverTip: { x: number; y: number; tooltip: NodeTooltip } | null;
   readonly selectedNode: ProcessNode | null;
@@ -733,8 +735,8 @@ function GraphBody({
           and number formatting match the search results count so "showing N of M" reads the same across the product. */}
       {!loading && !error && truncation && (
         <p className="process-tree__status process-tree__status--info" role="status">
-          Showing {truncation.returned.toLocaleString()} of {truncation.totalMatched.toLocaleString()} processes.
-          Narrow the time range or use search to see the rest.
+          Showing {truncation.returned.toLocaleString()} of {truncation.capped ? "more than " : ""}
+          {truncation.totalMatched.toLocaleString()} processes. Narrow the time range or use search to see the rest.
         </p>
       )}
       {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
