@@ -42,3 +42,30 @@ func TestIsPermanentDataError(t *testing.T) {
 		})
 	}
 }
+
+// The counting budget is only useful if its expiry is recognised, because an unrecognised one surfaces as a failed request, which
+// is the outcome the budget exists to prevent. Both numbers are covered: the server reports the same event as 3024 when
+// MAX_EXECUTION_TIME expires and as 1317 when the kill arrives as an interrupt, and matching one would leave the other fatal.
+func TestCountTimedOut(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"max execution time expired", &driver.MySQLError{Number: 3024}, true},
+		{"killed as an interrupt", &driver.MySQLError{Number: 1317}, true},
+		{"wrapped expiry is still an expiry", fmt.Errorf("count process tree: %w", &driver.MySQLError{Number: 3024}), true},
+		// A real failure MUST stay fatal. Treating one as a budget expiry would report a floor for a read that never ran, which is
+		// worse than the error: the page would look answered.
+		{"an unrelated MySQL error is not an expiry", &driver.MySQLError{Number: 1062}, false},
+		{"a non-MySQL error is not an expiry", errors.New("connection refused"), false},
+		{"no error is not an expiry", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, countTimedOut(tc.err))
+		})
+	}
+}

@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+
+	driver "github.com/go-sql-driver/mysql"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
@@ -560,6 +563,11 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 // host whose window matches half a million rows.
 const ProcessTreeCountBound = 10000
 
+// processTreeCountBudgetMs is the wall-clock the count may spend before it gives up and reports a floor. Generous against the
+// measured cost (a full scan of a 5.2M-row host is about 1.7s) so it never fires in ordinary use, and far enough inside the
+// server's 30-second write timeout that an expiry still leaves the request answerable.
+const processTreeCountBudgetMs = 5000
+
 // CountProcessTree reports how many process rows overlap the window, counting at most ProcessTreeCountBound of them, so a caller can
 // report what a limited read did not return (issue #423). The second return is true when it stopped at that bound, so the caller
 // knows the number is a floor rather than a total.
@@ -579,12 +587,18 @@ const ProcessTreeCountBound = 10000
 // Two repairs that look right and are not, both measured on that host and window. Forcing the indexes still takes 74 seconds,
 // because the cost is the half-million rows rather than the plan. Splitting the OR does not help either: `exit_time_ns IS NULL` is
 // 3,552 rows and fast, and `exit_time_ns >= from` is the half-million-row branch that has to be counted either way.
+//
+// The bound caps rows EMITTED, not rows examined, so a window matching fewer rows than the bound still walks the whole
+// `fork_time_ns <= to` range to prove it. That cost scales with the host rather than with the bound: measured at about 1.7s for a
+// full scan of this host's 5.2M rows, and it would grow on a larger one. MAX_EXECUTION_TIME is the backstop for that, because a
+// count is not worth failing a request over. On expiry the read reports what it already knows rather than returning an error, which
+// is why countTimedOut is a nil-error path.
 func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, bool, error) {
 	var total int64
 	// ORDER BY inside the subquery, matching GetProcessTree, so the scan walks idx_processes_host_time backwards and stops at the
 	// bound. Without it the subquery is free to pick the plan that made this slow in the first place.
 	err := s.db.GetContext(ctx, &total, `
-		SELECT COUNT(*) FROM (
+		SELECT /*+ MAX_EXECUTION_TIME(`+strconv.Itoa(processTreeCountBudgetMs)+`) */ COUNT(*) FROM (
 			SELECT 1
 			FROM processes`+processTreeWindowPredicate+`
 			ORDER BY fork_time_ns DESC
@@ -592,10 +606,32 @@ func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.Time
 		) AS bounded`,
 		append(processTreeWindowArgs(hostID, tr), ProcessTreeCountBound)...,
 	)
+	if countTimedOut(err) {
+		// Not an error to the caller. The rows are already in hand and the request is answerable without this number, so spending
+		// the operator's page on a denominator would be the wrong trade. Zero with capped=true reports "at least what you can see":
+		// BuildTree floors TotalMatched at Returned, so the page says "more than <the rows shown>" rather than inventing a total.
+		return 0, true, nil
+	}
 	if err != nil {
 		return 0, false, fmt.Errorf("count process tree: %w", err)
 	}
 	return total, total >= ProcessTreeCountBound, nil
+}
+
+// countTimedOut reports whether err is the counting budget expiring rather than a real failure.
+//
+// Both numbers, because the server reports the same event under two depending on how the statement was cut: 3024 when
+// MAX_EXECUTION_TIME expires, and 1317 when the kill arrives as an interrupt. Matching only one leaves the other surfacing as a
+// failed request, which is the outcome the budget exists to prevent.
+func countTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	var me *driver.MySQLError
+	if !errors.As(err, &me) {
+		return false
+	}
+	return me.Number == 3024 || me.Number == 1317
 }
 
 // EventAlreadyApplied reports whether a process row for (hostID, pid) already records eventID as the event that created it
