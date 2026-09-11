@@ -14,7 +14,7 @@ The scope is keyed on each process's generation, which not every process carries
 
 While a first read is in flight, so that no tree has resolved yet, the timeline SHALL NOT report an unresolved chain, because there is no loaded tree for anything to be absent from and a message that appears and then disappears is its own kind of wrong.
 
-A read that FAILED is a different outcome and SHALL be reported, in its own words rather than as an unresolved chain. The two were treated alike once and the page then contradicted itself: the graph rendered its error while the timeline listed the whole host with nothing to say it had stopped trying to narrow, so one surface reported failure and the other implied success. What the timeline SHALL NOT do is claim the chain is absent from a tree that never loaded, which is a claim about data nobody has seen. Saying the tree could not be loaded is both true and the thing the operator can act on. That governs only the report: where a tree has resolved, the scope the timeline applies and the label describing it are both derived from that same resolved chain, so a later refetch leaves the two consistent with each other rather than letting the label describe a scope that is not in force.
+A read that FAILED is a different outcome and SHALL be reported, in its own words rather than as an unresolved chain. The two were treated alike once and the page then contradicted itself: the graph rendered its error while the timeline listed the whole host with nothing to say it had stopped trying to narrow, so one surface reported failure and the other implied success. What the timeline SHALL NOT do is claim the chain is absent from a tree that never loaded, which is a claim about data nobody has seen. Saying the tree could not be loaded is both true and the thing the operator can act on. A failed read SHALL be reported whatever chain is still in hand. A refetch that fails leaves the chain resolved from the window before it, and reading that chain as evidence the scope still holds is how the same contradiction returns one window over: the graph reports the error while the timeline narrows the new window to the previous window's processes and calls itself scoped. Where the timeline reports that it cannot vouch for the scope, it SHALL also stop applying it, so the label and the events listed never disagree.
 
 #### Scenario: Timeline view lists window events filterable by type
 
@@ -52,6 +52,8 @@ A read that FAILED is a different outcome and SHALL be reported, in its own word
 - **THEN** the timeline states that the process tree could not be loaded and that it is therefore showing the whole host
 - **AND** it does not claim the chain is absent from the tree, which never loaded
 - **AND** the graph and the timeline no longer disagree about whether the read succeeded
+- **AND** this holds for a refetch that fails after an earlier read succeeded, where a chain resolved from the previous window is still in hand
+- **AND** in that case the timeline stops scoping to that chain rather than narrowing the new window to the previous window's processes
 
 #### Scenario: Timeline distinguishes an absent chain from a chain without generations
 

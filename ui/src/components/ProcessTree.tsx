@@ -224,17 +224,18 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   const chainCoverage = useMemo((): { unavailable?: ChainScopeGap; partial: boolean } => {
     // No focus requested: the full stream is what was asked for and needs no explanation.
     if (!alertChainIds) return { partial: false };
-    // Focus requested, but findAlertChain resolved nothing. This reports THAT, and no longer tries to report why. Four review
-    // rounds went into narrowing the cause and each precondition admitted a case it did not cover, most recently a truncated
-    // response, where the process is in the window but past the row limit BuildTree applies before aggregation. The remaining
-    // gate is only about timing: while the read is in flight or after it failed there is no loaded tree to be absent from, and
-    // a message that appears and then disappears is its own kind of wrong.
+    // A failed read is a settled outcome, not a pending one, and it outranks whatever chain is still on screen. It gets its own
+    // sentence because it cannot reuse "chain-unresolved", which claims the chain is absent from a tree, and a read that failed
+    // produced no tree for anything to be absent from. It is checked BEFORE the chain is consulted because fetchTree keeps the
+    // previous roots on rejection: after one successful load, a failed refetch leaves a NON-EMPTY chain resolved from the window
+    // before it, so gating on an empty chain would let the graph render its error while the timeline scoped this window to the
+    // last window's generations and called itself narrowed. That is the contradiction this gate exists to remove, one refetch over.
+    if (error !== null) return { unavailable: "tree-unavailable", partial: false };
+    // Focus requested, the read succeeded, and findAlertChain still resolved nothing. This reports THAT, and no longer tries to
+    // report why. Four review rounds went into narrowing the cause and each precondition admitted a case it did not cover, most
+    // recently a truncated response, where the process is in the window but past the row limit BuildTree applies before
+    // aggregation. The one remaining gate is timing.
     if (alertChainIds.size === 0) {
-      // A failed read is a settled outcome, not a pending one, and it gets its own sentence. Treating it as pending is what let
-      // the page contradict itself: the graph rendered its error while the timeline listed the whole host with nothing to say it
-      // had stopped trying to narrow. It cannot reuse "chain-unresolved" either, since that claims the chain is absent from a
-      // tree, and a read that failed produced no tree for anything to be absent from.
-      if (error !== null) return { unavailable: "tree-unavailable", partial: false };
       // Still in flight: no tree has resolved for the chain to be missing from, and a message that appears and then disappears as
       // the read lands is its own kind of wrong.
       if (loading) return { partial: false };
@@ -247,6 +248,11 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     // comparison still detects the shortfall reliably; only the magnitude was unsound.
     return { partial: resolved < alertChainIds.size };
   }, [alertChainIds, alertChainGenerations, loading, error]);
+
+  // Any degraded scope withholds the generations too, so the timeline shows the whole host rather than narrowing to a chain it has
+  // just said it cannot vouch for. This matters only for a failed refetch, where the generations still on hand came from the
+  // previous window; the other two gaps leave nothing to withhold.
+  const timelineChainGenerations = chainCoverage.unavailable ? undefined : (alertChainGenerations ?? undefined);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
@@ -665,7 +671,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           hostId={hostId}
           bounds={bounds}
           emphasizePid={emphasizePid}
-          chainGenerations={alertChainGenerations ?? undefined}
+          chainGenerations={timelineChainGenerations}
           chainScopeUnavailable={chainCoverage.unavailable}
           chainPartiallyScoped={chainCoverage.partial}
         />
