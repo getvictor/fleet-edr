@@ -22,6 +22,19 @@ describe("StatCard", () => {
     },
   );
 
+  // The hint is supplementary by design: it rides on the whole tile so the hover target is the card rather than a few
+  // words of caption, and the label still has to read on its own, since a title attribute reaches neither keyboard nor
+  // touch users.
+  it("carries an optional hint on the whole tile, and omits the attribute without one", () => {
+    const { container, rerender } = render(<StatCard value={11} label="alerting by default" hint="Counted from catalog defaults." />);
+    const card = container.querySelector(".stat-card");
+    expect(card).toHaveAttribute("title", "Counted from catalog defaults.");
+    expect(screen.getByText("alerting by default")).toBeVisible();
+
+    rerender(<StatCard value={11} label="alerting by default" />);
+    expect(container.querySelector(".stat-card")).not.toHaveAttribute("title");
+  });
+
   it("wraps children in a summary strip", () => {
     const { container } = render(
       <SummaryStrip>

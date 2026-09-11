@@ -53,7 +53,7 @@ describe("AttackCoverage summary strip", () => {
 
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
-    expect(within(cardFor("techniques alerting by default")).getByText("2")).toBeInTheDocument();
+    expect(within(cardFor("alerting by default")).getByText("2")).toBeInTheDocument();
     // rule_a + rule_b are the two distinct covering rules across both techniques.
     expect(within(cardFor("detection rules")).getByText("2")).toBeInTheDocument();
     expect(within(cardFor("tactics with coverage")).getByText("2")).toBeInTheDocument();
@@ -88,11 +88,11 @@ describe("AttackCoverage summary strip", () => {
 
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
-    expect(within(cardFor("techniques alerting by default")).getByText("1")).toBeInTheDocument();
+    expect(within(cardFor("alerting by default")).getByText("1")).toBeInTheDocument();
 
     // The silent-rule card carries the number AND somewhere to act on it. Left bare the figure reads as a defect to switch
     // off, when those rules ship in monitor mode deliberately, so the link is part of what the card is for.
-    const silent = within(strip).getByText(/covered only by rules that ship silent/).closest(".stat-card") as HTMLElement;
+    const silent = within(strip).getByText(/silent by default/).closest(".stat-card") as HTMLElement;
     expect(within(silent).getByText("2")).toBeVisible();
     const tune = within(silent).getByRole("link", { name: /promote or tune/i });
     expect(tune).toBeVisible();
@@ -134,7 +134,7 @@ describe("AttackCoverage tuning link", () => {
   it("withholds the link, but not the number, from an operator who cannot", async () => {
     renderWithPerms([]);
     // The count still renders: it is the fact worth knowing even for someone who cannot act on it themselves.
-    expect(await screen.findByText(/covered only by rules that ship silent/)).toBeVisible();
+    expect(await screen.findByText(/silent by default/)).toBeVisible();
     expect(screen.queryByRole("link", { name: /promote or tune/i })).not.toBeInTheDocument();
   });
 });

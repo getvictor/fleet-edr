@@ -1096,14 +1096,15 @@ describe("DetectionConfig observed column", () => {
       renderPage();
 
       await waitFor(() => {
-        expect(screen.getByText(/Cost leads with the total wall time/)).toBeVisible();
+        expect(screen.getByText(/is how much server time each rule used/)).toBeVisible();
       });
-      expect(screen.getByText(/most are retried, but one whose batch is set aside is not/)).toBeVisible();
       // The note must point at the HOVER for the worst case. renderCost shows the mean and suppresses the undecided
       // annotation at zero, so an earlier wording promising both "in each cell" described a cell that does not exist.
-      expect(screen.getByText(/hover a cell for the worst case/)).toBeVisible();
+      expect(screen.getByText(/Hover a cell for the slowest single run/)).toBeVisible();
       expect(screen.getByText(/Sorting ranks by the total/)).toBeVisible();
       expect(screen.queryByText(/undecided count in each cell/)).not.toBeInTheDocument();
+      // The column name is bolded. Without it the sentence reads as though its subject is missing.
+      expect(screen.getByText("Cost", { selector: "strong" })).toBeVisible();
     });
 
     // StrictMode runs an effect, its cleanup, then the effect again on the SAME instance. A mountedRef set false only in the
@@ -1346,9 +1347,12 @@ describe("DetectionConfig observed column", () => {
     // toBeVisible, not toBeInTheDocument: the point of this fix is that the caveat is SEEN, not merely present. A mutation that
     // hid the note passed against toBeInTheDocument, which asserts the wrong property for a visibility requirement.
     await waitFor(() => {
-      expect(screen.getByText(/not how many alerts promotion would raise/)).toBeVisible();
+      expect(screen.getByText(/not how many alerts you would get by promoting it/)).toBeVisible();
+      expect(screen.getByText("Observed", { selector: "strong" })).toBeVisible();
     });
-    expect(screen.getByText(/over the last 7 days/)).toBeVisible();
+    // Scoped to the Observed note: both notes now state their own window, so a document-wide query matches twice and
+    // would pass on the Cost one alone.
+    expect(screen.getByText("Observed", { selector: "strong" }).closest("p")).toHaveTextContent("over the last 7 days");
     expect(screen.getByRole("columnheader", { name: "Observed (7d)" })).toBeVisible();
   });
 
@@ -1392,7 +1396,7 @@ describe("DetectionConfig observed column", () => {
     await waitFor(() => {
       expect(screen.getByText(/Match counts could not be loaded/)).toBeVisible();
     });
-    expect(screen.queryByText(/not how many alerts promotion would raise/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not how many alerts you would get by promoting it/)).not.toBeInTheDocument();
     // And the header must not advertise a window it cannot cover.
     expect(screen.getByRole("columnheader", { name: "Observed" })).toBeInTheDocument();
   });

@@ -121,18 +121,28 @@ export function AttackCoverage() {
       {!loading && layer && (
         <>
           <SummaryStrip>
-            <StatCard accent="green" value={alerting} label="techniques alerting by default" />
+            <StatCard
+              accent="green"
+              value={alerting}
+              label="alerting by default"
+              hint="Techniques with at least one rule that alerts out of the box. Counted from each rule's catalog default, not from what this deployment has tuned."
+            />
             {notAlerting > 0 && (
               <StatCard
                 accent="neutral"
                 value={notAlerting}
                 // The number stays. It is the single most load-bearing fact on this page: most of the catalog ships silent,
-                // and a reader who takes "techniques alerting" as the coverage figure is off by a factor of five. What it
+                // and a reader who takes "alerting by default" as the coverage figure is off by a factor of five. What it
                 // needed was somewhere to go. Left bare it reads as a defect to switch off, when these rules ship in monitor
                 // mode deliberately, because promoting them without tuning buries the alerts that matter under theirs.
+                //
+                // The label is the short mirror of the card beside it, so the pair reads as one contrast rather than as a
+                // caption and a paragraph. "by default" carries the same qualifier for the same reason. The detail moved to
+                // the hint, and the LINK stays visible because it is an action rather than an explanation.
+                hint="Techniques covered only by rules that record matches without alerting. Most of the catalog ships this way deliberately: promoting all of it at once buries the alerts that matter. Counted from catalog defaults, not from what this deployment has tuned."
                 label={(
                   <>
-                    techniques covered only by rules that ship silent{canTune && (
+                    silent by default{canTune && (
                       <>
                         {" "}
                         <Link className="attack-coverage__tune-link" to="/detection-config">promote or tune</Link>
