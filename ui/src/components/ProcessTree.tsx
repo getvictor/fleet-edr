@@ -230,8 +230,15 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     // gate is only about timing: while the read is in flight or after it failed there is no loaded tree to be absent from, and
     // a message that appears and then disappears is its own kind of wrong.
     if (alertChainIds.size === 0) {
-      const treeLoaded = !loading && error === null;
-      return treeLoaded ? { unavailable: "chain-unresolved", partial: false } : { partial: false };
+      // A failed read is a settled outcome, not a pending one, and it gets its own sentence. Treating it as pending is what let
+      // the page contradict itself: the graph rendered its error while the timeline listed the whole host with nothing to say it
+      // had stopped trying to narrow. It cannot reuse "chain-unresolved" either, since that claims the chain is absent from a
+      // tree, and a read that failed produced no tree for anything to be absent from.
+      if (error !== null) return { unavailable: "tree-unavailable", partial: false };
+      // Still in flight: no tree has resolved for the chain to be missing from, and a message that appears and then disappears as
+      // the read lands is its own kind of wrong.
+      if (loading) return { partial: false };
+      return { unavailable: "chain-unresolved", partial: false };
     }
     const resolved = alertChainGenerations?.length ?? 0;
     if (resolved === 0) return { unavailable: "no-generations", partial: false };

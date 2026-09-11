@@ -46,14 +46,41 @@ async function buildEventTechniques(hostID: string): Promise<EventTechniques> {
 
 // ChainScopeGap says why the timeline could not reproduce the graph's alert-chain focus at all.
 //
-// Only one of these two names a cause, deliberately. "no-generations" is provable: the chain resolved and not one of its
-// processes carried the identifier the scope matches on. "chain-unresolved" is everything else, and it stays vague on purpose.
+// Only one of these names a cause from the chain itself, deliberately. "no-generations" is provable: the chain resolved and not one
+// of its processes carried the identifier the scope matches on. "tree-unavailable" is equally provable, from the other direction:
+// the read failed, so there is no tree and no chain to look for. "chain-unresolved" is everything left, and it stays vague on
+// purpose.
 // Four review rounds went into trying to say WHY the chain came back empty, and each precondition turned out to admit a case it
 // did not cover: a tree still loading, a failed read, a host with nothing in the window, and finally a TRUNCATED response,
 // where the process is in the window but past the row limit BuildTree applies. A message that names the wrong cause sends the
 // operator to fix the wrong thing, so this one reports what is certain (the chain could not be located in what was loaded) and
 // leaves the cause to the operator, who can see the truncation notice and the time window for themselves.
-export type ChainScopeGap = "no-generations" | "chain-unresolved";
+//
+// "tree-unavailable" was carved out of that vagueness because it is the one cause the page already knows for certain. Before it
+// existed a failed read produced no note at all, so the graph showed its error while the timeline listed the whole host looking
+// like a successful unscoped view: two surfaces of one page disagreeing about whether the read worked.
+export type ChainScopeGap = "no-generations" | "chain-unresolved" | "tree-unavailable";
+
+// scopeGapMessage is exhaustive over ChainScopeGap by construction: a Record, not a chain of ternaries, so adding a gap without a
+// sentence fails the type check rather than silently falling through to whichever branch happened to be last.
+//
+// None of these claims more than the page knows. "tree-unavailable" in particular does NOT say the chain is absent, because a read
+// that failed produced no tree for anything to be absent from.
+const scopeGapMessages: Record<ChainScopeGap, string> = {
+  "no-generations":
+    "Showing the whole host: this alert's processes carry no generation data, so the timeline cannot narrow to the chain.",
+  "chain-unresolved":
+    "Showing the whole host: this alert's process is not in the loaded process tree, so there is no chain to narrow to.",
+  "tree-unavailable":
+    "Showing the whole host: the process tree could not be loaded, so the timeline cannot narrow to this alert's chain.",
+};
+
+function scopeGapMessage(gap: ChainScopeGap): string {
+  // gap is a three-value union rather than caller-supplied input, so the key cannot be anything the Record does not declare: the
+  // type checker rejects a fourth value before this line can run.
+  // eslint-disable-next-line security/detect-object-injection -- closed union key, not external input
+  return scopeGapMessages[gap];
+}
 
 interface Props {
   readonly hostId: string;
@@ -212,9 +239,7 @@ export function HostTimeline(
         )}
         {!scopeChain && chainScopeUnavailable !== undefined && (
           <span className="host-timeline__scope-note host-timeline__scope-note--degraded" role="status">
-            {chainScopeUnavailable === "no-generations"
-              ? "Showing the whole host: this alert's processes carry no generation data, so the timeline cannot narrow to the chain."
-              : "Showing the whole host: this alert's process is not in the loaded process tree, so there is no chain to narrow to."}
+            {scopeGapMessage(chainScopeUnavailable)}
           </span>
         )}
       </div>
