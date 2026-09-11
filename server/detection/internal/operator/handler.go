@@ -11,6 +11,7 @@ import (
 
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
@@ -40,6 +41,10 @@ const (
 	processTreeDefaultLimit = 2000
 	// processTreeMaxLimit is the upper bound the handler enforces; values above this are clamped down. Prevents an operator from
 	// accidentally asking for the whole host's history in one query.
+	//
+	// It MUST stay below mysql.ProcessTreeCountBound, and the guard below the const block enforces that at compile time rather than
+	// by hoping a future reader notices. TotalMatched stops at that bound, so a limit allowed to reach it would report a page as
+	// large as the floor describing it: "showing 10,000 of more than 10,000" says nothing the operator can act on.
 	processTreeMaxLimit = 5000
 
 	// updateAlertStatusBodyCap bounds the PUT /api/alerts/{id} body so a malicious or buggy client can't exhaust server memory by
@@ -48,6 +53,11 @@ const (
 	// that scripted clients can dispatch on. Mirrors the same cap shape that response/operator/handler.go uses on /api/commands.
 	updateAlertStatusBodyCap = 1 << 20 // 1 MiB
 )
+
+// Compile-time guard on the invariant processTreeMaxLimit documents. A negative constant cannot convert to uint, so raising the
+// handler limit to or past the store's counting bound stops the build here instead of leaving the reported floor too close to the
+// page to tell the operator anything.
+const _ = uint(mysql.ProcessTreeCountBound - processTreeMaxLimit - 1)
 
 // writeError emits a `{"error": "<code>"}` JSON body per the server-rest-api JSON-response-format requirement. Mirrors the pattern
 // in server/response/internal/operator/handler.go and server/identity/internal/audit/handler.go so all session-authenticated

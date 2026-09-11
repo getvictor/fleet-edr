@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -3173,8 +3174,8 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 
 	t.Run("a limit exactly equal to the match count is not truncated", func(t *testing.T) {
 		t.Parallel()
-		// The boundary the count-only-when-the-limit-bound branch turns on: the read comes back AT the limit, so the count runs,
-		// and it must then prove nothing was dropped rather than warn. Off-by-one here would warn on every perfectly complete
+		// The boundary the lookahead row settles: the read asks for one more row than the limit, gets exactly the limit back, and
+		// that alone proves nothing was dropped, so no count is paid for. Off-by-one here would warn on every perfectly complete
 		// read whose size happens to match the cap.
 		res, err := d.Service().BuildTree(t.Context(), host, window, int(full.TotalMatched), true, 0)
 		require.NoError(t, err)
@@ -3183,8 +3184,19 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 		assert.Equal(t, full.TotalMatched, res.TotalMatched)
 	})
 
+	t.Run("a read that was not truncated never reports a floor", func(t *testing.T) {
+		t.Parallel()
+		// TotalMatchedCapped is only meaningful under truncation, and the pairing the other way round is what review caught: the
+		// count's budget expiring shipped capped=true with truncated=false, and since the UI raises the notice on truncated alone,
+		// the page suppressed it and presented a tree whose completeness was never established as complete.
+		assert.False(t, full.TotalMatchedCapped, "an untruncated read counted every row it returned, so nothing is a floor")
+	})
+
 	t.Run("the reported total ignores the requested limit", func(t *testing.T) {
 		t.Parallel()
+		// Holds for a count that completes, which is every count on a seed this size. The one exception is a count that exhausts
+		// its time budget: its floor is the rows THAT request returned, so it moves with the limit by construction. That case is
+		// covered by resolveTotalMatched's table rather than here, since a database will not expire a budget on demand.
 		small, err := d.Service().BuildTree(t.Context(), host, window, 1, true, 0)
 		require.NoError(t, err)
 		large, err := d.Service().BuildTree(t.Context(), host, window, 1000, true, 0)
@@ -3195,14 +3207,52 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 
 	t.Run("a window matching nothing is empty rather than truncated", func(t *testing.T) {
 		t.Parallel()
-		// Guards the boundary the Returned < TotalMatched comparison could get wrong: 0 < 0 must be false, so an empty window
-		// reports no truncation rather than warning about rows that do not exist.
+		// Guards the boundary the lookahead could get wrong: zero rows back is not more than the limit, so an empty window reports
+		// no truncation rather than warning about rows that do not exist.
 		empty, err := d.Service().BuildTree(t.Context(), "no-such-host", window, 10, true, 0)
 		require.NoError(t, err)
 		assert.False(t, empty.Truncated)
 		assert.Zero(t, empty.TotalMatched)
 		assert.Zero(t, empty.Returned)
 	})
+}
+
+// TestProcessTree_PathologicalLimits pins that BuildTree survives a limit the HTTP handler would never send.
+//
+// Not a spec scenario, because nothing observable through the API changes: the handler clamps `?limit=` to [1, 5000] before it gets
+// here. It is pinned anyway because BuildTree sits on the cross-context Service interface, and the lookahead read made the limit
+// load-bearing arithmetic: limit+1 overflows at math.MaxInt and a negative limit makes the trim a negative slice bound, so a caller
+// outside the handler panics the server rather than getting an error back. Review caught it.
+func TestProcessTree_PathologicalLimits(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const host = "limit-clamp-host"
+	for _, pid := range []int{201, 202, 203} {
+		mustInsertProcess(t, ctx, d, host, pid)
+	}
+	window := api.TimeRange{FromNs: 0, ToNs: time.Now().UnixNano()}
+
+	for _, tc := range []struct {
+		name  string
+		limit int
+	}{
+		{name: "most negative", limit: math.MinInt},
+		{name: "negative", limit: -1},
+		{name: "zero", limit: 0},
+		{name: "one", limit: 1},
+		{name: "most positive, which overflows the lookahead", limit: math.MaxInt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res, err := d.Service().BuildTree(t.Context(), host, window, tc.limit, true, 0)
+			require.NoError(t, err, "a limit the handler would never send must not fail the read")
+			assert.Positive(t, res.Returned, "every clamp lands on at least one row, since the window has rows")
+			assert.GreaterOrEqual(t, res.TotalMatched, res.Returned,
+				"the denominator is never below the numerator, whichever clamp applied")
+		})
+	}
 }
 
 // TestProcessTree_WindowOverlapSemantics pins which processes a time range admits. The tree deliberately shows a process that was
