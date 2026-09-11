@@ -22,5 +22,5 @@ function countAdmittedRows(nodes: ProcessNode[]): number {
 // produced: equal counts, and both equal to the rows the forest represents.
 export function treeResponse(roots: ProcessNode[], overrides: Partial<TreeResponse> = {}): TreeResponse {
   const returned = countAdmittedRows(roots);
-  return { roots, returned, total_matched: returned, truncated: false, ...overrides };
+  return { roots, returned, total_matched: returned, total_matched_capped: false, truncated: false, ...overrides };
 }

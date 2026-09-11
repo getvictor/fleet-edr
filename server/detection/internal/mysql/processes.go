@@ -555,23 +555,47 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 	return procs, nil
 }
 
-// CountProcessTree returns how many process rows overlap the window, independent of any row limit, so a caller can report what a
-// limited read did not return (issue #423).
+// ProcessTreeCountBound is how far CountProcessTree counts before it stops and reports a floor. Five times the 2000-row tree limit:
+// far enough that an ordinary truncated window still reports its real total, and near enough that the read stays sub-second on a
+// host whose window matches half a million rows.
+const ProcessTreeCountBound = 10000
+
+// CountProcessTree reports how many process rows overlap the window, counting at most ProcessTreeCountBound of them, so a caller can
+// report what a limited read did not return (issue #423). The second return is true when it stopped at that bound, so the caller
+// knows the number is a floor rather than a total.
 //
-// Unlike GetProcessTree this cannot stop early: the row query walks idx_processes_host_time in fork-time order and stops once it has
-// `limit` rows, while counting has to evaluate every match. Callers should therefore run this only when the limit actually bound
-// (see graph.BuildTree), not on every tree read. There is no not-counted sentinel: when it does run, it returns the exact number.
-func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, error) {
+// Callers should still run this only when the limit actually bound (see graph.BuildTree) rather than on every tree read: bounded is
+// not free, and a read that returned fewer rows than its limit already knows its own total.
+//
+// Bounded because the unbounded version took the endpoint down. Measured on a dogfood host carrying 5.4M process rows: a 24-hour
+// window overlapped 542,268 of them, and COUNT(*) over that ran past 120 seconds against the server's 30-second write timeout, so
+// the request returned 500 and the operator saw a failed graph. The row read for the same window was 0.089s.
+//
+// The subquery is not decoration: it is what makes the cost bounded. COUNT(*) with this predicate has to evaluate every match, and
+// at 24 hours the optimizer also abandons idx_processes_exit_time (range, 642k rows) for uk_processes_source_event (ref, 2.9M rows,
+// a 1022-byte key). Wrapping the row query's own `ORDER BY fork_time_ns DESC LIMIT` borrows the access path that already stops
+// early, so the work is set by the bound rather than by the window: 0.148s for the window that used to hang.
+//
+// Two repairs that look right and are not, both measured on that host and window. Forcing the indexes still takes 74 seconds,
+// because the cost is the half-million rows rather than the plan. Splitting the OR does not help either: `exit_time_ns IS NULL` is
+// 3,552 rows and fast, and `exit_time_ns >= from` is the half-million-row branch that has to be counted either way.
+func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, bool, error) {
 	var total int64
+	// ORDER BY inside the subquery, matching GetProcessTree, so the scan walks idx_processes_host_time backwards and stops at the
+	// bound. Without it the subquery is free to pick the plan that made this slow in the first place.
 	err := s.db.GetContext(ctx, &total, `
-		SELECT COUNT(*)
-		FROM processes`+processTreeWindowPredicate,
-		processTreeWindowArgs(hostID, tr)...,
+		SELECT COUNT(*) FROM (
+			SELECT 1
+			FROM processes`+processTreeWindowPredicate+`
+			ORDER BY fork_time_ns DESC
+			LIMIT ?
+		) AS bounded`,
+		append(processTreeWindowArgs(hostID, tr), ProcessTreeCountBound)...,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("count process tree: %w", err)
+		return 0, false, fmt.Errorf("count process tree: %w", err)
 	}
-	return total, nil
+	return total, total >= ProcessTreeCountBound, nil
 }
 
 // EventAlreadyApplied reports whether a process row for (hostID, pid) already records eventID as the event that created it

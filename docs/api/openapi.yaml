@@ -280,11 +280,41 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [roots, returned, total_matched, total_matched_capped, truncated]
                 properties:
                   roots:
                     type: array
                     items:
                       $ref: "#/components/schemas/ProcessNode"
+                  returned:
+                    type: integer
+                    format: int64
+                    description: |
+                      Process rows the limit admitted, counted BEFORE sibling aggregation folded any of them into `×N` group
+                      nodes. Carried rather than derivable: the handler clamps the requested limit, and counting rendered nodes
+                      undercounts because aggregation collapses siblings.
+                    example: 2000
+                  total_matched:
+                    type: integer
+                    format: int64
+                    description: |
+                      Process rows whose lifetime overlaps the window, independent of the row limit but bounded by the server's
+                      own counting bound. Exact below that bound, a FLOOR at or above it; `total_matched_capped` says which.
+                    example: 2588
+                  total_matched_capped:
+                    type: boolean
+                    description: |
+                      Counting stopped at its bound, so `total_matched` is a floor rather than a total. The bound exists because
+                      an unbounded count could not finish: on a host with 5.4M process rows a 24-hour window matched 542,268 and
+                      the count ran past the server's write timeout, failing the request. A client MUST NOT present a capped
+                      total as exact.
+                    example: false
+                  truncated:
+                    type: boolean
+                    description: |
+                      The row limit dropped rows, so the forest is partial. Stated by the server rather than inferred from
+                      `returned < total_matched`, so a client keys on the server's own judgement.
+                    example: false
 
   /api/hosts/{host_id}/processes/{pid}:
     get:

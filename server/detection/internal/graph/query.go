@@ -56,10 +56,11 @@ func (q *Query) BuildTree(
 	// tree load, including the overwhelming majority that are nowhere near the cap. The extra scan is now paid only when the read
 	// was truncated, which is exactly when the analyst needs the number.
 	if len(procs) == limit {
-		total, cerr := q.store.CountProcessTree(ctx, hostID, tr)
+		total, capped, cerr := q.store.CountProcessTree(ctx, hostID, tr)
 		if cerr != nil {
 			return api.ProcessTreeResult{}, cerr
 		}
+		res.TotalMatchedCapped = capped
 		// The row read and the count are separate statements, so retention pruning between them can return a total below the rows
 		// already in hand. Reporting "showing 2000 of 1998" would be incoherent, so the rows actually read are the floor. The
 		// opposite skew (ingest adding rows between the two) needs no guard: a larger total is a truthful denominator.
