@@ -91,3 +91,22 @@ func TestCountProcessTree_ExactBelowTheBound(t *testing.T) {
 	assert.Equal(t, int64(seeded), got, "below the bound the count is exact")
 	assert.False(t, capped, "below the bound nothing was capped, and saying otherwise would hide a real total behind a floor")
 }
+
+// The boundary Copilot caught on review: with EXACTLY ProcessTreeCountBound matching rows the old predicate (`total >= bound`)
+// reported capped, and the page then read "more than 10,000" over a window holding precisely 10,000. The count now probes one row
+// past the bound so "capped" means strictly more matched, and clamps the reported number back to the bound.
+func TestCountProcessTree_ExactlyAtTheBoundIsNotCapped(t *testing.T) {
+	t.Parallel()
+	store, db := newStoreAndDB(t)
+	ctx := t.Context()
+
+	const host = "count-at-bound-host"
+	const forkTime = int64(1000)
+	seedProcesses(t, ctx, db, host, mysql.ProcessTreeCountBound, forkTime)
+
+	got, capped, err := store.CountProcessTree(ctx, host, api.TimeRange{FromNs: 0, ToNs: forkTime + 1})
+	require.NoError(t, err)
+	assert.Equal(t, int64(mysql.ProcessTreeCountBound), got, "the total is exactly the bound and is reported as itself")
+	assert.False(t, capped,
+		"nothing lies beyond the bound here, so claiming a floor would put \"more than 10,000\" on a window holding 10,000")
+}

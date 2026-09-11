@@ -21,12 +21,14 @@ This predicate was tuned once before, in #423, which measured a 631k-row databas
 ## What changes
 
 - `CountProcessTree` counts through the row query's `ORDER BY fork_time_ns DESC` access path with a bound, so its cost is set by the bound rather than by how much the window matched.
-- `total_matched` is exact below the bound and a floor at or above it. A new `total_matched_capped` says which, so a client never has to guess whether a round number is real.
-- The bound is 10,000, five times the 2,000 row limit. It answers "is there a lot more" in 0.148s on the host that failed.
+- `total_matched` is exact when the count finished and a floor when it did not. A new `total_matched_capped` says which, so a client never has to guess whether a round number is real.
+- The bound is 10,000, five times the 2,000 row default limit. It answers "is there a lot more" in 0.148s on the host that failed. The count reads one row past it, so "capped" means strictly more matched and the page can say "more than 10,000" rather than "at least".
+- The count also carries a 5-second time budget. The bound caps rows EMITTED, not rows examined, so a sparse window still walks its whole range to prove it matched few rows: about 1.7s for a full scan of this host's 5.2M rows, and more on a larger one. On expiry the count reports what the read already holds instead of failing the request.
+- `truncated` is proven by reading one row past the requested limit rather than derived from `total_matched`. The count can be capped or give up, and a truncation flag derived from it read a partial forest as complete on exactly the hosts where the count cannot finish. This also stops paying for a count on a window holding exactly the limit, which is not truncated at all.
 
 ## What does not change
 
-The row read, its predicate, its ordering, and the shape of the tree. `returned` and `truncated` keep their meanings, and a window inside the bound reports exactly what it reports today.
+The row read's predicate, its ordering, and the shape of the tree. `returned` and `truncated` mean what they meant, and a window inside the bound reports exactly what it reports today. The read now asks for one row more than the limit and drops it, which is invisible to a client.
 
 ## Impact
 

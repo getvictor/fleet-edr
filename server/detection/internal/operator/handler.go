@@ -43,8 +43,8 @@ const (
 	// accidentally asking for the whole host's history in one query.
 	//
 	// It MUST stay below mysql.ProcessTreeCountBound, and the guard below the const block enforces that at compile time rather than
-	// by hoping a future reader notices. Truncated is derived from Returned < TotalMatched, and TotalMatched now stops at that
-	// bound, so a limit allowed to reach it would let a completely full page report Truncated=false with rows still behind it.
+	// by hoping a future reader notices. TotalMatched stops at that bound, so a limit allowed to reach it would report a page as
+	// large as the floor describing it: "showing 10,000 of more than 10,000" says nothing the operator can act on.
 	processTreeMaxLimit = 5000
 
 	// updateAlertStatusBodyCap bounds the PUT /api/alerts/{id} body so a malicious or buggy client can't exhaust server memory by
@@ -55,8 +55,8 @@ const (
 )
 
 // Compile-time guard on the invariant processTreeMaxLimit documents. A negative constant cannot convert to uint, so raising the
-// handler limit to or past the store's counting bound stops the build here instead of silently reporting a full page of results
-// as complete.
+// handler limit to or past the store's counting bound stops the build here instead of leaving the reported floor too close to the
+// page to tell the operator anything.
 const _ = uint(mysql.ProcessTreeCountBound - processTreeMaxLimit - 1)
 
 // writeError emits a `{"error": "<code>"}` JSON body per the server-rest-api JSON-response-format requirement. Mirrors the pattern

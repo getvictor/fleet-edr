@@ -203,10 +203,11 @@ func TestProcessTreeResult_WireRoundTrip_PBT(t *testing.T) {
 		}
 
 		original := ProcessTreeResult{
-			Roots:        roots,
-			Returned:     rapid.Int64().Draw(rt, "returned"),
-			TotalMatched: rapid.Int64().Draw(rt, "total_matched"),
-			Truncated:    rapid.Bool().Draw(rt, "truncated"),
+			Roots:              roots,
+			Returned:           rapid.Int64().Draw(rt, "returned"),
+			TotalMatched:       rapid.Int64().Draw(rt, "total_matched"),
+			TotalMatchedCapped: rapid.Bool().Draw(rt, "total_matched_capped"),
+			Truncated:          rapid.Bool().Draw(rt, "truncated"),
 		}
 
 		encoded, err := json.Marshal(original)
@@ -232,9 +233,12 @@ func TestProcessTreeResult_WireFieldNames(t *testing.T) {
 	assert.Contains(t, generic, "returned")
 	assert.Contains(t, generic, "total_matched")
 	assert.Contains(t, generic, "truncated")
-	// Present even when false: the UI branches on it, and an omitempty here would make "not truncated" indistinguishable from an
-	// older server that does not report truncation at all.
-	notTruncated, err := json.Marshal(ProcessTreeResult{})
+	assert.Contains(t, generic, "total_matched_capped")
+	// Present even when false: the UI branches on both, and an omitempty here would make "not truncated" indistinguishable from an
+	// older server that does not report truncation at all, and an exact total indistinguishable from one that does not say whether
+	// the number is a floor. A client that cannot tell those apart shows "2,588" for a number it has no right to state exactly.
+	plain, err := json.Marshal(ProcessTreeResult{})
 	require.NoError(t, err)
-	assert.Contains(t, string(notTruncated), `"truncated":false`)
+	assert.Contains(t, string(plain), `"truncated":false`)
+	assert.Contains(t, string(plain), `"total_matched_capped":false`)
 }

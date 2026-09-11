@@ -298,22 +298,25 @@ paths:
                     type: integer
                     format: int64
                     description: |
-                      Process rows whose lifetime overlaps the window, independent of the row limit but bounded by the server's
-                      own counting bound. Exact below that bound, a FLOOR at or above it; `total_matched_capped` says which.
+                      Process rows whose lifetime overlaps the window, independent of the row limit. Exact when the server could
+                      count every match, a FLOOR when it could not; `total_matched_capped` says which.
                     example: 2588
                   total_matched_capped:
                     type: boolean
                     description: |
-                      Counting stopped at its bound, so `total_matched` is a floor rather than a total. The bound exists because
-                      an unbounded count could not finish: on a host with 5.4M process rows a 24-hour window matched 542,268 and
-                      the count ran past the server's write timeout, failing the request. A client MUST NOT present a capped
-                      total as exact.
+                      `total_matched` is a floor rather than a total, either because the window matched more rows than the
+                      server's counting bound or because the count ran out of its time budget. Bounding it at all was forced: an
+                      unbounded count could not finish, and on a host with 5.4M process rows a 24-hour window matched 542,268
+                      while the count ran past the server's write timeout and failed the request. A client MUST NOT present a
+                      capped total as exact. Never set when `truncated` is false, since an untruncated read counted every row it
+                      returned.
                     example: false
                   truncated:
                     type: boolean
                     description: |
-                      The row limit dropped rows, so the forest is partial. Stated by the server rather than inferred from
-                      `returned < total_matched`, so a client keys on the server's own judgement.
+                      The row limit dropped rows, so the forest is partial. Proven by reading one row past the limit, NOT derived
+                      from `returned < total_matched`: the count behind `total_matched` can be capped or give up, and a client
+                      that inferred truncation from it would read a partial forest as complete. Key on this flag.
                     example: false
 
   /api/hosts/{host_id}/processes/{pid}:

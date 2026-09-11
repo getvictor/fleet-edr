@@ -3173,14 +3173,22 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 
 	t.Run("a limit exactly equal to the match count is not truncated", func(t *testing.T) {
 		t.Parallel()
-		// The boundary the count-only-when-the-limit-bound branch turns on: the read comes back AT the limit, so the count runs,
-		// and it must then prove nothing was dropped rather than warn. Off-by-one here would warn on every perfectly complete
+		// The boundary the lookahead row settles: the read asks for one more row than the limit, gets exactly the limit back, and
+		// that alone proves nothing was dropped, so no count is paid for. Off-by-one here would warn on every perfectly complete
 		// read whose size happens to match the cap.
 		res, err := d.Service().BuildTree(t.Context(), host, window, int(full.TotalMatched), true, 0)
 		require.NoError(t, err)
 		assert.False(t, res.Truncated, "returning exactly every matching row is complete, not truncated")
 		assert.Equal(t, full.TotalMatched, res.Returned)
 		assert.Equal(t, full.TotalMatched, res.TotalMatched)
+	})
+
+	t.Run("a read that was not truncated never reports a floor", func(t *testing.T) {
+		t.Parallel()
+		// TotalMatchedCapped is only meaningful under truncation, and the pairing the other way round is what review caught: the
+		// count's budget expiring shipped capped=true with truncated=false, and since the UI raises the notice on truncated alone,
+		// the page suppressed it and presented a tree whose completeness was never established as complete.
+		assert.False(t, full.TotalMatchedCapped, "an untruncated read counted every row it returned, so nothing is a floor")
 	})
 
 	t.Run("the reported total ignores the requested limit", func(t *testing.T) {

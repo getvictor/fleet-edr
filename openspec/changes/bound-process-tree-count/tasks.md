@@ -7,3 +7,8 @@
 - [x] Integration coverage: exact below the bound, floor at the bound, flag set only at the bound
 - [x] Mutation-test the bound and the flag
 - [x] Re-measure on the dogfood host that the failing window now answers
+- [x] Give the count a time budget so a sparse window that walks the whole range still answers
+- [x] Prove `truncated` from a lookahead row, so it holds when the count cannot finish
+- [x] Count one row past the bound so "more than N" is true rather than "at least N"
+- [x] Spec the floor semantics on the UI side too, not only on the API
+- [x] Pin the new wire field in the round-trip PBT and the field-name test

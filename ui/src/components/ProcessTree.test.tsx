@@ -537,9 +537,12 @@ describe("ProcessTreeView truncation notice (issue #423)", () => {
     expect(notice).toHaveTextContent(/search/i);
   });
 
+  // spec:web-ui/process-tree-visualization/a-total-the-server-could-not-establish-exactly-is-shown-as-a-floor
+  //
   // A capped total is a FLOOR, not a total, and the notice has to say so. The server stops counting at its bound so the read cannot
   // hang, which means a bare "of 10,000" would state a number the server never established: the real figure on the host that
-  // motivated the bound was 542,268.
+  // motivated the bound was 542,268. The distinction comes from the server's flag alone: 10,000 is also a number an exact count can
+  // legitimately return, so reading the figure itself would hedge a total the server does know.
   it("says the total is a floor when the server stopped counting at its bound", async () => {
     vi.spyOn(api, "getProcessTree").mockResolvedValue(
       treeResponse(forest, { returned: 2000, total_matched: 10000, total_matched_capped: true, truncated: true }),
@@ -550,6 +553,8 @@ describe("ProcessTreeView truncation notice (issue #423)", () => {
     expect(notice).toHaveTextContent(/Showing 2,000 of more than 10,000 processes/i);
   });
 
+  // spec:web-ui/process-tree-visualization/a-total-the-server-could-not-establish-exactly-is-shown-as-a-floor
+  //
   // The uncapped case must NOT gain the hedge, or every ordinary truncated read starts understating a number the server does know.
   it("states an uncapped total exactly, with no hedge", async () => {
     vi.spyOn(api, "getProcessTree").mockResolvedValue(

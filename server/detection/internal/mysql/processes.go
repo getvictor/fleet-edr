@@ -558,9 +558,9 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 	return procs, nil
 }
 
-// ProcessTreeCountBound is how far CountProcessTree counts before it stops and reports a floor. Five times the 2000-row tree limit:
-// far enough that an ordinary truncated window still reports its real total, and near enough that the read stays sub-second on a
-// host whose window matches half a million rows.
+// ProcessTreeCountBound is how far CountProcessTree counts before it stops and reports a floor. Five times the 2,000-row default
+// tree limit and twice the 5,000-row maximum: far enough that an ordinary truncated window still reports its real total, and near
+// enough that the read stays sub-second on a host whose window matches half a million rows.
 const ProcessTreeCountBound = 10000
 
 // processTreeCountBudgetMs is the wall-clock the count may spend before it gives up and reports a floor. Generous against the
@@ -569,8 +569,12 @@ const ProcessTreeCountBound = 10000
 const processTreeCountBudgetMs = 5000
 
 // CountProcessTree reports how many process rows overlap the window, counting at most ProcessTreeCountBound of them, so a caller can
-// report what a limited read did not return (issue #423). The second return is true when it stopped at that bound, so the caller
-// knows the number is a floor rather than a total.
+// report what a limited read did not return (issue #423). The second return is true when the number is a FLOOR rather than a total,
+// which happens two ways: the window matched more rows than the bound, or the count ran out of its time budget.
+//
+// It counts one row PAST the bound and clamps the answer back down, so "capped" means strictly more than ProcessTreeCountBound
+// matched rather than "at least". Reporting capped at exactly the bound would put "more than 10,000" on a window holding exactly
+// 10,000, which is the kind of small lie that costs a reader their trust in the rest of the number.
 //
 // Callers should still run this only when the limit actually bound (see graph.BuildTree) rather than on every tree read: bounded is
 // not free, and a read that returned fewer rows than its limit already knows its own total.
@@ -604,18 +608,23 @@ func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.Time
 			ORDER BY fork_time_ns DESC
 			LIMIT ?
 		) AS bounded`,
-		append(processTreeWindowArgs(hostID, tr), ProcessTreeCountBound)...,
+		append(processTreeWindowArgs(hostID, tr), ProcessTreeCountBound+1)...,
 	)
 	if countTimedOut(err) {
 		// Not an error to the caller. The rows are already in hand and the request is answerable without this number, so spending
 		// the operator's page on a denominator would be the wrong trade. Zero with capped=true reports "at least what you can see":
-		// BuildTree floors TotalMatched at Returned, so the page says "more than <the rows shown>" rather than inventing a total.
+		// BuildTree floors TotalMatched at Returned, so the page reads "more than <the rows shown>" rather than inventing a total.
+		// That the page was truncated at all is established by BuildTree's lookahead row and does not depend on this number, so an
+		// expiry here costs the operator the magnitude and nothing else.
 		return 0, true, nil
 	}
 	if err != nil {
 		return 0, false, fmt.Errorf("count process tree: %w", err)
 	}
-	return total, total >= ProcessTreeCountBound, nil
+	if total > ProcessTreeCountBound {
+		return ProcessTreeCountBound, true, nil
+	}
+	return total, false, nil
 }
 
 // countTimedOut reports whether err is the counting budget expiring rather than a real failure.
