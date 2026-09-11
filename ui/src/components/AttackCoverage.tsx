@@ -124,7 +124,7 @@ export function AttackCoverage() {
             <StatCard
               accent="green"
               value={alerting}
-              label="alerting by default"
+              label="techniques alerting by default"
               hint="Techniques with at least one rule that alerts out of the box. Counted from each rule's catalog default, not from what this deployment has tuned."
             />
             {notAlerting > 0 && (
@@ -137,12 +137,14 @@ export function AttackCoverage() {
                 // mode deliberately, because promoting them without tuning buries the alerts that matter under theirs.
                 //
                 // The label is the short mirror of the card beside it, so the pair reads as one contrast rather than as a
-                // caption and a paragraph. "by default" carries the same qualifier for the same reason. The detail moved to
-                // the hint, and the LINK stays visible because it is an action rather than an explanation.
-                hint="Techniques covered only by rules that record matches without alerting. Most of the catalog ships this way deliberately: promoting all of it at once buries the alerts that matter. Counted from catalog defaults, not from what this deployment has tuned."
+                // caption and a paragraph. Two words of it are not negotiable, though. "techniques" stays because this card
+                // sits beside a count of RULES and a count of TACTICS, and a bare "silent by default" reads as either.
+                // "by default" stays because the score comes from each rule's catalog default rather than from this
+                // deployment's settings. The detail moved to the hint, and the LINK stays visible: it is an action.
+                hint="Techniques covered only by rules that do not alert out of the box. Most ship in monitor mode, recording matches without raising an alert; a few ship disabled and record nothing. Promoting all of them at once buries the alerts that matter. Counted from catalog defaults, not from what this deployment has tuned."
                 label={(
                   <>
-                    silent by default{canTune && (
+                    techniques silent by default{canTune && (
                       <>
                         {" "}
                         <Link className="attack-coverage__tune-link" to="/detection-config">promote or tune</Link>
