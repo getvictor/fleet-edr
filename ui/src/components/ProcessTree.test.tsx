@@ -1,8 +1,8 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router";
 import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import * as api from "../api";
-import type { AlertDetail, ProcessNode } from "../types";
+import type { AlertDetail, ApplicationControlRule, ProcessNode } from "../types";
 import { ProcessTreeView } from "./ProcessTree";
 import { degradedScopeMessages } from "./chainScope";
 import { treeResponse } from "../test/factories";
@@ -661,6 +661,118 @@ describe("ProcessTreeView alert title link", () => {
 
 // Rule attribution on the alert breadcrumb (issue #765). The breadcrumb is the alert's detail view, so it displays a match and
 // carries the same Detection Rule License obligation as the alert list.
+// The alert title routes to whatever raised the alert, and there are three destinations. The branch is easy to get wrong in a way
+// that still renders a link, so each case asserts WHERE the link goes, not merely that one exists.
+// spec:web-ui/alert-pivots-to-the-host-process-tree/alert-title-routes-to-whatever-raised-the-alert
+describe("ProcessTreeView alert title routing", () => {
+  function appControlRule(id: number, policyID: number): ApplicationControlRule {
+    return {
+      id, policy_id: policyID, rule_type: "BINARY", identifier: "abc", action: "BLOCK",
+      enforcement: "ENFORCE", enabled: true, severity: "high", source: "operator",
+      created_at: "2026-09-12T00:00:00Z", updated_at: "2026-09-12T00:00:00Z", created_by: "usr_1",
+    };
+  }
+
+  const appControlAlert: AlertDetail = {
+    ...launchDaemonAlert,
+    id: 11,
+    rule_id: "app_control:42",
+    title: "Application blocked: /usr/bin/curl",
+    source: "application_control",
+  };
+
+  it("links an application-control alert to the policy that owns the matched rule", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(appControlAlert);
+    const ruleSpy = vi.spyOn(api, "getAppControlRule").mockResolvedValue(appControlRule(42, 7));
+    renderTree("?alert=11&process=0&at=1750248000000");
+
+    const link = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(link).toHaveAttribute("href", "/app-control/policies/7");
+    expect(ruleSpy).toHaveBeenCalledWith(42);
+  });
+
+  it("still links a documented detection rule to its documentation page", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    const link = await screen.findByRole("link", { name: launchDaemonAlert.title });
+    expect(link).toHaveAttribute("href", "/rules/privilege_launchd_plist_write");
+  });
+
+  // sensor_recovery_failed is registered and alerts but is deliberately absent from the catalog, and it is not an app-control
+  // rule either. Linking it would land the analyst on "Unknown rule", which is worse than no link.
+  it("renders plain text for an alert that is neither documented nor application-control", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({
+      ...launchDaemonAlert, id: 12, rule_id: "sensor_recovery_failed", title: "EDR sensor could not be restored",
+    });
+    renderTree("?alert=12&process=0&at=1750248000000");
+
+    expect(await screen.findByText("EDR sensor could not be restored")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "EDR sensor could not be restored" })).toBeNull();
+  });
+
+  // A failed resolution must not link anywhere. Linking to a policy we could not confirm exists sends the analyst to a page that
+  // will not describe what blocked, which is the failure the catalog fallback already exists to avoid.
+  it("falls back to plain text when the owning policy cannot be resolved", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(appControlAlert);
+    const ruleSpy = vi.spyOn(api, "getAppControlRule").mockRejectedValue(new Error("404"));
+    renderTree("?alert=11&process=0&at=1750248000000");
+
+    // Wait for the resolution to SETTLE before asserting the absence. findByText alone matches the text inside a link too, so it
+    // resolves while the rejection is still in flight and the assertion passes against a link that has not rendered yet. That
+    // false pass is what a mutant returning a bogus policy id on failure slipped through.
+    await waitFor(() => { expect(ruleSpy).toHaveBeenCalled(); });
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+    });
+    expect(screen.getByText(appControlAlert.title)).toBeVisible();
+  });
+
+  // A resolution landing after the operator has moved to a different alert must not be read as the new alert's policy. The
+  // resolved state carries the rule it was resolved for precisely so this cannot happen.
+  //
+  // The component must STAY MOUNTED across the switch, which is why this navigates rather than re-rendering: unmounting resets the
+  // resolved state, so a remount tests nothing and a version ignoring the guard passes. Changing only the query string keeps the
+  // /hosts/:hostId route matched, so the same instance sees a new alert.
+  it("does not show a previous alert's policy after switching alerts", async () => {
+    const other: AlertDetail = { ...appControlAlert, id: 13, rule_id: "app_control:99", title: "Application blocked: /bin/nc" };
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      Promise.resolve(id === 13 ? other : appControlAlert),
+    );
+    vi.spyOn(api, "getAppControlRule").mockImplementation((ruleID: number) =>
+      ruleID === 42
+        ? Promise.resolve(appControlRule(42, 7))
+        : new Promise(() => { /* the second alert's resolution never lands */ }),
+    );
+
+    function Switcher() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => { void navigate("/hosts/h1?alert=13&process=0&at=1750248000000"); }}>
+          switch alert
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={["/hosts/h1?alert=11&process=0&at=1750248000000"]}>
+        <Switcher />
+        <Routes>
+          <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const first = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(first).toHaveAttribute("href", "/app-control/policies/7");
+
+    fireEvent.click(screen.getByRole("button", { name: "switch alert" }));
+
+    expect(await screen.findByText(other.title)).toBeVisible();
+    expect(screen.queryByRole("link", { name: other.title })).toBeNull();
+    expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+  });
+});
+
 describe("ProcessTreeView alert attribution", () => {
   it("credits the rule author on the alert breadcrumb", async () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({

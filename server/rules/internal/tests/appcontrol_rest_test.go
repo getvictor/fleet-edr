@@ -1690,3 +1690,65 @@ func TestAppControlREST_ListPolicies_CarriesRuleCount(t *testing.T) {
 
 	assert.Equal(t, 1, listCount(), "the count follows the policy's rules rather than being computed once")
 }
+
+// spec:server-application-control/rest-surface-for-policies-rules-groups-and-assignments/a-single-rule-is-readable-by-its-id
+//
+// TestAppControlREST_GetRule round-trips the single-rule read that an application-control alert needs. The alert records the rule
+// it matched (`app_control:<n>`) and never the policy, and the rules LIST filters by policy_id, which is the direction that does
+// not help: a client holding an alert has no way to reach the owning policy without this read.
+//
+// policy_id is the assertion that matters. A read returning the rule without it would satisfy "the endpoint works" and still leave
+// the alert unroutable, which is the whole reason the endpoint exists.
+func TestAppControlREST_GetRule(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+
+	create := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"severity":   rulesapi.SeverityRuleHigh,
+			"reason":     "single-rule read fixture",
+		})
+	require.Equal(t, http.StatusCreated, create.StatusCode)
+	var created rulesapi.ApplicationControlRule
+	require.NoError(t, json.NewDecoder(create.Body).Decode(&created))
+	create.Body.Close()
+	require.Positive(t, created.ID)
+
+	t.Run("returns the rule and the policy that owns it", func(t *testing.T) {
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules/"+i64(created.ID), nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var got rulesapi.ApplicationControlRule
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		assert.Equal(t, created.ID, got.ID)
+		assert.Equal(t, policyID, got.PolicyID, "the owning policy is what makes an alert routable; without it this read is useless")
+		assert.Equal(t, rulesapi.RuleTypeBinary, got.RuleType)
+	})
+
+	t.Run("a rule id that names no rule is 404", func(t *testing.T) {
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules/99999999", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusNotFound, resp.StatusCode)
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+		assert.Equal(t, "application_control.rule_not_found", errBody.Error)
+	})
+
+	t.Run("a malformed id is 400", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/app-control/rules/abc",
+			"/api/v1/app-control/rules/0",
+			"/api/v1/app-control/rules/-1",
+		} {
+			resp := r.do(t, http.MethodGet, path, nil)
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode, path)
+			resp.Body.Close()
+		}
+	})
+}

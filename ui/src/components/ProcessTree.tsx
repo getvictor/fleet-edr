@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type RefObject } from "react";
 import { useParams, useSearchParams, useLocation, Link } from "react-router";
 import * as d3 from "d3";
-import { fetchRuleDocs, getAlertDetail, getProcessTree, listAlerts } from "../api";
+import { APP_CONTROL_RULE_PREFIX, fetchRuleDocs, getAlertDetail, getAppControlRule, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import {
   NANOSECONDS_PER_MILLISECOND,
@@ -161,6 +161,36 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
   }, [showSystem]);
+
+  // An application-control alert's rule id names a POLICY rule, not a catalog rule, so its title routes to the owning policy
+  // instead of to rule documentation. The alert records only the rule, and the rules list filters by policy, so the owner has to
+  // be read from the rule itself.
+  const appControlRuleNumber = useMemo(() => {
+    const ruleID = alertDetail?.rule_id ?? "";
+    if (!ruleID.startsWith(APP_CONTROL_RULE_PREFIX)) return null;
+    const numeric = Number(ruleID.slice(APP_CONTROL_RULE_PREFIX.length));
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+  }, [alertDetail?.rule_id]);
+
+  // The resolution carries the rule it was resolved FOR, so a result landing after the operator moved to another alert cannot be
+  // read as that alert's policy. Keying the state on its own input is cheaper than a cancellation flag and is what makes the
+  // derivation below sound; a bare policy id would linger and link the new alert to the previous one's policy.
+  const [resolvedPolicy, setResolvedPolicy] = useState<{ ruleNumber: number; policyID: number } | null>(null);
+  useEffect(() => {
+    if (appControlRuleNumber === null) return;
+    let cancelled = false;
+    getAppControlRule(appControlRuleNumber)
+      .then((rule) => {
+        if (!cancelled) setResolvedPolicy({ ruleNumber: appControlRuleNumber, policyID: rule.policy_id });
+      })
+      // Left unresolved on failure: the title then falls back to plain text, which is what an undocumented rule already does, and
+      // is better than linking to a policy we could not confirm exists.
+      .catch(() => { /* fall back to plain text */ });
+    return () => { cancelled = true; };
+  }, [appControlRuleNumber]);
+
+  const appControlPolicyID =
+    appControlRuleNumber !== null && resolvedPolicy?.ruleNumber === appControlRuleNumber ? resolvedPolicy.policyID : null;
 
   // Rule ids the catalog documents, used to decide whether the alert title can link anywhere. Null while loading or on failure,
   // which the link check treats as "cannot confirm", so a failed fetch degrades to plain text rather than to a broken link.
@@ -591,6 +621,14 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
               to={`/rules/${encodeURIComponent(alertDetail.rule_id)}`}
               className="alert-breadcrumb__title alert-breadcrumb__title--link"
               title={`Open documentation for the ${alertDetail.rule_id} rule`}
+            >
+              {alertDetail.title}
+            </Link>
+          ) : appControlPolicyID !== null ? (
+            <Link
+              to={`/app-control/policies/${String(appControlPolicyID)}`}
+              className="alert-breadcrumb__title alert-breadcrumb__title--link"
+              title="Open the application control policy that blocked this"
             >
               {alertDetail.title}
             </Link>

@@ -117,6 +117,7 @@ func (h *AppControlHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("DELETE /api/v1/app-control/policies/{id}", h.handleDeletePolicy)
 	mux.HandleFunc("POST /api/v1/app-control/policies/{id}/rules", h.handleCreateRule)
 	mux.HandleFunc("POST /api/v1/app-control/policies/{id}/rules:bulkUpsert", h.handleBulkUpsertRules)
+	mux.HandleFunc("GET /api/v1/app-control/rules/{id}", h.handleGetRule)
 	mux.HandleFunc("PATCH /api/v1/app-control/rules/{id}", h.handleUpdateRule)
 	mux.HandleFunc("DELETE /api/v1/app-control/rules/{id}", h.handleDeleteRule)
 	mux.HandleFunc("GET /api/v1/app-control/rules", h.handleListRulesAcrossPolicies)
@@ -830,6 +831,36 @@ func (h *AppControlHandler) handleListHostGroups(w http.ResponseWriter, r *http.
 
 // handleGetHostGroup serves GET /api/v1/app-control/host-groups/{id}. Returns 404 with the typed host_group_not_found code
 // on stale ids so the REST client can distinguish "the row was removed" from a generic 500.
+// handleGetRule serves GET /api/v1/app-control/rules/{id}: one rule, including the policy that owns it.
+//
+// Exists because ownership runs the wrong way for the caller that needs it. An application-control alert carries the rule it
+// matched, and the rules list filters BY policy, so an operator holding an alert has no way to reach the policy that blocked
+// without knowing it already. Read-gated like the other reads; PATCH and DELETE already live at this path.
+func (h *AppControlHandler) handleGetRule(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionAppControlRead,
+		identityapi.Resource{Type: "application_control"}) {
+		return
+	}
+	id, ok := parsePositiveInt64Path(r)
+	if !ok {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidQuery, "invalid rule id")
+		return
+	}
+	rule, err := h.svc.GetRuleByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, api.ErrAppControlRuleNotFound) {
+			writeAppControlErr(ctx, h.logger, w, http.StatusNotFound, errCodeRuleNotFound, errMsgRuleNotFound)
+			return
+		}
+		h.logger.ErrorContext(ctx, "appcontrol get rule", "err", err, "rule_id", id)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, rule)
+}
+
 func (h *AppControlHandler) handleGetHostGroup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,

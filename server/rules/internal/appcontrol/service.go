@@ -130,6 +130,17 @@ func (s *Service) ListAssignmentsForPolicy(ctx context.Context, policyID int64) 
 	return s.store.ListAssignmentsForPolicy(ctx, policyID)
 }
 
+// GetRuleByID returns one rule, including the id of the policy that owns it.
+//
+// A read passthrough, and the ownership is the point. An application-control alert records the rule it matched
+// (`app_control:<n>`), not the policy, so a client holding an alert cannot otherwise reach the policy that blocked: the rules list
+// filters by policy_id, which is the direction that does not help here.
+//
+// Missing rows arrive as api.ErrAppControlRuleNotFound from the store, which the handler maps to 404.
+func (s *Service) GetRuleByID(ctx context.Context, ruleID int64) (api.ApplicationControlRule, error) {
+	return s.store.GetRuleByID(ctx, ruleID)
+}
+
 // GetPolicyWithRules returns the policy row plus its rules in one call so the policy-detail page can render without an extra round
 // trip. Returns ErrAppControlPolicyNotFound when the policy is absent; the handler maps that to HTTP 404.
 func (s *Service) GetPolicyWithRules(ctx context.Context, policyID int64) (api.ApplicationControlPolicy, error) {
