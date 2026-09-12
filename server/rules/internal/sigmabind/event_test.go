@@ -354,7 +354,7 @@ func TestWithResolver_DoesNotMutateTheOriginal(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/an-unsigned-process-supplies-no-original-file-name
-// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/a-renamed-signed-binary-is-matched-by-its-signing-identity
+// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/a-renamed-binary-is-matched-by-its-signature
 //
 // TestOriginalFileNameFromSigningIdentity pins absent-versus-empty at the field, which is the only place the distinction is
 // visible. A rule fixture cannot see it: `OriginalFileName|contains: 'x'` fails against an empty value and against an absent one

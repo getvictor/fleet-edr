@@ -42,7 +42,7 @@ Deciding this where the field is supplied, rather than in each rule, is what let
 - **WHEN** it is evaluated against an event of a different type
 - **THEN** it does not match, rather than matching on a field that happens to share a name
 
-#### Scenario: A renamed signed binary is matched by its signing identity
+#### Scenario: A renamed binary is matched by its signature
 
 - **GIVEN** a process-creation rule reading `OriginalFileName`
 - **AND** a signed binary whose file has been renamed on disk
