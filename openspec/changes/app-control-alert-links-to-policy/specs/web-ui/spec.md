@@ -38,7 +38,7 @@ When the alert is not attributed to a single process (a process-optional finding
 - **WHEN** the operator acknowledges it from the alert detail surface
 - **THEN** the alert's status transitions to acknowledged even though no process node was selected
 
-#### Scenario: An alert's title routes to whatever raised it
+#### Scenario: Alert title routes to whatever raised the alert
 
 - **GIVEN** an alert raised by a detection rule the catalog documents
 - **WHEN** the analyst opens the alert

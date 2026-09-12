@@ -663,7 +663,7 @@ describe("ProcessTreeView alert title link", () => {
 // carries the same Detection Rule License obligation as the alert list.
 // The alert title routes to whatever raised the alert, and there are three destinations. The branch is easy to get wrong in a way
 // that still renders a link, so each case asserts WHERE the link goes, not merely that one exists.
-// spec:web-ui/alert-pivots-to-the-host-process-tree/an-alerts-title-routes-to-whatever-raised-it
+// spec:web-ui/alert-pivots-to-the-host-process-tree/alert-title-routes-to-whatever-raised-the-alert
 describe("ProcessTreeView alert title routing", () => {
   function appControlRule(id: number, policyID: number): ApplicationControlRule {
     return {
