@@ -27,6 +27,7 @@ import {
   wouldSystemToggleReveal,
   findAlertChain,
   parseAlertIDParam,
+  parsePositiveIntParam,
   resolveAlertEntry,
   selectNodeFromParams,
   viewHref,
@@ -176,8 +177,9 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   const appControlRuleNumber = useMemo(() => {
     const ruleID = alertDetail?.rule_id ?? "";
     if (!ruleID.startsWith(APP_CONTROL_RULE_PREFIX)) return null;
-    const numeric = Number(ruleID.slice(APP_CONTROL_RULE_PREFIX.length));
-    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+    // The same positive-integer rule the alert ids go through: the suffix is a rule's database key, so "app_control:0" or
+    // "app_control:1.5" name no rule and must not be looked up.
+    return parsePositiveIntParam(ruleID.slice(APP_CONTROL_RULE_PREFIX.length));
   }, [alertDetail?.rule_id]);
 
   // The resolution carries the rule it was resolved FOR, so a result landing after the operator moved to another alert cannot be

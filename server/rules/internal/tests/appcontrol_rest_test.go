@@ -1754,17 +1754,25 @@ func TestAppControlREST_GetRule(t *testing.T) {
 		assert.Equal(t, "application_control.rule_not_found", errBody.Error)
 	})
 
-	t.Run("a malformed id is 400", func(t *testing.T) {
-		for _, path := range []string{
-			"/api/v1/app-control/rules/abc",
-			"/api/v1/app-control/rules/0",
-			"/api/v1/app-control/rules/-1",
-		} {
-			resp := r.do(t, http.MethodGet, path, nil)
-			require.Equal(t, http.StatusBadRequest, resp.StatusCode, path)
-			resp.Body.Close()
-		}
-	})
+	malformed := []struct {
+		name string
+		path string
+	}{
+		{"a non-numeric id", "/api/v1/app-control/rules/abc"},
+		{"a zero id", "/api/v1/app-control/rules/0"},
+		{"a negative id", "/api/v1/app-control/rules/-1"},
+	}
+	for _, tc := range malformed {
+		t.Run(tc.name+" is 400", func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, tc.path, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errBody map[string]string
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+			// The same code PATCH and DELETE report at this path; invalid_query is for list-endpoint query parameters.
+			assert.Equal(t, "application_control.invalid_rule_id", errBody["error"])
+		})
+	}
 }
 
 // TestAppControlREST_GetRule_ReadPermissionDenied pins the refusal for a caller without application-control read.

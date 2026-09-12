@@ -10,6 +10,7 @@ import {
   chainGenerations,
   findAlertChain,
   parseAlertIDParam,
+  parsePositiveIntParam,
   resolveAlertEntry,
   selectNodeFromParams,
   viewHref,
@@ -562,11 +563,13 @@ describe("buildVisibleRoots", () => {
   });
 });
 
-// The breadcrumb compares a loaded alert's id against this, so anything that is not a real alert id must come back null rather than
-// as a number that could accidentally equal one. Number("") is 0 and Number("abc") is NaN, and neither names an alert.
-describe("parseAlertIDParam", () => {
+// Callers compare a loaded record's id against this, so anything that is not a real id must come back null rather than a number
+// that could accidentally equal one, or a NaN that compares false against itself. Number("") is 0 and Number("abc") is NaN, and
+// neither names a row.
+describe("parsePositiveIntParam", () => {
   const cases: { name: string; param: string | null | undefined; want: number | null }[] = [
-    { name: "an alert id", param: "842", want: 842 },
+    { name: "an id", param: "842", want: 842 },
+    { name: "an application-control rule suffix", param: "8", want: 8 },
     { name: "an absent query parameter", param: null, want: null },
     { name: "an absent route parameter", param: undefined, want: null },
     { name: "an empty parameter", param: "", want: null },
@@ -577,6 +580,8 @@ describe("parseAlertIDParam", () => {
   ];
   for (const c of cases) {
     it(`reads ${c.name}`, () => {
+      expect(parsePositiveIntParam(c.param)).toBe(c.want);
+      // The alert-id reader is a named wrapper, so the two cannot answer differently.
       expect(parseAlertIDParam(c.param)).toBe(c.want);
     });
   }
