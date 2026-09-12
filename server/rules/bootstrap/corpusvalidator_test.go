@@ -107,9 +107,10 @@ func TestCorpusValidator_RefusesMalformedContent(t *testing.T) {
 // is an error here even though each individual refusal is only a warning.
 func TestCorpusValidator_RefusesACorpusThatWouldRunNothing(t *testing.T) {
 	t.Parallel()
-	// OriginalFileName is a Sysmon field with no macOS equivalent, which the binder refuses per-rule rather than fatally.
+	// IntegrityLevel is a Windows token concept with no macOS equivalent, which the binder refuses per-rule rather than fatally.
+	// (OriginalFileName used to serve here and no longer can: it is supplied from the code-signing identifier.)
 	unmappable := ruleDoc("authored/unmappable.yml", "44444444-4444-4444-8444-444444444444", "Unmappable",
-		"    selection:\n        OriginalFileName: 'x.exe'\n    condition: selection\n")
+		"    selection:\n        IntegrityLevel: 'High'\n    condition: selection\n")
 	_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{unmappable})
 	require.Error(t, err, "a corpus where nothing can run would drop the deployment to its embedded copy")
 	assert.Contains(t, err.Error(), "no document in the proposed corpus can run")
@@ -123,7 +124,7 @@ func TestCorpusValidator_UnrunnableRuleBesideARunnableOneIsAWarning(t *testing.T
 	warnings, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
 		ruleDoc("imported/runnable.yml", "11111111-1111-4111-8111-111111111111", "Runnable", simpleDetection),
 		ruleDoc("authored/unmappable.yml", "44444444-4444-4444-8444-444444444444", "Unmappable",
-			"    selection:\n        OriginalFileName: 'x.exe'\n    condition: selection\n"),
+			"    selection:\n        IntegrityLevel: 'High'\n    condition: selection\n"),
 	})
 	require.NoError(t, err, "one unrunnable rule must not block a corpus that otherwise loads")
 	require.Len(t, warnings, 1, "but the operator must be told it will not fire")

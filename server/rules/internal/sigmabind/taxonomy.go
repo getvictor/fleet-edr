@@ -7,14 +7,16 @@
 //
 // The field set is what the corpus actually reads, measured rather than assumed. Across the 69 macOS SigmaHQ rules there are
 // exactly five distinct detection fields: CommandLine (107 uses), Image (85), ParentImage (16 uses across 11 rules),
-// TargetFilename (5) and OriginalFileName (1). Four are supplied. The one that is not is absent for a reason worth stating, because
-// that absence is what the load-time check exists to report:
+// TargetFilename (5) and OriginalFileName (1). All five are supplied, and two of them not from the payload:
 //
 //   - ParentImage is supplied by the CALLER rather than read from the payload, which carries ppid but not the parent's path. The
 //     graph knows it and this package does not know the graph, so NewExecEvent takes it as an argument (issue #771). An event
 //     built without it reports the field absent, so a rule keyed on a parent declines rather than matching an unknown image.
-//   - OriginalFileName is the name embedded in a Windows PE version resource. It has no macOS equivalent, so it is not a matter of
-//     enrichment; inventing a value would misrepresent what we know.
+//   - OriginalFileName is the name embedded in a Windows PE version resource, and this comment used to say it has no macOS
+//     equivalent. That was wrong about the concept rather than about the format. What the field means is the name a binary was
+//     compiled as, which a rename does not change, and macOS carries exactly that in the code signature: the signing identifier
+//     cannot be changed without invalidating the signature. It is supplied from there (issue #1002). An unsigned process reports
+//     the field absent rather than empty, because inventing a value would still misrepresent what we know.
 package sigmabind
 
 import (
@@ -46,6 +48,10 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		"Subcommand":       func(e *Event) ([]string, bool) { return e.subcommand, e.subcommand != nil },
 		"CommandArguments": func(e *Event) ([]string, bool) { return e.commandArguments, e.commandArguments != nil },
 		"EnvAssignments":   func(e *Event) ([]string, bool) { return e.envAssignments, e.envAssignments != nil },
+		// Sigma's OriginalFileName is the name a binary was compiled as, which a rename does not change; macOS carries that in
+		// the code signature rather than in version info, so this supplies the signing identifier. A rule reading it is
+		// `portable: mapped`: the field name is standard Sigma, the value behind it is ours.
+		"OriginalFileName": func(e *Event) ([]string, bool) { return e.signingID, e.signingID != nil },
 	},
 	// Sigma calls this category file_event.
 	"open": {

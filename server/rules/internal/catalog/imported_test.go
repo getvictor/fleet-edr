@@ -25,7 +25,11 @@ import (
 //
 // TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
 // description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and each rule this sensor cannot run is refused BY NAME with a
-// reason. 66 of the 69 import; the other three are refused for two distinct reasons, both of them the contract working.
+// reason. 67 of the 69 import; the other two are refused for one reason, which is the contract working.
+//
+// It was 66 and three. The third refusal was the meshagent rule, refused for OriginalFileName, and it imports now that the field
+// is supplied from the code-signing identifier. Both remaining refusals are the file_event pair, which watch paths this agent
+// emits no events for (issue #998).
 //
 // The fixtures are the upstream tree copied byte-for-byte, including its `<category>/` layout, so this exercises the directory walk
 // the production loader does. Asserting the exact counts rather than a lower bound is the point: a version that imported one rule
@@ -36,18 +40,18 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	rules, rejected, err := loadImported(importedCorpus, "imported", nil)
 	require.NoError(t, err)
 
-	assert.Len(t, rules, 66, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
+	assert.Len(t, rules, 67, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
 
-	// Three refusals across two distinct reasons, and both reasons are the refusal contract working rather than a gap.
+	// Two refusals, one reason, and the reason is the refusal contract working rather than a gap.
 	reasons := map[string]string{}
 	for _, r := range rejected {
 		reasons[path.Base(r.File)] = r.Reason
 		assert.NotContains(t, r.Reason, r.File, "the reason does not repeat the file, which the rejection already carries")
 	}
-	require.Len(t, rejected, 3, "one unsupplied field, and two rules in a category this agent collects too narrowly")
+	require.Len(t, rejected, 2, "two rules in a category this agent collects too narrowly")
 
-	assert.Contains(t, reasons["proc_creation_macos_remote_access_tools_renamed_meshagent_execution.yml"], "OriginalFileName",
-		"a field this sensor does not collect, named so an operator knows why the rule is absent")
+	assert.NotContains(t, reasons, "proc_creation_macos_remote_access_tools_renamed_meshagent_execution.yml",
+		"it reads OriginalFileName, which is now supplied from the code-signing identifier, so it imports")
 	for _, f := range []string{"file_event_macos_emond_launch_daemon.yml", "file_event_macos_susp_startup_item_created.yml"} {
 		assert.Contains(t, reasons[f], "/etc/sudoers",
 			"a file_event rule cannot fire on this agent, and the reason says which telemetry is missing")
@@ -153,8 +157,8 @@ func TestParseImported_RefusesWhatItCannotRun(t *testing.T) {
 			file: `title: T
 level: medium
 logsource: {category: process_creation, product: macos}
-detection: {sel: {OriginalFileName: x}, condition: sel}`,
-			wantErr: "OriginalFileName",
+detection: {sel: {IntegrityLevel: x}, condition: sel}`,
+			wantErr: "IntegrityLevel",
 		},
 		{
 			name: "a category that maps to no event we collect",
@@ -548,7 +552,7 @@ func TestLoadImported_ADuplicateIDIsCaughtEvenWhenTheFirstFileIsRejected(t *test
 
 	dir := t.TempDir()
 	// `a/` sorts before `b/`, so the unmappable file is parsed first.
-	unmappable := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {OriginalFileName: x}, condition: sel}\n")
+	unmappable := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {IntegrityLevel: x}, condition: sel}\n")
 	valid := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
 	for sub, body := range map[string][]byte{"a": unmappable, "b": valid} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, sub), 0o750))

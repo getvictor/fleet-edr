@@ -30,10 +30,10 @@ import (
 //
 // Measured against SigmaHQ's 69 macOS rules, two numbers that are worth keeping apart. 68 are FIELD-BINDABLE: they read only what
 // this engine supplies (Image in 61, CommandLine in 59, ParentImage in 11, TargetFilename in 2) with modifiers it implements. Only
-// 66 are RUNNABLE, because binding a rule's fields is not the same as the agent producing events for it to read.
+// 67 are RUNNABLE, because binding a rule's fields is not the same as the agent producing events for it to read.
 //
-// The three refusals: one reads OriginalFileName, a Sysmon field naming a PE's embedded original name that has no macOS
-// equivalent; two are file_event rules watching paths the agent emits no open event for (see categoryIsInert).
+// The two refusals are both file_event rules watching paths the agent emits no open event for (see categoryIsInert). A third used
+// to be refused for reading OriginalFileName; that field is now supplied from the code-signing identifier (issue #1002).
 type importedRule struct {
 	// author is the upstream rule's own author field, carried so the operator-facing reference can credit them. The corpus is
 	// licensed under DRL 1.1 and the bytes we distribute are unmodified, so attribution travels with the rule itself; this is what
@@ -210,8 +210,8 @@ type rejection struct {
 // loadImported reads every *.yml under dir as an upstream Sigma rule, returning the rules it can run and the files it cannot.
 //
 // The two outcomes are deliberately different. A file this engine cannot MAP is expected: the corpus is written for a fleet of
-// sensors, and SigmaHQ's macOS rules include one reading OriginalFileName, a Sysmon field naming a PE's embedded original name that
-// has no macOS equivalent. Refusing the whole corpus over it would mean importing nothing. So it becomes a rejection, which the
+// sensors, and a rule may read a field this one does not supply or watch telemetry it does not collect. Refusing the whole corpus
+// over one such rule would mean importing nothing. So it becomes a rejection, which the
 // caller reports; it is never dropped silently, because a silently skipped rule is indistinguishable from one that never matches.
 //
 // A file that is unreadable, malformed, or claims an id another file already claimed is an error instead. Those say the import

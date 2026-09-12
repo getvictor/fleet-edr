@@ -44,6 +44,12 @@
       "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_split_file_into_pieces"
     },
     {
+      "techniqueID": "T1036.003",
+      "score": 0.5,
+      "color": "#fdae6b",
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_remote_access_tools_renamed_meshagent_execution"
+    },
+    {
       "techniqueID": "T1036.006",
       "score": 0.5,
       "color": "#fdae6b",
@@ -257,7 +263,7 @@
       "techniqueID": "T1219.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_remote_access_tools_meshagent_arguments"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_remote_access_tools_meshagent_arguments, proc_creation_macos_remote_access_tools_renamed_meshagent_execution"
     },
     {
       "techniqueID": "T1490",
