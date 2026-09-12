@@ -2,6 +2,12 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
+## [0.5.1] (2026-09-12)
+
+Re-release of 0.5.0. No product changes: the server, agent, and installer are byte-identical to what 0.5.0 built, and the 0.5.0 notes below describe everything in this release. 0.5.0 was withdrawn shortly after publication to correct authorship metadata in the repository's own commit history, which is why this carries a new number rather than being republished under the old one.
+
+Upgrading from 0.5.0 is unnecessary. Upgrading from 0.4.0 or earlier, read the 0.5.0 upgrade notes below: they apply in full.
+
 ## [0.5.0] (2026-09-11)
 
 Feature release on top of 0.4.0. The headline is rule content: the detection rules a deployment runs move out of the binary and into the database, so an upgrade delivers new rules, you can write your own through an audited API, and a rule set that turns out wrong can be rolled back. Also in this release: per-rule match counts and cost in the detection-tuning table, capture-provider health per host, a new alert for destruction of sudo policy, and a long list of detection-accuracy fixes.
