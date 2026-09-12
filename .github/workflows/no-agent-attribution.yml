@@ -1,0 +1,53 @@
+name: No agent attribution
+
+# Fails when a commit message credits an AI agent as an author. Commits here are authored by the people who own them; an agent
+# that helped write a change is a tool, and tools do not take authorship credit.
+#
+# This gate exists because the local commit-msg hook cannot see the path that actually broke it. Four commits reached main
+# carrying a Co-Authored-By trailer and a session marker, and every one of them was a SQUASH MERGE whose message GitHub composed
+# server-side from a PR body. No local hook runs for those. So this checks the commits themselves once they exist, on both the
+# pull_request range and the push to main, and it is the backstop that catches a merge nobody ran a hook for.
+#
+# It is NOT a ban on Co-Authored-By. Real co-authors are legitimate and dependabot's own merges carry one; only trailers naming
+# an agent are refused.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  no-agent-attribution:
+    name: No agent attribution in commit messages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The scanner walks a commit RANGE, so the history it spans has to be present. A shallow clone would silently scan
+          # nothing and pass, which is the failure mode this gate must not have.
+          fetch-depth: 0
+
+      - name: Scan commit messages
+        env:
+          # On a pull_request the range is the PR's own commits. On a push to main it is what the push added, which is where a
+          # squash merge lands.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # A branch's first push reports an all-zero "before", and a force-push can report a commit that is no longer an
+          # ancestor. Fall back to scanning just the head commit rather than failing the job on a range git cannot walk.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git merge-base --is-ancestor "$BASE" "$HEAD_SHA" 2>/dev/null; then
+            echo "No usable base ($BASE); scanning the head commit only."
+            RANGE="${HEAD_SHA}~1..${HEAD_SHA}"
+          else
+            RANGE="${BASE}..${HEAD_SHA}"
+          fi
+          echo "Scanning $RANGE"
+          tools/lint-no-agent-attribution.sh range "$RANGE"
+          echo "No agent attribution found."
