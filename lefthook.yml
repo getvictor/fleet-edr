@@ -153,6 +153,20 @@ pre-commit:
         done
         exit $matched
 
+commit-msg:
+  commands:
+    no-agent-attribution:
+      # Commits here are authored by the people who own them. An agent that helped write a change is a tool, and tools do not take
+      # authorship credit. This refuses a message crediting one, whether that is a Co-Authored-By trailer naming the agent, a
+      # session marker, or a "Generated with" line.
+      #
+      # NOT a ban on Co-Authored-By: real co-authors are legitimate, and dependabot's own merges carry one.
+      #
+      # This hook covers LOCAL commits only. A squash merge composed by GitHub from a PR body never reaches it, which is how the
+      # four commits that prompted this gate got in, so the CI half in .github/workflows/no-agent-attribution.yml is the one that
+      # closes that path. Keep both.
+      run: tools/lint-no-agent-attribution.sh msg {1}
+
 pre-push:
   parallel: true
   commands:
