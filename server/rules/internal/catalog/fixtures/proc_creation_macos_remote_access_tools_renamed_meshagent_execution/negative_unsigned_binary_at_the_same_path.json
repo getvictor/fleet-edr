@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"event_id": "meshagent-unsigned-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":5200,"parent_pid":1}},
+    {"event_id": "meshagent-unsigned-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":5200,"ppid":1,"path":"/tmp/com.apple.softwareupdated","args":["com.apple.softwareupdated"],"uid":501,"gid":20}}
+  ],
+  "expected_findings": []
+}

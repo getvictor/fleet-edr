@@ -59,6 +59,61 @@ func TestFileRenamePayloadRoundTrips(t *testing.T) {
 	})
 }
 
+// The round trip for the exec payload's code-signing member: whatever signing identifier an exec carries, the decode surfaces it
+// under OriginalFileName unchanged, and every shape that carries none surfaces the field as ABSENT.
+//
+// Property-based because the shapes that matter are structural rather than a value list: the key omitted, an explicit null, an
+// empty object, an empty identifier, and an arbitrary identifier. The first four all have to land on "absent", and a table
+// enumerating them proves nothing about the fifth. Reverse-domain identifiers are the real population, so the vocabulary carries
+// those alongside the bytes that break naive encoders.
+//
+// The distinction this pins is invisible to the rule the field was added for. `OriginalFileName|contains` matches neither an
+// absent field nor an empty one, so no substring fixture can tell them apart; only asking for the field itself can, which is what
+// assertField does.
+// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/an-unsigned-process-supplies-no-original-file-name
+func TestExecSigningIdentityRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	awkward := []string{
+		"", "com.meshcentral.meshagent", "com.apple.softwareupdated", "a", `id"quote`, `id\backslash`, "id\nnewline",
+		"ünïcodé.identifier", "  spaces  ", "com.example." + string(rune(0x7f)),
+	}
+	rapid.Check(t, func(rt *rapid.T) {
+		payload := map[string]any{
+			"pid":  rapid.IntRange(0, 1<<22).Draw(rt, "pid"),
+			"path": "/tmp/renamed",
+			"args": []string{"/tmp/renamed"},
+		}
+
+		// The shapes that must all mean "this process carries no compiled name".
+		var want string
+		switch rapid.SampledFrom([]string{"omitted", "null", "empty-object", "identifier"}).Draw(rt, "shape") {
+		case "omitted":
+		case "null":
+			payload["code_signing"] = nil
+		case "empty-object":
+			payload["code_signing"] = map[string]any{}
+		case "identifier":
+			if rapid.Bool().Draw(rt, "awkward") {
+				want = rapid.SampledFrom(awkward).Draw(rt, "vocab")
+			} else {
+				want = rapid.String().Draw(rt, "freeform")
+			}
+			payload["code_signing"] = map[string]any{"signing_id": want}
+		}
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			rt.Fatalf("marshal: %v", err)
+		}
+		ev, err := sigmabind.NewExecEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: body}, "/bin/launchd")
+		if err != nil {
+			rt.Fatalf("decode: %v", err)
+		}
+		assertField(rt, ev, "OriginalFileName", want)
+	})
+}
+
 // assertField encodes the supplied-versus-absent contract once, so both fields are held to the same rule and neither can drift
 // into a special case.
 func assertField(rt *rapid.T, ev *sigmabind.Event, name, want string) {
@@ -66,7 +121,7 @@ func assertField(rt *rapid.T, ev *sigmabind.Event, name, want string) {
 	got, ok := ev.Field(name)
 	if want == "" {
 		if ok {
-			rt.Fatalf("%s = %v, want absent: an empty path is not a value a rule should match on", name, got)
+			rt.Fatalf("%s = %v, want absent: an empty value is not one a rule should match on", name, got)
 		}
 		return
 	}
