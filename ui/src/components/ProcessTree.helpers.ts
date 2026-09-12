@@ -285,6 +285,30 @@ export function resolveAlertEntry(entryAlert: AlertDetail | undefined, searchPar
   };
 }
 
+// parsePositiveIntParam reads a URL-supplied positive integer id, or null when it is absent or is not one. Every id this UI takes
+// from a URL (an alert, an application-control rule) is a positive integer database key, and null is the single answer for all the
+// ways a value fails to be one: absent, non-numeric, fractional, zero, negative. Returning null rather than NaN matters because
+// NaN compares false against everything including itself, so a caller that forgot to check would silently take the wrong branch.
+//
+// Both spellings of absence are accepted because both occur: a missing query parameter reads as null, a missing route parameter as
+// undefined. Folding them here keeps the decision in one place rather than at each call site.
+export function parsePositiveIntParam(param: string | null | undefined): number | null {
+  if (param === null || param === undefined) return null;
+  const value = Number(param);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+// parseAlertIDParam reads a URL-supplied alert id. A named wrapper around parsePositiveIntParam so the call site reads as "we are
+// pulling an alert id here", matching how the server names parseRuleID over its own positive-int path parser, and so a future
+// change to what names an alert lands on one function.
+//
+// Shared by both alert entry paths (the host route's `?alert=` query parameter and the /alerts/:alertId route parameter) so the two
+// cannot drift into disagreeing. Null never equals a loaded alert's id, so a caller comparing a loaded detail against this treats
+// an unparseable parameter as "no alert", the same outcome the fetch path reaches.
+export function parseAlertIDParam(param: string | null | undefined): number | null {
+  return parsePositiveIntParam(param);
+}
+
 // buildPreservedIds: never hide processes that have alerts attached, or that sit on the ancestor path of one (even if their binary is
 // in a system path, the analyst context matters). Lifted verbatim from ProcessTreeView's preservedIds useMemo (complexity paydown).
 export function buildPreservedIds(roots: ProcessNode[], alertProcessIds: Set<number>): Set<number> {

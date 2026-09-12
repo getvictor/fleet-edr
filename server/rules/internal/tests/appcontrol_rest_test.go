@@ -120,13 +120,23 @@ type appControlRig struct {
 // newAppControlRig wires a rules bootstrap with the demo-cut REST surface live. Hosts are a fixed []string the recordingInserter
 // fans out to. Sessions and CSRF are bypassed: the handler is mounted directly so the test exercises the route's auth-gate + service
 // plumbing without identity middleware. The actor on context is injected by a tiny wrapper so HTTPGate sees a tenant.
-func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
+// appControlRigOpt adjusts the rig's bootstrap dependencies before wiring. Exists so a test that needs one dependency swapped does
+// not have to clone the whole rig; see withAuthZ.
+type appControlRigOpt func(*rulesbootstrap.Deps)
+
+// withAuthZ replaces the rig's allow-everything authorizer, so a test can drive one endpoint's permission gate while the rest of the
+// surface still works for seeding fixtures.
+func withAuthZ(az identityapi.AuthZ) appControlRigOpt {
+	return func(d *rulesbootstrap.Deps) { d.AuthZ = az }
+}
+
+func newAppControlRig(t *testing.T, hosts []string, opts ...appControlRigOpt) *appControlRig {
 	t.Helper()
 	db := full.Open(t)
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}
 	hostList := append([]string(nil), hosts...)
-	rules, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
+	deps := rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               slog.Default(),
 		AuthZ:                allowAllAuthZ{},
@@ -135,7 +145,11 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 		HostLister: func(_ context.Context) ([]string, error) {
 			return append([]string(nil), hostList...), nil
 		},
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	rules, err := rulesbootstrap.New(t.Context(), deps)
 	require.NoError(t, err)
 	require.NoError(t, rules.ApplySchema(t.Context()))
 
@@ -1689,4 +1703,117 @@ func TestAppControlREST_ListPolicies_CarriesRuleCount(t *testing.T) {
 	require.Equal(t, http.StatusCreated, create.StatusCode)
 
 	assert.Equal(t, 1, listCount(), "the count follows the policy's rules rather than being computed once")
+}
+
+// spec:server-application-control/rest-surface-for-policies-rules-groups-and-assignments/a-single-rule-is-readable-by-its-id
+//
+// TestAppControlREST_GetRule round-trips the single-rule read that an application-control alert needs. The alert records the rule
+// it matched (`app_control:<n>`) and never the policy, and the rules LIST filters by policy_id, which is the direction that does
+// not help: a client holding an alert has no way to reach the owning policy without this read.
+//
+// policy_id is the assertion that matters. A read returning the rule without it would satisfy "the endpoint works" and still leave
+// the alert unroutable, which is the whole reason the endpoint exists.
+func TestAppControlREST_GetRule(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	policyID := r.defaultPolicyID(t)
+
+	create := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"severity":   rulesapi.SeverityRuleHigh,
+			"reason":     "single-rule read fixture",
+		})
+	require.Equal(t, http.StatusCreated, create.StatusCode)
+	var created rulesapi.ApplicationControlRule
+	require.NoError(t, json.NewDecoder(create.Body).Decode(&created))
+	create.Body.Close()
+	require.Positive(t, created.ID)
+
+	t.Run("returns the rule and the policy that owns it", func(t *testing.T) {
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules/"+i64(created.ID), nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var got rulesapi.ApplicationControlRule
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		assert.Equal(t, created.ID, got.ID)
+		assert.Equal(t, policyID, got.PolicyID, "the owning policy is what makes an alert routable; without it this read is useless")
+		assert.Equal(t, rulesapi.RuleTypeBinary, got.RuleType)
+	})
+
+	t.Run("a rule id that names no rule is 404", func(t *testing.T) {
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/rules/99999999", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusNotFound, resp.StatusCode)
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+		assert.Equal(t, "application_control.rule_not_found", errBody.Error)
+	})
+
+	malformed := []struct {
+		name string
+		path string
+	}{
+		{"a non-numeric id", "/api/v1/app-control/rules/abc"},
+		{"a zero id", "/api/v1/app-control/rules/0"},
+		{"a negative id", "/api/v1/app-control/rules/-1"},
+	}
+	for _, tc := range malformed {
+		t.Run(tc.name+" is 400", func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, tc.path, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errBody map[string]string
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+			// The same code PATCH and DELETE report at this path; invalid_query is for list-endpoint query parameters.
+			assert.Equal(t, "application_control.invalid_rule_id", errBody["error"])
+		})
+	}
+}
+
+// TestAppControlREST_GetRule_ReadPermissionDenied pins the refusal for a caller without application-control read.
+//
+// The assertion that carries weight is that the refusal is identical whatever the rule id. A gate placed after the id lookup would
+// answer 403 for a rule that exists and 404 for one that does not, turning the endpoint into an existence oracle for a caller with
+// no read permission at all. Only the read action is denied here, so the fixture is still seeded through the API.
+func TestAppControlREST_GetRule_ReadPermissionDenied(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"}, withAuthZ(denyActionAuthZ{denied: identityapi.ActionAppControlRead}))
+	policyID := r.defaultPolicyID(t)
+
+	create := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			"severity":   rulesapi.SeverityRuleHigh,
+			"reason":     "denied-read fixture",
+		})
+	require.Equal(t, http.StatusCreated, create.StatusCode)
+	var created rulesapi.ApplicationControlRule
+	require.NoError(t, json.NewDecoder(create.Body).Decode(&created))
+	create.Body.Close()
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"a rule that exists", "/api/v1/app-control/rules/" + i64(created.ID)},
+		{"a rule id that names no rule", "/api/v1/app-control/rules/99999999"},
+		{"a malformed rule id", "/api/v1/app-control/rules/abc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, http.MethodGet, tc.path, nil)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			var errBody map[string]string
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&errBody))
+			assert.Equal(t, "forbidden", errBody["error"], "the refusal must not vary with the rule id")
+		})
+	}
 }

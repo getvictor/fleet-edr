@@ -2,6 +2,12 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
+## [Unreleased]
+
+### Fixed
+
+- **An application-control alert links to the policy that blocked.** Its title was plain text, so an analyst who saw `Application blocked: /usr/bin/curl` had no way to reach the rule that denied it. Detection alerts already linked to their rule documentation; these carry a policy rule rather than a catalog rule, so they now link to the policy that owns it.
+
 ## [0.5.1] (2026-09-12)
 
 Re-release of 0.5.0. No product changes: the server, agent, and installer are byte-identical to what 0.5.0 built, and the 0.5.0 notes below describe everything in this release. 0.5.0 was withdrawn shortly after publication to correct authorship metadata in the repository's own commit history, which is why this carries a new number rather than being republished under the old one.

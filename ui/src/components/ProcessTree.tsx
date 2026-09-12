@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type RefObject } from "react";
 import { useParams, useSearchParams, useLocation, Link } from "react-router";
 import * as d3 from "d3";
-import { fetchRuleDocs, getAlertDetail, getProcessTree, listAlerts } from "../api";
+import { APP_CONTROL_RULE_PREFIX, fetchRuleDocs, getAlertDetail, getAppControlRule, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import {
   NANOSECONDS_PER_MILLISECOND,
@@ -26,6 +26,8 @@ import {
   collectMatches,
   wouldSystemToggleReveal,
   findAlertChain,
+  parseAlertIDParam,
+  parsePositiveIntParam,
   resolveAlertEntry,
   selectNodeFromParams,
   viewHref,
@@ -144,7 +146,14 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // the alerted process plus its ancestors and descendants (the "related processes only" view), so
   // the analyst isn't wading through a forest of unrelated background daemons. Toggleable.
   const [focusAlertChain, setFocusAlertChain] = useState<boolean>(() => alertEntry.focus);
-  const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(entryAlert ?? null);
+  const [loadedAlert, setLoadedAlert] = useState<AlertDetail | null>(entryAlert ?? null);
+
+  // The alert the URL names right now, known synchronously on the very render the parameter changes. Navigating between two
+  // alerts on the mounted host route leaves the previous alert's detail in state until its replacement fetch settles, so the
+  // breadcrumb is derived against this instead of rendered from whatever is loaded: for that window the title would link to the
+  // previous alert's rule or policy, and the triage control would resolve the previous alert.
+  const requestedAlertID = entryAlert !== undefined ? entryAlert.id : parseAlertIDParam(searchParams.get("alert"));
+  const alertDetail = loadedAlert !== null && loadedAlert.id === requestedAlertID ? loadedAlert : null;
 
   // A process-optional alert (process_id === 0) has no attributed process node to focus on: it keys on an artifact, not a
   // process (e.g. a LaunchDaemon registration, where the BTM instigator is Apple's smd, not the actor). Focus mode would
@@ -161,6 +170,42 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
   }, [showSystem]);
+
+  // An application-control alert's rule id names a POLICY rule, not a catalog rule, so its title routes to the owning policy
+  // instead of to rule documentation. The alert records only the rule, and the rules list filters by policy, so the owner has to
+  // be read from the rule itself.
+  const appControlRuleNumber = useMemo(() => {
+    const ruleID = alertDetail?.rule_id ?? "";
+    if (!ruleID.startsWith(APP_CONTROL_RULE_PREFIX)) return null;
+    // The same positive-integer rule the alert ids go through: the suffix is a rule's database key, so "app_control:0" or
+    // "app_control:1.5" name no rule and must not be looked up.
+    return parsePositiveIntParam(ruleID.slice(APP_CONTROL_RULE_PREFIX.length));
+  }, [alertDetail?.rule_id]);
+
+  // The resolution carries the rule it was resolved FOR, so a result landing after the operator moved to another alert cannot be
+  // read as that alert's policy. Keying the state on its own input is cheaper than a cancellation flag and is what makes the
+  // derivation below sound; a bare policy id would linger and link the new alert to the previous one's policy.
+  //
+  // A failure records policyID null rather than leaving the previous resolution in place. The title then falls back to plain text,
+  // which is what an undocumented rule already does and is better than linking to a policy we could not confirm exists. Writing the
+  // outcome is what makes that true on a REVISIT: the same rule resolved earlier in the session would otherwise still satisfy the
+  // key check and render a link built from a lookup that just failed.
+  const [resolvedPolicy, setResolvedPolicy] = useState<{ ruleNumber: number; policyID: number | null } | null>(null);
+  useEffect(() => {
+    if (appControlRuleNumber === null) return;
+    let cancelled = false;
+    getAppControlRule(appControlRuleNumber)
+      .then((rule) => {
+        if (!cancelled) setResolvedPolicy({ ruleNumber: appControlRuleNumber, policyID: rule.policy_id });
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedPolicy({ ruleNumber: appControlRuleNumber, policyID: null });
+      });
+    return () => { cancelled = true; };
+  }, [appControlRuleNumber]);
+
+  const appControlPolicyID =
+    appControlRuleNumber !== null && resolvedPolicy?.ruleNumber === appControlRuleNumber ? resolvedPolicy.policyID : null;
 
   // Rule ids the catalog documents, used to decide whether the alert title can link anywhere. Null while loading or on failure,
   // which the link check treats as "cannot confirm", so a failed fetch degrades to plain text rather than to a broken link.
@@ -179,16 +224,15 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // never clobbers the prop-seeded detail.
   useEffect(() => {
     if (entryAlert !== undefined) return;
-    const alertIdParam = searchParams.get("alert");
-    if (!alertIdParam) {
-      setAlertDetail(null); // eslint-disable-line react-hooks/set-state-in-effect -- clear on param removal
+    const alertId = parseAlertIDParam(searchParams.get("alert"));
+    if (alertId === null) {
+      setLoadedAlert(null); // eslint-disable-line react-hooks/set-state-in-effect -- clear on param removal or an unusable value
       return;
     }
-    const alertId = Number(alertIdParam);
     let cancelled = false;
     getAlertDetail(alertId)
-      .then((result) => { if (!cancelled) setAlertDetail(result); })
-      .catch(() => { if (!cancelled) setAlertDetail(null); });
+      .then((result) => { if (!cancelled) setLoadedAlert(result); })
+      .catch(() => { if (!cancelled) setLoadedAlert(null); });
     return () => { cancelled = true; };
   }, [searchParams, entryAlert]);
 
@@ -594,6 +638,14 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
             >
               {alertDetail.title}
             </Link>
+          ) : appControlPolicyID !== null ? (
+            <Link
+              to={`/app-control/policies/${String(appControlPolicyID)}`}
+              className="alert-breadcrumb__title alert-breadcrumb__title--link"
+              title="Open the application control policy that blocked this"
+            >
+              {alertDetail.title}
+            </Link>
           ) : (
             <span className="alert-breadcrumb__title">{alertDetail.title}</span>
           )}
@@ -613,7 +665,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
             alertId={alertDetail.id}
             status={alertDetail.status}
             onStatusChange={(status) => {
-              setAlertDetail((prev) => (prev ? { ...prev, status } : prev));
+              setLoadedAlert((prev) => (prev ? { ...prev, status } : prev));
               // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
               setAlertRefreshKey((k) => k + 1);
             }}

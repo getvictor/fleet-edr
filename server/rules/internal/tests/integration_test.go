@@ -121,6 +121,17 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
 }
 
+// denyActionAuthZ refuses exactly one action and allows every other, so a test can seed its fixtures through the API and still
+// exercise a single endpoint's permission gate.
+type denyActionAuthZ struct{ denied identityapi.Action }
+
+func (d denyActionAuthZ) Allow(_ context.Context, a identityapi.Action, _ identityapi.Resource) (identityapi.Decision, error) {
+	if a == d.denied {
+		return identityapi.Decision{Allow: false, Reason: "denied"}, nil
+	}
+	return identityapi.Decision{Allow: true, Reason: "granted"}, nil
+}
+
 // newRules wires rules.bootstrap.New against a fresh test DB.
 func newRules(t *testing.T) *rulesbootstrap.Rules {
 	t.Helper()

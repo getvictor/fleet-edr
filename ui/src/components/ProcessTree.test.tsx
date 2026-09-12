@@ -1,8 +1,8 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router";
 import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import * as api from "../api";
-import type { AlertDetail, ProcessNode } from "../types";
+import type { AlertDetail, ApplicationControlRule, ProcessNode } from "../types";
 import { ProcessTreeView } from "./ProcessTree";
 import { degradedScopeMessages } from "./chainScope";
 import { treeResponse } from "../test/factories";
@@ -661,6 +661,193 @@ describe("ProcessTreeView alert title link", () => {
 
 // Rule attribution on the alert breadcrumb (issue #765). The breadcrumb is the alert's detail view, so it displays a match and
 // carries the same Detection Rule License obligation as the alert list.
+// The alert title routes to whatever raised the alert, and there are three destinations. The branch is easy to get wrong in a way
+// that still renders a link, so each case asserts WHERE the link goes, not merely that one exists.
+// spec:web-ui/alert-pivots-to-the-host-process-tree/alert-title-routes-to-whatever-raised-the-alert
+describe("ProcessTreeView alert title routing", () => {
+  function appControlRule(id: number, policyID: number): ApplicationControlRule {
+    return {
+      id, policy_id: policyID, rule_type: "BINARY", identifier: "abc", action: "BLOCK",
+      enforcement: "ENFORCE", enabled: true, severity: "high", source: "operator",
+      created_at: "2026-09-12T00:00:00Z", updated_at: "2026-09-12T00:00:00Z", created_by: "usr_1",
+    };
+  }
+
+  const appControlAlert: AlertDetail = {
+    ...launchDaemonAlert,
+    id: 11,
+    rule_id: "app_control:42",
+    title: "Application blocked: /usr/bin/curl",
+    source: "application_control",
+  };
+
+  // Renders the view on the host route alongside buttons that navigate to another alert WITHOUT unmounting it. The mounted-ness is
+  // the whole point of these tests: unmounting resets the resolved-policy state and the loaded alert, so a remount exercises a fresh
+  // component and a version that ignores the staleness guards passes anyway. Changing only the query string keeps /hosts/:hostId
+  // matched, so the same instance sees the new alert.
+  function renderWithAlertNav(initial: string, targets: Record<string, string>) {
+    function Nav() {
+      const navigate = useNavigate();
+      return (
+        <>
+          {Object.entries(targets).map(([label, to]) => (
+            <button key={label} type="button" onClick={() => { void navigate(to); }}>{label}</button>
+          ))}
+        </>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={[initial]}>
+        <Nav />
+        <Routes>
+          <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("links an application-control alert to the policy that owns the matched rule", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(appControlAlert);
+    const ruleSpy = vi.spyOn(api, "getAppControlRule").mockResolvedValue(appControlRule(42, 7));
+    renderTree("?alert=11&process=0&at=1750248000000");
+
+    const link = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(link).toHaveAttribute("href", "/app-control/policies/7");
+    expect(ruleSpy).toHaveBeenCalledWith(42);
+  });
+
+  it("still links a documented detection rule to its documentation page", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    const link = await screen.findByRole("link", { name: launchDaemonAlert.title });
+    expect(link).toHaveAttribute("href", "/rules/privilege_launchd_plist_write");
+  });
+
+  // sensor_recovery_failed is registered and alerts but is deliberately absent from the catalog, and it is not an app-control
+  // rule either. Linking it would land the analyst on "Unknown rule", which is worse than no link.
+  it("renders plain text for an alert that is neither documented nor application-control", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({
+      ...launchDaemonAlert, id: 12, rule_id: "sensor_recovery_failed", title: "EDR sensor could not be restored",
+    });
+    renderTree("?alert=12&process=0&at=1750248000000");
+
+    expect(await screen.findByText("EDR sensor could not be restored")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "EDR sensor could not be restored" })).toBeNull();
+  });
+
+  // A failed resolution must not link anywhere. Linking to a policy we could not confirm exists sends the analyst to a page that
+  // will not describe what blocked, which is the failure the catalog fallback already exists to avoid.
+  it("falls back to plain text when the owning policy cannot be resolved", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(appControlAlert);
+    const ruleSpy = vi.spyOn(api, "getAppControlRule").mockRejectedValue(new Error("404"));
+    renderTree("?alert=11&process=0&at=1750248000000");
+
+    // Wait for the resolution to SETTLE before asserting the absence. findByText alone matches the text inside a link too, so it
+    // resolves while the rejection is still in flight and the assertion passes against a link that has not rendered yet. That
+    // false pass is what a mutant returning a bogus policy id on failure slipped through.
+    await waitFor(() => { expect(ruleSpy).toHaveBeenCalled(); });
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+    });
+    expect(screen.getByText(appControlAlert.title)).toBeVisible();
+  });
+
+  // A resolution landing after the operator has moved to a different alert must not be read as the new alert's policy. The
+  // resolved state carries the rule it was resolved for precisely so this cannot happen.
+  //
+  // The component must STAY MOUNTED across the switch, which is why this navigates rather than re-rendering: unmounting resets the
+  // resolved state, so a remount tests nothing and a version ignoring the guard passes. Changing only the query string keeps the
+  // /hosts/:hostId route matched, so the same instance sees a new alert.
+  it("does not show a previous alert's policy after switching alerts", async () => {
+    const other: AlertDetail = { ...appControlAlert, id: 13, rule_id: "app_control:99", title: "Application blocked: /bin/nc" };
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      Promise.resolve(id === 13 ? other : appControlAlert),
+    );
+    vi.spyOn(api, "getAppControlRule").mockImplementation((ruleID: number) =>
+      ruleID === 42
+        ? Promise.resolve(appControlRule(42, 7))
+        : new Promise(() => { /* the second alert's resolution never lands */ }),
+    );
+
+    renderWithAlertNav("/hosts/h1?alert=11&process=0&at=1750248000000", {
+      "switch alert": "/hosts/h1?alert=13&process=0&at=1750248000000",
+    });
+
+    const first = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(first).toHaveAttribute("href", "/app-control/policies/7");
+
+    fireEvent.click(screen.getByRole("button", { name: "switch alert" }));
+
+    expect(await screen.findByText(other.title)).toBeVisible();
+    expect(screen.queryByRole("link", { name: other.title })).toBeNull();
+    expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+  });
+
+  // The breadcrumb must not survive its own alert. While the replacement alert's detail is still in flight the loaded detail is
+  // still the PREVIOUS alert, so a breadcrumb rendered from whatever is loaded shows the previous alert's title, links to the
+  // previous alert's policy, and aims its triage controls at the previous alert's id. The guard keying on the rule cannot catch
+  // this: both sides of that comparison are stale together.
+  // spec:web-ui/alert-pivots-to-the-host-process-tree/the-breadcrumb-never-outlives-the-alert-it-describes
+  it("renders no breadcrumb while the next alert's detail is still loading", async () => {
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      id === 11 ? Promise.resolve(appControlAlert) : new Promise(() => { /* the second alert's detail never lands */ }),
+    );
+    vi.spyOn(api, "getAppControlRule").mockResolvedValue(appControlRule(42, 7));
+
+    renderWithAlertNav("/hosts/h1?alert=11&process=0&at=1750248000000", {
+      "switch alert": "/hosts/h1?alert=13&process=0&at=1750248000000",
+    });
+
+    const first = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(first).toHaveAttribute("href", "/app-control/policies/7");
+
+    fireEvent.click(screen.getByRole("button", { name: "switch alert" }));
+
+    // Not merely "no link": the whole breadcrumb belongs to an alert the operator has already left, and its triage controls would
+    // acknowledge or resolve that one.
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+    });
+    expect(screen.queryByText(appControlAlert.title)).toBeNull();
+    expect(screen.queryByText("#11")).toBeNull();
+  });
+
+  // Returning to an alert whose policy resolved earlier in the session, when the lookup now fails. The resolution is keyed by rule
+  // number, so a resolution left in place by the failure still matches the key and would render a link built from a lookup that
+  // just failed, contradicting the plain-text fallback above.
+  // spec:web-ui/alert-pivots-to-the-host-process-tree/the-breadcrumb-never-outlives-the-alert-it-describes
+  it("falls back to plain text when a revisited alert's policy lookup fails", async () => {
+    const plainAlert: AlertDetail = {
+      ...launchDaemonAlert, id: 12, rule_id: "sensor_recovery_failed", title: "EDR sensor could not be restored",
+    };
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      Promise.resolve(id === 12 ? plainAlert : appControlAlert),
+    );
+    const ruleSpy = vi.spyOn(api, "getAppControlRule")
+      .mockResolvedValueOnce(appControlRule(42, 7))
+      .mockRejectedValue(new Error("404"));
+
+    renderWithAlertNav("/hosts/h1?alert=11&process=0&at=1750248000000", {
+      "go elsewhere": "/hosts/h1?alert=12&process=0&at=1750248000000",
+      "come back": "/hosts/h1?alert=11&process=0&at=1750248000000",
+    });
+
+    const first = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(first).toHaveAttribute("href", "/app-control/policies/7");
+
+    fireEvent.click(screen.getByRole("button", { name: "go elsewhere" }));
+    expect(await screen.findByText(plainAlert.title)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "come back" }));
+    await waitFor(() => { expect(ruleSpy).toHaveBeenCalledTimes(2); });
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+    });
+    expect(screen.getByText(appControlAlert.title)).toBeVisible();
+  });
+});
+
 describe("ProcessTreeView alert attribution", () => {
   it("credits the rule author on the alert breadcrumb", async () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({

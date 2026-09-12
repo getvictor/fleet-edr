@@ -656,6 +656,18 @@ export async function getAppControlPolicy(id: number): Promise<ApplicationContro
   return fetchJSON<ApplicationControlPolicy>(`/v1/app-control/policies/${String(id)}`);
 }
 
+// APP_CONTROL_RULE_PREFIX namespaces the rule_id an application-control alert carries, mirroring
+// api.ApplicationControlRuleIDPrefix on the server. Exported so a caller recognising such an alert does not re-spell the literal.
+export const APP_CONTROL_RULE_PREFIX = "app_control:";
+
+// getAppControlRule reads one application-control rule, including the policy that owns it.
+//
+// The ownership is why this exists. An application-control alert records the rule it matched (`app_control:<n>`) and never the
+// policy, and the rules list filters BY policy, so an alert cannot be routed to its policy without asking the rule itself.
+export async function getAppControlRule(id: number): Promise<ApplicationControlRule> {
+  return fetchJSON<ApplicationControlRule>(`/v1/app-control/rules/${String(id)}`);
+}
+
 // CreateAppControlRuleRequest is the JSON body the POST endpoint
 // accepts. Mirrors createRuleRequest in
 // server/rules/internal/operator/appcontrol_handler.go. The demo cut
