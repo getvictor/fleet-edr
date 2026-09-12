@@ -285,11 +285,15 @@ export function resolveAlertEntry(entryAlert: AlertDetail | undefined, searchPar
   };
 }
 
-// parseAlertIDParam reads the ?alert= deep-link parameter as an alert id, or null when it is absent or does not name one. Null never
-// equals a loaded alert's id, so a caller comparing a loaded detail against this treats an unparseable parameter as "no alert", which
-// is the same outcome the fetch path reaches (it skips the request and clears the detail).
-export function parseAlertIDParam(param: string | null): number | null {
-  if (param === null) return null;
+// parseAlertIDParam reads a URL-supplied alert id, or null when it is absent or does not name one. Null never equals a loaded
+// alert's id, so a caller comparing a loaded detail against this treats an unparseable parameter as "no alert", which is the same
+// outcome the fetch path reaches (it skips the request and clears the detail).
+//
+// Shared by both alert entry paths so they cannot disagree about what names an alert: the host route's `?alert=` query parameter
+// (absent as null) and the /alerts/:alertId route parameter (absent as undefined). Accepting both spellings of absence keeps the
+// decision here rather than at each call site.
+export function parseAlertIDParam(param: string | null | undefined): number | null {
+  if (param === null || param === undefined) return null;
   const id = Number(param);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
