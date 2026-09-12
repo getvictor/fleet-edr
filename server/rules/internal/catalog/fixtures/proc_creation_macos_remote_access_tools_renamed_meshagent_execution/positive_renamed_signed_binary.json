@@ -1,0 +1,12 @@
+{
+  "events": [
+    {"event_id": "meshagent-renamed-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":5100,"parent_pid":1}},
+    {"event_id": "meshagent-renamed-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":5100,"ppid":1,"path":"/tmp/com.apple.softwareupdated","args":["com.apple.softwareupdated"],"uid":501,"gid":20,
+                 "code_signing":{"team_id":"FIXTURE01","signing_id":"com.meshcentral.meshagent","flags":0,"is_platform_binary":false}}}
+  ],
+  "expected_findings": [
+    {"rule_id": "proc_creation_macos_remote_access_tools_renamed_meshagent_execution", "severity": "high"}
+  ]
+}
