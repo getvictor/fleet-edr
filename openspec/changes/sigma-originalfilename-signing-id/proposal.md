@@ -19,7 +19,7 @@ macOS has an equivalent and we already collect it. The code-signing identifier i
 
 `OriginalFileName` becomes a supplied Sigma field for `process_creation`, sourced from the exec event's code-signing identifier.
 
-A rule reading it is `portable: mapped` rather than `standard`, like `EnvAssignments`: valid Sigma, reading a field this engine computes rather than one from Sigma's own taxonomy.
+A rule reading it stays `portable: standard`. The field is Sigma's own, and binding it to a platform-specific carrier is what every field here does: `Image` is a macOS path and `CommandLine` a macOS argument vector. It is deliberately not one of the exporter's `computedFields`, which names the fields this engine invents (`Subcommand`, `CommandArguments`, `EnvAssignments`) because Sigma has no notion of argument position. Nothing about `OriginalFileName` is invented.
 
 ## What does not change
 
@@ -27,4 +27,6 @@ The refusal path itself. Two rules stay refused, for the unrelated reason that t
 
 ## The unsigned case is the risk
 
-An unsigned process has no signing identifier. The field must be ABSENT rather than an empty string, because a rule matching `OriginalFileName|contains` against an empty value would match every unsigned binary on the host: precisely the population an attacker's renamed tool sits in.
+An unsigned process has no signing identifier. The field must be ABSENT rather than an empty string, and the difference is not visible through `contains`: a non-empty pattern matches neither an absent field nor an empty one, so no fixture written with `contains` can tell the two apart.
+
+It shows up where a rule asks about the field itself. `OriginalFileName: null` is Sigma's test for "this process has no such name", which is true of every unsigned binary and must match; `OriginalFileName: ''` asks for a present-but-empty identifier, which no process has and must not match. Supplying `""` inverts both answers, so an unsigned process would be reported as carrying an empty compiled name rather than none. That is the assertion the field-level test pins, because the substring tests cannot.

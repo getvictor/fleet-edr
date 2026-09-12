@@ -29,8 +29,9 @@ import (
 // turns a re-sync into a merge conflict.
 //
 // Measured against SigmaHQ's 69 macOS rules, two numbers that are worth keeping apart. 68 are FIELD-BINDABLE: they read only what
-// this engine supplies (Image in 61, CommandLine in 59, ParentImage in 11, TargetFilename in 2) with modifiers it implements. Only
-// 67 are RUNNABLE, because binding a rule's fields is not the same as the agent producing events for it to read.
+// this engine supplies (Image in 61, CommandLine in 59, ParentImage in 11, TargetFilename in 2, OriginalFileName in 1) with
+// modifiers it implements. Only 67 are RUNNABLE, because binding a rule's fields is not the same as the agent producing events for
+// it to read.
 //
 // The two refusals are both file_event rules watching paths the agent emits no open event for (see categoryIsInert). A third used
 // to be refused for reading OriginalFileName; that field is now supplied from the code-signing identifier (issue #1002).

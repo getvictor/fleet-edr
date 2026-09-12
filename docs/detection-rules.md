@@ -21,7 +21,6 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | --- | --- |
 | `imported/file_event/file_event_macos_emond_launch_daemon.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), so a file_event rule watching anything else could never fire |
 | `imported/file_event/file_event_macos_susp_startup_item_created.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), so a file_event rule watching anything else could never fire |
-| `imported/process_creation/proc_creation_macos_remote_access_tools_renamed_meshagent_execution.yml` | rule reads field(s) OriginalFileName which exec events do not supply; supported: CommandArguments, CommandLine, EnvAssignments, Image, ParentImage, Subcommand |
 
 ## Index
 
@@ -76,6 +75,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`proc_creation_macos_payload_decoded_and_decrypted`](#proc_creation_macos_payload_decoded_and_decrypted) | Payload Decoded and Decrypted via Built-in Utilities | medium | monitor | T1059, T1204, T1140 |
 | [`proc_creation_macos_persistence_via_plistbuddy`](#proc_creation_macos_persistence_via_plistbuddy) | Potential Persistence Via PlistBuddy | high | monitor | T1543.001, T1543.004 |
 | [`proc_creation_macos_remote_access_tools_meshagent_arguments`](#proc_creation_macos_remote_access_tools_meshagent_arguments) | Remote Access Tool - Potential MeshAgent Execution - MacOS | medium | monitor | T1219.002 |
+| [`proc_creation_macos_remote_access_tools_renamed_meshagent_execution`](#proc_creation_macos_remote_access_tools_renamed_meshagent_execution) | Remote Access Tool - Renamed MeshAgent Execution - MacOS | high | monitor | T1219.002, T1036.003 |
 | [`proc_creation_macos_remote_access_tools_teamviewer_incoming_connection`](#proc_creation_macos_remote_access_tools_teamviewer_incoming_connection) | Remote Access Tool - Team Viewer Session Started On MacOS Host | low | monitor | T1133 |
 | [`proc_creation_macos_remote_system_discovery`](#proc_creation_macos_remote_system_discovery) | Macos Remote System Discovery | low | monitor | T1018 |
 | [`proc_creation_macos_schedule_task_job_cron`](#proc_creation_macos_schedule_task_job_cron) | Scheduled Cron Task/Job - MacOs | medium | monitor | T1053.003 |
@@ -1540,6 +1540,39 @@ Matching command lines with the '--meshServiceName' argument can indicate that t
 ### Known false-positive sources
 
 - Environments that legitimately use MeshAgent
+
+### References
+
+- <https://www.huntress.com/blog/know-thy-enemy-a-novel-november-case-on-persistent-remote-access>
+- <https://thecyberexpress.com/ukraine-hit-by-meshagent-malware-campaign/>
+- <https://wazuh.com/blog/how-to-detect-meshagent-with-wazuh/>
+- <https://www.security.com/threat-intelligence/medusa-ransomware-attacks>
+
+## proc_creation_macos_remote_access_tools_renamed_meshagent_execution
+
+**Remote Access Tool - Renamed MeshAgent Execution - MacOS**  
+Remote Access Tool - Renamed MeshAgent Execution - MacOS
+
+| | |
+| --- | --- |
+| Rule ID | `proc_creation_macos_remote_access_tools_renamed_meshagent_execution` |
+| Severity | `high` |
+| Default mode | `monitor` |
+| Source | SigmaHQ, by Norbert Jaśniewicz (AlphaSOC) |
+| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
+| ATT&CK | [`T1219.002`](https://attack.mitre.org/techniques/T1219/002/), [`T1036.003`](https://attack.mitre.org/techniques/T1036/003/) |
+| Event types | `exec` |
+
+### Description
+
+Detects the execution of a renamed instance of the Remote Monitoring and Management (RMM) tool, MeshAgent.
+RMM tools such as MeshAgent are commonly utilized by IT administrators for legitimate remote support and system management.
+However, malicious actors may exploit these tools by renaming them to bypass detection mechanisms, enabling unauthorized access and control over compromised systems.
+
+
+### Known false-positive sources
+
+- Unknown
 
 ### References
 

@@ -49,8 +49,10 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		"CommandArguments": func(e *Event) ([]string, bool) { return e.commandArguments, e.commandArguments != nil },
 		"EnvAssignments":   func(e *Event) ([]string, bool) { return e.envAssignments, e.envAssignments != nil },
 		// Sigma's OriginalFileName is the name a binary was compiled as, which a rename does not change; macOS carries that in
-		// the code signature rather than in version info, so this supplies the signing identifier. A rule reading it is
-		// `portable: mapped`: the field name is standard Sigma, the value behind it is ours.
+		// the code signature rather than in version info, so this supplies the signing identifier. Standard Sigma taxonomy, so a
+		// rule reading it stays `portable: standard`: the carrier differs by platform the way Image's and CommandLine's do,
+		// while the question the field asks is the same one. It is deliberately NOT in the exporter's computedFields, which
+		// names fields this engine INVENTS (see Subcommand above); nothing about this one is invented.
 		"OriginalFileName": func(e *Event) ([]string, bool) { return e.signingID, e.signingID != nil },
 	},
 	// Sigma calls this category file_event.

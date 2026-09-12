@@ -55,16 +55,18 @@ type Event struct {
 	envAssignments   []string
 }
 
-// execPayload is the subset of an exec event this package reads. Deliberately partial: the taxonomy supplies five fields and all of
-// them come from the path and the argument vector, so decoding the rest (code signing, hashes, pid generation) would cost
-// allocation per event for values nothing here reads.
+// execPayload is the subset of an exec event this package reads. Deliberately partial: the taxonomy supplies six fields, five from
+// the path and the argument vector and one from the code signature, so decoding the rest (hashes, notarization, pid generation)
+// would cost allocation per event for values nothing here reads. Only signing_id is taken from the signature, for the same reason.
 type execPayload struct {
 	Path string   `json:"path"`
 	Args []string `json:"args"`
 	PID  *int     `json:"pid"`
 	// The signing identity, for OriginalFileName. Only signing_id is read: it is the one signature field that names what the
-	// binary IS, which is what a renamed-tool rule is asking about.
-	CodeSigning *struct {
+	// binary IS, which is what a renamed-tool rule is asking about. A value rather than a pointer because every shape that
+	// leaves it zero (the key absent, an explicit null, an empty object, an empty identifier) means the same thing here, and
+	// presentString already folds them into an absent field.
+	CodeSigning struct {
 		SigningID string `json:"signing_id"`
 	} `json:"code_signing"`
 }
@@ -229,9 +231,7 @@ func NewEvent(ev api.Event) (*Event, error) {
 		e.envAssignments = envAssignments(p.Path, p.Args)
 		// presentString yields nil for "", so an unsigned process (no code_signing block) and a signed one carrying an empty
 		// identifier are both absent rather than empty. That is the direction that fails safe.
-		if p.CodeSigning != nil {
-			e.signingID = presentString(p.CodeSigning.SigningID)
-		}
+		e.signingID = presentString(p.CodeSigning.SigningID)
 	case "open":
 		var p openPayload
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
