@@ -681,6 +681,31 @@ describe("ProcessTreeView alert title routing", () => {
     source: "application_control",
   };
 
+  // Renders the view on the host route alongside buttons that navigate to another alert WITHOUT unmounting it. The mounted-ness is
+  // the whole point of these tests: unmounting resets the resolved-policy state and the loaded alert, so a remount exercises a fresh
+  // component and a version that ignores the staleness guards passes anyway. Changing only the query string keeps /hosts/:hostId
+  // matched, so the same instance sees the new alert.
+  function renderWithAlertNav(initial: string, targets: Record<string, string>) {
+    function Nav() {
+      const navigate = useNavigate();
+      return (
+        <>
+          {Object.entries(targets).map(([label, to]) => (
+            <button key={label} type="button" onClick={() => { void navigate(to); }}>{label}</button>
+          ))}
+        </>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={[initial]}>
+        <Nav />
+        <Routes>
+          <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
   it("links an application-control alert to the policy that owns the matched rule", async () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue(appControlAlert);
     const ruleSpy = vi.spyOn(api, "getAppControlRule").mockResolvedValue(appControlRule(42, 7));
@@ -745,22 +770,9 @@ describe("ProcessTreeView alert title routing", () => {
         : new Promise(() => { /* the second alert's resolution never lands */ }),
     );
 
-    function Switcher() {
-      const navigate = useNavigate();
-      return (
-        <button type="button" onClick={() => { void navigate("/hosts/h1?alert=13&process=0&at=1750248000000"); }}>
-          switch alert
-        </button>
-      );
-    }
-    render(
-      <MemoryRouter initialEntries={["/hosts/h1?alert=11&process=0&at=1750248000000"]}>
-        <Switcher />
-        <Routes>
-          <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderWithAlertNav("/hosts/h1?alert=11&process=0&at=1750248000000", {
+      "switch alert": "/hosts/h1?alert=13&process=0&at=1750248000000",
+    });
 
     const first = await screen.findByRole("link", { name: appControlAlert.title });
     expect(first).toHaveAttribute("href", "/app-control/policies/7");
@@ -770,6 +782,69 @@ describe("ProcessTreeView alert title routing", () => {
     expect(await screen.findByText(other.title)).toBeVisible();
     expect(screen.queryByRole("link", { name: other.title })).toBeNull();
     expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+  });
+
+  // The breadcrumb must not survive its own alert. While the replacement alert's detail is still in flight the loaded detail is
+  // still the PREVIOUS alert, so a breadcrumb rendered from whatever is loaded shows the previous alert's title, links to the
+  // previous alert's policy, and aims its triage controls at the previous alert's id. The guard keying on the rule cannot catch
+  // this: both sides of that comparison are stale together.
+  // spec:web-ui/alert-pivots-to-the-host-process-tree/the-breadcrumb-never-outlives-the-alert-it-describes
+  it("renders no breadcrumb while the next alert's detail is still loading", async () => {
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      id === 11 ? Promise.resolve(appControlAlert) : new Promise(() => { /* the second alert's detail never lands */ }),
+    );
+    vi.spyOn(api, "getAppControlRule").mockResolvedValue(appControlRule(42, 7));
+
+    renderWithAlertNav("/hosts/h1?alert=11&process=0&at=1750248000000", {
+      "switch alert": "/hosts/h1?alert=13&process=0&at=1750248000000",
+    });
+
+    const first = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(first).toHaveAttribute("href", "/app-control/policies/7");
+
+    fireEvent.click(screen.getByRole("button", { name: "switch alert" }));
+
+    // Not merely "no link": the whole breadcrumb belongs to an alert the operator has already left, and its triage controls would
+    // acknowledge or resolve that one.
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+    });
+    expect(screen.queryByText(appControlAlert.title)).toBeNull();
+    expect(screen.queryByText("#11")).toBeNull();
+  });
+
+  // Returning to an alert whose policy resolved earlier in the session, when the lookup now fails. The resolution is keyed by rule
+  // number, so a resolution left in place by the failure still matches the key and would render a link built from a lookup that
+  // just failed, contradicting the plain-text fallback above.
+  // spec:web-ui/alert-pivots-to-the-host-process-tree/the-breadcrumb-never-outlives-the-alert-it-describes
+  it("falls back to plain text when a revisited alert's policy lookup fails", async () => {
+    const plainAlert: AlertDetail = {
+      ...launchDaemonAlert, id: 12, rule_id: "sensor_recovery_failed", title: "EDR sensor could not be restored",
+    };
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      Promise.resolve(id === 12 ? plainAlert : appControlAlert),
+    );
+    const ruleSpy = vi.spyOn(api, "getAppControlRule")
+      .mockResolvedValueOnce(appControlRule(42, 7))
+      .mockRejectedValue(new Error("404"));
+
+    renderWithAlertNav("/hosts/h1?alert=11&process=0&at=1750248000000", {
+      "go elsewhere": "/hosts/h1?alert=12&process=0&at=1750248000000",
+      "come back": "/hosts/h1?alert=11&process=0&at=1750248000000",
+    });
+
+    const first = await screen.findByRole("link", { name: appControlAlert.title });
+    expect(first).toHaveAttribute("href", "/app-control/policies/7");
+
+    fireEvent.click(screen.getByRole("button", { name: "go elsewhere" }));
+    expect(await screen.findByText(plainAlert.title)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "come back" }));
+    await waitFor(() => { expect(ruleSpy).toHaveBeenCalledTimes(2); });
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: appControlAlert.title })).toBeNull();
+    });
+    expect(screen.getByText(appControlAlert.title)).toBeVisible();
   });
 });
 

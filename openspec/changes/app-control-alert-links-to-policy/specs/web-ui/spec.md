@@ -6,6 +6,8 @@ The UI SHALL provide a control on each alert in the list that pivots into the al
 
 The breadcrumb's title MUST route the analyst to what raised the alert, and which route depends on what raised it. A detection rule the catalog documents MUST link to that rule's documentation page. An application-control alert, whose rule identifier names a policy rule rather than a catalog rule, MUST link to the policy that owns the matched rule. An alert whose rule is neither, such as a registered non-detection absent from the catalog, MUST render as plain text rather than linking to a page that will report the rule as unknown. Linking an identifier the destination cannot resolve is worse than not linking it, which is why the fallback is a deliberate branch rather than an omission.
 
+The breadcrumb MUST describe the alert the page is currently addressing, not whichever alert's detail happens to be loaded. Moving between two alerts without leaving the page replaces the address before the new detail arrives, so during that window the page MUST render no breadcrumb rather than the previous alert's. A breadcrumb left behind is not merely stale text: its title links to what raised the PREVIOUS alert, and its lifecycle controls act on the previous alert's id, so acknowledging what appears on screen would triage an alert the analyst has already left.
+
 The receiving page's alert detail surface MUST show the alert's current status and expose its lifecycle controls (acknowledge, resolve, reopen), and the status MUST update on success. This is the single triage surface for the alert: the process detail panel MUST NOT restate the alert or duplicate its lifecycle controls, and instead references the process's alerts as links to their alert page.
 
 When the alert is not attributed to a single process (a process-optional finding, where the attacker has no live process and the alert keys on an artifact such as a LaunchDaemon registration), the page MUST NOT render a silent blank canvas. It MUST instead present an explicit explanation that the detection is not tied to a running process, alongside an opt-in control that widens the view to the surrounding host activity. The page MUST NOT auto-expand to the full host tree. The explanation MUST survive a page reload of the alert link rather than depending on a non-persisted view toggle. Because triage lives on the alert detail surface rather than on a process node, a process-optional alert (which has no process node to select) MUST still be triageable from this page.
@@ -51,3 +53,10 @@ When the alert is not attributed to a single process (a process-optional finding
 - **GIVEN** an alert whose rule is neither documented nor an application-control rule
 - **WHEN** the analyst opens the alert
 - **THEN** the title renders as plain text and links nowhere
+
+#### Scenario: The breadcrumb never outlives the alert it describes
+
+- **GIVEN** the analyst is on one alert's page and moves to another alert without leaving the page
+- **WHEN** the second alert's detail has not arrived yet
+- **THEN** the page renders no breadcrumb, rather than the first alert's title, link, and lifecycle controls
+- **AND** once a policy lookup fails for the alert on screen, the title renders as plain text even if that same rule resolved earlier in the session

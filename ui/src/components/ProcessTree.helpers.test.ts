@@ -9,6 +9,7 @@ import {
   collectMatches,
   chainGenerations,
   findAlertChain,
+  parseAlertIDParam,
   resolveAlertEntry,
   selectNodeFromParams,
   viewHref,
@@ -559,6 +560,25 @@ describe("buildVisibleRoots", () => {
       expect(out[0].children).toEqual([]);
     });
   });
+});
+
+// The breadcrumb compares a loaded alert's id against this, so anything that is not a real alert id must come back null rather than
+// as a number that could accidentally equal one. Number("") is 0 and Number("abc") is NaN, and neither names an alert.
+describe("parseAlertIDParam", () => {
+  const cases: { name: string; param: string | null; want: number | null }[] = [
+    { name: "an alert id", param: "842", want: 842 },
+    { name: "an absent parameter", param: null, want: null },
+    { name: "an empty parameter", param: "", want: null },
+    { name: "a non-numeric parameter", param: "abc", want: null },
+    { name: "zero", param: "0", want: null },
+    { name: "a negative id", param: "-1", want: null },
+    { name: "a fractional id", param: "4.5", want: null },
+  ];
+  for (const c of cases) {
+    it(`reads ${c.name}`, () => {
+      expect(parseAlertIDParam(c.param)).toBe(c.want);
+    });
+  }
 });
 
 describe("resolveAlertEntry", () => {

@@ -285,6 +285,15 @@ export function resolveAlertEntry(entryAlert: AlertDetail | undefined, searchPar
   };
 }
 
+// parseAlertIDParam reads the ?alert= deep-link parameter as an alert id, or null when it is absent or does not name one. Null never
+// equals a loaded alert's id, so a caller comparing a loaded detail against this treats an unparseable parameter as "no alert", which
+// is the same outcome the fetch path reaches (it skips the request and clears the detail).
+export function parseAlertIDParam(param: string | null): number | null {
+  if (param === null) return null;
+  const id = Number(param);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 // buildPreservedIds: never hide processes that have alerts attached, or that sit on the ancestor path of one (even if their binary is
 // in a system path, the analyst context matters). Lifted verbatim from ProcessTreeView's preservedIds useMemo (complexity paydown).
 export function buildPreservedIds(roots: ProcessNode[], alertProcessIds: Set<number>): Set<number> {
