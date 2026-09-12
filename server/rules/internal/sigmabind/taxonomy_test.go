@@ -57,9 +57,10 @@ func TestValidate_RejectsUnmappedFields(t *testing.T) {
 		want      string
 	}{
 		{
-			// A Windows PE version-resource field with no macOS equivalent, so no enrichment will ever supply it.
-			"OriginalFileName has no macOS equivalent", "exec",
-			"selection:\n  OriginalFileName: 'curl.exe'\ncondition: selection\n", "OriginalFileName",
+			// A Windows token concept with no macOS equivalent, so no enrichment will ever supply it. OriginalFileName used to
+			// serve as this case and no longer can: it is supplied from the code-signing identifier (issue #1002).
+			"IntegrityLevel has no macOS equivalent", "exec",
+			"selection:\n  IntegrityLevel: 'High'\ncondition: selection\n", "IntegrityLevel",
 		},
 		{
 			"a field of another event type is not silently accepted", "open",
@@ -96,7 +97,7 @@ func TestValidate_RejectsUnmappedEventType(t *testing.T) {
 func TestSupportedFields(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "ParentImage", "Subcommand"},
+	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "OriginalFileName", "ParentImage", "Subcommand"},
 		SupportedFields("exec"))
 	assert.Equal(t, []string{"Image", "TargetFilename"}, SupportedFields("open"))
 	// A rename supplies both of Sigma's file_rename fields. Enumerated here rather than left to the round-trip test because

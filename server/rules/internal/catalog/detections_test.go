@@ -72,8 +72,8 @@ func TestLoadDetections_Rejects(t *testing.T) {
 			// (#771), which is exactly the kind of quiet weakening this case exists to prevent.
 			"a field the event type does not supply",
 			map[string]string{"pack/x.yml": detectionRuleFile("x", "process_creation",
-				"  selection:\n    OriginalFileName: 'curl.exe'\n  condition: selection\n")},
-			"OriginalFileName",
+				"  selection:\n    IntegrityLevel: 'High'\n  condition: selection\n")},
+			"IntegrityLevel",
 		},
 		{
 			// A detection under a category we cannot populate would pass a logsource check and then match nothing forever.

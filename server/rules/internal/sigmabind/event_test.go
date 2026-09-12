@@ -352,3 +352,51 @@ func TestWithResolver_DoesNotMutateTheOriginal(t *testing.T) {
 	_, present := core.Field("ParentImage")
 	assert.False(t, present, "resolving on a copy must not give the original a parent it never had")
 }
+
+// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/an-unsigned-process-supplies-no-original-file-name
+// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/a-renamed-signed-binary-is-matched-by-its-signing-identity
+//
+// TestOriginalFileNameFromSigningIdentity pins absent-versus-empty at the field, which is the only place the distinction is
+// visible. A rule fixture cannot see it: `OriginalFileName|contains: 'x'` fails against an empty value and against an absent one
+// alike, so a version supplying "" for an unsigned process passes every contains-based rule in the corpus. The difference shows
+// only against Sigma's `Field: null` (matches absent, not empty) and `Field: ""` (matches empty, not absent), so this asserts the
+// presence flag directly rather than through a rule that cannot tell.
+func TestOriginalFileNameFromSigningIdentity(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		payload     string
+		wantValues  []string
+		wantPresent bool
+	}{
+		{
+			name:        "a signed binary supplies its signing identifier, whatever the file is called",
+			payload:     `{"pid":1,"path":"/tmp/com.apple.softwareupdated","args":["x"],"code_signing":{"team_id":"T","signing_id":"com.meshcentral.meshagent","flags":0,"is_platform_binary":false}}`,
+			wantValues:  []string{"com.meshcentral.meshagent"},
+			wantPresent: true,
+		},
+		{
+			name:        "an unsigned process carries no code_signing block, so the field is absent",
+			payload:     `{"pid":1,"path":"/tmp/thing","args":["x"]}`,
+			wantPresent: false,
+		},
+		{
+			name:        "a signing block with an empty identifier is absent too, not present-and-empty",
+			payload:     `{"pid":1,"path":"/tmp/thing","args":["x"],"code_signing":{"team_id":"T","signing_id":"","flags":0,"is_platform_binary":false}}`,
+			wantPresent: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, err := NewEvent(api.Event{EventID: "e1", EventType: "exec", Payload: []byte(tc.payload)})
+			require.NoError(t, err)
+			values, ok := e.Field("OriginalFileName")
+			assert.Equal(t, tc.wantPresent, ok, "presence is what Field: null and Field: \"\" discriminate on")
+			if tc.wantPresent {
+				assert.Equal(t, tc.wantValues, values)
+			} else {
+				assert.Empty(t, values, "an absent field reports no values, so a null test matches it")
+			}
+		})
+	}
+}
