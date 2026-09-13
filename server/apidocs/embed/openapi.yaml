@@ -1751,7 +1751,7 @@ components:
 
     SessionResponse:
       type: object
-      required: [user, csrf_token]
+      required: [user, csrf_token, roles]
       properties:
         user:
           type: object
@@ -1760,6 +1760,13 @@ components:
             id: {type: integer, format: int64}
             email: {type: string, format: email}
         csrf_token: {type: string}
+        roles:
+          type: array
+          items: {type: string}
+          uniqueItems: true
+          description: >-
+            The ids of the roles the operator holds deployment-wide, sorted, each once. Always present; empty when the operator holds
+            none.
 
     ErrorResponse:
       type: object

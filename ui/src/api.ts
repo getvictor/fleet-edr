@@ -96,6 +96,9 @@ export interface SessionInfo {
   // optimistically and rely on the server's 403". Advisory only; the server's
   // authorization chokepoint remains authoritative.
   permissions?: string[];
+  // roles are the ids of the roles the operator holds deployment-wide, which the account menu names. Optional for the same reason as
+  // permissions: an older server does not send it, and the menu then names no role.
+  roles?: string[];
 }
 
 export function getCsrfToken(): string {

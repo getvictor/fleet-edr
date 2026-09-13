@@ -70,11 +70,19 @@
   &__header {
     padding: 8px 10px;
     color: $ui-fleet-black-50;
-    font-family: "Source Code Pro", monospace;
     font-size: 12px;
     border-bottom: 1px solid $ui-fleet-black-10;
     margin-bottom: 4px;
     overflow-wrap: anywhere;
+  }
+
+  // The email is an identifier, so monospace; the role and sign-in method under it keep the application font.
+  &__email {
+    font-family: "Source Code Pro", monospace;
+  }
+
+  &__session {
+    margin-top: 2px;
   }
 
   &__item {

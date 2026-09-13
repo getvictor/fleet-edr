@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -101,6 +102,9 @@ type sessionResponse struct {
 	// affordances. Always a non-nil array (possibly empty) so the wire shape is stable. Advisory only: the server still enforces every
 	// action at the authorization chokepoint regardless of what this carried.
 	Permissions []string `json:"permissions"`
+	// Roles is the id of every role the operator holds deployment-wide, sorted, so the account menu can say which role a session
+	// carries. Always a non-nil array. The same global bindings Permissions is computed from.
+	Roles []string `json:"roles"`
 }
 
 type errBody struct {
@@ -197,31 +201,39 @@ func (h *Handler) writeSessionJSON(ctx context.Context, w http.ResponseWriter, u
 	if sess, ok := api.SessionFromContext(ctx); ok {
 		authMethod = sess.AuthMethod
 	}
+	roleIDs := globalRoleIDs(ctx)
 	writeJSON(ctx, h.logger, w, http.StatusOK, sessionResponse{
 		User:        userResponse{ID: u.ID, Email: u.Email},
 		CSRFToken:   api.EncodeToken(csrfToken),
 		AuthMethod:  authMethod,
-		Permissions: h.effectivePermissions(ctx),
+		Permissions: h.effectivePermissions(roleIDs),
+		Roles:       roleIDs,
 	})
 }
 
-// effectivePermissions returns the action identifiers the operator's roles confer, for the session probe's `permissions` field. It
-// reads the actor the Session middleware pinned on ctx, collects its deployment-wide (`global`) role ids (the only scope wave-1
-// honours), and resolves them through the PermissionResolver. Always returns a non-nil slice so the JSON wire shape is a stable array:
-// an empty set (no resolver wired, no actor, or no global bindings) marshals as `[]`, never `null`.
-func (h *Handler) effectivePermissions(ctx context.Context) []string {
-	if h.perms == nil {
-		return []string{}
-	}
+// globalRoleIDs returns the ids of the deployment-wide (`global`) role bindings on the actor the Session middleware pinned on ctx,
+// sorted: the only scope wave-1 honours. Always non-nil, so the JSON wire shape is a stable array.
+func globalRoleIDs(ctx context.Context) []string {
+	roleIDs := []string{}
 	actor, ok := api.ActorFromContext(ctx)
 	if !ok {
-		return []string{}
+		return roleIDs
 	}
-	roleIDs := make([]string, 0, len(actor.Roles))
 	for _, b := range actor.Roles {
 		if b.ScopeType == api.RoleBindingScopeGlobal {
 			roleIDs = append(roleIDs, b.RoleID)
 		}
+	}
+	slices.Sort(roleIDs)
+	return slices.Compact(roleIDs)
+}
+
+// effectivePermissions returns the action identifiers the given global role ids confer, for the session probe's `permissions` field,
+// resolved through the PermissionResolver. Always returns a non-nil slice so the JSON wire shape is a stable array: an empty set (no
+// resolver wired, no actor, or no global bindings) marshals as `[]`, never `null`.
+func (h *Handler) effectivePermissions(roleIDs []string) []string {
+	if h.perms == nil {
+		return []string{}
 	}
 	perms := h.perms.PermissionsForRoleIDs(roleIDs)
 	if perms == nil {

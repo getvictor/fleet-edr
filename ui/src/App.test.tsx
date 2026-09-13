@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthedApp } from "./App";
+import * as api from "./api";
 import { setUnauthorizedHandler, setForbiddenHandler } from "./api";
 import { PermissionAction } from "./permissions-core";
 
@@ -100,6 +101,47 @@ describe("home view routing", () => {
     stubAuthedSession([PermissionAction.HostRead]);
     renderAuthedApp();
     expect(await screen.findByText("No hosts reporting yet.")).toBeInTheDocument();
+  });
+});
+
+describe("AuthedApp account menu", () => {
+  async function openAccountMenu() {
+    fireEvent.click(await screen.findByRole("button", { name: "Account menu" }));
+  }
+
+  it("names the role the session probe returns", async () => {
+    vi.spyOn(api, "currentSession").mockResolvedValue({ ...authedSession, roles: ["auditor"] });
+    renderAuthedApp();
+    await openAccountMenu();
+    expect(screen.getByText("Role: Auditor")).toBeVisible();
+  });
+
+  // spec:web-ui/the-account-menu-names-the-session-s-role-and-sign-in-method/a-session-whose-roles-are-not-reported-names-no-role
+  it("names no role when the server does not send the session's roles", async () => {
+    vi.spyOn(api, "currentSession").mockResolvedValue(authedSession);
+    renderAuthedApp();
+    await openAccountMenu();
+    expect(screen.getByText("operator@example.com")).toBeVisible();
+    expect(screen.queryByText(/Role:/)).not.toBeInTheDocument();
+  });
+
+  // spec:web-ui/the-account-menu-names-the-session-s-role-and-sign-in-method/the-named-role-follows-a-refetched-session
+  it("names the new role when a denial refetches the session", async () => {
+    vi.spyOn(api, "currentSession")
+      .mockResolvedValueOnce({ ...authedSession, roles: ["senior_analyst"] })
+      .mockResolvedValueOnce({ ...authedSession, roles: ["analyst"] });
+    const setForbidden = vi.spyOn(api, "setForbiddenHandler");
+    renderAuthedApp();
+    await openAccountMenu();
+    expect(screen.getByText("Role: Senior analyst")).toBeVisible();
+
+    // AuthedApp registers the denial handler on mount; the last non-null registration is the live one.
+    const handlers = setForbidden.mock.calls.map(([handler]) => handler).filter((handler) => handler !== null);
+    const onForbidden = handlers[handlers.length - 1];
+    act(() => {
+      onForbidden();
+    });
+    expect(await screen.findByText("Role: Analyst")).toBeVisible();
   });
 });
 
