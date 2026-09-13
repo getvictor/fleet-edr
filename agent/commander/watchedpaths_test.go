@@ -43,6 +43,22 @@ func TestExecuteSetWatchedPaths_ForwardsTheRawPayload(t *testing.T) {
 	assert.Equal(t, map[string]any{"version": float64(5), "paths": float64(2)}, result)
 }
 
+// The agent does not read epoch, so an epoch the extension would reject still reaches it byte for byte; judging it is the extension's job.
+func TestExecuteSetWatchedPaths_ForwardsAnEpochItDoesNotRead(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{
+		`{"version":3,"epoch":"not a number","paths":[]}`,
+		`{"version":3,"epoch":1.5,"paths":[]}`,
+		`{"version":3,"epoch":null,"paths":[]}`,
+	} {
+		sender := &recordingExtensionSender{}
+		status, _ := runWatchedPaths(t, sender, raw)
+		assert.Equal(t, StatusCompleted, status, raw)
+		require.Len(t, sender.watched, 1)
+		assert.Equal(t, []byte(raw), sender.watched[0])
+	}
+}
+
 // An empty set is how the server removes every path it added; the extension keeps its built-in paths regardless.
 func TestExecuteSetWatchedPaths_ForwardsAnEmptySet(t *testing.T) {
 	t.Parallel()
@@ -118,7 +134,7 @@ func TestSetWatchedPathsPayload_JSONRoundTrip(t *testing.T) {
 		}), 0, 8).Draw(t, "entries")
 		paths, err := json.Marshal(entries)
 		require.NoError(t, err)
-		want := setWatchedPathsPayload{Version: rapid.Int64().Draw(t, "version"), Epoch: rapid.Int64().Draw(t, "epoch"), Paths: paths}
+		want := setWatchedPathsPayload{Version: rapid.Int64().Draw(t, "version"), Paths: paths}
 
 		b, err := json.Marshal(want)
 		require.NoError(t, err)

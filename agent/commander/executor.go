@@ -328,12 +328,11 @@ func (e *Executor) runSetWatchedPaths(ctx context.Context, cmd Command) (string,
 	return StatusCompleted, result
 }
 
-// setWatchedPathsPayload is the envelope of a set_watched_paths command. Paths stays raw: the entries are addressed to the extension.
+// setWatchedPathsPayload is the part of a set_watched_paths command the agent checks. Paths stays raw, and epoch is deliberately absent:
+// both are addressed to the extension, and a field decoded here would be a field the agent could refuse a command over.
 type setWatchedPathsPayload struct {
-	Version int64 `json:"version"`
-	// Epoch is forwarded rather than read; it is here so the envelope names every field of the wire shape.
-	Epoch int64           `json:"epoch,omitempty"`
-	Paths json.RawMessage `json:"paths"`
+	Version int64           `json:"version"`
+	Paths   json.RawMessage `json:"paths"`
 }
 
 type killPayload struct {
