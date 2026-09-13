@@ -171,9 +171,9 @@ jobs:
       # spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/profiles-are-rendered-unsigned
       #
       # Both branches render the .mobileconfig templates with APPLE_TEAM_ID substituted and ship them UNSIGNED. The
-      # system-extension, TCC and managed login items payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji, Intune, mosyle)
-      # signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright. Download authenticity is
-      # provided by the cosign signatures attached below, not by a CMS wrapper on the profile.
+      # system-extension, TCC and managed login items payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji,
+      # Intune, mosyle) signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright. Download
+      # authenticity is provided by the cosign signatures attached below, not by a CMS wrapper on the profile.
       - name: Render mobileconfig profiles
         if: env.DRY_RUN == ''
         env:

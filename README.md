@@ -46,7 +46,7 @@ Two steps. Stand up a server, then push the agent to your Macs.
 
 - **Or self-host the container** on any container host (Docker, Kubernetes, AWS ECS/EKS, GCP, Azure, or your own VM). The server is a standard multi-arch Linux image. Setup, secrets, and TLS: [docs/install-server.md](docs/install-server.md).
 
-**2. Deploy the agent to your Macs** (Apple Silicon, macOS 26+). The agent ships as a Developer ID-signed, notarized `.pkg` plus two `.mobileconfig` profiles, delivered by your MDM.
+**2. Deploy the agent to your Macs** (Apple Silicon, macOS 26+). The agent ships as a Developer ID-signed, notarized `.pkg` plus three `.mobileconfig` profiles, delivered by your MDM.
 
 - **Via MDM** (Fleet, Jamf, Kandji, Intune, mosyle): the vendor-neutral contract is in [docs/mdm-deployment.md](docs/mdm-deployment.md); the Fleet-specific recipe is in [docs/fleet-deployment.md](docs/fleet-deployment.md).
 - **Manually on 1 to 5 Macs** (no MDM, for evaluation): [docs/install-agent-manual.md](docs/install-agent-manual.md).

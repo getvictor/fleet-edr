@@ -6,7 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Upgrade notes (action required)
 
-- **Upload the new background items profile.** `edr-login-items.mobileconfig` ships with this release: push it through your MDM with the other two profiles so users cannot turn off the Fleet EDR agent in Login Items & Extensions (macOS 13 and later).
+- **A third profile keeps users from turning off the agent.** `edr-login-items.mobileconfig` ships with this release and marks the Fleet EDR background items as managed, so they cannot be turned off in Login Items & Extensions (macOS 13 and later). Push it through your MDM with the other two profiles.
 - **Alerts are now deleted 180 days after their last triage activity.** Until now nothing deleted alerts. To keep them longer, or indefinitely as before, set `EDR_ALERT_RETENTION_DAYS` (0 keeps them forever) before upgrading: deletion starts as soon as the upgraded server starts, then repeats hourly.
 - **Subscribe webhook destinations to sensor health faults.** A host whose sensor cannot be restored no longer raises an alert, so a destination that learned about it through alert deliveries stops hearing about it until you tick **Sensor health fault** for it in Settings, Webhooks.
 

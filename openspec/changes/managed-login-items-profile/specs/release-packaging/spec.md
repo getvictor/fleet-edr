@@ -19,3 +19,14 @@ The background items profile SHALL identify the items by the team identifier rat
 - **WHEN** the background items profile is rendered
 - **THEN** it carries one managed login items rule, of type team identifier, naming the project's team id
 - **AND** the render step fails if the rendered rule names another type or team
+
+### Requirement: Release artifacts carry a verifiable Sigstore signature
+
+From the first release that ships the bundle format (v0.2.0) onward, the release pipeline SHALL publish, alongside every signed blob artifact (the package, all three `.mobileconfig` profiles, the `SHA256SUMS` manifest, and both SBOMs), a single Sigstore bundle file (`<artifact>.sigstore.json`) that carries the signature, the ephemeral Fulcio signing certificate, and the transparency-log proof in one file. Each bundle MUST verify the artifact against the GitHub Actions workflow identity that produced it, using only non-deprecated cosign flags, so a verifier on a current cosign release sees no deprecation warnings. The pipeline MUST NOT require the legacy `<artifact>.sig` + `<artifact>.pem` pair for releases that ship bundles; releases predating the bundle format keep their existing `.sig`/`.pem` files and the legacy verify command remains valid for them.
+
+#### Scenario: Each released artifact verifies against its published bundle
+
+- **GIVEN** a release tag whose pipeline signs every blob artifact with `cosign sign-blob --bundle`
+- **WHEN** a verifier runs `cosign verify-blob --bundle <artifact>.sigstore.json --certificate-identity-regexp <release-workflow-identity> --certificate-oidc-issuer https://token.actions.githubusercontent.com <artifact>` on a current cosign release
+- **THEN** verification reports "Verified OK"
+- **AND** no deprecated-flag warning is printed

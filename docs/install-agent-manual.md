@@ -73,7 +73,7 @@ cosign verify-blob \
 # Expect: "Verified OK"
 ```
 
-The same `<file>.sigstore.json` bundle covers `SHA256SUMS` and both `.mobileconfig` profiles. To verify the server image instead, pass the same keyless identity and issuer constraints:
+The same `<file>.sigstore.json` bundle covers `SHA256SUMS` and all three `.mobileconfig` profiles. To verify the server image instead, pass the same keyless identity and issuer constraints:
 
 ```sh
 cosign verify ghcr.io/getvictor/fleet-edr-server:v0.5.1 \

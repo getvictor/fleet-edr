@@ -79,7 +79,7 @@ sudo tail -n 50 /var/log/fleet-edr-agent.log | grep -E 'ES|receiver'
 
 Upload `edr-login-items.mobileconfig` the same way. It needs macOS 13 or later.
 
-What the profile does: a `com.apple.servicemanagement` payload with one rule matching team ID `FDG8Q7N4CC` marks every background item the team signs as managed: the agent daemon (`com.fleetdm.edr.agent`) and the activation LaunchAgent (`com.fleetdm.edr.activate`). Without it, a user can turn either off in **System Settings > General > Login Items & Extensions**, which stops the agent or the re-activation after an upgrade, and macOS shows a "Background Items Added" notification when the pkg installs. With it, both show as managed, cannot be turned off, and install without the notification.
+What the profile does: a `com.apple.servicemanagement` payload with one rule matching team ID `FDG8Q7N4CC` marks every background item the team signs as managed: the agent daemon (`com.fleetdm.edr.agent`) and the activation LaunchAgent (`com.fleetdm.edr.activate`). Without it, a user can turn either off in **System Settings > General > Login Items & Extensions**, which stops the agent or the re-activation after an upgrade. With it, both show as managed and cannot be turned off.
 
 Verify after the pkg installs: in **System Settings > General > Login Items & Extensions**, the Fleet EDR items show as managed by your organization, with no switch to turn them off.
 

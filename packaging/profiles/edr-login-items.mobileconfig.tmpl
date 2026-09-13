@@ -2,9 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
     Managed login items. Marks the Fleet EDR background items as managed, so a console user cannot turn them off in System
-    Settings > General > Login Items & Extensions, and macOS does not show the "Background Items Added" notification when the
-    package installs them. Without it, a user can silently disable the agent daemon (com.fleetdm.edr.agent) or the activation
-    agent (com.fleetdm.edr.activate). macOS 13 and later; MDM-only. Ships unsigned on purpose; the MDM signs it at delivery (see
+    Settings > General > Login Items & Extensions. Without it, a user can silently disable the agent daemon
+    (com.fleetdm.edr.agent) or the activation agent (com.fleetdm.edr.activate). macOS 13 and later; MDM-only. Ships unsigned on purpose; the MDM signs it at delivery (see
     packaging/profiles/render.sh). The __TEAM_ID__ token is substituted with the value of APPLE_TEAM_ID.
 
     One TeamIdentifier rule covers every item signed by the team, so a background item added later is managed without a profile
