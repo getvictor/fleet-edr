@@ -40,9 +40,9 @@ type Options struct {
 	NowNs       func() int64
 }
 
-// Poster reports the registry's current health to POST /api/status: once at startup, again on any change of a component's status or reason (debounced), and on
-// a periodic floor so the server's view refreshes even with no transitions. It is an idempotent snapshot channel, so a dropped post
-// self-heals on the next one; the poster therefore does not retry a failed post itself.
+// Poster reports the registry's current health to POST /api/status: once at startup, again on any change of a component's status or
+// reason (debounced), and on a periodic floor so the server's view refreshes even with no transitions. It is an idempotent snapshot
+// channel, so a dropped post self-heals on the next one; the poster therefore does not retry a failed post itself.
 type Poster struct {
 	reg          *Registry
 	client       *http.Client
