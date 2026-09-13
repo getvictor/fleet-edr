@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -25,6 +26,18 @@ func recoveryFailedEvent(id, host, provider, outcome string, attempts int) api.E
 	}
 }
 
+// recoveryFailedEventWithComponent is recoveryFailedEvent plus the owning component, the shape a current agent emits. The plain
+// helper deliberately omits the key rather than sending it empty, which is what an older agent's payload looks like on the wire.
+func recoveryFailedEventWithComponent(id, host, provider, outcome string, attempts int, component string) api.Event {
+	payload, err := json.Marshal(map[string]any{
+		"provider": provider, "outcome": outcome, "attempts": attempts, "component": component,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return api.Event{EventID: id, HostID: host, EventType: "sensor_recovery_failed", Payload: payload}
+}
+
 // evalRecoveryFailed runs the rule over one event. The archive is nil because this rule reads no history: unlike
 // sensor_tamper, its input event is already terminal, and requiring a GraphReader here would imply otherwise.
 func evalRecoveryFailed(t *testing.T, evt api.Event) []api.Finding {
@@ -34,11 +47,13 @@ func evalRecoveryFailed(t *testing.T, evt api.Event) []api.Finding {
 	return findings
 }
 
-// spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/automatic-recovery-gives-up-and-raises-a-finding
-// spec:server-detection-rules-engine/non-detections-are-excluded-from-the-operator-facing-catalog/a-non-detection-still-evaluates-and-alerts
+// spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/automatic-recovery-gives-up-and-opens-a-health-episode
+// spec:server-detection-rules-engine/non-detections-are-excluded-from-the-operator-facing-catalog/a-non-detection-still-evaluates
 //
-// Being classified a non-detection removes this rule from the operator-facing catalog and nothing else: it still evaluates and
-// still persists the same alert, which is what this test pins.
+// Being classified a health signal keeps this rule off the operator-facing catalog and sends its findings to a host health episode
+// instead of the alerts table (issue #778). What it does NOT change is the finding: the same rule id, host, severity, cited events
+// and text, which is what this test pins. Where that finding is then recorded is the engine's decision and is pinned in
+// TestEngine_HealthFindingIsRecordedNotAlerted.
 func TestSensorRecoveryFailed_RaisesACriticalFinding(t *testing.T) {
 	t.Parallel()
 	findings := evalRecoveryFailed(t, recoveryFailedEvent("e1", "host-a", "content_filter", "enable_failed", 3))
@@ -52,6 +67,45 @@ func TestSensorRecoveryFailed_RaisesACriticalFinding(t *testing.T) {
 	assert.Equal(t, []string{"e1"}, f.EventIDs, "the finding must cite the record it fired on")
 	assert.Contains(t, f.Description, "content_filter", "the finding must name the provider to restore")
 	assert.Contains(t, f.Description, "3", "and how many repairs were attempted, so it reads as tried rather than skipped")
+
+	// The same facts as FIELDS. The description is for a person; the episode this becomes is read by an operational surface that
+	// filters and groups on the provider and the outcome, and parsing them back out of a sentence is not something to ask of it.
+	require.NotNil(t, f.Health, "a health signal's finding must carry the detail the episode is recorded from")
+	assert.Equal(t, endpointapi.KindSelfHealFailed, f.Health.Kind)
+	var detail endpointapi.SelfHealFailedDetail
+	require.NoError(t, json.Unmarshal(f.Health.Detail, &detail))
+	assert.Equal(t, endpointapi.SelfHealFailedDetail{Provider: "content_filter", Outcome: "enable_failed", Attempts: 3}, detail)
+}
+
+// TestSensorRecoveryFailed_CarriesTheComponentThatClosesTheEpisode: the episode is closed when the owning component reports healthy
+// again, so the component has to reach the finding. The agent reports it because nothing on this side can recover it: a provider is
+// rendered into the health snapshot from its parent's liveness report and vanishes when the parent stops reporting it.
+//
+// An agent too old to report one still produces a finding. It simply has nothing to close its episode, which reads as "we do not
+// know that this was ever fixed" and is the truth, and is better than dropping a report that names a host which is not capturing.
+func TestSensorRecoveryFailed_CarriesTheComponentThatClosesTheEpisode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		component string
+	}{
+		{"an agent that reports the owning component", "network_extension"},
+		{"an agent too old to report one", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			evt := recoveryFailedEvent("e1", "host-a", "content_filter", "enable_failed", 3)
+			if tc.component != "" {
+				evt = recoveryFailedEventWithComponent("e1", "host-a", "content_filter", "enable_failed", 3, tc.component)
+			}
+			findings := evalRecoveryFailed(t, evt)
+
+			require.Len(t, findings, 1, "a report without a component is still a host that is not capturing")
+			require.NotNil(t, findings[0].Health)
+			assert.Equal(t, tc.component, findings[0].Health.Component)
+		})
+	}
 }
 
 // spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/an-unrecognised-outcome-is-still-reported

@@ -28,9 +28,13 @@ type (
 	Process = detectionapi.Process
 	// TimeRange is the [start, end] window every graph query takes.
 	TimeRange = detectionapi.TimeRange
-	// Finding is a per-rule positive output. Detection persists these
-	// as alerts via mysql.Store.InsertAlert.
+	// Finding is a per-rule positive output. Detection persists these as alerts via mysql.Store.InsertAlert, except for a finding
+	// from a rule that declares itself a health signal, which is recorded as a host health episode instead (issue #778).
 	Finding = detectionapi.Finding
+	// HealthDetail is the machine-readable half of a health-signal finding: the component at fault and the fault's own fields.
+	// Set only by a rule whose NonDetectionKind is NonDetectionHealth.
+	HealthDetail = detectionapi.HealthDetail
+
 	// RiskModifier is one conditional escalation on a Finding: the risk a condition adds, and the techniques it implies. A rule
 	// with a conditional severity declares one instead of reporting a finished severity, so an operator's per-rule setting
 	// re-ranks the rule rather than erasing what the rule observed (issue #753).
@@ -166,11 +170,14 @@ const (
 // that says nothing is treated as a detection. Only the rare rule that is something else has to say so, in its own file, next to
 // the doc comment that explains why.
 //
-// The distinction is about the CATALOG SURFACE, not about evaluation. A non-detection is registered, evaluated and persisted
-// exactly like any other rule; it is omitted from the operator-facing catalog (GET /api/rules, GET /api/attack-coverage, and the
-// generated docs/detection-rules.md) because those surfaces describe detections an operator can read, tune and reason about.
-// Publishing a rule there that has no detection logic, no tuning surface and no adversary claim misleads on all three counts, and
-// in the ATT&CK case inflates a coverage figure that is read during procurement.
+// A non-detection is registered and evaluated exactly like any other rule. It is omitted from the operator-facing catalog
+// (GET /api/rules, GET /api/attack-coverage, and the generated docs/detection-rules.md) because those surfaces describe detections
+// an operator can read, tune and reason about. Publishing a rule there that has no detection logic, no tuning surface and no
+// adversary claim misleads on all three counts, and in the ATT&CK case inflates a coverage figure that is read during procurement.
+//
+// Where its findings are RECORDED follows the kind (issue #778). A projection renders a decision already made about activity on the
+// host, so its findings persist as alerts and are worked in the same queue as detections. A health signal reports a fault in our own
+// software, so its findings are recorded as host health episodes and never as alerts.
 //
 // Registered non-detections and why:
 //
@@ -317,6 +324,17 @@ func AlertOriginOf(r Rule) string {
 		return ""
 	}
 	return OriginOf(r)
+}
+
+// IsHealthSignal reports whether r declares itself a health signal, which is what decides that its findings are recorded as host
+// health episodes rather than persisted as alerts (issue #778).
+//
+// Read from the RULE rather than from the finding it produced, for the same reason AlertOriginOf is: the declaration is the
+// contract. Keying the routing on a field of the finding would let a detection that set it by mistake escape the alert queue, and
+// would let a health rule that forgot to set it land in the queue its declaration exists to keep it out of.
+func IsHealthSignal(r Rule) bool {
+	nd, ok := r.(NonDetection)
+	return ok && nd.NonDetectionKind() == NonDetectionHealth
 }
 
 // AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.

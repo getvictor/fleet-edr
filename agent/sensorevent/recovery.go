@@ -30,7 +30,17 @@ const RecoveryFailedEventType = "sensor_recovery_failed"
 // health is level state that something else keeps overwriting; an event is an append, so the same treatment here would
 // produce one event per report for as long as the provider stayed down. selfheal.Options.OnEscalation is the edge-shaped
 // seam that exists for this.
-func EmitRecoveryFailed(ctx context.Context, emit Emitter, provider, outcome string, attempts int) error {
+// # Why component rides along
+//
+// The server records this against a health component and closes the record when that component reports healthy again. The
+// provider does not name one: it is rendered into the health snapshot from its parent's liveness report and vanishes when the
+// parent stops reporting it. The agent holds the parent at this moment, so it states it rather than leaving the server to keep a
+// provider-to-component map that would rot silently the first time a provider moved.
+//
+// Unlike provider and outcome, an empty component does not drop the event. It is additive on a wire an older agent already
+// speaks, and the report is still worth having without it: it names a real host that is not capturing, which is the part an
+// operator has to act on either way.
+func EmitRecoveryFailed(ctx context.Context, emit Emitter, provider, component, outcome string, attempts int) error {
 	if emit == nil {
 		return nil
 	}
@@ -39,9 +49,15 @@ func EmitRecoveryFailed(ctx context.Context, emit Emitter, provider, outcome str
 		// it. Dropping is better than emitting a record an analyst cannot act on.
 		return fmt.Errorf("sensorevent: recovery-failed event needs a provider and an outcome, got %q/%q", provider, outcome)
 	}
-	return emit(ctx, RecoveryFailedEventType, map[string]any{
+	payload := map[string]any{
 		"provider": provider,
 		"outcome":  outcome,
 		"attempts": attempts,
-	})
+	}
+	// Omitted rather than sent empty, so the wire carries "not reported" as the absent field the schema describes rather than as
+	// a present value the server would have to special-case.
+	if component != "" {
+		payload["component"] = component
+	}
+	return emit(ctx, RecoveryFailedEventType, payload)
 }

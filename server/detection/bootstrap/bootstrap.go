@@ -22,6 +22,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/service"
 	"github.com/fleetdm/edr/server/detection/internal/webhook"
 	detectionmigrations "github.com/fleetdm/edr/server/detection/migrations"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
@@ -400,6 +401,17 @@ func (d *Detection) SetMonitorMatchRecorder(r rulesapi.MonitorMatchRecorder) {
 func (d *Detection) SetRuleEvalStatsRecorder(r rulesapi.RuleEvalStatsRecorder) {
 	if d.engine != nil {
 		d.engine.SetRuleEvalStatsRecorder(r)
+	}
+}
+
+// SetHealthEpisodeRecorder wires where a health-signal rule's findings are recorded, mirroring SetModeResolver. cmd/main passes the
+// endpoint context's recorder once both contexts are built. No-op in ModeIntake, where there is no engine and so nothing evaluates.
+//
+// Unwired, the engine drops those findings rather than persisting them as alerts: see the engine field's comment for why a fallback
+// to the alert queue would undo the change rather than degrade it.
+func (d *Detection) SetHealthEpisodeRecorder(r endpointapi.HealthEpisodeRecorder) {
+	if d.engine != nil {
+		d.engine.SetHealthEpisodeRecorder(r)
 	}
 }
 

@@ -59,12 +59,14 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 				Health:     d.health,
 				Component:  health.ComponentNetworkExtension,
 				Logger:     d.logger,
-				// The repair giving up is recorded durably as well as in health (issue #691). Health says what is true
-				// now, so once an operator fixes the host by hand it reads healthy again and nothing records that the
-				// host went uncaptured for however long it took them to notice. The alert is the durable account, the
-				// same argument that justified recording the stop itself.
+				// The repair giving up is recorded durably as well as in health (issues #691, #778). Health says what
+				// is true now, so once an operator fixes the host by hand it reads healthy again and nothing records
+				// that the host went uncaptured for however long it took them to notice. The durable account is a host
+				// health EPISODE on the server: it opens from this event and closes when the component reports healthy
+				// again, so the interval is the outage. It used to be an alert, which recorded the start and never the
+				// end; the component is reported here because the server closes the episode against it.
 				OnEscalation: func(e selfheal.Escalation) {
-					if err := sensorevent.EmitRecoveryFailed(ctx, emitter, e.Provider, e.Outcome, e.Attempts); err != nil {
+					if err := sensorevent.EmitRecoveryFailed(ctx, emitter, e.Provider, e.Component, e.Outcome, e.Attempts); err != nil {
 						// Best effort by design: the health state is already published and the agent must keep
 						// running. Logged at WARN so a queue that is rejecting writes is visible.
 						d.logger.WarnContext(ctx, "could not record that automatic capture recovery gave up",

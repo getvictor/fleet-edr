@@ -1,20 +1,27 @@
 # Expected detection assertions for the T1562.001-sensor-recovery-failed scenario.
 #
-# BOTH rules are asserted because the scenario feeds the full episode and an
-# operator sees both: sensor_tamper for the stop, sensor_recovery_failed for
-# the repair giving up. Asserting only the second would let a regression that
-# silently stopped reporting the stop pass unnoticed here.
+# Only sensor_tamper is asserted here, and the absence of the second rule is the
+# point rather than an omission.
+#
+# The scenario still feeds the full episode, both events in the order a real host
+# produces them, because the stop and the exhaustion together are what an operator
+# lives through. But since issue #778 the exhaustion is no longer an alert: it is
+# recorded as a host health episode, and this harness asserts alerts. Listing it
+# here would assert an alert the system is now specified NOT to raise, which would
+# fail for the right reason and read as a regression.
+#
+# Its efficacy coverage returns when the episode read API lands with the operator
+# surface, at which point this file gains a health-episode assertion rather than an
+# alert one. Until then the rule's behaviour is covered by its unit tests and by the
+# engine routing tests, not here.
 #
 # The budget matches the sibling scenario's, and for the same reason: the stop
 # alert is the slow half, because that rule deliberately waits out its recovery
-# window before deciding. This rule's own event is terminal and needs no wait.
+# window before deciding.
 scenario_id: T1562.001-sensor-recovery-failed
 mitre: T1562.001
 within_seconds: 45
 rules:
   - rule_id: sensor_tamper
     severity: high
-    expect: alert
-  - rule_id: sensor_recovery_failed
-    severity: critical
     expect: alert

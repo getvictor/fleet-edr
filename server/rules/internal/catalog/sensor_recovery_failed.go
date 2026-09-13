@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -43,12 +44,15 @@ type SensorRecoveryFailed struct{}
 
 func (r *SensorRecoveryFailed) ID() string { return "sensor_recovery_failed" }
 
-// NonDetectionKind declares this a health signal, not a detection, so it stays off the operator-facing catalog surfaces
-// (GET /api/rules, GET /api/attack-coverage, docs/detection-rules.md). Nothing about registration, evaluation or alert
-// persistence changes. Its subject is our own agent: the repair of a stopped capture provider giving up. Both failure shapes it
-// reports point at our software (the host application or the system configuration daemon failing the repair, or the extension
-// running with wedged sessions), so it establishes nothing about an adversary. A person still has to act on it, which is why it
-// keeps its severity; where that signal belongs is being moved to a host-health surface separately.
+// NonDetectionKind declares this a health signal, not a detection. Its subject is our own agent: the repair of a stopped capture
+// provider giving up. Both failure shapes it reports point at our software (the host application or the system configuration
+// daemon failing the repair, or the extension running with wedged sessions), so it establishes nothing about an adversary.
+//
+// Two things follow from the declaration. It stays off the operator-facing catalog surfaces (GET /api/rules,
+// GET /api/attack-coverage, docs/detection-rules.md), and since issue #778 the engine also routes its findings to a host health
+// episode rather than to the alerts table: an operational fault does not belong in the queue an analyst works to decide whether a
+// host is under attack. Registration and evaluation are unchanged. The severity is unchanged too, because a host that is not
+// capturing needs someone to act whether or not anyone attacked it.
 func (r *SensorRecoveryFailed) NonDetectionKind() api.NonDetectionKind { return api.NonDetectionHealth }
 
 // SupportedExclusionMatchTypes returns nil for the same reason sensor_tamper does: there is no benign writer to allowlist,
@@ -68,19 +72,19 @@ func (r *SensorRecoveryFailed) DisplayName() string { return "EDR sensor could n
 //
 // The observed base rate settles it. The 37.8-hour providerless episode on 2026-07-17 was the enable_ineffective shape, and its
 // cause was a Settings disable-then-enable leaving the network extension with no filter or DNS sessions: an OS-interaction bug.
-// That is the common cause of this alert in practice.
+// That is the common cause of this record in practice.
 //
-// Where the claim actually landed is worth stating, because the obvious answer is no longer the right one. Issue #754 was filed
-// about the ATT&CK coverage export, and this rule has since been classified a health signal, which already keeps it off that
-// export and off GET /api/rules and the generated reference. What the claim still reached is every ALERT this rule raises: the
-// finding declares no techniques of its own, so alert persistence falls back to this list and stamped T1562.001 onto the row an
-// analyst reads. That is the surface the removal fixes.
+// Where the claim actually landed is worth stating, because the obvious answer was never the right one. Issue #754 was filed about
+// the ATT&CK coverage export, and this rule's health classification already kept it off that export and off GET /api/rules and the
+// generated reference. What the claim still reached was every ROW this rule raised: the finding declares no techniques of its own,
+// so persistence fell back to this list and stamped T1562.001 onto what an operator reads. That is the surface the removal fixes,
+// and it still is: an episode carries the same absence.
 //
-// The alert keeps its Critical severity and its operational explanation. Removing an attribution is not a downgrade: without an
+// The record keeps its Critical severity and its operational explanation. Removing an attribution is not a downgrade: without an
 // adversary attached this is a visibility and health statement, and that needs no adversary label to earn its severity, since a
 // host that is not capturing needs an operator either way. What the removal does take out of the text is the attribution itself,
-// which the description used to carry as a trailing "(MITRE T1562.001)" and which is the same claim by another route. Whether
-// this belongs on a health surface rather than in the detection feed is a larger question, tracked separately.
+// which the description used to carry as a trailing "(MITRE T1562.001)" and which is the same claim by another route. Where the
+// signal belongs was the larger question, and issue #778 settled it: a host health episode, not the detection feed.
 //
 // Empty and not nil, which is what the interface asks for (see api.Rule) and what the other unmapped rule returns.
 func (r *SensorRecoveryFailed) Techniques() []string { return []string{} }
@@ -96,7 +100,7 @@ func (r *SensorRecoveryFailed) Doc() api.Documentation {
 			"stopped.\n\n" +
 			"The practical difference from the sensor-disabled alert is what the host is doing now. That alert is " +
 			"raised seconds after capture stops, before anyone can know whether the repair will work, so most of the " +
-			"time it describes a host that has already fixed itself. This alert only exists for hosts that have not: " +
+			"time it describes a host that has already fixed itself. This is recorded only for hosts that have not: " +
 			"the telemetry that provider carries is not being collected, and will not be until an operator restores " +
 			"it, usually by re-activating the extension on the host.\n\n" +
 			"The reported outcome says which kind of failure it was, because they point at different causes. If the " +
@@ -115,7 +119,7 @@ func (r *SensorRecoveryFailed) Doc() api.Documentation {
 			"Reports that automatic recovery gave up, not why the provider stopped in the first place. The stop itself, " +
 				"and whether it looked like tampering, is carried by the sensor-disabled alert that precedes it.",
 			"An attacker who stops a provider AND prevents the agent from reporting at all produces no event and so no " +
-				"alert. That absence is covered by host health going stale, not by this rule.",
+				"record. That absence is covered by host health going stale, not by this rule.",
 		},
 	}
 }
@@ -138,6 +142,11 @@ type sensorRecoveryFailedPayload struct {
 	Provider string `json:"provider"`
 	Outcome  string `json:"outcome"`
 	Attempts int    `json:"attempts"`
+	// Component is the registered health component the provider belongs to, reported by the agent because nothing here can
+	// recover it: a provider is rendered into the health snapshot from its parent's liveness report and vanishes when the parent
+	// stops reporting it. It is what lets the recorded episode be closed when that component reports healthy again. Absent from an
+	// agent predating the field, in which case the episode is recorded without one.
+	Component string `json:"component"`
 }
 
 func (r *SensorRecoveryFailed) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
@@ -158,6 +167,19 @@ func (r *SensorRecoveryFailed) evalEvent(_ context.Context, evt api.Event, _ api
 	if p.Provider == "" {
 		return nil, nil
 	}
+	// A value too long to store is refused here rather than at the write. The recorder reports a failed insert as a persistence
+	// error, which nacks the whole batch and has it retried forever, so one malformed report would stall every event behind it.
+	// These names are our own agent's registered constants, so exceeding the width means a malformed or hostile report, and
+	// declining it costs that one report. Same posture as the empty-provider check above.
+	if len(p.Provider) > endpointapi.MaxHealthSubjectLen || len(p.Component) > endpointapi.MaxHealthComponentLen {
+		return nil, nil
+	}
+
+	// The same three facts the description states in prose, as fields. The finding is recorded as a health episode rather than as
+	// an alert (issue #778), and the surface that reads an episode filters and groups on the provider and the outcome rather than
+	// reading a sentence. Marshalling cannot fail for this struct (three scalars), so the error is not reachable; ignoring it
+	// explicitly rather than plumbing an impossible failure out of a rule that has no way to report one.
+	detail, _ := json.Marshal(endpointapi.SelfHealFailedDetail{Provider: p.Provider, Outcome: p.Outcome, Attempts: p.Attempts})
 
 	return &api.Finding{
 		HostID:   evt.HostID,
@@ -169,6 +191,16 @@ func (r *SensorRecoveryFailed) evalEvent(_ context.Context, evt api.Event, _ api
 		Description: sensorRecoveryFailedDescription(p),
 		Subject:     sensorRecoveryFailedSubject(p.Provider, evt.EventID),
 		EventIDs:    []string{evt.EventID},
+		Health: &api.HealthDetail{
+			Kind:      endpointapi.KindSelfHealFailed,
+			Component: p.Component,
+			// The provider is what distinguishes two simultaneous failures under one extension: content_filter and dns_proxy are
+			// reported independently, and without this the second would collide with the first's episode and be discarded.
+			Subject: p.Provider,
+			// The host's own clock, so the episode measures the outage rather than the delivery delay.
+			OccurredAtNs: evt.TimestampNs,
+			Detail:       detail,
+		},
 	}, nil
 }
 

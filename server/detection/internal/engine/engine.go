@@ -18,6 +18,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	detectionslices "github.com/fleetdm/edr/server/detection/internal/slices"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -75,6 +76,17 @@ const (
 	routeSuppressed
 	// routeDuplicate: the mode was alert and the insert deduplicated against an alert that already existed.
 	routeDuplicate
+	// routeHealthOpened: the rule declares itself a health signal and this finding OPENED a host health episode. No alert row was
+	// written. Its own bucket rather than folded into routeAlerted because the two land on different surfaces and an operator
+	// counting alerts must not be told a health episode was one (issue #778).
+	routeHealthOpened
+	// routeHealthDuplicate: the same, but this occurrence was already recorded so nothing new was written. Split from
+	// routeHealthOpened for the reason routeDuplicate is split from routeAlerted: event delivery is at-least-once, so a redelivered
+	// report is routine, and counting it as an episode would report records that do not exist.
+	routeHealthDuplicate
+	// routeHealthDropped: a health finding that could not be recorded at all, because the rule supplied no detail or because no
+	// recorder is wired. Counted apart from both so the span cannot report an episode where persistence created none.
+	routeHealthDropped
 )
 const tracerName = "server/detection/engine"
 
@@ -101,6 +113,13 @@ type Engine struct {
 	// budget stops evaluating a rule that repeatedly costs more than it is worth (issue #767). Per-replica and safe to lose; see
 	// evalBudget for why a restart clearing it is the intended behaviour rather than a gap.
 	budget *evalBudget
+	// healthRecorder is where a health-signal rule's findings go instead of the alerts table (issue #778). Owned by the endpoint
+	// context, which owns host health, and reached through its api package like any other cross-context call.
+	//
+	// Optional, and its absence is deliberately NOT a fallback to persisting an alert. A deployment wired without it should record
+	// nothing rather than put an operational fault back in the queue an analyst works: the whole point of the move is that the
+	// signal makes no claim about an adversary, and that is not less true because a dependency is missing.
+	healthRecorder endpointapi.HealthEpisodeRecorder
 }
 
 // New creates a detection engine backed by the given store.
@@ -129,6 +148,10 @@ func (e *Engine) SetMetrics(m api.MetricsRecorder) { e.metrics = m }
 // declares nothing still alerts, so this is the pre-config behavior for every hand-written rule; a rule that declares monitor must
 // not start alerting merely because no configuration surface is wired.
 func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver = m }
+
+// SetHealthEpisodeRecorder wires where health-signal findings are recorded. Optional: an engine without one drops them, which is
+// the honest behaviour (see the field's comment) rather than falling back to an alert row.
+func (e *Engine) SetHealthEpisodeRecorder(r endpointapi.HealthEpisodeRecorder) { e.healthRecorder = r }
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r rulesapi.Rule) {
@@ -495,7 +518,11 @@ func (e *Engine) evaluateRule(
 	// the span reporting 0/0 while findings before it had genuinely been raised or suppressed, so the work already done vanished
 	// from the trace at exactly the moment someone would be reading it. The counters start at zero, which is the honest answer
 	// for a rule that produced nothing.
-	var alerted, suppressed, duplicates int
+	// healthEpisodes is its own counter rather than a fourth way to be "alerted": these land on the host health surface, so folding
+	// them into alert_count would report alerts an operator cannot find in the alert list (issue #778). It counts episodes OPENED,
+	// so it reads like alert_count does; healthFindings carries the rest (a redelivery of an occurrence already recorded, or a finding that
+	// could not be recorded), which would otherwise vanish from the span entirely.
+	var alerted, suppressed, duplicates, healthEpisodes, healthFindings int
 	// Chains this rule declined because an ancestor had no record, counted as the delta across its own evaluation so a
 	// batch-wide scope still reports per-rule (issue #829). Without it the decline is invisible: a rule that reports nothing
 	// because ancestry was incomplete looks exactly like a rule with nothing to report, which is the documented way a detection
@@ -522,6 +549,8 @@ func (e *Engine) evaluateRule(
 			attribute.Int("alert_count", alerted),
 			attribute.Int("suppressed_count", suppressed),
 			attribute.Int("duplicate_count", duplicates),
+			attribute.Int("health_episode_count", healthEpisodes),
+			attribute.Int("health_finding_unrecorded_count", healthFindings),
 			attribute.Int("ancestry_incomplete_count", scope.AncestryIncompleteCounts()[rule.ID()]),
 		)
 	}()
@@ -578,6 +607,9 @@ func (e *Engine) evaluateRule(
 	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
 	// and a batch can carry many findings for one rule.
 	ruleDefault := rulesapi.DefaultModeOf(rule)
+	// Read from the rule, once per batch, for the same reason: the DECLARATION decides where findings are recorded, not anything
+	// the finding itself carries.
+	isHealthRule := rulesapi.IsHealthSignal(rule)
 	// Attribution rides the alert the rule produces (issue #765). Read from the RULE, never from the finding, so that a rule
 	// cannot credit someone else for its match or drop the credit entirely: the Detection Rule License obligation the imported
 	// corpus carries would otherwise be satisfied only by rules that chose to satisfy it.
@@ -602,7 +634,7 @@ func (e *Engine) evaluateRule(
 	// flag that already gates the alert log and edr.alerts.created, so it is correct by construction rather than by test, and that
 	// is worth knowing rather than assuming.
 	for _, f := range findings {
-		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques, origin, tally)
+		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, isHealthRule, f, techniques, origin, tally)
 		if err != nil {
 			span.RecordError(err)
 			return err
@@ -614,6 +646,15 @@ func (e *Engine) evaluateRule(
 			suppressed++
 		case routeDuplicate:
 			duplicates++
+		case routeHealthOpened:
+			// Deliberately not counted into any of the three alert buckets. They are meant to sum to what the rule found on the
+			// ALERT surface, and a health episode is not on it; adding it to alerted would overstate the alert count and adding it
+			// to suppressed would report a configuration nobody chose.
+			healthEpisodes++
+		case routeHealthDuplicate, routeHealthDropped:
+			// Counted as findings but not as episodes, because no row was created. health_episode_count is read the way
+			// alert_count is, as rows that came into existence.
+			healthFindings++
 		}
 	}
 	return retryableMiss
@@ -644,8 +685,8 @@ func evaluate(
 // It reports what happened to the finding, so the caller can annotate its span with what was actually raised rather than with what
 // the rule returned.
 func (e *Engine) routeFinding(
-	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
-	origin string, tally *batchTally,
+	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, isHealthRule bool, f api.Finding,
+	techniques []string, origin string, tally *batchTally,
 ) (routeOutcome, error) {
 	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
@@ -679,8 +720,23 @@ func (e *Engine) routeFinding(
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeAlert:
-		// Fall through to the severity-override + persist path below.
+		// Fall through to the persist path below.
 	}
+
+	// A health signal is recorded rather than alerted (issue #778). The decision is made on the kind the RULE declares, not on
+	// whether this particular finding happens to carry a health payload: the declaration is the contract, and keying on the payload
+	// would let a detection that set the field by mistake escape the alert queue, while a health rule that forgot to set it would
+	// quietly land in the queue the declaration exists to keep it out of.
+	//
+	// Placed AFTER the mode switch has acted, so mode and kind compose the way they read: mode decides whether an operator wants
+	// this recorded at all, kind decides which surface records it. An earlier cut checked kind first on the grounds that no setting
+	// could name a rule absent from the tunable catalog. That was wrong: UpsertRuleSetting does not validate its rule_id against the
+	// registered set, so an operator can store a disabled or monitor setting for this rule, and ignoring it would have silently
+	// overridden a choice they made deliberately.
+	if isHealthRule {
+		return e.recordHealthEpisode(ctx, ruleID, f)
+	}
+
 	created, err := e.persistFinding(ctx, f, techniques, origin)
 	if err != nil {
 		return 0, err
@@ -689,6 +745,66 @@ func (e *Engine) routeFinding(
 		return routeDuplicate, nil
 	}
 	return routeAlerted, nil
+}
+
+// recordHealthEpisode records a health-signal finding as a host health episode instead of persisting an alert.
+//
+// The episode is identified by the finding's host and the event that reported it, and the store is unique on that pair. That is why
+// nothing here compares against what is already stored: the agent emits one event per outage, so the repetition this sees is a
+// redelivery of that event under at-least-once delivery, and the dedup has to hold under concurrent ingest across replicas, which a
+// read-then-write here would not.
+//
+// A missing recorder drops the finding rather than falling back to an alert. See the field's comment: putting an operational fault
+// back in the analyst queue because a dependency is unwired would undo the change rather than degrade it.
+func (e *Engine) recordHealthEpisode(ctx context.Context, ruleID string, f api.Finding) (routeOutcome, error) {
+	// A rule that declares itself a health signal must say what the episode records. Without the detail there is no kind to file it
+	// under and no component to close it against, so the row would be unreadable and could never resolve. Refused rather than
+	// written half-formed, and not silently rerouted to an alert either: the declaration says this is not a detection.
+	if f.Health == nil || f.Health.Kind == "" {
+		e.logger.ErrorContext(ctx, "health finding dropped: the rule declares a health signal but supplied no health detail",
+			"rule", ruleID, "host", f.HostID)
+		return routeHealthDropped, nil
+	}
+	if e.healthRecorder == nil {
+		e.logger.WarnContext(ctx, "health finding dropped: no health episode recorder is wired",
+			"rule", ruleID, "host", f.HostID)
+		return routeHealthDropped, nil
+	}
+	// The occurrence is the episode's identity, so a finding that cites no event cannot be recorded: without one, a redelivery
+	// would open a second episode for an outage already recorded, which is the property the identity exists to hold.
+	if len(f.EventIDs) == 0 {
+		e.logger.ErrorContext(ctx, "health finding dropped: no source event to record it against",
+			"rule", ruleID, "host", f.HostID)
+		return routeHealthDropped, nil
+	}
+	opened, err := e.healthRecorder.OpenHealthEpisode(ctx, endpointapi.HealthEpisode{
+		HostID:    f.HostID,
+		Component: f.Health.Component,
+		Subject:   f.Health.Subject,
+		Kind:      f.Health.Kind,
+		// The first cited event. A health finding is raised from exactly one report, unlike a detection that can correlate several.
+		SourceEventID: f.EventIDs[0],
+		Severity:      f.Severity,
+		Title:         f.Title,
+		Description:   f.Description,
+		Detail:        f.Health.Detail,
+		// The host's clock, from the event that reported the fault. The episode's other end is stamped from the agent's own
+		// transition instant, so taking this one from the server would measure queue backlog as part of the outage and, on a
+		// backlogged queue, could stamp an opening later than the recovery that ends it.
+		OpenedAtNs: f.Health.OccurredAtNs,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("record health episode for rule %s: %w", ruleID, err)
+	}
+	// Logged only when a record is actually created. A redelivered batch re-evaluates the same event, so logging every call would
+	// repeat one outage's line on every replay, which is noise an operator reads as more outages than there were.
+	if !opened {
+		return routeHealthDuplicate, nil
+	}
+	e.logger.InfoContext(ctx, "host health episode opened",
+		"rule", ruleID, "host", f.HostID, "component", f.Health.Component, "subject", f.Health.Subject,
+		"kind", f.Health.Kind, "severity", f.Severity)
+	return routeHealthOpened, nil
 }
 
 // persistFinding inserts a single finding as an alert, stamping it

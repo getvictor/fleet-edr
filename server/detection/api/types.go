@@ -464,7 +464,9 @@ func ApplyModifiers(base string, modifiers []RiskModifier) string {
 }
 
 // Finding is a per-rule positive output, persisted by the engine
-// into the alerts table. Canonical definition; rules/api re-exports
+// into the alerts table, or recorded as a host health episode when the
+// rule that produced it declares itself a health signal (issue #778).
+// Canonical definition; rules/api re-exports
 // it as a type alias so catalog rule files implement
 // rulesapi.Rule.Evaluate without importing detection/api directly
 // (see arch-go.yml §api-purity for the alias rationale).
@@ -498,6 +500,41 @@ type Finding struct {
 	//
 	// So Severity is the BASE the setting replaces, and these apply on top of it. See RiskModifier for why they are deltas.
 	Modifiers []RiskModifier
+	// Health is set only by a rule that declares itself a health signal, and it is what that finding is RECORDED from: the engine
+	// routes such a finding to a host health episode rather than to the alerts table (issue #778).
+	//
+	// It exists because the two destinations want different things. An alert is read by a person, so the facts can live in
+	// Description; an episode is read by an operational surface that filters and groups on them, so they have to be fields. A
+	// health rule therefore states them twice, once as prose for whoever reads the record and once here, rather than leaving the
+	// recording side to parse a sentence back apart.
+	//
+	// Nil for every other rule, which is all of them but one.
+	Health *HealthDetail
+}
+
+// HealthDetail is the machine-readable half of a health-signal finding: which component of this product is at fault, and the
+// fault's own fields. Component names a registered health component (the same vocabulary the agent's status snapshot uses), which
+// is what lets the episode be closed later when that component reports healthy again. It may be empty when the reporting agent
+// predates saying so, in which case the episode is recorded without one and simply has nothing to close it.
+//
+// Detail is the per-kind payload, carried as already-encoded JSON because its shape belongs to the kind rather than to this type:
+// adding a second health signal should not widen a struct every rule can see.
+//
+// Kind and Detail are deliberately primitives here rather than the endpoint context's own types. This package is a pure API
+// surface with a pinned dependency allow-list (arch-go), and the kinds and their payload shapes belong to the context that stores
+// them; a rule that needs to name one imports that context's api directly, which its allow-list already permits.
+type HealthDetail struct {
+	Kind      string
+	Component string
+	// Subject is which thing inside the component is at fault (for a capture-provider failure, the provider). Data an operator reads
+	// and filters on rather than identity: the episode is identified by the event that reported it, so two parts failing under one
+	// component are already two episodes because they arrive as two events.
+	Subject string
+	// OccurredAtNs is when the fault happened ON THE HOST, taken from the triggering event rather than from the server's clock. The
+	// episode's value is the interval it measures, and its other end is stamped from the agent's own transition instant, so opening
+	// it from server time would measure queue backlog and delivery delay as part of the outage.
+	OccurredAtNs int64
+	Detail       []byte
 }
 
 // RiskModifier is one conditional escalation: how much risk the condition adds, and the techniques observing it implies.
