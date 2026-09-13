@@ -49,6 +49,14 @@
   color: $ui-fleet-black-50;
 }
 
+// An exclusion value is usually a path or glob with no spaces, so it offers no break opportunity and would set the Value column's
+// minimum width, widening the whole table. overflow-wrap: anywhere lets it break at any character and, unlike break-word, also lowers
+// the min-content width the table's automatic layout sizes the column from, so the max-width holds.
+.detection-config__exclusion-value {
+  max-width: 24rem;
+  overflow-wrap: anywhere;
+}
+
 // The catalog declares severities lowercase ("medium"); present them capitalized so the column reads as a label, not a raw value.
 .detection-config__default-severity {
   text-transform: capitalize;

@@ -809,7 +809,7 @@ export function DetectionConfig() {
                     <tr key={ex.id}>
                       <td>{ex.rule_id || "(shared)"}</td>
                       <td>{ex.match_type}</td>
-                      <td>
+                      <td className="detection-config__exclusion-value">
                         <code>{ex.value}</code>
                       </td>
                       <td>{ex.reason}</td>
