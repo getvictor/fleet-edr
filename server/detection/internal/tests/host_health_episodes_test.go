@@ -97,16 +97,27 @@ func TestHostHealth_EpisodesAreAnEmptyListNotNull(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 
-	for _, host := range []string{"EPISODE-HOST-NO-SNAPSHOT", "EPISODE-HOST-WITH-SNAPSHOT"} {
-		if host == "EPISODE-HOST-WITH-SNAPSHOT" {
-			_, err := d.Store().DB().ExecContext(t.Context(), `INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
-				VALUES (?, 'healthy', NULL, 100)`, host)
+	cases := []struct {
+		name         string
+		host         string
+		withSnapshot bool
+	}{
+		{name: "host with no snapshot", host: "EPISODE-HOST-NO-SNAPSHOT"},
+		{name: "host with a snapshot", host: "EPISODE-HOST-WITH-SNAPSHOT", withSnapshot: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.withSnapshot {
+				_, err := d.Store().DB().ExecContext(t.Context(), `INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
+					VALUES (?, 'healthy', NULL, 100)`, tc.host)
+				require.NoError(t, err)
+			}
+			h, err := d.Store().HostHealth(t.Context(), tc.host)
 			require.NoError(t, err)
-		}
-		h, err := d.Store().HostHealth(t.Context(), host)
-		require.NoError(t, err)
-		require.NotNil(t, h.Episodes, "%s: episodes must be an empty list, not nil", host)
-		assert.Empty(t, h.Episodes)
+			require.NotNil(t, h.Episodes, "episodes must be an empty list, not nil")
+			assert.Empty(t, h.Episodes)
+		})
 	}
 }
 
