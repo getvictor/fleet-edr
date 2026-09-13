@@ -554,3 +554,31 @@ func TestMonitorRecordRetention_ZeroDisablesTheMonitorPrune(t *testing.T) {
 
 	assert.True(t, f.exists("alerts", ancient), "a disabled monitor window keeps the record, and the alert window does not reach it")
 }
+
+// TestMonitorRecordRetention_Loop_RunsWhenOnlyTheMonitorWindowIsSet is the monitor-record counterpart of the alert Loop test above. Loop
+// returns early only when every window is off, and the tests that call Run directly cannot see that check: dropping the monitor window
+// from it would silently disable monitor-record pruning for anyone who turned both other windows off, and they would all still pass.
+func TestMonitorRecordRetention_Loop_RunsWhenOnlyTheMonitorWindowIsSet(t *testing.T) {
+	t.Parallel()
+	f := newAlertFixture(t)
+	expired := f.monitorRecord(8*24*time.Hour, 1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runner := pipeline.NewRetention(f.db, pipeline.RetentionOptions{
+		RetentionDays:              0,
+		AlertRetentionDays:         0,
+		MonitorRecordRetentionDays: 7,
+		Interval:                   time.Hour, // runPeriodic runs one pass immediately, then waits
+		Now:                        func() time.Time { return retentionNow },
+	})
+	done := make(chan struct{})
+	go func() {
+		runner.Loop(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return !f.exists("alerts", expired) }, 10*time.Second, 50*time.Millisecond,
+		"Loop must run the monitor-record prune even though both other windows are disabled")
+	cancel()
+	<-done
+}

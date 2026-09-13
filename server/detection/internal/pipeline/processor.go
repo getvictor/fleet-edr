@@ -568,7 +568,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 	if !held {
 		// This evaluation outlived its claim lease and another attempt owns the rows now (issue #817). Everything up to here is
 		// idempotent: the graph builder is keyed on event identity and alert persistence deduplicates on
-		// (source, host, rule, subject). What follows is not, so it belongs to whichever attempt still holds the claim.
+		// (source, disposition, host, rule, subject). What follows is not, so it belongs to whichever attempt still holds the claim.
 		//
 		// Logged at WARN because it is also the first visibility anyone has that leases are being exceeded at all, which was
 		// previously invisible by construction: both attempts acknowledged successfully and neither learned it had lost.

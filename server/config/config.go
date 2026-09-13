@@ -45,7 +45,7 @@ const (
 	// defaultMonitorRecordRetentionDays is how long a monitor record is kept (issue #994). Seven days because that is the window the
 	// Observed column counts over and the window a promote decision is made over; a record older than that no longer informs one.
 	defaultMonitorRecordRetentionDays = 7
-	// maxRetentionDays caps both retention windows at a hundred years. Every consumer turns a window into a time.Duration of that many
+	// maxRetentionDays caps every retention window at a hundred years. Every consumer turns a window into a time.Duration of that many
 	// days, and a Duration counts nanoseconds in an int64, so past about 106,751 days the conversion wraps negative. A wrapped window puts
 	// the cutoff in the FUTURE and the next pass deletes every row older than that, which is to say everything: the opposite of what an
 	// operator asking for a very long window meant. Refused at boot instead, with room to spare below the wrap.
