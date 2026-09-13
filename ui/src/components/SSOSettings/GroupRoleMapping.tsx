@@ -63,7 +63,7 @@ export function GroupRoleMapping({
             aria-describedby="sso-groups-claim-help"
           />
           <p id="sso-groups-claim-help" className="sso-settings__help">
-            The ID-token claim that lists the operator&apos;s groups. Leave it empty to turn mapping off.
+            The ID-token claim that lists the operator&apos;s groups. To turn mapping off, clear it and remove every mapping.
           </p>
         </div>
 
