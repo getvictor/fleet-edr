@@ -54,6 +54,32 @@ func goldenAlertEnvelopes() map[string]Envelope {
 	}
 }
 
+// goldenHealthEnvelopes pins the health subject's bytes against drift from here on. Unlike the alert goldens there is no "before" to
+// compare with, since the shape is new; what this protects is every release after it, where a receiver already parsing it would break
+// on a renamed or reordered key just as an alert receiver would.
+func goldenHealthEnvelopes() map[string]Envelope {
+	opened := time.Unix(1_767_225_600, 0).UTC()
+	return map[string]Envelope{
+		"health_episode_opened.json": BuildHealthEpisode(HealthBuildParams{
+			EventID: "44444444-4444-4444-8444-444444444444", Attempt: 1, HostID: "host-h",
+			ConsoleBaseURL: "https://edr.example.com/",
+			Episode: HealthEpisodeBody{
+				ID: 3, Kind: "self_heal_failed", Component: "network_extension", Subject: "content_filter", Severity: "critical",
+				Title: "EDR sensor could not be restored", Description: "automatic recovery gave up on content_filter",
+				Detail:   json.RawMessage(`{"provider":"content_filter","outcome":"enable_ineffective","attempts":5}`),
+				OpenedAt: opened,
+			},
+		}),
+		"health_episode_opened_whole_component.json": BuildHealthEpisode(HealthBuildParams{
+			EventID: "55555555-5555-4555-8555-555555555555", Attempt: 2, HostID: "host-i",
+			Episode: HealthEpisodeBody{
+				ID: 4, Kind: "self_heal_failed", Component: "endpoint_security_extension", Severity: "high",
+				Title: "EDR sensor could not be restored", OpenedAt: opened,
+			},
+		}),
+	}
+}
+
 // spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/an-alert-envelope-is-unchanged-by-the-health-event-type
 //
 // TestAlertEnvelopesAreByteStable pins every alert envelope to the exact bytes it serialized to BEFORE host health events existed.
@@ -65,7 +91,19 @@ func goldenAlertEnvelopes() map[string]Envelope {
 // the event type is unchanged, and would need a SchemaVersion bump rather than a silent release.
 func TestAlertEnvelopesAreByteStable(t *testing.T) {
 	t.Parallel()
-	for name, env := range goldenAlertEnvelopes() {
+	checkGolden(t, goldenAlertEnvelopes(), "an alert envelope's bytes changed, which breaks existing receivers")
+}
+
+// TestHealthEnvelopesAreByteStable pins the health subject against drift. See goldenHealthEnvelopes for why it has no "before".
+func TestHealthEnvelopesAreByteStable(t *testing.T) {
+	t.Parallel()
+	checkGolden(t, goldenHealthEnvelopes(), "a health envelope's bytes changed, which breaks receivers already parsing it")
+}
+
+// checkGolden compares each envelope with its golden file, or rewrites the files under -update.
+func checkGolden(t *testing.T, envelopes map[string]Envelope, drift string) {
+	t.Helper()
+	for name, env := range envelopes {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got, err := json.MarshalIndent(env, "", "  ")
@@ -78,7 +116,7 @@ func TestAlertEnvelopesAreByteStable(t *testing.T) {
 			}
 			want, err := os.ReadFile(path) //nolint:gosec // a fixed testdata path built from a literal map key, not user input
 			require.NoError(t, err, "golden missing: regenerate only if the alert wire format is meant to change")
-			require.Equal(t, string(want), string(got)+"\n", "an alert envelope's bytes changed, which breaks existing receivers")
+			require.Equal(t, string(want), string(got)+"\n", drift)
 		})
 	}
 }

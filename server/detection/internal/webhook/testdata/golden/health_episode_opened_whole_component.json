@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "event_id": "55555555-5555-4555-8555-555555555555",
+  "event_type": "host.health_episode_opened",
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "delivery_attempt": 2,
+  "health_episode": {
+    "id": 4,
+    "kind": "self_heal_failed",
+    "component": "endpoint_security_extension",
+    "severity": "high",
+    "title": "EDR sensor could not be restored",
+    "opened_at": "2026-01-01T00:00:00Z"
+  },
+  "host": {
+    "id": "host-i"
+  },
+  "links": {
+    "console": "/ui/hosts/host-i"
+  }
+}

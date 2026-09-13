@@ -39,7 +39,17 @@ interface FormState {
 }
 
 function emptyForm(): FormState {
-  return { editingId: null, name: "", url: "", onCreated: true, onStatusChanged: false, onHealthEpisodeOpened: false, minSeverity: "low", enabled: true, secret: "" };
+  return {
+    editingId: null,
+    name: "",
+    url: "",
+    onCreated: true,
+    onStatusChanged: false,
+    onHealthEpisodeOpened: false,
+    minSeverity: "low",
+    enabled: true,
+    secret: "",
+  };
 }
 
 function toForm(d: WebhookDestination): FormState {
@@ -113,7 +123,9 @@ export function Webhooks() {
   function validate(f: FormState): string | null {
     if (f.name.trim() === "") return "Name is required.";
     if (!isHTTPSURL(f.url)) return "URL must be a valid https URL.";
-    if (!f.onCreated && !f.onStatusChanged) return "Select at least one event type.";
+    // Every subscribable event counts. Listing them one by one here is how a health-only destination came to be unsaveable: the
+    // checkbox reached the payload but not this check, so the form refused a subscription the API accepts.
+    if (!f.onCreated && !f.onStatusChanged && !f.onHealthEpisodeOpened) return "Select at least one event type.";
     if (f.editingId === null && f.secret.trim() === "") return "A signing secret is required.";
     return null;
   }

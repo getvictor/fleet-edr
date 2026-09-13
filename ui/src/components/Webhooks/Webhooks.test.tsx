@@ -132,6 +132,28 @@ describe("Webhooks", () => {
     expect(create.mock.calls[0][0].event_types).toEqual(["alert.created", "host.health_episode_opened"]);
   });
 
+  // A destination that wants ONLY sensor health faults is a real configuration (a pager for the sensor fleet, separate from the SOC's
+  // alert channel). The earlier test kept "Alert created" checked, so it could not see that the form rejected this combination.
+  it("saves a destination subscribed only to sensor health faults", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValueOnce([]).mockResolvedValueOnce([dest]);
+    const create = vi.spyOn(api, "createWebhook").mockResolvedValue(dest);
+    render(<Webhooks />);
+    await screen.findByText("No destinations configured.");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "sensor-pager" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://hooks.example.com/sensor" } });
+    fireEvent.change(screen.getByLabelText("Signing secret"), { target: { value: "sekret" } });
+    fireEvent.click(screen.getByLabelText("Alert created")); // on by default; turn it off
+    fireEvent.click(screen.getByLabelText("Sensor health fault"));
+    fireEvent.click(screen.getByRole("button", { name: "Add destination" }));
+
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+    expect(create.mock.calls[0][0].event_types).toEqual(["host.health_episode_opened"]);
+    expect(screen.queryByText("Select at least one event type.")).toBeNull();
+  });
+
   // The edit form must read the subscription back, or saving an unrelated change (a rename) would silently unsubscribe a destination
   // from health faults because the checkbox came up unchecked.
   it("keeps a health subscription across an unrelated edit", async () => {
