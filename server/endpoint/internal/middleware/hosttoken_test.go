@@ -208,3 +208,7 @@ func TestHostToken_PanicsOnNilService(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { _ = middleware.HostToken(nil, slog.Default()) })
 }
+
+func (f fakeService) ActiveEnrollments(context.Context) ([]api.ActiveEnrollment, error) {
+	panic("not used")
+}

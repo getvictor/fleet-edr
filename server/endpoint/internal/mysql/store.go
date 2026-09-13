@@ -50,6 +50,12 @@ type RegisterRequest struct {
 	SourceIP     string
 }
 
+// ActiveEnrollment is an active enrollment's host and when it last enrolled.
+type ActiveEnrollment struct {
+	HostID     string    `db:"host_id"`
+	EnrolledAt time.Time `db:"enrolled_at"`
+}
+
 // RegisterResult carries the host id, enrollment timestamp, and the epoch the row now holds back to the caller. The bearer token is no
 // longer minted here: the service layer mints a self-validating signed token (see internal/signedtoken) at this epoch. Epoch is 0 for a
 // brand-new host and the preserved (possibly operator-bumped) value for a re-enroll.
@@ -65,33 +71,39 @@ type RegisterResult struct {
 // would become valid again the moment the host re-enrolls (the re-enroll would otherwise reset the epoch back to 0). Revocation is
 // cleared so a host that proves the enroll secret is admitted afresh. The enrollments table holds the *current* enrollment state only;
 // revocation/audit history lives in structured logs (enroll handler + operator revoke).
+//
+// enrolled_at comes from the database clock, the clock every command's created_at comes from, because the watched-path catch-up
+// (issue #998) orders the two: a command queued before a host's latest enrollment may not have survived the reinstall behind it, and
+// comparing a database time with an application time would let clock skew hide that.
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
-	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, platform, source_ip, enrolled_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, NOW(6))
 		ON DUPLICATE KEY UPDATE
 			hostname      = VALUES(hostname),
 			agent_version = VALUES(agent_version),
 			os_version    = VALUES(os_version),
 			platform      = VALUES(platform),
 			source_ip     = VALUES(source_ip),
-			enrolled_at   = VALUES(enrolled_at),
+			enrolled_at   = NOW(6),
 			revoked_at    = NULL,
 			revoke_reason = NULL,
 			revoked_by    = NULL
-	`, req.HostID, req.Hostname, req.AgentVersion, req.OSVersion, req.Platform, req.SourceIP, now); err != nil {
+	`, req.HostID, req.Hostname, req.AgentVersion, req.OSVersion, req.Platform, req.SourceIP); err != nil {
 		return nil, fmt.Errorf("upsert enrollment: %w", err)
 	}
 
 	// Read back the epoch the row now carries (0 for a fresh host, the preserved value for a re-enroll). Sourced from the DB rather than
 	// assumed 0 so the minted token matches the host's current epoch and survives the revocation-snapshot check.
-	var epoch int64
-	if err := s.db.GetContext(ctx, &epoch, `SELECT token_epoch FROM enrollments WHERE host_id = ?`, req.HostID); err != nil {
+	var row struct {
+		Epoch      int64     `db:"token_epoch"`
+		EnrolledAt time.Time `db:"enrolled_at"`
+	}
+	if err := s.db.GetContext(ctx, &row, `SELECT token_epoch, enrolled_at FROM enrollments WHERE host_id = ?`, req.HostID); err != nil {
 		return nil, fmt.Errorf("read token epoch: %w", err)
 	}
 
-	return &RegisterResult{HostID: req.HostID, EnrolledAt: now, Epoch: epoch}, nil
+	return &RegisterResult{HostID: req.HostID, EnrolledAt: row.EnrolledAt.UTC(), Epoch: row.Epoch}, nil
 }
 
 // CountActive returns how many non-revoked enrollments exist. Cheaper than ActiveHostIDs when the caller only needs the count. The
@@ -105,16 +117,31 @@ func (s *Store) CountActive(ctx context.Context) (int, error) {
 }
 
 // ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment. Used to fan out policy updates to the set of
-// hosts that still have a valid token; returning just the id column keeps the payload small when the caller is already going to look
-// up the full row by id.
+// hosts that still have a valid token. It projects ActiveEnrollments, so a push and the watched-path catch-up agree on which
+// enrollments are active.
 func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
-	var ids []string
-	if err := s.db.SelectContext(ctx, &ids, `
-		SELECT host_id FROM enrollments WHERE revoked_at IS NULL ORDER BY host_id
-	`); err != nil {
-		return nil, fmt.Errorf("list active host ids: %w", err)
+	rows, err := s.ActiveEnrollments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.HostID
 	}
 	return ids, nil
+}
+
+// ActiveEnrollments returns each active (non-revoked) enrollment's host_id and enrolled_at, in host_id order, and nothing else: the
+// watched-path catch-up reads it every few minutes, so it reads only the columns that question needs. host_id is the primary key, so
+// the table holds one row per host and the read is bounded by the number of hosts ever enrolled.
+func (s *Store) ActiveEnrollments(ctx context.Context) ([]ActiveEnrollment, error) {
+	var rows []ActiveEnrollment
+	if err := s.db.SelectContext(ctx, &rows, `
+		SELECT host_id, enrolled_at FROM enrollments WHERE revoked_at IS NULL ORDER BY host_id
+	`); err != nil {
+		return nil, fmt.Errorf("list active enrollments: %w", err)
+	}
+	return rows, nil
 }
 
 // List returns every enrollment row, active + revoked, for the admin UI.

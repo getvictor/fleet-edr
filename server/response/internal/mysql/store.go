@@ -286,6 +286,32 @@ func (s *Store) ExpirePendingOlderThan(ctx context.Context, hostID string, cutof
 	return n, nil
 }
 
+// LatestOfType returns, per host in hostIDs, the most recently queued command of commandType: the one with the highest id, which is
+// the order commands are inserted in. Hosts with no such command are absent. Chunked like ListPendingForHosts, and each host's latest id is
+// the last entry of its range in idx_commands_host_type_id (host_id, command_type, id).
+func (s *Store) LatestOfType(ctx context.Context, commandType string, hostIDs []string) (map[string]api.Command, error) {
+	out := make(map[string]api.Command, len(hostIDs))
+	for start := 0; start < len(hostIDs); start += listPendingChunkSize {
+		end := min(start+listPendingChunkSize, len(hostIDs))
+		query, args, err := sqlx.In(
+			`SELECT c.id, c.host_id, c.command_type, c.payload, c.status, c.created_at, c.acked_at, c.completed_at, c.result
+				FROM commands c
+				JOIN (SELECT host_id, MAX(id) AS id FROM commands WHERE command_type = ? AND host_id IN (?) GROUP BY host_id) latest
+					ON c.id = latest.id`, commandType, hostIDs[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("expand latest-of-type host ids: %w", err)
+		}
+		var rows []commandRow
+		if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
+			return nil, fmt.Errorf("latest %s commands: %w", commandType, err)
+		}
+		for i := range rows {
+			out[rows[i].HostID] = rows[i].toAPI()
+		}
+	}
+	return out, nil
+}
+
 // UndeliverableByHost counts, per host, the commands that aged out undelivered inside api.UndeliverableWindow (issue #732).
 //
 // Only status='expired' is counted, and that is the whole point of the query rather than a simplification. A command reaches that

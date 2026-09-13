@@ -324,3 +324,27 @@ func TestListPendingForHosts(t *testing.T) {
 		assert.Empty(t, cmds)
 	})
 }
+
+// LatestOfType answers per host with the newest command of the asked type, whatever its status, and ignores other types.
+func TestLatestOfType(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := s.Insert(ctx, "host-a", "set_watched_paths", json.RawMessage(`{"version":1}`))
+	require.NoError(t, err)
+	newest, err := s.Insert(ctx, "host-a", "set_watched_paths", json.RawMessage(`{"version":2}`))
+	require.NoError(t, err)
+	_, err = s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"pid":1}`))
+	require.NoError(t, err)
+	_, err = s.Insert(ctx, "host-b", "kill_process", json.RawMessage(`{"pid":2}`))
+	require.NoError(t, err)
+
+	got, err := s.LatestOfType(ctx, "set_watched_paths", []string{"host-a", "host-b", "host-c"})
+	require.NoError(t, err)
+
+	require.Len(t, got, 1, "host-b has only another type and host-c has none")
+	assert.Equal(t, newest, got["host-a"].ID)
+	assert.JSONEq(t, `{"version":2}`, string(got["host-a"].Payload))
+	assert.Equal(t, api.StatusPending, got["host-a"].Status)
+}

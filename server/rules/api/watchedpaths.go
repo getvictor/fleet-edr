@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,30 @@ var BuiltInWatchedPaths = []WatchedPath{
 	{Path: "/etc/sudoers", Match: WatchedPathLiteral},
 	{Path: "/etc/sudoers.d/", Match: WatchedPathPrefix},
 }
+
+// WatchedPathEnrollment is a host with an active enrollment and when it last enrolled, as the watched-path catch-up reads it. A
+// re-enrollment follows a reinstall, which removes the extension's persisted set, so a set queued before it may no longer be on the
+// host.
+type WatchedPathEnrollment struct {
+	HostID     string
+	EnrolledAt time.Time
+}
+
+// WatchedPathEnrollmentLister returns the hosts with an active enrollment. cmd/main adapts the endpoint context's enrollment list.
+type WatchedPathEnrollmentLister func(ctx context.Context) ([]WatchedPathEnrollment, error)
+
+// WatchedPathCommand is what the watched-path catch-up needs to know about a host's latest set_watched_paths command.
+type WatchedPathCommand struct {
+	Payload   []byte
+	Status    string
+	CreatedAt time.Time
+	// CompletedAt is when the command reached a terminal status, and zero while it has not.
+	CompletedAt time.Time
+}
+
+// WatchedPathCommandLister returns, per host, its most recently queued command of a type. cmd/main adapts the response context's
+// LatestOfType.
+type WatchedPathCommandLister func(ctx context.Context, commandType string, hostIDs []string) (map[string]WatchedPathCommand, error)
 
 // MaxWatchedPaths bounds the set. Every entry is a mute the file-tamper client holds, two for a path under a firmlinked root, and a
 // set this size already covers the uses the issue names (canaries, credential stores, a handful of integrity-monitored directories)

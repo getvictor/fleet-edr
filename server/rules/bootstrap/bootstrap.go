@@ -73,6 +73,14 @@ type Deps struct {
 	// context has seen events from, which misses a host enrolled but not yet reporting and includes one whose enrollment is revoked.
 	// Nil leaves the watched-path routes unmounted.
 	EnrolledHostLister appcontrol.HostLister
+	// WatchedPathEnrollments and WatchedPathLatestCommands feed the watched-path catch-up, which queues the current set for hosts
+	// that enrolled after a change, reinstalled, or let their command age out (issue #998). cmd/main adapts the endpoint context's
+	// enrollment list and the response context's LatestOfType. The catch-up runs only when both are set, alongside the routes.
+	WatchedPathEnrollments    api.WatchedPathEnrollmentLister
+	WatchedPathLatestCommands api.WatchedPathCommandLister
+	// WatchedPathConvergeInterval is how often the catch-up runs. Optional: zero or negative means
+	// watchedpaths.DefaultConvergeInterval.
+	WatchedPathConvergeInterval time.Duration
 
 	// Corpus supplies rule definitions from the rulecontent context (ADR-0021): rulecontent produces content, rules consumes and
 	// evaluates it. Optional. When nil, or when the stored corpus is empty or fails to load, the catalog falls back to the corpus
@@ -115,7 +123,11 @@ type Rules struct {
 	// auditDrain delivers rule-content audit entries the writing request could not (issue #886). Nil when no outbox was wired.
 	auditDrain       *ruleauthoring.AuditDrain
 	detectionConfigH *operator.DetectionConfigHandler
-	ruleAuthoringH   *operator.RuleAuthoringHandler
+	// watchedPathConverger is nil unless the watched-path catch-up is wired; see Deps.WatchedPathEnrollments.
+	watchedPathConverger *watchedpaths.Converger
+	// watchedPathConvergeInterval is how often it runs. See Deps.WatchedPathConvergeInterval.
+	watchedPathConvergeInterval time.Duration
+	ruleAuthoringH              *operator.RuleAuthoringHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -210,26 +222,34 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		})
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
+	var watchedPathConverger *watchedpaths.Converger
 	if deps.CommandBatchInserter != nil && deps.EnrolledHostLister != nil {
+		watchedPathStore := watchedpaths.NewStore(deps.DB)
 		detectionConfigH.SetWatchedPaths(watchedpaths.NewService(
-			watchedpaths.NewStore(deps.DB), deps.CommandBatchInserter, deps.EnrolledHostLister, deps.Audit, logger))
+			watchedPathStore, deps.CommandBatchInserter, deps.EnrolledHostLister, deps.Audit, logger))
+		if deps.WatchedPathEnrollments != nil && deps.WatchedPathLatestCommands != nil {
+			watchedPathConverger = watchedpaths.NewConverger(watchedPathStore, deps.CommandBatchInserter,
+				deps.WatchedPathEnrollments, deps.WatchedPathLatestCommands, logger)
+		}
 	}
 	r := &Rules{
-		svc:                    svc,
-		detectionConfigStore:   detectionConfigStore,
-		evalStatsBuffer:        evalStatsBuffer,
-		evalStatsFlushInterval: deps.EvalStatsFlushInterval,
-		auditDrain:             auditDrain,
-		operatorH:              opH,
-		appControlH:            appControlH,
-		appControlSt:           appControlStore,
-		appControlSvc:          appControlSvc,
-		detectionConfigSvc:     detectionConfigSvc,
-		detectionConfigH:       detectionConfigH,
-		ruleAuthoringH:         ruleAuthoringH,
-		db:                     deps.DB,
-		logger:                 logger,
-		corpus:                 deps.Corpus,
+		svc:                         svc,
+		detectionConfigStore:        detectionConfigStore,
+		evalStatsBuffer:             evalStatsBuffer,
+		evalStatsFlushInterval:      deps.EvalStatsFlushInterval,
+		auditDrain:                  auditDrain,
+		operatorH:                   opH,
+		appControlH:                 appControlH,
+		appControlSt:                appControlStore,
+		appControlSvc:               appControlSvc,
+		detectionConfigSvc:          detectionConfigSvc,
+		detectionConfigH:            detectionConfigH,
+		ruleAuthoringH:              ruleAuthoringH,
+		watchedPathConverger:        watchedPathConverger,
+		watchedPathConvergeInterval: deps.WatchedPathConvergeInterval,
+		db:                          deps.DB,
+		logger:                      logger,
+		corpus:                      deps.Corpus,
 	}
 
 	// Version 0: the initial set is stamped as not-from-storage even when it came from the store, because the version that produced
@@ -321,6 +341,13 @@ func (r *Rules) Run(ctx context.Context) {
 		func(ctx context.Context) {
 			if r.auditDrain != nil {
 				r.auditDrain.SweepLoop(ctx, ruleauthoring.DefaultSweepInterval)
+			}
+		},
+		// Queues the watched-path set for hosts that missed its push (issue #998). Absent where the command queue, enrollments or
+		// command history are not wired, as the watched-path routes are.
+		func(ctx context.Context) {
+			if r.watchedPathConverger != nil {
+				r.watchedPathConverger.Loop(ctx, r.watchedPathConvergeInterval)
 			}
 		},
 	}

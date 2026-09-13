@@ -327,3 +327,7 @@ func TestEnroll_SecretNeverLogged(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	assert.NotContains(t, buf.String(), secret, "audit log must never contain the enroll secret")
 }
+
+func (f fakeService) ActiveEnrollments(context.Context) ([]api.ActiveEnrollment, error) {
+	panic("not used")
+}

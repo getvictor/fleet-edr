@@ -32,9 +32,11 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/metrics"
 	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
+	responseapi "github.com/fleetdm/edr/server/response/api"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/tracingpolicy"
 	"github.com/fleetdm/edr/server/ui"
@@ -645,18 +647,20 @@ func openRules(
 	}
 
 	rulesCtx, err := rulesbootstrap.New(ctx, rulesbootstrap.Deps{
-		DB:                   db,
-		Logger:               logger,
-		Corpus:               ruleContentCtx.Corpus(),
-		RuleAuthor:           ruleAuthor,
-		RulePacks:            rulePacks,
-		AuditOutbox:          ruleContentCtx.AuditOutbox(),
-		Audit:                identityCtx.AuditRecorder(),
-		AuthZ:                identityCtx.AuthZ(),
-		PrincipalLabel:       identityCtx.Service().PrincipalLabel,
-		CommandBatchInserter: responseCtx.Service().InsertBatch,
-		HostLister:           hostListerFromDetection(detectionCtx.Service()),
-		EnrolledHostLister:   endpointCtx.Service().ActiveHostIDs,
+		DB:                        db,
+		Logger:                    logger,
+		Corpus:                    ruleContentCtx.Corpus(),
+		RuleAuthor:                ruleAuthor,
+		RulePacks:                 rulePacks,
+		AuditOutbox:               ruleContentCtx.AuditOutbox(),
+		Audit:                     identityCtx.AuditRecorder(),
+		AuthZ:                     identityCtx.AuthZ(),
+		PrincipalLabel:            identityCtx.Service().PrincipalLabel,
+		CommandBatchInserter:      responseCtx.Service().InsertBatch,
+		HostLister:                hostListerFromDetection(detectionCtx.Service()),
+		EnrolledHostLister:        endpointCtx.Service().ActiveHostIDs,
+		WatchedPathEnrollments:    activeEnrollmentsFromEndpoint(endpointCtx.Service()),
+		WatchedPathLatestCommands: latestCommandsFromResponse(responseCtx.Service()),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
@@ -667,6 +671,41 @@ func openRules(
 		return nil, err
 	}
 	return rulesCtx, nil
+}
+
+// activeEnrollmentsFromEndpoint adapts the endpoint context's active enrollments to the shape the watched-path catch-up reads. In
+// cmd/main for the same reason as hostListerFromDetection: the projection is wiring.
+func activeEnrollmentsFromEndpoint(svc endpointapi.Service) rulesapi.WatchedPathEnrollmentLister {
+	return func(ctx context.Context) ([]rulesapi.WatchedPathEnrollment, error) {
+		active, err := svc.ActiveEnrollments(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]rulesapi.WatchedPathEnrollment, len(active))
+		for i, e := range active {
+			out[i] = rulesapi.WatchedPathEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt}
+		}
+		return out, nil
+	}
+}
+
+// latestCommandsFromResponse adapts the response context's LatestOfType to the watched-path catch-up's shape.
+func latestCommandsFromResponse(svc responseapi.Service) rulesapi.WatchedPathCommandLister {
+	return func(ctx context.Context, commandType string, hostIDs []string) (map[string]rulesapi.WatchedPathCommand, error) {
+		latest, err := svc.LatestOfType(ctx, commandType, hostIDs)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]rulesapi.WatchedPathCommand, len(latest))
+		for hostID, c := range latest {
+			cmd := rulesapi.WatchedPathCommand{Payload: c.Payload, Status: string(c.Status), CreatedAt: c.CreatedAt}
+			if c.CompletedAt != nil {
+				cmd.CompletedAt = *c.CompletedAt
+			}
+			out[hostID] = cmd
+		}
+		return out, nil
+	}
 }
 
 // hostListerFromDetection projects detection's ListHosts (returns the richer HostSummary shape) down to the appcontrol.HostLister
