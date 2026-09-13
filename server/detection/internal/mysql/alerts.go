@@ -38,25 +38,9 @@ const alertEventsBatchSize = 500
 // an Alert by hand.
 func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error) {
 	eventIDs = detectionslices.Deduplicate(eventIDs)
-	// Defense in depth: callers that forget to stamp Source land in the catalog-rule bucket. The ENUM column would otherwise reject an
-	// empty string with Error 1265 (Data truncated).
-	if a.Source == "" {
-		a.Source = api.AlertSourceDetection
-	}
-	if a.Disposition == "" {
-		a.Disposition = api.AlertDispositionAlert
-	}
-	// Subject is the dedup identity. A blank Subject (every process-backed caller, e.g. catalog rules that only set
-	// ProcessID, and application-control) defaults to the process_id string, preserving the historical
-	// (source, host_id, rule_id, process_id) dedup. Process-less callers (BTM persistence) supply a namespaced Subject.
-	if a.Subject == "" {
-		// A process-less alert (ProcessID 0) MUST supply its own dedup Subject: defaulting to "0" would collapse every
-		// process-less alert for the same (source, host_id, rule_id) into one row. Treat the omission as a programming
-		// error rather than silently mis-deduplicating (Gemini).
-		if a.ProcessID == 0 {
-			return 0, false, fmt.Errorf("insert alert for rule %s on host %s: process-less alert requires a non-empty Subject", a.RuleID, a.HostID)
-		}
-		a.Subject = strconv.FormatInt(a.ProcessID, 10)
+	a, err := normalizeAlert(a)
+	if err != nil {
+		return 0, false, err
 	}
 
 	// Read the triggering events' envelopes from the durable archive BEFORE opening the MySQL transaction. ingestion writes the
@@ -75,6 +59,64 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	alertID, created, err := insertAlertRow(ctx, tx, a)
+	if err != nil {
+		return 0, false, err
+	}
+
+	// A re-fired-finding dedup re-links any newly-triggering events to the existing alert (INSERT IGNORE absorbs the rows
+	// already linked); a fresh alert links them with a plain INSERT. Both copy the triggering-event payloads idempotently.
+	if err := insertAlertEventLinks(ctx, tx, linksFor(alertID, eventIDs), !created /* dedup re-link uses INSERT IGNORE */); err != nil {
+		return 0, false, err
+	}
+	if err := insertEventPayloads(ctx, tx, payloadsFor(alertID, evidence)); err != nil {
+		return 0, false, err
+	}
+
+	// Only a fresh alert enqueues webhook deliveries; a re-fired dedup (created == false) must not re-notify, and a monitor record is not
+	// an alert at all (issue #994). The enqueue runs in this same transaction so a queued delivery is durable with the alert and never
+	// queued if the insert rolls back (issue #496).
+	if created && a.Disposition == api.AlertDispositionAlert {
+		if err := s.enqueueNewAlertDeliveries(ctx, tx, a, alertID); err != nil {
+			return 0, false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("commit insert alert: %w", err)
+	}
+	return alertID, created, nil
+}
+
+// normalizeAlert fills the defaults a row needs before it is written, and refuses a row that cannot be deduplicated.
+func normalizeAlert(a api.Alert) (api.Alert, error) {
+	// Defense in depth: callers that forget to stamp Source land in the catalog-rule bucket. The ENUM column would otherwise reject an
+	// empty string with Error 1265 (Data truncated).
+	if a.Source == "" {
+		a.Source = api.AlertSourceDetection
+	}
+	if a.Disposition == "" {
+		a.Disposition = api.AlertDispositionAlert
+	}
+	// Subject is the dedup identity. A blank Subject (every process-backed caller, e.g. catalog rules that only set
+	// ProcessID, and application-control) defaults to the process_id string, preserving the historical
+	// (source, host_id, rule_id, process_id) dedup. Process-less callers (BTM persistence) supply a namespaced Subject.
+	if a.Subject == "" {
+		// A process-less alert (ProcessID 0) MUST supply its own dedup Subject: defaulting to "0" would collapse every
+		// process-less alert for the same (source, host_id, rule_id) into one row. Treat the omission as a programming
+		// error rather than silently mis-deduplicating (Gemini).
+		if a.ProcessID == 0 {
+			return api.Alert{}, fmt.Errorf("insert alert for rule %s on host %s: process-less alert requires a non-empty Subject",
+				a.RuleID, a.HostID)
+		}
+		a.Subject = strconv.FormatInt(a.ProcessID, 10)
+	}
+	return a, nil
+}
+
+// insertAlertRow writes one alert or monitor record row inside tx, or matches the existing row with its dedup key, and reports its id
+// and whether it was newly created.
+func insertAlertRow(ctx context.Context, tx *sqlx.Tx, a api.Alert) (int64, bool, error) {
 	// NULLIF(process_id, 0) stores a process-less alert's link as NULL (there is no processes(id) = 0 row, so a literal 0
 	// would violate fk_alerts_process). Dedup is on `subject`, not process_id.
 	//
@@ -95,7 +137,6 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert alert: %w", err)
 	}
-
 	alertID, err := res.LastInsertId()
 	if err != nil {
 		return 0, false, fmt.Errorf("insert alert last id: %w", err)
@@ -104,80 +145,79 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert alert rows affected: %w", err)
 	}
-	created := rowsAffected == 1
-
-	// A re-fired-finding dedup re-links any newly-triggering events to the existing alert (INSERT IGNORE absorbs the rows
-	// already linked); a fresh alert links them with a plain INSERT. Both copy the triggering-event payloads idempotently.
-	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, !created /* dedup re-link uses INSERT IGNORE */); err != nil {
-		return 0, false, err
-	}
-	if err := insertEventPayloads(ctx, tx, alertID, evidence); err != nil {
-		return 0, false, err
-	}
-
-	// Only a fresh alert enqueues webhook deliveries; a re-fired dedup (created == false) must not re-notify, and a monitor record is not
-	// an alert at all (issue #994). The enqueue runs in this same transaction so a queued delivery is durable with the alert and never
-	// queued if the insert rolls back (issue #496).
-	if created && a.Disposition == api.AlertDispositionAlert {
-		if err := s.enqueueNewAlertDeliveries(ctx, tx, a, alertID); err != nil {
-			return 0, false, err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, false, fmt.Errorf("commit insert alert: %w", err)
-	}
-	return alertID, created, nil
+	return alertID, rowsAffected == 1, nil
 }
 
-// bulkInsertAlertEvents links eventIDs to alertID with one (chunked) multi-row INSERT instead of N round-trips. dedup=true switches to
-// INSERT IGNORE so re-linking an existing (alert_id, event_id) PK doesn't blow up.
-func bulkInsertAlertEvents(ctx context.Context, tx *sqlx.Tx, alertID int64, eventIDs []string, dedup bool) error {
-	if len(eventIDs) == 0 {
-		return nil
+// alertEventLink is one (alert, triggering event) pair, and alertEventPayload one triggering event's envelope copied as an alert's
+// evidence. The writers below take them across any number of alerts, so a batch of monitor records links and copies in a few statements.
+type alertEventLink struct {
+	alertID int64
+	eventID string
+}
+
+type alertEventPayload struct {
+	alertID int64
+	event   api.Event
+}
+
+func linksFor(alertID int64, eventIDs []string) []alertEventLink {
+	links := make([]alertEventLink, len(eventIDs))
+	for i, eid := range eventIDs {
+		links[i] = alertEventLink{alertID: alertID, eventID: eid}
 	}
+	return links
+}
+
+func payloadsFor(alertID int64, events []api.Event) []alertEventPayload {
+	payloads := make([]alertEventPayload, len(events))
+	for i := range events {
+		payloads[i] = alertEventPayload{alertID: alertID, event: events[i]}
+	}
+	return payloads
+}
+
+// insertAlertEventLinks writes links with chunked multi-row INSERTs instead of one round-trip per event. dedup=true switches to
+// INSERT IGNORE so re-linking an existing (alert_id, event_id) PK doesn't blow up.
+func insertAlertEventLinks(ctx context.Context, tx *sqlx.Tx, links []alertEventLink, dedup bool) error {
 	verb := "INSERT INTO"
 	if dedup {
 		verb = "INSERT IGNORE INTO"
 	}
-	for start := 0; start < len(eventIDs); start += alertEventsBatchSize {
-		end := min(start+alertEventsBatchSize, len(eventIDs))
-		chunk := eventIDs[start:end]
+	for start := 0; start < len(links); start += alertEventsBatchSize {
+		chunk := links[start:min(start+alertEventsBatchSize, len(links))]
 		placeholders := make([]string, len(chunk))
 		args := make([]any, 0, len(chunk)*2)
-		for i, eid := range chunk {
+		for i, l := range chunk {
 			placeholders[i] = "(?, ?)"
-			args = append(args, alertID, eid)
+			args = append(args, l.alertID, l.eventID)
 		}
 		stmt := verb + " alert_events (alert_id, event_id) VALUES " + strings.Join(placeholders, ", ")
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return fmt.Errorf("link alert_events alert=%d count=%d: %w", alertID, len(chunk), err)
+			return fmt.Errorf("link alert_events alert=%d count=%d: %w", chunk[0].alertID, len(chunk), err)
 		}
 	}
 	return nil
 }
 
-// insertEventPayloads makes the alert's evidence self-contained: it copies the given triggering-event envelopes (already read from the
+// insertEventPayloads makes an alert's evidence self-contained: it copies the given triggering-event envelopes (already read from the
 // durable archive by the caller, before the transaction) into alert_event_payloads, so the alert detail view resolves them even after
 // the raw events age out of the archive (ADR-0015). INSERT IGNORE keeps it idempotent across the dedup re-link path. Runs inside the
-// alert-insert transaction, but does no external I/O of its own: the ClickHouse read happened off the critical section.
-func insertEventPayloads(ctx context.Context, tx *sqlx.Tx, alertID int64, events []api.Event) error {
+// insert transaction, but does no external I/O of its own: the ClickHouse read happened off the critical section.
+func insertEventPayloads(ctx context.Context, tx *sqlx.Tx, payloads []alertEventPayload) error {
 	// Batch the INSERT into alert_event_payloads by row count so a large evidence set stays under MySQL's placeholder / packet limits.
-	for start := 0; start < len(events); start += alertEventsBatchSize {
-		end := min(start+alertEventsBatchSize, len(events))
-		chunk := events[start:end]
-
+	for start := 0; start < len(payloads); start += alertEventsBatchSize {
+		chunk := payloads[start:min(start+alertEventsBatchSize, len(payloads))]
 		placeholders := make([]string, len(chunk))
 		args := make([]any, 0, len(chunk)*7)
 		for i := range chunk {
+			ev := chunk[i].event
 			placeholders[i] = "(?, ?, ?, ?, ?, ?, ?)"
-			args = append(args, alertID, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs,
-				chunk[i].IngestedAtNs, chunk[i].EventType, []byte(chunk[i].Payload))
+			args = append(args, chunk[i].alertID, ev.EventID, ev.HostID, ev.TimestampNs, ev.IngestedAtNs, ev.EventType, []byte(ev.Payload))
 		}
-		stmt := "INSERT IGNORE INTO alert_event_payloads (alert_id, event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES " +
-			strings.Join(placeholders, ", ")
+		stmt := "INSERT IGNORE INTO alert_event_payloads " +
+			"(alert_id, event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES " + strings.Join(placeholders, ", ")
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return fmt.Errorf("copy event payloads for alert %d: %w", alertID, err)
+			return fmt.Errorf("copy event payloads for alert %d: %w", chunk[0].alertID, err)
 		}
 	}
 	return nil
