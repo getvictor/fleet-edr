@@ -50,6 +50,10 @@ const (
 	// stop the agent is about to fix from one it has already failed to fix three times, which is the difference between
 	// ignoring the alert and driving to the host.
 	reasonSelfHealFailed = "self_heal_failed"
+	// reasonRebootRequired is the network extension after an in-place upgrade (issue #985): macOS keeps the previous version
+	// registered until the Mac restarts, its Mach service stays bound to that version, and the agent cannot connect to the new
+	// one. never_connected would read as "not approved yet", which sends an operator to the wrong fix.
+	reasonRebootRequired = "reboot_required"
 )
 
 // Component is one condition in a status snapshot. The JSON tags match the server's ComponentHealth exactly; reason and message are
@@ -105,7 +109,8 @@ type providerHealth struct {
 
 // Registry is the agent's concurrency-safe health state. Each monitored component is registered once at startup (seeding
 // unhealthy/never_connected) and then driven by the receiver loops' connect/disconnect transitions. The poster reads Snapshot(); a
-// buffered Changed() channel pulses on any status transition so the poster can report promptly rather than waiting for its periodic tick.
+// buffered Changed() channel pulses on any change of status or reason so the poster can report promptly rather than waiting for its
+// periodic tick.
 type Registry struct {
 	mu    sync.Mutex
 	comps map[string]*componentState
@@ -292,6 +297,16 @@ func (r *Registry) MarkSelfHealFailed(compType, message string) {
 	})
 }
 
+// MarkRebootRequired records that compType cannot be reached because a previous version is waiting to be removed at the next
+// restart (issue #985). Unhealthy, under a reason that names the fix. Not sticky: the next successful connect overwrites it.
+// No-op for an unregistered type.
+func (r *Registry) MarkRebootRequired(compType string) {
+	r.transition(compType, func(s *componentState) {
+		s.set(StatusUnhealthy, reasonRebootRequired,
+			s.displayName+": the previous version is still registered until the Mac restarts; restart it to finish the upgrade")
+	})
+}
+
 // MarkDisconnected records that compType lost its session: unhealthy, with connection_lost if it had ever connected (the tamper-adjacent
 // signal) or never_connected otherwise. No-op for an unregistered type.
 func (r *Registry) MarkDisconnected(compType string) {
@@ -304,8 +319,8 @@ func (r *Registry) MarkDisconnected(compType string) {
 	})
 }
 
-// transition applies mutate under the lock, stamps the transition time only when the status actually changed, and pulses Changed() on a
-// real change so "since when" stays meaningful and the poster does not wake for no-op updates.
+// transition applies mutate under the lock, stamps the transition time only when the status or reason actually changed, and pulses
+// Changed() on a real change so "since when" stays meaningful and the poster does not wake for no-op updates.
 func (r *Registry) transition(compType string, mutate func(*componentState)) {
 	r.mu.Lock()
 	s, ok := r.comps[compType]
@@ -313,12 +328,15 @@ func (r *Registry) transition(compType string, mutate func(*componentState)) {
 		r.mu.Unlock()
 		return
 	}
-	before := s.status
+	beforeStatus, beforeReason := s.status, s.reason
 	mutate(s)
-	if s.status != before {
+	// A new reason is a new condition even at the same status: never_connected to reboot_required stays unhealthy but names a
+	// different fix, so it is dated from now and posted now rather than at the next periodic tick. The message alone is not
+	// compared, so rewording within one reason does not restamp.
+	changed := s.status != beforeStatus || s.reason != beforeReason
+	if changed {
 		s.lastTransitionNs = r.nowNs()
 	}
-	changed := s.status != before
 	r.mu.Unlock()
 	if changed {
 		r.notify()
@@ -326,7 +344,7 @@ func (r *Registry) transition(compType string, mutate func(*componentState)) {
 }
 
 // set updates the mutable fields of a component state in place. lastTransitionNs is stamped by transition, not here, so the stamp only
-// advances on a real status change.
+// advances on a real change of status or reason.
 func (s *componentState) set(status Status, reason, message string) {
 	s.status = status
 	s.reason = reason
@@ -423,8 +441,8 @@ func providerDisplayName(name string) string {
 	}
 }
 
-// Changed returns a channel that receives a value after any status transition. It is buffered with capacity one and sent non-blocking,
-// so a burst of transitions coalesces into a single pending wake-up (the poster debounces further).
+// Changed returns a channel that receives a value after any change of a component's status or reason. It is buffered with capacity
+// one and sent non-blocking, so a burst of transitions coalesces into a single pending wake-up (the poster debounces further).
 func (r *Registry) Changed() <-chan struct{} { return r.changed }
 
 func (r *Registry) notify() {

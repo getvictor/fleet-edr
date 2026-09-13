@@ -4,9 +4,12 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/health"
+	"github.com/fleetdm/edr/agent/receiver"
 )
 
 // TestNewAgentHTTPClient builds the shared agent HTTP client (fingerprint/insecure TLS policy + HTTP/2 keep-alive PING config) and
@@ -56,4 +59,27 @@ func TestControlDialTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The receiver's stale-upgrade signal reaches the component's reported health, so the console says a restart is needed rather than
+// that the extension is not activated.
+func TestWithHealthHooks_StaleUpgradeMarksRebootRequired(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry()
+	registry.Register(health.ComponentNetworkExtension, "Network extension")
+	hooks := withHealthHooks(receiver.LoopHooks{}, receiverLoopParams{health: registry, component: health.ComponentNetworkExtension})
+
+	require.NotNil(t, hooks.OnUpgradeStale)
+	hooks.OnUpgradeStale()
+	snap := registry.Snapshot()
+	require.Len(t, snap, 1)
+	assert.Equal(t, health.StatusUnhealthy, snap[0].Status)
+	assert.Equal(t, "reboot_required", snap[0].Reason)
+
+	t.Run("a loop that reports no health gets no health hooks", func(t *testing.T) {
+		t.Parallel()
+		unwired := withHealthHooks(receiver.LoopHooks{}, receiverLoopParams{})
+		assert.Nil(t, unwired.OnUpgradeStale)
+		assert.Nil(t, unwired.OnConnected)
+	})
 }
