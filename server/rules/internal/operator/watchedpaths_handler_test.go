@@ -124,7 +124,11 @@ func TestWatchedPathsHandler_ReplaceRejectsABadBodyAndAMissingActor(t *testing.T
 	bad.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, bad.StatusCode)
 
-	noActor := dcDo(t, watchedPathsServer(t, svc, false), http.MethodPut, "/api/v1/detection-config/watched-paths", `{"reason":"r"}`)
+	noList := dcDo(t, watchedPathsServer(t, svc, true), http.MethodPut, "/api/v1/detection-config/watched-paths", `{"reason":"r"}`)
+	noList.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, noList.StatusCode)
+
+	noActor := dcDo(t, watchedPathsServer(t, svc, false), http.MethodPut, "/api/v1/detection-config/watched-paths", `{"paths":[],"reason":"r"}`)
 	noActor.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, noActor.StatusCode)
 	assert.Nil(t, svc.gotActor, "neither request reaches the service")

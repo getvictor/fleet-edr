@@ -42,6 +42,7 @@ func TestValidateWatchedPaths_RefusesWhatItShouldNotWatch(t *testing.T) {
 		{"dot segment", []WatchedPath{literal("/etc/./hosts")}, "segment"},
 		{"dot-dot segment", []WatchedPath{prefix("/Library/../Users/")}, "segment"},
 		{"control character", []WatchedPath{literal("/etc/ho\nsts")}, "control character"},
+		{"NUL, which would truncate the path the kernel receives", []WatchedPath{prefix("/Users/\x00ignored/")}, "control character"},
 		{"delete character", []WatchedPath{literal("/etc/hosts\x7f")}, "control character"},
 		{"too long", []WatchedPath{literal("/" + strings.Repeat("a", MaxWatchedPathBytes))}, "longer than"},
 		{"literal ending in a slash", []WatchedPath{literal("/Library/StartupItems/")}, `must not end in "/"`},
@@ -52,13 +53,14 @@ func TestValidateWatchedPaths_RefusesWhatItShouldNotWatch(t *testing.T) {
 		{"firmlink parent itself", []WatchedPath{prefix("/private/")}, "below a top-level directory"},
 		{"unknown match", []WatchedPath{{Path: "/Library/StartupItems/", Match: "recursive_glob"}}, "unknown match"},
 		{"duplicate", []WatchedPath{prefix("/Library/StartupItems/"), prefix("/Library/StartupItems/")}, "more than once"},
+		{"duplicate through the firmlink", []WatchedPath{prefix("/etc/emond.d/"), prefix("/private/etc/emond.d/")}, "more than once"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := ValidateWatchedPaths(tc.paths)
 			require.ErrorIs(t, err, ErrInvalidWatchedPaths)
-			assert.Contains(t, err.Error(), tc.reason)
+			require.ErrorContains(t, err, tc.reason)
 		})
 	}
 }
@@ -74,7 +76,7 @@ func TestValidateWatchedPaths_BoundsTheSetSize(t *testing.T) {
 	over := append(slices.Clone(full), WatchedPath{Path: "/Library/Watched/one-too-many", Match: WatchedPathLiteral})
 	err := ValidateWatchedPaths(over)
 	require.ErrorIs(t, err, ErrInvalidWatchedPaths)
-	assert.Contains(t, err.Error(), "at most 32")
+	require.ErrorContains(t, err, "at most 32")
 }
 
 func TestValidateWatchedPaths_NamesTheEntryItRefuses(t *testing.T) {
@@ -83,8 +85,7 @@ func TestValidateWatchedPaths_NamesTheEntryItRefuses(t *testing.T) {
 		{Path: "/Library/StartupItems/", Match: WatchedPathPrefix},
 		{Path: "/Users/", Match: WatchedPathPrefix},
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `entry 1 ("/Users/")`)
+	require.ErrorContains(t, err, `entry 1 ("/Users/")`)
 }
 
 func TestValidateWatchedPaths_AcceptsAPathAtTheLengthBound(t *testing.T) {

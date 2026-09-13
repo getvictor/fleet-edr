@@ -986,18 +986,20 @@ paths:
       summary: Replace the watched-path set
       description: |
         Replaces the set whole, stores it as the next version, and queues a
-        `set_watched_paths` command for every enrolled host. `reason` is
+        `set_watched_paths` command for every host with an active enrollment.
+        `paths` is required (an empty list clears the set) and `reason` is
         required and audited with the previous and new sets. A command that
         cannot be queued for some hosts does not fail the change; the response
         counts them.
 
         The set is refused, and nothing stored or queued, when it has more than
         `max_paths` entries or any entry whose path is not absolute, has an
-        empty, `.` or `..` segment, is longer than 1024 bytes, or contains a
-        control character; whose `match` is not `literal` or `prefix`; that is
+        empty, `.` or `..` segment, is longer than 1024 bytes, or contains an
+        ASCII control character (NUL included); whose `match` is not `literal` or `prefix`; that is
         a `literal` ending in `/`, a `prefix` not ending in `/`, or a `prefix`
         naming a top-level directory (judged through `/private` for `/etc`,
-        `/tmp` and `/var`); or that repeats another entry.
+        `/tmp` and `/var`); or that repeats another entry (also judged
+        through `/private`).
       security:
         - SessionCookie: []
           CSRF: []
@@ -1032,8 +1034,12 @@ paths:
                   fanout_failed:
                     type: integer
                     description: Of those, hosts the command could not be queued for.
+                  fanout_skipped_reason:
+                    type: string
+                    enum: [host_lister_error]
+                    description: Present when the set was queued for no host because the enrolled hosts could not be listed.
         "400":
-          description: Invalid input, a blank reason, or a set the server refuses; the message names the entry and why.
+          description: Invalid input, a missing `paths` list, a blank reason, or a set the server refuses; the message names the entry and why.
           content:
             application/json:
               schema:

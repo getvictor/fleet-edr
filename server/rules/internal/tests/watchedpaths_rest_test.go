@@ -3,10 +3,12 @@
 package tests
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +16,7 @@ import (
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 )
 
 const watchedPathsRoute = "/api/v1/detection-config/watched-paths"
@@ -145,22 +148,65 @@ func TestWatchedPathsREST_ClearsTheSet(t *testing.T) {
 	assert.JSONEq(t, `[]`, string(mustField(t, commands[1].Payload, "paths")), "an empty set is sent as an empty list, not null")
 }
 
-// A request that leaves the list out means an empty set, and reads back as an empty list rather than null.
-func TestWatchedPathsREST_TreatsAMissingListAsEmpty(t *testing.T) {
+// spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-change-without-a-list-is-refused
+// A request without the list is refused rather than read as an empty set, which would remove every path an operator added whenever a
+// client misspelled the field.
+func TestWatchedPathsREST_RefusesARequestWithoutAList(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
+	put := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "add"})
+	put.Body.Close()
 
-	resp := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"reason": "nothing to watch"})
-	resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	for _, body := range []map[string]any{
+		{"reason": "no list"},
+		{"path": []rulesapi.WatchedPath{}, "reason": "misspelled field"},
+		{"paths": nil, "reason": "null list"},
+	} {
+		resp := r.do(t, http.MethodPut, watchedPathsRoute, body)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "%v", body)
+	}
 
 	stored := r.watchedPaths(t)
 	assert.Equal(t, int64(1), stored.Version)
-	assert.NotNil(t, stored.Paths)
-	assert.Empty(t, stored.Paths)
-	commands := r.inserter.snapshot()
-	require.Len(t, commands, 1)
-	assert.JSONEq(t, `[]`, string(mustField(t, commands[0].Payload, "paths")))
+	assert.Equal(t, []rulesapi.WatchedPath{startupItems}, stored.Paths)
+	assert.Len(t, r.inserter.snapshot(), 1)
+}
+
+// Concurrent replacements are ordered by the row lock: each takes the next version, audits the set it actually replaced, and gets a
+// later epoch than the version before it, which is what lets a host order the sets however their commands arrive.
+func TestWatchedPathsREST_OrdersConcurrentReplacements(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	const writers = 8
+
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			path := rulesapi.WatchedPath{Path: fmt.Sprintf("/Library/Watched%d/", i), Match: rulesapi.WatchedPathPrefix}
+			resp := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{path}, "reason": "race"})
+			resp.Body.Close()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	}
+	wg.Wait()
+
+	epochs := make(map[int64]int64, writers)
+	for _, c := range r.inserter.snapshot() {
+		var p rulesapi.SetWatchedPathsPayload
+		require.NoError(t, json.Unmarshal(c.Payload, &p))
+		epochs[p.Version] = p.Epoch
+	}
+	require.Len(t, epochs, writers, "every replacement took its own version")
+	for v := int64(2); v <= writers; v++ {
+		assert.Greater(t, epochs[v], epochs[v-1], "version %d must carry a later epoch than version %d", v, v-1)
+	}
+	previous := make(map[any]bool, writers)
+	for _, e := range r.audit.snapshot() {
+		assert.Equal(t, e.Payload["version"].(int64)-1, e.Payload["previous_version"], "each change audits the set it replaced")
+		previous[e.Payload["previous_version"]] = true
+	}
+	assert.Len(t, previous, writers)
 }
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-set-the-server-would-not-watch-is-refused
@@ -216,6 +262,66 @@ func TestWatchedPathsREST_EnforcesReadAndWritePermissions(t *testing.T) {
 		assert.Equal(t, int64(0), r.watchedPaths(t).Version)
 		assert.Empty(t, r.inserter.snapshot())
 	})
+}
+
+// The epoch moves forward with the version even when the database clock reads earlier than the last change, as it can after the
+// clock is stepped back: a later version with an earlier epoch would let a host reorder the two sets.
+func TestWatchedPathsREST_EpochAdvancesPastAClockThatWentBack(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	first := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "first"})
+	first.Body.Close()
+	_, err := r.db.ExecContext(t.Context(), `UPDATE watched_path_set SET updated_at = NOW(6) + INTERVAL 1 DAY WHERE id = 1`)
+	require.NoError(t, err)
+	ahead := r.watchedPaths(t).UpdatedAt
+
+	second := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{}, "reason": "second"})
+	second.Body.Close()
+	require.Equal(t, http.StatusOK, second.StatusCode)
+
+	stored := r.watchedPaths(t)
+	assert.Equal(t, int64(2), stored.Version)
+	assert.True(t, stored.UpdatedAt.After(*ahead), "version 2 must carry a later update time than version 1's")
+}
+
+// A push that could not even list the hosts is not reported as a push to an empty fleet.
+func TestWatchedPathsREST_ReportsAHostListFailure(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"}, func(d *rulesbootstrap.Deps) {
+		d.EnrolledHostLister = func(context.Context) ([]string, error) { return nil, errors.New("enrollments unavailable") }
+	})
+
+	resp := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "r"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var result map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "host_lister_error", result["fanout_skipped_reason"])
+	assert.EqualValues(t, 0, result["fanout_hosts"])
+
+	assert.Equal(t, int64(1), r.watchedPaths(t).Version, "the set is stored even though it reached no host")
+	events := r.audit.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, "host_lister_error", events[0].Payload["fanout_skipped_reason"])
+	assert.Empty(t, r.inserter.snapshot())
+}
+
+// The push goes to active enrollments, not to hosts the detection context has seen events from.
+func TestWatchedPathsREST_PushesToEnrolledHosts(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"seen-only"}, func(d *rulesbootstrap.Deps) {
+		d.EnrolledHostLister = func(context.Context) ([]string, error) { return []string{"enrolled-a", "enrolled-b"}, nil }
+	})
+
+	resp := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "r"})
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var hosts []string
+	for _, c := range r.inserter.snapshot() {
+		hosts = append(hosts, c.HostID)
+	}
+	assert.ElementsMatch(t, []string{"enrolled-a", "enrolled-b"}, hosts)
 }
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-push-that-misses-hosts-does-not-undo-the-change

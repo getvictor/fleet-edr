@@ -6,9 +6,11 @@ The server SHALL hold one watched-path set: a version and a list of entries, eac
 
 `GET /api/v1/detection-config/watched-paths` SHALL return the set, the built-in paths every host watches regardless of it, and the maximum number of entries, to a caller permitted `detection_config.read`.
 
-`PUT /api/v1/detection-config/watched-paths` SHALL replace the set, for a caller permitted `detection_config.write`, only when the request carries a non-blank reason and the proposed set is valid. A replacement SHALL be stored as the next version, SHALL queue a `set_watched_paths` command carrying `{version, epoch, paths}` for every enrolled host, where `epoch` is the set's update time in Unix microseconds so hosts keep ordering sets after a database restore sends `version` backwards, and SHALL be audited with the reason, the previous and new sets, and the number of hosts the command was queued for and missed. A command that could not be queued for some hosts SHALL NOT fail the replacement, which is already stored; the response SHALL report both counts.
+`PUT /api/v1/detection-config/watched-paths` SHALL replace the set, for a caller permitted `detection_config.write`, only when the request carries a `paths` list (an empty list clears the set; a request without one is refused, so a misspelled field cannot remove every path), a non-blank reason, and a valid set. A replacement SHALL be stored as the next version, SHALL queue a `set_watched_paths` command carrying `{version, epoch, paths}` for every host with an active enrollment, and SHALL be audited with the reason, the set it replaced, the new set, and the number of hosts the command was queued for and missed. A command that could not be queued for some hosts SHALL NOT fail the replacement, which is already stored; the response SHALL report both counts, and when the enrolled hosts could not be listed at all it SHALL say so rather than report an empty fleet.
 
-The server is the only place the set is validated, so it SHALL refuse a proposed set, storing nothing and queueing nothing, when it has more than 32 entries, or any entry whose path is not absolute, has an empty, `.` or `..` segment, is longer than 1024 bytes, or contains a control character, whose `match` is neither `literal` nor `prefix`, that is a `literal` ending in `/`, that is a `prefix` not ending in `/`, that is a `prefix` naming a top-level directory, or that repeats another entry. A path under `/private/etc`, `/private/tmp`, or `/private/var` SHALL be judged by its root-linked form. The refusal SHALL name the entry and the reason.
+`epoch` is the set's update time in Unix microseconds. Hosts order sets by version or epoch, so each replacement SHALL receive both a version and an epoch later than the set it replaced, and concurrent replacements SHALL each audit the set they actually replaced.
+
+The server is the only place the set is validated, so it SHALL refuse a proposed set, storing nothing and queueing nothing, when it has more than 32 entries, or any entry whose path is not absolute, has an empty, `.` or `..` segment, is longer than 1024 bytes, or contains an ASCII control character (NUL included), whose `match` is neither `literal` nor `prefix`, that is a `literal` ending in `/`, that is a `prefix` not ending in `/`, that is a `prefix` naming a top-level directory, or that repeats another entry. A path under `/private/etc`, `/private/tmp`, or `/private/var` SHALL be judged by its root-linked form, both for the top-level rule and for repetition. The refusal SHALL name the entry and the reason.
 
 A top-level prefix is refused because its cost is not bounded by the set's size: every write under a tree such as `/Users/` would reach the wire.
 
@@ -24,6 +26,7 @@ A top-level prefix is refused because its cost is not bounded by the set's size:
 - **WHEN** they replace the set with a valid list of entries and a reason
 - **THEN** the set is stored as the next version with those entries
 - **AND** a `set_watched_paths` command carrying that version, the set's update time as its epoch, and those entries is queued for each of the three hosts
+- **AND** the version and the epoch are both later than those of the set it replaced
 - **AND** the change is audited with the reason, the previous and new sets, and the host counts
 
 #### Scenario: A set the server would not watch is refused
@@ -32,6 +35,12 @@ A top-level prefix is refused because its cost is not bounded by the set's size:
 - **WHEN** a caller permitted `detection_config.write` submits it with a reason
 - **THEN** the request is refused with a message naming the entry and why
 - **AND** the stored set is unchanged and no command is queued
+
+#### Scenario: A change without a list is refused
+
+- **GIVEN** a stored set with entries
+- **WHEN** a caller permitted `detection_config.write` submits a replacement with a reason but no `paths` list
+- **THEN** the request is refused, the stored set is unchanged, and no command is queued
 
 #### Scenario: A change without a reason is refused
 
@@ -51,3 +60,4 @@ A top-level prefix is refused because its cost is not bounded by the set's size:
 - **WHEN** a caller permitted `detection_config.write` submits it with a reason
 - **THEN** the set is stored as the next version
 - **AND** the response and the audit row report how many hosts the command was not queued for
+- **AND** when the enrolled hosts could not be listed, they say the push was skipped for that reason rather than reporting no hosts

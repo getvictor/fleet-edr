@@ -145,6 +145,9 @@ func newAppControlRig(t *testing.T, hosts []string, opts ...appControlRigOpt) *a
 		HostLister: func(_ context.Context) ([]string, error) {
 			return append([]string(nil), hostList...), nil
 		},
+		EnrolledHostLister: func(_ context.Context) ([]string, error) {
+			return append([]string(nil), hostList...), nil
+		},
 	}
 	for _, opt := range opts {
 		opt(&deps)

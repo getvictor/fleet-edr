@@ -77,23 +77,26 @@ var firmlinkedRoots = []string{"/etc", "/tmp", "/var"}
 // ValidateWatchedPaths checks a proposed set. It is the one place the set is validated: the agent checks only the envelope and the
 // extension applies what it is given.
 //
-// A path must be absolute, clean (no empty, "." or ".." segment), within MaxWatchedPathBytes, and free of control characters. A prefix
+// A path must be absolute, clean (no empty, "." or ".." segment), within MaxWatchedPathBytes, and free of ASCII control characters
+// (NUL included, which would truncate the path the kernel receives). A prefix
 // names a directory, so it ends in "/", and it must lie below a top-level directory: a prefix such as "/Users/" or "/Library/" would
 // put every write under that tree on the wire, which is the firehose ADR-0008 removed. A literal names a file, so it does not end in
-// "/". An entry may appear once.
+// "/". An entry may appear once, judged by its root-linked form.
 func ValidateWatchedPaths(paths []WatchedPath) error {
 	if len(paths) > MaxWatchedPaths {
 		return fmt.Errorf("%w: %d paths, at most %d", ErrInvalidWatchedPaths, len(paths), MaxWatchedPaths)
 	}
+	// Duplicates are keyed by the root-linked form, since /etc/emond.d/ and /private/etc/emond.d/ are one directory.
 	seen := make(map[WatchedPath]struct{}, len(paths))
 	for i, p := range paths {
 		if err := validateWatchedPath(p); err != nil {
 			return fmt.Errorf("%w: entry %d (%q): %s", ErrInvalidWatchedPaths, i, p.Path, err.Error())
 		}
-		if _, dup := seen[p]; dup {
+		key := WatchedPath{Path: rootLinked(p.Path), Match: p.Match}
+		if _, dup := seen[key]; dup {
 			return fmt.Errorf("%w: entry %d (%q): listed more than once", ErrInvalidWatchedPaths, i, p.Path)
 		}
-		seen[p] = struct{}{}
+		seen[key] = struct{}{}
 	}
 	return nil
 }
@@ -105,7 +108,7 @@ func validateWatchedPath(p WatchedPath) error {
 	case len(p.Path) > MaxWatchedPathBytes:
 		return fmt.Errorf("the path is longer than %d bytes", MaxWatchedPathBytes)
 	case strings.ContainsFunc(p.Path, func(r rune) bool { return r < 0x20 || r == 0x7f }):
-		return errors.New("the path contains a control character")
+		return errors.New("the path contains an ASCII control character")
 	}
 	for s := range strings.SplitSeq(strings.TrimSuffix(p.Path[1:], "/"), "/") {
 		if s == "" || s == "." || s == ".." {

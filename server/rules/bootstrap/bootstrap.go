@@ -67,6 +67,11 @@ type Deps struct {
 	// detection.api.Service.ListHosts that projects each HostSummary down to its host_id. Same optional-when-nil contract as
 	// CommandBatchInserter; nil disables the REST surface.
 	HostLister appcontrol.HostLister
+	// EnrolledHostLister enumerates the hosts with an active enrollment, which is who a watched-path set is pushed to (issue #998).
+	// cmd/main passes the endpoint context's ActiveHostIDs. Separate from HostLister because that one lists hosts the detection
+	// context has seen events from, which misses a host enrolled but not yet reporting and includes one whose enrollment is revoked.
+	// Nil leaves the watched-path routes unmounted.
+	EnrolledHostLister appcontrol.HostLister
 
 	// Corpus supplies rule definitions from the rulecontent context (ADR-0021): rulecontent produces content, rules consumes and
 	// evaluates it. Optional. When nil, or when the stored corpus is empty or fails to load, the catalog falls back to the corpus
@@ -203,8 +208,10 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 			Logger:   logger,
 		})
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
+	}
+	if deps.CommandBatchInserter != nil && deps.EnrolledHostLister != nil {
 		detectionConfigH.SetWatchedPaths(watchedpaths.NewService(
-			watchedpaths.NewStore(deps.DB), deps.CommandBatchInserter, deps.HostLister, deps.Audit, logger))
+			watchedpaths.NewStore(deps.DB), deps.CommandBatchInserter, deps.EnrolledHostLister, deps.Audit, logger))
 	}
 	r := &Rules{
 		svc:                    svc,
@@ -658,8 +665,8 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 //	GET  /api/v1/app-control/policies                    (when CommandBatchInserter + HostLister are wired)
 //	GET  /api/v1/app-control/policies/{id}               (when CommandBatchInserter + HostLister are wired)
 //	POST /api/v1/app-control/policies/{id}/rules         (when CommandBatchInserter + HostLister are wired)
-//	GET  /api/v1/detection-config/watched-paths          (when CommandBatchInserter + HostLister are wired)
-//	PUT  /api/v1/detection-config/watched-paths          (when CommandBatchInserter + HostLister are wired)
+//	GET  /api/v1/detection-config/watched-paths          (when CommandBatchInserter + EnrolledHostLister are wired)
+//	PUT  /api/v1/detection-config/watched-paths          (when CommandBatchInserter + EnrolledHostLister are wired)
 //	GET  /api/v1/rule-content/documents                  (when RuleAuthor + Corpus are wired)
 //	POST /api/v1/rule-content/documents:check            (when RuleAuthor + Corpus are wired)
 //	GET  /api/v1/rule-content/documents/{path...}        (when RuleAuthor + Corpus are wired)

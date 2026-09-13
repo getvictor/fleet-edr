@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -26,6 +25,8 @@ func NewStore(db *sqlx.DB) *Store {
 	}
 	return &Store{db: db}
 }
+
+const selectSet = `SELECT version, paths, updated_at, updated_by FROM watched_path_set WHERE id = 1`
 
 type setRow struct {
 	Version   int64        `db:"version"`
@@ -49,38 +50,49 @@ func (r setRow) set() (api.WatchedPathSet, error) {
 // Get returns the stored set.
 func (s *Store) Get(ctx context.Context) (api.WatchedPathSet, error) {
 	var row setRow
-	if err := sqlx.GetContext(ctx, s.db, &row,
-		`SELECT version, paths, updated_at, updated_by FROM watched_path_set WHERE id = 1`); err != nil {
+	if err := sqlx.GetContext(ctx, s.db, &row, selectSet); err != nil {
 		return api.WatchedPathSet{}, fmt.Errorf("read watched path set: %w", err)
 	}
 	return row.set()
 }
 
-// Replace stores paths as the new set and returns it, one version past the one it replaced. The version advances in the same
-// statement that writes the paths, so two concurrent replacements each get their own version and the later write is the later
-// version.
-func (s *Store) Replace(ctx context.Context, paths []api.WatchedPath, actor string, now time.Time) (api.WatchedPathSet, error) {
+// Replace stores paths as the new set and returns the set it replaced and the new one, one version past it.
+//
+// The previous set, the version and the update time are all read and written under the row lock, so concurrent replacements are
+// ordered by who takes the lock: each gets the next version, reports the set it actually replaced, and gets an update time strictly
+// later than the one before. That last property is load-bearing. A host orders sets by version or by update time (the epoch), so a
+// later version stamped with an earlier time, which reading the clock before taking the lock could produce, would let an out-of-order
+// delivery put the older set back. The time comes from the database for the same reason: one clock orders every replica's writes.
+func (s *Store) Replace(ctx context.Context, paths []api.WatchedPath, actor string) (previous, next api.WatchedPathSet, err error) {
 	encoded, err := json.Marshal(paths)
 	if err != nil {
-		return api.WatchedPathSet{}, fmt.Errorf("encode watched paths: %w", err)
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("encode watched paths: %w", err)
 	}
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return api.WatchedPathSet{}, fmt.Errorf("begin watched path set replace: %w", err)
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("begin watched path set replace: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE watched_path_set SET version = version + 1, paths = ?, updated_at = ?, updated_by = ? WHERE id = 1`,
-		encoded, now.UTC(), actor); err != nil {
-		return api.WatchedPathSet{}, fmt.Errorf("replace watched path set: %w", err)
+	var before setRow
+	if err := sqlx.GetContext(ctx, tx, &before, selectSet+` FOR UPDATE`); err != nil {
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("lock watched path set: %w", err)
 	}
-	var row setRow
-	if err := sqlx.GetContext(ctx, tx, &row,
-		`SELECT version, paths, updated_at, updated_by FROM watched_path_set WHERE id = 1`); err != nil {
-		return api.WatchedPathSet{}, fmt.Errorf("read replaced watched path set: %w", err)
+	if _, err := tx.ExecContext(ctx, `UPDATE watched_path_set
+		SET version = version + 1, paths = ?, updated_by = ?,
+		    updated_at = GREATEST(NOW(6), COALESCE(updated_at + INTERVAL 1 MICROSECOND, NOW(6)))
+		WHERE id = 1`, encoded, actor); err != nil {
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("replace watched path set: %w", err)
+	}
+	var after setRow
+	if err := sqlx.GetContext(ctx, tx, &after, selectSet); err != nil {
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("read replaced watched path set: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return api.WatchedPathSet{}, fmt.Errorf("commit watched path set replace: %w", err)
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("commit watched path set replace: %w", err)
 	}
-	return row.set()
+	if previous, err = before.set(); err != nil {
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, err
+	}
+	next, err = after.set()
+	return previous, next, err
 }

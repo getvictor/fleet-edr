@@ -24,13 +24,19 @@ type watchedPathsResponse struct {
 	MaxPaths int               `json:"max_paths"`
 }
 
+// replaceWatchedPathsRequest is the PUT body. Paths is a pointer so a request without it is refused rather than read as an empty set:
+// a client that misspells the field would otherwise remove every path an operator had added. Clearing the set is an explicit
+// empty list.
 type replaceWatchedPathsRequest struct {
-	Paths  []api.WatchedPath `json:"paths"`
-	Reason string            `json:"reason"`
+	Paths  *[]api.WatchedPath `json:"paths"`
+	Reason string             `json:"reason"`
 }
 
-// SetWatchedPaths wires the watched-path routes (issue #998). Set after construction, and only where the command queue and host list
-// the push needs are wired, which is also the condition for the application-control routes.
+// msgWatchedPathsRequired is the refusal for a PUT without a paths list.
+const msgWatchedPathsRequired = "paths is required; send an empty list to stop watching every path added"
+
+// SetWatchedPaths wires the watched-path routes (issue #998). Set after construction, and only where the command queue and the
+// enrolled-host list the push needs are wired.
 func (h *DetectionConfigHandler) SetWatchedPaths(svc watchedPathsService) {
 	h.watchedPaths = svc
 }
@@ -60,11 +66,15 @@ func (h *DetectionConfigHandler) handleReplaceWatchedPaths(w http.ResponseWriter
 	if !h.decode(ctx, w, r, &req) {
 		return
 	}
+	if req.Paths == nil {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput, msgWatchedPathsRequired)
+		return
+	}
 	actor, ok := h.actor(ctx, w)
 	if !ok {
 		return
 	}
-	result, err := h.watchedPaths.Replace(ctx, actor, req.Reason, req.Paths)
+	result, err := h.watchedPaths.Replace(ctx, actor, req.Reason, *req.Paths)
 	switch {
 	case errors.Is(err, watchedpaths.ErrReasonRequired):
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput, msgDCReasonRequired)

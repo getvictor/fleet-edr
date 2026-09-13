@@ -390,7 +390,11 @@ func openContexts(
 	if err != nil {
 		return
 	}
-	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx, ruleContentCtx); err != nil {
+	// endpoint before rules: the watched-path push goes to active enrollments, which the endpoint context owns (issue #998).
+	if endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel)); err != nil {
+		return
+	}
+	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx, ruleContentCtx, endpointCtx); err != nil {
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
@@ -403,9 +407,6 @@ func openContexts(
 	detectionCtx.SetMonitorMatchRecorder(rulesCtx.MonitorMatchRecorder())
 	detectionCtx.SetRuleEvalStatsRecorder(rulesCtx.RuleEvalStatsRecorder())
 	rulesCtx.SetRetentionDays(cfg.RetentionDays)
-	if endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel)); err != nil {
-		return
-	}
 	// A health-signal rule's findings are recorded as host health episodes rather than as alerts (issue #778). Wired after the
 	// endpoint context exists, unlike the rules-context setters above, because the recorder is the endpoint's: it owns host health,
 	// and the engine only states the fault it observed.
@@ -623,6 +624,7 @@ func openRules(
 	detectionCtx *detectionbootstrap.Detection,
 	responseCtx *responsebootstrap.Response,
 	ruleContentCtx *rulecontentbootstrap.RuleContent,
+	endpointCtx *endpointbootstrap.Endpoint,
 ) (*rulesbootstrap.Rules, error) {
 	// Closing the loop ADR-0021 leaves open. rulecontent owns the authoring lifecycle but must not import the evaluator, so it
 	// takes the validator as a port; the only honest validator is the corpus loader, which lives in rules. Neither context can
@@ -654,6 +656,7 @@ func openRules(
 		PrincipalLabel:       identityCtx.Service().PrincipalLabel,
 		CommandBatchInserter: responseCtx.Service().InsertBatch,
 		HostLister:           hostListerFromDetection(detectionCtx.Service()),
+		EnrolledHostLister:   endpointCtx.Service().ActiveHostIDs,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)
