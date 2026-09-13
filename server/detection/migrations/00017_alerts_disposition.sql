@@ -14,10 +14,13 @@
 -- The key swap is one statement so there is no moment without a uniqueness guarantee. Existing rows all take the default 'alert', and
 -- the new key only adds a column to the old one, so every row that was unique before still is and the build cannot fail on a duplicate.
 --
--- Two indexes lead with disposition, because every read now filters on it and monitor records are expected to outnumber alerts several
+-- Three indexes lead with disposition, because every read now filters on it and monitor records are expected to outnumber alerts several
 -- times over (2,327 monitor matches against 384 alerts in a week on the dogfood host). (disposition, created_at) serves the default list,
--- newest first. (disposition, updated_at) replaces the retention prune's (updated_at): the alert and monitor prunes each select their own
--- disposition below their own cutoff, and an index on updated_at alone would walk the other disposition's rows to find them.
+-- newest first. (disposition, rule_id, created_at) serves one rule's monitor records, which is how an operator reaches them from the
+-- rule; without it that read walks every monitor record newest first looking for the rule's, measured at 103ms for a rule with none among
+-- 180,000 records against 0.17ms with it. (disposition, updated_at) replaces the retention prune's (updated_at): the alert and monitor
+-- prunes each select their own disposition below their own cutoff, and an index on updated_at alone would walk the other disposition's
+-- rows to find them. All three were checked with EXPLAIN at that scale.
 --
 -- ALGORITHM=INPLACE, LOCK=NONE is stated so the change fails loudly rather than silently taking a write lock on a table on the ingest
 -- path. Adding a column rebuilds the table in place with concurrent DML allowed.
@@ -33,6 +36,7 @@ ALTER TABLE alerts
 	ADD UNIQUE KEY uk_alerts_dedup (source, disposition, host_id, rule_id, subject),
 	DROP INDEX idx_alerts_updated_at,
 	ADD INDEX idx_alerts_disposition_created (disposition, created_at),
+	ADD INDEX idx_alerts_disposition_rule_created (disposition, rule_id, created_at),
 	ADD INDEX idx_alerts_disposition_updated (disposition, updated_at),
 	ALGORITHM=INPLACE, LOCK=NONE;
 -- +goose StatementEnd
