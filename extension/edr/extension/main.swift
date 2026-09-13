@@ -9,11 +9,37 @@ import os.log
 // this snapshot on every exec.
 ApplicationControlStore.shared.loadFromDisk()
 
-// The security extension wires the shared XPCEventServer's inbound hook to apply app-control policy pushed by the agent.
+// Dedicated, target-muted file-tamper client (#301, ADR-0008). It watches the built-in sudoers paths plus the set the server last
+// pushed (#998) via inverted target-path muting, and lives on its own ES client (separate from `subscriber` below) so the
+// client-global target-path inversion never filters the primary client's AUTH_EXEC (whose target is the executable). Constructed
+// here, ahead of the XPC server, because the server's inbound hook applies pushed sets to it; it starts subscribing further down.
+// It starts from the persisted set so a restarted extension watches the operator's paths from its first event.
+let watchedPathStore = WatchedPathStore()
+let fileTamper = FileTamperSubscriber(pushed: watchedPathStore.current?.paths ?? [])
+let watchedPathsLogger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "WatchedPaths")
+
+// The security extension wires the shared XPCEventServer's inbound hooks to apply app-control policy and watched-path sets pushed
+// by the agent.
 let server = XPCEventServer(
     serviceName: "FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc",
     logger: Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer"),
-    onApplicationControl: { data in ApplicationControlStore.shared.apply(rawJSON: data) }
+    onApplicationControl: { data in ApplicationControlStore.shared.apply(rawJSON: data) },
+    onWatchedPaths: { data in
+        // The store turns away a payload that is not a watched-path document and a set older than the one in force, which commands
+        // delivered out of order would otherwise put back; either way the active and persisted sets stay as they were.
+        guard let update = watchedPathStore.accept(data) else {
+            let current = watchedPathStore.current
+            // The store logs a persist failure itself; this line covers every refusal, so it names none of them.
+            let skip = "watched_paths.update not accepted; the set in force is " +
+                "version=\(current?.version ?? 0) epoch=\(current?.epoch ?? 0)"
+            watchedPathsLogger.info("\(skip, privacy: .public)")
+            return
+        }
+        let summary = "watched_paths.update version=\(update.version) epoch=\(update.epoch) " +
+            "paths=\(update.paths.count) skipped=\(update.skipped)"
+        watchedPathsLogger.info("\(summary, privacy: .public)")
+        fileTamper.apply(pushed: update.paths)
+    }
 )
 // Per-producer EventSerializer instances. EventSerializer wraps a JSONEncoder that must not be shared across concurrent
 // producers, so each independent emit path owns one (matching ESFSubscriber / FileTamperSubscriber, which each construct their
@@ -37,11 +63,8 @@ let subscriber = ESFSubscriber()
 subscriber.onEvent = { data in server.send(data: data) }
 subscriber.start()
 
-// Dedicated, target-muted file-tamper client (#301, ADR-0008). It watches /etc/sudoers* for CREATE/WRITE via
-// inverted target-path muting and lives on its own ES client (separate from `subscriber` above) so the client-global
-// target-path inversion never filters the primary client's AUTH_EXEC (whose target is the executable). Its events flow into
-// the same XPC pipeline; the server's sudoers_tamper rule consumes them as `open` (write-mode) events.
-let fileTamper = FileTamperSubscriber()
+// The file-tamper client's events flow into the same XPC pipeline; the server's sudoers_tamper rule consumes them as `open`
+// (write-mode) events.
 fileTamper.onEvent = { data in server.send(data: data) }
 fileTamper.start()
 

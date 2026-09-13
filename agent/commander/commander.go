@@ -33,11 +33,12 @@ const defaultPollInterval = 5 * time.Second
 // stream-driven, and the cost of a redundant poll is one request that the server answers with an empty pending list.
 const defaultFloorInterval = 2 * time.Minute
 
-// ApplicationControlSender forwards a raw application-control snapshot JSON payload to the ESF extension over XPC. The commander stays
-// decoupled from the concrete receiver so tests can supply a recording double. Nil is allowed (set_application_control commands are
-// then reported as `failed` with a clear reason), matching the pre-step-1 commander shape.
-type ApplicationControlSender interface {
+// ExtensionSender forwards raw JSON payloads addressed to the ESF extension over XPC: the application-control snapshot and the
+// file-tamper client's watched-path set. The commander stays decoupled from the concrete receiver so tests can supply a recording
+// double. Nil is allowed (set_application_control and set_watched_paths commands are then reported as `failed` with a clear reason).
+type ExtensionSender interface {
 	SendApplicationControl(payload []byte) error
+	SendWatchedPaths(payload []byte) error
 }
 
 // Config holds commander settings.
@@ -49,9 +50,9 @@ type Config struct {
 	OnAuthFail func(ctx context.Context)
 	HostID     string
 	Interval   time.Duration
-	// ApplicationControlSender is the XPC bridge to the ESF extension. Used by the set_application_control command handler; nil means
-	// "commander cannot apply snapshot updates" and the handler will report the command failed with a clear reason.
-	ApplicationControlSender ApplicationControlSender
+	// ExtensionSender is the XPC bridge to the ESF extension. Used by the set_application_control and set_watched_paths command
+	// handlers; nil means the commander cannot reach the extension, and those handlers report the command failed with a clear reason.
+	ExtensionSender ExtensionSender
 	// StreamConnected, when set, lets the commander defer to the persistent control channel while it returns true, because the gateway
 	// pushes commands in real time and polling would race it. The deferral is bounded by FloorInterval: a stream the agent believes in
 	// but the server has forgotten would otherwise silence commands forever. Nil means "always poll" (the control channel is disabled).
@@ -96,7 +97,7 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	executor := NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
+	executor := NewExecutor(cfg.ExtensionSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
 	executor.SetInFlight(cfg.InFlight)
 	// Start the floor clock now rather than at the zero time, so a fresh commander defers to a live stream like any other and the

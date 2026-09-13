@@ -215,7 +215,7 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     }
 
     // Publish the conn + queue + semaphore under the slots mutex so a
-    // concurrent xpc_bridge_send_application_control or xpc_bridge_ping
+    // concurrent xpc_bridge_send or xpc_bridge_ping
     // cannot observe (in_use=1, connection=NULL). The earlier reservation
     // marked in_use=1 outside this critical section for liveness; this
     // second critical section commits the actual handles atomically with
@@ -229,8 +229,9 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     return handle;
 }
 
-int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t len) {
-    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS || data == NULL || len == 0) {
+int xpc_bridge_send(int handle, const char *type, const uint8_t *data, size_t len) {
+    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS || type == NULL || type[0] == '\0' || data == NULL ||
+        len == 0) {
         return -1;
     }
 
@@ -253,7 +254,7 @@ int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t 
     pthread_mutex_unlock(&g_slots_mutex);
 
     xpc_object_t msg = xpc_dictionary_create_empty();
-    xpc_dictionary_set_string(msg, "type", "application_control.update");
+    xpc_dictionary_set_string(msg, "type", type);
     xpc_dictionary_set_data(msg, "data", data, len);
     xpc_connection_send_message(conn, msg);
     xpc_release(msg);

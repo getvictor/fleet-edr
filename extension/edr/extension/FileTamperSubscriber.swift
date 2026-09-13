@@ -4,13 +4,16 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "ESFFileTamper")
 
-/// FileTamperSubscriber is the DEDICATED, NOTIFY-only second Endpoint Security client that watches a small, fixed set of
-/// sensitive target paths for content changes (ADR-0008, #301). It is separate from the primary ESFSubscriber client for one
-/// hard ESF reason: target-path mute *inversion* (`es_invert_muting`) is client-global, and `AUTH_EXEC`'s "target" is the
-/// executable being launched. Inverting target-path muting to "observe only /etc/sudoers*" on a client that also handles
-/// `AUTH_EXEC` would filter exec authorization (and Application Control) by that same path list, breaking enforcement. So the
-/// inversion lives here, on a client with NO auth subscriptions (exactly what `es_invert_muting`'s documentation requires),
-/// and the primary client keeps unfiltered exec authorization.
+/// FileTamperSubscriber is the DEDICATED, NOTIFY-only second Endpoint Security client that watches a small set of sensitive
+/// target paths for content changes (ADR-0008, #301). The set is the built-in sudoers paths plus whatever the server
+/// pushes (ADR-0008 step 4, #998), and a pushed set is applied to the running client without a restart.
+///
+/// It is separate from the primary ESFSubscriber client for one hard ESF reason: target-path mute *inversion*
+/// (`es_invert_muting`) is client-global, and `AUTH_EXEC`'s "target" is the executable being launched. Inverting target-path
+/// muting to "observe only the watched paths" on a client that also handles `AUTH_EXEC` would filter exec authorization (and
+/// Application Control) by that same path list, breaking enforcement. So the inversion lives here, on a client with NO auth
+/// subscriptions (exactly what `es_invert_muting`'s documentation requires), and the primary client keeps unfiltered exec
+/// authorization.
 ///
 /// Subscriptions: NOTIFY_CREATE (new sudoers.d drop) and NOTIFY_WRITE (in-place edit / overwrite of an existing sudoers
 /// file). Each is re-emitted as an `open` event with synthetic write-mode flags so the server's sudoers_tamper rule consumes
@@ -38,19 +41,18 @@ final class FileTamperSubscriber: Sendable {
     private let serializer = EventSerializer()
     nonisolated(unsafe) var onEvent: ((Data) -> Void)?
 
-    /// watchedTargets is the fixed sensitive-path set this client observes after inversion. /etc is a symlink to /private/etc
-    /// on macOS and ESF reports the resolved (/private/etc) form, so both spellings are muted defensively. LITERAL pins
-    /// /etc/sudoers exactly; PREFIX covers everything under /etc/sudoers.d/. A TARGET_PREFIX matches all descendants sharing
-    /// the prefix, so the trailing slash keeps it from also matching siblings like /etc/sudoers.d.bak; the server sudoersPath
-    /// regex further narrows to direct children of the directory.
-    private static let watchedTargets: [(path: String, type: es_mute_path_type_t)] = [
-        ("/private/etc/sudoers", ES_MUTE_PATH_TYPE_TARGET_LITERAL),
-        ("/etc/sudoers", ES_MUTE_PATH_TYPE_TARGET_LITERAL),
-        ("/private/etc/sudoers.d/", ES_MUTE_PATH_TYPE_TARGET_PREFIX),
-        ("/etc/sudoers.d/", ES_MUTE_PATH_TYPE_TARGET_PREFIX)
-    ]
+    /// applyQueue serializes every change to the muted set, so a pushed set arriving over XPC and the startup configuration
+    /// cannot interleave their mute calls. `applied` and `pushed` are only read and written on it.
+    private let applyQueue = DispatchQueue(label: "com.fleetdm.edr.filetamper.watched-paths")
+    /// applied is the target set currently muted, and therefore observed once inversion is on (WatchedPaths.targets).
+    private nonisolated(unsafe) var applied: [WatchedPath] = []
+    /// pushed is the latest server-pushed set. One that arrives before start() is held here and applied when the client starts.
+    private nonisolated(unsafe) var pushed: [WatchedPath]
+    private nonisolated(unsafe) var started = false
 
-    init() {
+    /// pushed is the set persisted by the last push (WatchedPathStore), applied with the built-in paths when the client starts.
+    init(pushed: [WatchedPath]) {
+        self.pushed = pushed
         var rawClient: OpaquePointer?
         let result = es_new_client(&rawClient) { [weak self] _, message in
             self?.handleMessage(message)
@@ -68,14 +70,9 @@ final class FileTamperSubscriber: Sendable {
         // documented prerequisite for inverting target-path muting); then mute the watched paths; then invert so the muted
         // set becomes the ONLY observed set.
         es_unmute_all_target_paths(client)
-        // A mute failure leaves that target unobserved after inversion (a silent coverage gap), so treat it as fatal -
-        // consistent with the invert + subscribe failures below. The watched set is a fixed list of valid absolute paths,
-        // so a failure here means a misconfigured client, not a bad path.
-        Self.watchedTargets.forEach { target in
-            guard es_mute_path(client, target.path, target.type) == ES_RETURN_SUCCESS else {
-                logger.error("file-tamper mute failed for \(target.path, privacy: .public)")
-                exit(EXIT_FAILURE)
-            }
+        applyQueue.sync {
+            reconcile()
+            started = true
         }
         guard es_invert_muting(client, ES_MUTE_INVERSION_TYPE_TARGET_PATH) == ES_RETURN_SUCCESS else {
             logger.error("file-tamper target-path mute inversion failed")
@@ -103,7 +100,79 @@ final class FileTamperSubscriber: Sendable {
             logger.error("file-tamper subscribe failed")
             exit(EXIT_FAILURE)
         }
-        logger.info("FileTamper client active: target-muted (inverted) to /etc/sudoers*: CREATE/WRITE/RENAME/TRUNCATE/UNLINK/OPEN")
+        let summary = "FileTamper client active: target-muted (inverted) to \(appliedCount) watched targets: " +
+            "CREATE/WRITE/RENAME/TRUNCATE/UNLINK/OPEN"
+        logger.info("\(summary, privacy: .public)")
+    }
+
+    private var appliedCount: Int {
+        applyQueue.sync { applied.count }
+    }
+
+    /// apply makes a pushed set the watched set on the running client. The built-in paths stay watched whatever is pushed, and a path
+    /// in both the old and the new set is never unmuted, so replacing the set opens no gap in what was already covered.
+    func apply(pushed next: [WatchedPath]) {
+        applyQueue.async {
+            self.pushed = next
+            if self.started {
+                self.reconcile()
+            }
+        }
+    }
+
+    /// reconcile mutes and unmutes the difference between the applied targets and those the current pushed set calls for. Runs on
+    /// applyQueue.
+    ///
+    /// Mutes come first and unmutes only follow when every mute succeeded. A mute that fails leaves this process watching everything it
+    /// watched before the update, the paths the update drops included, rather than dropping them while the paths meant to replace them
+    /// are missing; the failed target is not recorded as applied, so the next update tries it again. A restarted extension starts from
+    /// the persisted set instead (#1018).
+    ///
+    /// A built-in path that fails to mute is fatal, as it was when the set was fixed: after inversion that path would silently go
+    /// unobserved, and the shipped sudoers rules would go blind with it. A pushed path that fails is logged instead, because the set
+    /// persists, and exiting on it would restart the extension into the same failure on every launch.
+    private func reconcile() {
+        let next = WatchedPaths.targets(pushed: pushed)
+        let builtIn = Set(WatchedPaths.targets(pushed: []))
+        let (mute, unmute) = WatchedPaths.changes(from: applied, to: next)
+        var muted = 0
+        var failedMutes = 0
+        for target in mute {
+            guard es_mute_path(client, target.path, Self.muteType(target.match)) == ES_RETURN_SUCCESS else {
+                logger.error("file-tamper mute failed for \(target.path, privacy: .private)")
+                if builtIn.contains(target) {
+                    exit(EXIT_FAILURE)
+                }
+                failedMutes += 1
+                continue
+            }
+            applied.append(target)
+            muted += 1
+        }
+        var unmuted = 0
+        if failedMutes == 0 {
+            for target in unmute {
+                guard es_unmute_path(client, target.path, Self.muteType(target.match)) == ES_RETURN_SUCCESS else {
+                    // Still muted, so still observed: it stays in the applied set, and the next update tries again.
+                    logger.error("file-tamper unmute failed for \(target.path, privacy: .private)")
+                    continue
+                }
+                applied.removeAll { $0 == target }
+                unmuted += 1
+            }
+        }
+        let summary = "file-tamper watched targets: \(applied.count) (+\(muted) -\(unmuted), \(failedMutes) failed" +
+            (failedMutes > 0 ? ", nothing unmuted)" : ")")
+        logger.info("\(summary, privacy: .public)")
+    }
+
+    private static func muteType(_ match: WatchedPathMatch) -> es_mute_path_type_t {
+        switch match {
+        case .literal:
+            return ES_MUTE_PATH_TYPE_TARGET_LITERAL
+        case .prefix:
+            return ES_MUTE_PATH_TYPE_TARGET_PREFIX
+        }
     }
 
     func stop() {

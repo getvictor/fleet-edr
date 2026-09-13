@@ -196,7 +196,7 @@ func run() error {
 	}, httpClient, logger)
 	up.SetMetrics(rec)
 
-	// esfDispatcher bridges the commander (which wants a stable ApplicationControlSender across receiver reconnects) and the ESF
+	// esfDispatcher bridges the commander (which wants a stable ExtensionSender across receiver reconnects) and the ESF
 	// receiver loop (which builds a fresh *receiver.Receiver on every connect). The loop's OnConnected hook publishes into the
 	// dispatcher; OnDisconnected clears it so commands issued during a reconnect window fail fast.
 	esfDispatcher := receiver.NewDispatcher()
@@ -259,11 +259,11 @@ func run() error {
 	// ephemeral state, lost on restart; the commander reads it, the control client sets it.
 	var streamConnected atomic.Bool
 	cmdDeps := commandDeps{
-		tokenProvider:    tokenProvider,
-		appControlSender: esfDispatcher,
-		streamConnected:  &streamConnected,
-		ledger:           commandLedger,
-		generation:       genRegistry,
+		tokenProvider:   tokenProvider,
+		extensionSender: esfDispatcher,
+		streamConnected: &streamConnected,
+		ledger:          commandLedger,
+		generation:      genRegistry,
 		// One tracker for both transports, which is the whole point: it is what stops the floor poll and the push path executing the
 		// same command at once now that the poll no longer waits on the stream indefinitely (issue #711).
 		inFlight: commander.NewInFlight(),
@@ -401,10 +401,10 @@ func safePrefix(s string) string {
 // drives, the stream-connected flag the poll path consults, the durable command ledger, and the logger. Grouped so the two start
 // functions stay under the positional-argument limit (SonarCloud go:S107).
 type commandDeps struct {
-	tokenProvider    enrollment.TokenProvider
-	appControlSender commander.ApplicationControlSender
-	streamConnected  *atomic.Bool
-	ledger           commander.Ledger
+	tokenProvider   enrollment.TokenProvider
+	extensionSender commander.ExtensionSender
+	streamConnected *atomic.Bool
+	ledger          commander.Ledger
 	// generation is the live pid -> pidversion registry (issue #627), fed by the ESF receive path and shared by both command transports so
 	// a kill_process command is refused when its target PID has since been reused / re-exec'd.
 	generation *procgen.Registry
@@ -422,12 +422,12 @@ func startCommander(ctx context.Context, hostID, serverURL string, transport htt
 		return
 	}
 	cmdr := commander.New(commander.Config{
-		ServerURL:                serverURL,
-		TokenFn:                  deps.tokenProvider.Token,
-		OnAuthFail:               deps.tokenProvider.OnUnauthorized,
-		HostID:                   hostID,
-		Interval:                 commanderPollInterval,
-		ApplicationControlSender: deps.appControlSender,
+		ServerURL:       serverURL,
+		TokenFn:         deps.tokenProvider.Token,
+		OnAuthFail:      deps.tokenProvider.OnUnauthorized,
+		HostID:          hostID,
+		Interval:        commanderPollInterval,
+		ExtensionSender: deps.extensionSender,
 		// Defer to the control channel while it is connected (the gateway pushes commands in real time), but only for a bounded
 		// interval: an agent holding a stream the server has forgotten would otherwise never ask for work again (issue #711).
 		StreamConnected: deps.streamConnected.Load,
@@ -477,16 +477,16 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 		return err
 	}
 	client := controlclient.New(controlclient.Config{
-		Client:                   control.NewControlChannelClient(conn),
-		HostID:                   hostID,
-		TokenFn:                  deps.tokenProvider.Token,
-		OnAuthFail:               deps.tokenProvider.OnUnauthorized,
-		ApplicationControlSender: deps.appControlSender,
-		Ledger:                   deps.ledger,
-		Generation:               deps.generation,
-		InFlight:                 deps.inFlight,
-		OnConnectedChange:        deps.streamConnected.Store,
-		Logger:                   logger,
+		Client:            control.NewControlChannelClient(conn),
+		HostID:            hostID,
+		TokenFn:           deps.tokenProvider.Token,
+		OnAuthFail:        deps.tokenProvider.OnUnauthorized,
+		ExtensionSender:   deps.extensionSender,
+		Ledger:            deps.ledger,
+		Generation:        deps.generation,
+		InFlight:          deps.inFlight,
+		OnConnectedChange: deps.streamConnected.Store,
+		Logger:            logger,
 	})
 	go func() {
 		if err := client.Run(ctx); err != nil && ctx.Err() == nil {

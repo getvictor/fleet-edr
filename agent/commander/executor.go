@@ -59,7 +59,7 @@ type ReportFunc func(ctx context.Context, status string, result json.RawMessage)
 // state, so the poll loop and the control-channel client share one instance's worth of behavior without coupling to how commands are
 // delivered or how outcomes are sent back. A shared Ledger gives it durable, cross-transport at-most-once execution.
 type Executor struct {
-	sender ApplicationControlSender
+	sender ExtensionSender
 	ledger Ledger
 	// kill is the process-termination syscall, injectable so tests exercise the kill_process path without signalling a real process.
 	kill func(pid int, sig syscall.Signal) error
@@ -74,9 +74,10 @@ type Executor struct {
 	logger   *slog.Logger
 }
 
-// NewExecutor builds an Executor. sender may be nil (set_application_control then reports failed with a clear reason); ledger may be nil
+// NewExecutor builds an Executor. sender may be nil (set_application_control and set_watched_paths then report failed with a clear reason);
+// ledger may be nil
 // (dedup disabled, for tests or a degraded path if the ledger cannot be opened); logger nil uses the default.
-func NewExecutor(sender ApplicationControlSender, ledger Ledger, logger *slog.Logger) *Executor {
+func NewExecutor(sender ExtensionSender, ledger Ledger, logger *slog.Logger) *Executor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -204,6 +205,8 @@ func (e *Executor) run(ctx context.Context, cmd Command) (status string, result 
 		return e.runKill(ctx, cmd)
 	case "set_application_control":
 		return e.runSetApplicationControl(ctx, cmd)
+	case "set_watched_paths":
+		return e.runSetWatchedPaths(ctx, cmd)
 	default:
 		return StatusFailed, marshalResult("unknown command type: " + cmd.CommandType)
 	}
@@ -290,6 +293,46 @@ func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (s
 		"rules":          len(rules),
 	})
 	return StatusCompleted, result
+}
+
+// runSetWatchedPaths forwards the file-tamper client's watched-path set to the ESF extension over XPC (issue #998). Result on success
+// is {"version": V, "paths": N}: the server's version for the set, and how many entries were forwarded.
+//
+// Envelope validation only, for the same reason as set_application_control: version positive and paths a JSON array. What an entry
+// means, and which entries it can apply, is the extension's to decide, and the agent forwards the raw bytes so the wire shape is
+// identical at both ends. The extension always watches its built-in paths as well, so an empty set is valid and clears only the
+// paths the server added.
+func (e *Executor) runSetWatchedPaths(ctx context.Context, cmd Command) (string, json.RawMessage) {
+	var payload setWatchedPathsPayload
+	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+		return StatusFailed, marshalResult(invalidPayloadPrefix + err.Error())
+	}
+	if payload.Version <= 0 {
+		return StatusFailed, marshalResult("payload missing or invalid version")
+	}
+	if !isJSONArray(payload.Paths) {
+		return StatusFailed, marshalResult("payload missing or invalid paths array")
+	}
+	if e.sender == nil {
+		return StatusFailed, marshalResult("extension sender not configured")
+	}
+	if err := e.sender.SendWatchedPaths([]byte(cmd.Payload)); err != nil {
+		return StatusFailed, marshalResult("xpc send: " + err.Error())
+	}
+	// Both guards above make this decode infallible, as they do for the rule count in runSetApplicationControl.
+	var paths []json.RawMessage
+	_ = json.Unmarshal(payload.Paths, &paths)
+	e.logger.InfoContext(ctx, "commander set_watched_paths", "cmd_id", cmd.ID, "edr.watched_paths.version", payload.Version,
+		"edr.watched_paths.count", len(paths))
+	result, _ := json.Marshal(map[string]any{"version": payload.Version, "paths": len(paths)})
+	return StatusCompleted, result
+}
+
+// setWatchedPathsPayload is the part of a set_watched_paths command the agent checks. Paths stays raw, and epoch is deliberately absent:
+// both are addressed to the extension, and a field decoded here would be a field the agent could refuse a command over.
+type setWatchedPathsPayload struct {
+	Version int64           `json:"version"`
+	Paths   json.RawMessage `json:"paths"`
 }
 
 type killPayload struct {

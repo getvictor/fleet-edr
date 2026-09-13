@@ -89,19 +89,28 @@ func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
 	assert.Equal(t, int64(1), called.Load(), "401 on fetchPending must trigger OnAuthFail exactly once")
 }
 
-// recordingApplicationControlSender captures application_control snapshot payloads so tests can inspect them without cgo / real XPC.
-// Mimics the production sender's contract: return nil on success, a non-nil error on failure so the commander reports the command as
-// `failed`.
-type recordingApplicationControlSender struct {
+// recordingExtensionSender captures the payloads sent to the extension so tests can inspect them without cgo / real XPC: application
+// control snapshots in sent, watched-path sets in watched. Mimics the production sender's contract: return nil on success, a non-nil
+// error on failure so the commander reports the command as `failed`.
+type recordingExtensionSender struct {
 	sent    [][]byte
+	watched [][]byte
 	sendErr error
 }
 
-func (r *recordingApplicationControlSender) SendApplicationControl(payload []byte) error {
+func (r *recordingExtensionSender) SendApplicationControl(payload []byte) error {
 	if r.sendErr != nil {
 		return r.sendErr
 	}
 	r.sent = append(r.sent, append([]byte(nil), payload...))
+	return nil
+}
+
+func (r *recordingExtensionSender) SendWatchedPaths(payload []byte) error {
+	if r.sendErr != nil {
+		return r.sendErr
+	}
+	r.watched = append(r.watched, append([]byte(nil), payload...))
 	return nil
 }
 
@@ -129,11 +138,11 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{}
+	sender := &recordingExtensionSender{}
 	c := New(Config{
-		ServerURL:                srv.URL,
-		HostID:                   "host-a",
-		ApplicationControlSender: sender,
+		ServerURL:       srv.URL,
+		HostID:          "host-a",
+		ExtensionSender: sender,
 	}, nil, nil)
 
 	rawPayload := `{"policy_id":7,"policy_version":42,"rules":[{"rule_type":"BINARY","identifier":"aaa","action":"BLOCK","enforcement":"PROTECT","severity":"medium"}]}`
@@ -182,8 +191,8 @@ func TestExecuteSetApplicationControl_SendFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{sendErr: errors.New("connection interrupted")}
-	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	sender := &recordingExtensionSender{sendErr: errors.New("connection interrupted")}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 	c.dispatch(t.Context(), Command{
 		ID:          31,
 		CommandType: "set_application_control",
@@ -212,8 +221,8 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{}
-	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	sender := &recordingExtensionSender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 
 	c.dispatch(t.Context(), Command{
 		ID:          12,
@@ -243,8 +252,8 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{}
-	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	sender := &recordingExtensionSender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 
 	c.dispatch(t.Context(), Command{
 		ID:          13,
@@ -275,8 +284,8 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{}
-	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	sender := &recordingExtensionSender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 
 	c.dispatch(t.Context(), Command{
 		ID:          14,
@@ -320,8 +329,8 @@ func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			sender := &recordingApplicationControlSender{}
-			c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+			sender := &recordingExtensionSender{}
+			c := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 			c.dispatch(t.Context(), Command{
 				ID:          16,
 				CommandType: "set_application_control",
@@ -343,8 +352,8 @@ func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{}
-	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	sender := &recordingExtensionSender{}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 	c.dispatch(t.Context(), Command{
 		ID:          17,
 		CommandType: "set_application_control",
@@ -571,12 +580,12 @@ func TestPollIsFallbackWhenConnectionUnavailable(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			sender := &recordingApplicationControlSender{}
+			sender := &recordingExtensionSender{}
 			cmdr := New(Config{
-				ServerURL:                srv.URL,
-				HostID:                   "host-a",
-				ApplicationControlSender: sender,
-				StreamConnected:          func() bool { return tc.streamConnected },
+				ServerURL:       srv.URL,
+				HostID:          "host-a",
+				ExtensionSender: sender,
+				StreamConnected: func() bool { return tc.streamConnected },
 			}, nil, nil)
 
 			cmdr.pollAndDispatch(t.Context())
@@ -600,7 +609,7 @@ func TestPollIsFallbackWhenConnectionUnavailable(t *testing.T) {
 // commander MUST NOT execute the command's side effects, and the command MUST remain eligible for
 // re-dispatch on the next poll. The "remains eligible" half is structural (no completed/failed terminal
 // is reported, so the server still sees the command as pending). The test asserts the side effects are
-// suppressed by checking that the ApplicationControlSender was never invoked even though the payload was
+// suppressed by checking that the ExtensionSender was never invoked even though the payload was
 // valid.
 func TestAcknowledgementFailsDoesNotExecute(t *testing.T) {
 	t.Parallel()
@@ -616,8 +625,8 @@ func TestAcknowledgementFailsDoesNotExecute(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := &recordingApplicationControlSender{}
-	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
+	sender := &recordingExtensionSender{}
+	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", ExtensionSender: sender}, nil, nil)
 	cmd := Command{
 		ID:          50,
 		CommandType: "set_application_control",

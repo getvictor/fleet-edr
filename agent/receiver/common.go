@@ -6,7 +6,7 @@
 // callbacks.go + bridge.c. The non-darwin build is the stub in
 // receiver_other.go: it satisfies the same public surface so the agent
 // module compiles on linux for the headless integration job (UAT plan M3),
-// but the stub Receiver's Connect, SendApplicationControl, and Ping all
+// but the stub Receiver's Connect, SendApplicationControl, SendWatchedPaths, and Ping all
 // return ErrUnsupported because there is no XPC service to talk to. A
 // future milestone (M2) replaces the stub with an inject-able variant
 // driven by the fake-agent control plane.

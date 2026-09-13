@@ -50,6 +50,7 @@ type Connector interface {
 	Errors() <-chan int
 	Ping(timeout time.Duration) error
 	SendApplicationControl(payload []byte) error
+	SendWatchedPaths(payload []byte) error
 }
 
 // Compile-time check that *Receiver (darwin/cgo build) and the non-darwin stub both satisfy Connector. The stub's Inject method is
@@ -336,8 +337,8 @@ type dispatcherBox struct {
 // NewDispatcher returns a fresh Dispatcher with no Connector published.
 func NewDispatcher() *Dispatcher { return &Dispatcher{} }
 
-// ErrNoConnector is returned by SendApplicationControl when no Connector is currently published. This is the expected error during
-// reconnect windows; callers should treat the command as failed and let the server retry.
+// ErrNoConnector is returned by SendApplicationControl and SendWatchedPaths when no Connector is currently published. This is the
+// expected error during reconnect windows; callers should treat the command as failed and let the server retry.
 var ErrNoConnector = errors.New("receiver dispatcher: no connector published")
 
 // Set publishes c as the active Connector. Safe to call concurrently with SendApplicationControl. Wire this to LoopHooks.OnConnected
@@ -352,7 +353,7 @@ func (d *Dispatcher) Clear() {
 	d.cur.Store(nil)
 }
 
-// SendApplicationControl satisfies commander.ApplicationControlSender. Returns ErrNoConnector when no Connector is published;
+// SendApplicationControl satisfies commander.ExtensionSender. Returns ErrNoConnector when no Connector is published;
 // otherwise forwards to the active Connector. Lock-free read of d.cur means this stays cheap even when the Loop is mid-reconnect.
 func (d *Dispatcher) SendApplicationControl(payload []byte) error {
 	b := d.cur.Load()
@@ -360,4 +361,14 @@ func (d *Dispatcher) SendApplicationControl(payload []byte) error {
 		return ErrNoConnector
 	}
 	return b.c.SendApplicationControl(payload)
+}
+
+// SendWatchedPaths satisfies commander.ExtensionSender, routing like SendApplicationControl: ErrNoConnector between connect cycles,
+// otherwise the active Connector.
+func (d *Dispatcher) SendWatchedPaths(payload []byte) error {
+	b := d.cur.Load()
+	if b == nil || b.c == nil {
+		return ErrNoConnector
+	}
+	return b.c.SendWatchedPaths(payload)
 }

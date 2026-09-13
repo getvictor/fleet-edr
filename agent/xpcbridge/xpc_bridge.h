@@ -28,13 +28,14 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
 // Disconnect and clean up a specific connection.
 void xpc_bridge_disconnect(int handle);
 
-// Send an "application_control.update" message to the peer on the given handle.
-// The payload is copied into an XPC dictionary under the "data" key alongside
-// "type"="application_control.update". Returns 0 on success, -1 if the handle
-// is invalid or the connection is gone. XPC send is asynchronous: success
-// here means the message was enqueued on the connection, not that the peer
-// received it.
-int xpc_bridge_send_application_control(int handle, const uint8_t *data, size_t len);
+// Send a typed message to the peer on the given handle: an XPC dictionary with
+// "type" set to the given message type (for example
+// "application_control.update" or "watched_paths.update") and the payload
+// copied under the "data" key. Returns 0 on success, -1 if the handle is
+// invalid, the connection is gone, or the type or payload is empty. XPC send
+// is asynchronous: success here means the message was enqueued on the
+// connection, not that the peer received it.
+int xpc_bridge_send(int handle, const char *type, const uint8_t *data, size_t len);
 
 // Send a "hello" handshake message and synchronously wait for the extension's
 // "hello-ack" reply. timeout_ns caps the wait. Returns 0 if the ack arrived

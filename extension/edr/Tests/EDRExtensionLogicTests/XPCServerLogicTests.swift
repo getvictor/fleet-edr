@@ -157,6 +157,20 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(dispatchInbound(type: "application_control.update", data: Data()), .rejectMissingData)
     }
 
+    // MARK: Requirement: Inbound watched-path update
+
+    // spec:extension-xpc-server/inbound-watched-path-update/the-agent-pushes-a-watched-path-set
+    func testWatchedPathsUpdateWithDataDispatchesToApplyWatchedPaths() {
+        let payload = Data(#"{"version":2,"paths":[]}"#.utf8)
+        XCTAssertEqual(dispatchInbound(type: "watched_paths.update", data: payload), .applyWatchedPaths(payload))
+    }
+
+    // spec:extension-xpc-server/inbound-watched-path-update/a-watched-paths-update-with-no-data-is-rejected
+    func testWatchedPathsUpdateWithoutDataDispatchesToRejectMissingData() {
+        XCTAssertEqual(dispatchInbound(type: "watched_paths.update", data: nil), .rejectMissingData)
+        XCTAssertEqual(dispatchInbound(type: "watched_paths.update", data: Data()), .rejectMissingData)
+    }
+
     // MARK: Requirement: Hello handshake and reply
 
     // spec:extension-xpc-server/hello-handshake-and-reply/the-agent-sends-a-hello-after-connecting
