@@ -352,17 +352,10 @@ final class ApplicationControlStore {
         )
     }
 
-    /// persist writes the raw payload to disk atomically. Data.write(to:options:.atomic)
-    /// is implemented as write-temp-then-rename internally: Foundation manages
-    /// the temp file and the rename in a single atomic swap that handles the
-    /// destination-already-exists case correctly. No manual mv dance and no
-    /// non-atomic window where the destination is missing.
+    /// persist writes the raw payload to disk atomically (see AtomicFile).
     private func persist(rawJSON data: Data) {
-        let url = URL(fileURLWithPath: storagePath)
-        let directory = url.deletingLastPathComponent()
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
-            try data.write(to: url, options: .atomic)
+            try AtomicFile.write(data, toPath: storagePath)
         } catch {
             logger.error("application control persist failed: \(error.localizedDescription, privacy: .public)")
         }

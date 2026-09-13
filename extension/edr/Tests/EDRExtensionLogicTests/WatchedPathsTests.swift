@@ -112,7 +112,8 @@ final class WatchedPathsTests: XCTestCase {
     }
 
     func testDecodeReadsTheEpochWhenPresent() {
-        XCTAssertEqual(WatchedPaths.decode(payload(#"{"version": 2, "epoch": 1789300000000000, "paths": []}"#))?.epoch, 1_789_300_000_000_000)
+        let update = WatchedPaths.decode(payload(#"{"version": 2, "epoch": 1789300000000000, "paths": []}"#))
+        XCTAssertEqual(update?.epoch, 1_789_300_000_000_000)
     }
 
     // MARK: supersedes
@@ -140,7 +141,8 @@ final class WatchedPathsTests: XCTestCase {
     }
 
     func testDecodeAcceptsAnEmptySet() {
-        XCTAssertEqual(WatchedPaths.decode(payload(#"{"version": 4, "paths": []}"#)), WatchedPathsUpdate(version: 4, epoch: 0, paths: [], skipped: 0))
+        XCTAssertEqual(WatchedPaths.decode(payload(#"{"version": 4, "paths": []}"#)),
+                       WatchedPathsUpdate(version: 4, epoch: 0, paths: [], skipped: 0))
     }
 
     // MARK: targets
@@ -227,7 +229,9 @@ final class WatchedPathsTests: XCTestCase {
         let store = temporaryStore()
         XCTAssertNil(store.current, "nothing pushed yet")
 
-        let accepted = store.accept(payload(#"{"version": 9, "epoch": 90, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#))
+        let accepted = store.accept(payload(
+            #"{"version": 9, "epoch": 90, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#
+        ))
         XCTAssertEqual(accepted?.paths, [WatchedPath(path: "/Library/StartupItems/", match: .prefix)])
 
         let restarted = WatchedPathStore(storagePath: store.storagePath)
@@ -240,11 +244,14 @@ final class WatchedPathsTests: XCTestCase {
         let store = temporaryStore()
         XCTAssertNotNil(store.accept(payload(#"{"version": 2, "epoch": 20, "paths": [{"path": "/etc/emond.d/", "match": "prefix"}]}"#)))
 
-        XCTAssertNil(store.accept(payload(#"{"version": 1, "epoch": 10, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#)))
+        XCTAssertNil(store.accept(payload(
+            #"{"version": 1, "epoch": 10, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#
+        )))
         XCTAssertNil(store.accept(payload(#"{"version": 2, "epoch": 20, "paths": []}"#)), "a redelivery of the set in force")
 
         XCTAssertEqual(store.current?.version, 2)
-        XCTAssertEqual(WatchedPathStore(storagePath: store.storagePath).current?.paths, [WatchedPath(path: "/etc/emond.d/", match: .prefix)])
+        XCTAssertEqual(WatchedPathStore(storagePath: store.storagePath).current?.paths,
+                       [WatchedPath(path: "/etc/emond.d/", match: .prefix)])
     }
 
     // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-malformed-push-leaves-the-watched-set-unchanged
