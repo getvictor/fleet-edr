@@ -49,11 +49,14 @@ func EnqueueHeld(ctx context.Context, tx sqlx.ExecerContext, entry Entry, hold t
 	return id, nil
 }
 
-// Seal replaces a held entry's payload with entry's and makes it deliverable. It reports false when the entry is gone, because its
-// hold passed and a drain delivered it as first written.
+// Seal replaces a held entry's payload with entry's and makes it deliverable, provided its hold has not passed. It reports false when
+// the hold has passed, because from then on a drain may already have read the entry as first written, and a seal it did not see would
+// claim a delivery it cannot promise. Such an entry is delivered as first written. The hold is compared on the database clock, the
+// same one PendingAuditEntries uses, so a drain can only read a held entry once a seal can no longer change it.
 func (s *Store) Seal(ctx context.Context, id int64, entry Entry) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE detection_config_audit_outbox SET payload = ?, held_until = NULL WHERE id = ?`, string(entry.Payload), id)
+		`UPDATE detection_config_audit_outbox SET payload = ?, held_until = NULL WHERE id = ? AND held_until > NOW(6)`,
+		string(entry.Payload), id)
 	if err != nil {
 		return false, fmt.Errorf("seal audit entry %d: %w", id, err)
 	}

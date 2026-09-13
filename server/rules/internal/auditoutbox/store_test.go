@@ -116,6 +116,24 @@ func TestStore_AHeldEntryWaitsForItsSealOrItsHold(t *testing.T) {
 	assert.False(t, sealed, "an entry already delivered cannot be sealed")
 }
 
+// Once a held entry's hold has passed, a drain may already have read it as first written, so sealing it is refused and it is
+// delivered unchanged: a seal cannot report counts added to a row a drain is recording without them.
+func TestStore_AnEntryPastItsHoldCannotBeSealed(t *testing.T) {
+	t.Parallel()
+	s, db := openOutbox(t)
+	var lapsedID int64
+	inTx(t, db, func(tx *sqlx.Tx) {
+		var err error
+		lapsedID, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
+		require.NoError(t, err)
+	})
+
+	sealed, err := s.Seal(t.Context(), lapsedID, entryFor(t, "with counts"))
+	require.NoError(t, err)
+	assert.False(t, sealed)
+	assert.Equal(t, []string{"as first written"}, pendingTargets(t, s))
+}
+
 func TestNewStore_PanicsWithoutADatabase(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { auditoutbox.NewStore(nil) })

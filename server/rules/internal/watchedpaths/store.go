@@ -133,7 +133,7 @@ func (s *Store) Replace(
 const auditHold = 5 * time.Minute
 
 // SealAudit adds the push's host counts to a replacement's held audit entry and releases it for delivery. It reports false when the
-// hold had already passed and a drain delivered the entry without the counts.
+// hold had already passed, in which case the entry is delivered without the counts.
 func (s *Store) SealAudit(ctx context.Context, id int64, entry auditoutbox.Entry) (bool, error) {
 	return s.outbox.Seal(ctx, id, entry)
 }

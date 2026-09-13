@@ -4,7 +4,7 @@
 
 The audit entry for a detection-config change (creating or deleting an exclusion, changing a rule setting, or replacing the watched-path set) SHALL be committed in the same transaction as the change, so an audit reader can never find the change without its entry. Because the audit store belongs to another bounded context and cannot join that transaction, the entry SHALL be committed to an outbox and delivered to the audit store afterwards. Delivery MAY lag the change, SHALL be retried until it succeeds, and SHALL NOT drop an entry. A change that is refused or rolled back SHALL leave no entry. The delivered row SHALL carry the trace of the request that made the change.
 
-A watched-path replacement's audit row SHALL report how many hosts the set was queued for and missed, which is known only after the change commits. Its entry SHALL therefore be withheld from delivery until the writer adds those counts. When the writer stops before adding them, the entry SHALL still be delivered, without the counts, once a bounded hold has passed.
+A watched-path replacement's audit row SHALL report how many hosts the set was queued for and missed, which is known only after the change commits. Its entry SHALL therefore be withheld from delivery until the writer adds those counts. When the writer stops before adding them, or adds them only after the hold has passed, the entry SHALL still be delivered, without the counts, once a bounded hold has passed.
 
 #### Scenario: A change commits with its audit entry
 

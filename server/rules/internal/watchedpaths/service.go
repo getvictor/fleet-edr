@@ -165,7 +165,8 @@ func (s *Service) completeAudit(
 		s.logger.WarnContext(ctx, "watchedpaths: could not add the push's host counts to the audit entry; it is delivered without "+
 			"them once its hold passes", "version", version, "err", err)
 	case !sealed:
-		s.logger.WarnContext(ctx, "watchedpaths: audit row was delivered before the push's host counts were added", "version", version)
+		s.logger.WarnContext(ctx, "watchedpaths: the push outlasted its audit entry's hold; the row is delivered without host counts",
+			"version", version)
 	}
 	if s.drain == nil {
 		s.logger.WarnContext(ctx, "watchedpaths: audit recorder not configured; audit entry left undelivered", "version", version)
