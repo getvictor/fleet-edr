@@ -10,6 +10,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // ErrInvalidRequest is returned when a mutation carries an invalid match type, mode, or a missing required field. REST handlers map
@@ -133,8 +134,11 @@ func (s *Store) ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSettin
 	return readSettings(ctx, s.db)
 }
 
-// CreateExclusion inserts an exclusion and bumps the config version atomically.
-func (s *Store) CreateExclusion(ctx context.Context, in CreateExclusionInput) (api.DetectionExclusion, error) {
+// CreateExclusion inserts an exclusion, bumps the config version, and writes the audit entry audit builds from the new id, all in one
+// transaction.
+func (s *Store) CreateExclusion(
+	ctx context.Context, in CreateExclusionInput, audit func(id int64) (auditoutbox.Entry, error),
+) (api.DetectionExclusion, error) {
 	if !api.IsValidExclusionMatchType(in.MatchType) {
 		return api.DetectionExclusion{}, fmt.Errorf("%w: match_type %q", ErrInvalidRequest, in.MatchType)
 	}
@@ -157,6 +161,13 @@ func (s *Store) CreateExclusion(ctx context.Context, in CreateExclusionInput) (a
 		if err != nil {
 			return fmt.Errorf("exclusion last insert id: %w", err)
 		}
+		entry, err := audit(id)
+		if err != nil {
+			return err
+		}
+		if err := auditoutbox.Enqueue(ctx, tx, entry); err != nil {
+			return err
+		}
 		return bumpVersion(ctx, tx)
 	})
 	if err != nil {
@@ -165,8 +176,9 @@ func (s *Store) CreateExclusion(ctx context.Context, in CreateExclusionInput) (a
 	return s.getExclusion(ctx, id)
 }
 
-// DeleteExclusion removes an exclusion and bumps the version. Returns sql.ErrNoRows when the id does not exist.
-func (s *Store) DeleteExclusion(ctx context.Context, id int64) error {
+// DeleteExclusion removes an exclusion, bumps the version, and writes the audit entry, in one transaction. Returns sql.ErrNoRows when
+// the id does not exist, writing nothing.
+func (s *Store) DeleteExclusion(ctx context.Context, id int64, audit auditoutbox.Entry) error {
 	return s.inTx(ctx, func(tx *sqlx.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM detection_exclusions WHERE id = ?`, id)
 		if err != nil {
@@ -179,13 +191,17 @@ func (s *Store) DeleteExclusion(ctx context.Context, id int64) error {
 		if n == 0 {
 			return sql.ErrNoRows
 		}
+		if err := auditoutbox.Enqueue(ctx, tx, audit); err != nil {
+			return err
+		}
 		return bumpVersion(ctx, tx)
 	})
 }
 
 // UpsertRuleSetting inserts or updates the setting for (rule, scope) and bumps the version. The unique key (rule_id, host_group_id)
-// drives the upsert, so re-setting the same scope flips the row in place rather than creating a duplicate.
-func (s *Store) UpsertRuleSetting(ctx context.Context, in UpsertSettingInput) (api.DetectionRuleSetting, error) {
+// drives the upsert, so re-setting the same scope flips the row in place rather than creating a duplicate. The audit entry is written
+// in the same transaction.
+func (s *Store) UpsertRuleSetting(ctx context.Context, in UpsertSettingInput, audit auditoutbox.Entry) (api.DetectionRuleSetting, error) {
 	if !api.IsValidDetectionRuleMode(in.Mode) {
 		return api.DetectionRuleSetting{}, fmt.Errorf("%w: mode %q", ErrInvalidRequest, in.Mode)
 	}
@@ -213,6 +229,9 @@ func (s *Store) UpsertRuleSetting(ctx context.Context, in UpsertSettingInput) (a
 			in.RuleID, in.HostGroupID, in.Mode, severity, in.Settings, in.Actor)
 		if err != nil {
 			return fmt.Errorf("upsert rule setting: %w", err)
+		}
+		if err := auditoutbox.Enqueue(ctx, tx, audit); err != nil {
+			return err
 		}
 		return bumpVersion(ctx, tx)
 	})

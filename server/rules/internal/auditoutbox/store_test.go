@@ -1,0 +1,138 @@
+package auditoutbox_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
+
+	identityapi "github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/migrations/runner"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
+	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
+	"github.com/fleetdm/edr/server/testdb"
+)
+
+func openOutbox(t *testing.T) (*auditoutbox.Store, *sqlx.DB) {
+	t.Helper()
+	db := testdb.Open(t)
+	require.NoError(t, runner.Up(t.Context(), db, rulesmigrations.FS, runner.Options{
+		Context:   "rules",
+		TableName: "rules_goose_db_version",
+	}))
+	return auditoutbox.NewStore(db), db
+}
+
+func entryFor(t *testing.T, targetID string) auditoutbox.Entry {
+	t.Helper()
+	entry, err := auditoutbox.Encode(identityapi.AuditEvent{
+		Action: identityapi.AuditDetectionConfigExclusionCreate, TargetType: "detection_exclusion", TargetID: targetID,
+	})
+	require.NoError(t, err)
+	return entry
+}
+
+// inTx commits write's statements in one transaction, as a detection-config change does.
+func inTx(t *testing.T, db *sqlx.DB, write func(tx *sqlx.Tx)) {
+	t.Helper()
+	tx, err := db.BeginTxx(t.Context(), nil)
+	require.NoError(t, err)
+	write(tx)
+	require.NoError(t, tx.Commit())
+}
+
+func pendingTargets(t *testing.T, s *auditoutbox.Store) []string {
+	t.Helper()
+	pending, err := s.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	targets := make([]string, 0, len(pending))
+	for _, p := range pending {
+		e, err := auditoutbox.Decode(p.Payload)
+		require.NoError(t, err)
+		targets = append(targets, e.TargetID)
+	}
+	return targets
+}
+
+func TestStore_AnEnqueuedEntryIsPendingOnceCommittedAndGoneOnceDeleted(t *testing.T) {
+	t.Parallel()
+	s, db := openOutbox(t)
+	inTx(t, db, func(tx *sqlx.Tx) {
+		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "first")))
+		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "second")))
+	})
+
+	pending, err := s.PendingAuditEntries(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+	assert.Equal(t, auditoutbox.Kind, pending[0].Kind)
+	assert.Equal(t, []string{"first", "second"}, pendingTargets(t, s), "oldest first")
+
+	require.NoError(t, s.DeleteAuditEntries(t.Context(), []int64{pending[0].ID}))
+	assert.Equal(t, []string{"second"}, pendingTargets(t, s))
+}
+
+func TestStore_AnEntryInARolledBackTransactionIsNeverPending(t *testing.T) {
+	t.Parallel()
+	s, db := openOutbox(t)
+	tx, err := db.BeginTxx(t.Context(), nil)
+	require.NoError(t, err)
+	require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "rolled back")))
+	require.NoError(t, tx.Rollback())
+
+	assert.Empty(t, pendingTargets(t, s))
+}
+
+// spec:server-detection-rules-engine/detection-config-changes-commit-their-audit-entry/an-entry-whose-writer-stops-is-still-delivered
+// A held entry waits for its writer to seal it, and is delivered as first written once the hold passes, so a writer that stops
+// between committing the change and completing the entry delays the audit row rather than losing it.
+func TestStore_AHeldEntryWaitsForItsSealOrItsHold(t *testing.T) {
+	t.Parallel()
+	s, db := openOutbox(t)
+	var sealedID int64
+	inTx(t, db, func(tx *sqlx.Tx) {
+		var err error
+		sealedID, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "held then sealed"), time.Hour)
+		require.NoError(t, err)
+		_, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "held, writer gone"), time.Hour)
+		require.NoError(t, err)
+		_, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "hold passed"), -time.Second)
+		require.NoError(t, err)
+	})
+
+	assert.Equal(t, []string{"hold passed"}, pendingTargets(t, s), "an entry is withheld only while its hold lasts")
+
+	sealed, err := s.Seal(t.Context(), sealedID, entryFor(t, "sealed with counts"))
+	require.NoError(t, err)
+	assert.True(t, sealed)
+	assert.Equal(t, []string{"sealed with counts", "hold passed"}, pendingTargets(t, s),
+		"sealing releases the entry with its new payload, in its original order")
+
+	require.NoError(t, s.DeleteAuditEntries(t.Context(), []int64{sealedID}))
+	sealed, err = s.Seal(t.Context(), sealedID, entryFor(t, "too late"))
+	require.NoError(t, err)
+	assert.False(t, sealed, "an entry already delivered cannot be sealed")
+}
+
+func TestTraceID(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, auditoutbox.TraceID(context.Background()), "no span, no trace")
+
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	require.NoError(t, err)
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled,
+	}))
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", auditoutbox.TraceID(ctx))
+}
+
+func TestNewStore_PanicsWithoutADatabase(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { auditoutbox.NewStore(nil) })
+}

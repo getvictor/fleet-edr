@@ -3,14 +3,18 @@ package detectionconfig_test
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 )
 
@@ -26,8 +30,14 @@ func (f *fakeAudit) Record(_ context.Context, e identityapi.AuditEvent) error {
 
 func newService(t *testing.T, audit identityapi.AuditRecorder) *detectionconfig.Service {
 	t.Helper()
-	store, _ := openStore(t)
-	svc := detectionconfig.NewService(store, nil, audit, nil)
+	store, db := openStore(t)
+	var drain *auditoutbox.Drain
+	if audit != nil {
+		var err error
+		drain, err = auditoutbox.NewDrain(auditoutbox.NewStore(db), audit, "detection config", nil)
+		require.NoError(t, err)
+	}
+	svc := detectionconfig.NewService(store, nil, drain, nil)
 	require.NoError(t, svc.Reload(t.Context()))
 	return svc
 }
@@ -266,4 +276,95 @@ func TestService_RefreshLoop_ConvergesAcrossReplicas(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return svcB.Excluded("sudoers_tamper", api.ExclusionMatchPathGlob, "/private/var/db/munki/installer", "host-a")
 	}, 3*time.Second, 20*time.Millisecond, "replica B should converge to the exclusion created on replica A via its refresh loop")
+}
+
+// switchableAudit records events, refusing them while down is set, as an unavailable audit store would.
+type switchableAudit struct {
+	down   bool
+	events []identityapi.AuditEvent
+}
+
+func (a *switchableAudit) Record(_ context.Context, e identityapi.AuditEvent) error {
+	if a.down {
+		return errors.New("audit store unavailable")
+	}
+	a.events = append(a.events, e)
+	return nil
+}
+
+// spec:server-detection-rules-engine/detection-config-changes-commit-their-audit-entry/a-change-commits-with-its-audit-entry
+// spec:server-detection-rules-engine/detection-config-changes-commit-their-audit-entry/a-delivery-failure-delays-the-audit-row
+// Each change commits its audit entry with it, so an audit store that is down when the change is made delays the row instead of
+// losing it: the change succeeds, the entry waits in the outbox, and the next drain delivers it with the change's own trace.
+func TestService_AChangeCommitsItsAuditEntryAndAnOutageOnlyDelaysTheRow(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	audit := &switchableAudit{down: true}
+	outbox := auditoutbox.NewStore(db)
+	drain, err := auditoutbox.NewDrain(outbox, audit, "detection config", nil)
+	require.NoError(t, err)
+	svc := detectionconfig.NewService(store, nil, drain, nil)
+	require.NoError(t, svc.Reload(t.Context()))
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(7, "ops@fleetdm.com")}
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	require.NoError(t, err)
+	ctx := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID}))
+
+	excl, err := svc.CreateExclusion(ctx, actor, "munki writes sudoers", detectionconfig.CreateExclusionInput{
+		RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob, Value: "/usr/local/munki/*",
+	})
+	require.NoError(t, err, "the change succeeds while the audit store is down")
+	_, err = svc.UpsertRuleSetting(ctx, actor, "noisy", detectionconfig.UpsertSettingInput{
+		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeMonitor,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteExclusion(ctx, actor, "no longer needed", excl.ID))
+	assert.Empty(t, audit.events)
+	pending, err := outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	assert.Len(t, pending, 3, "each change's entry committed with it")
+
+	audit.down = false
+	delivered, err := drain.Drain(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 3, delivered)
+	require.Len(t, audit.events, 3)
+	create, setting, deletion := audit.events[0], audit.events[1], audit.events[2]
+	assert.Equal(t, identityapi.AuditDetectionConfigExclusionCreate, create.Action)
+	assert.Equal(t, strconv.FormatInt(excl.ID, 10), create.TargetID, "the entry names the id the change created")
+	assert.Equal(t, "/usr/local/munki/*", create.Payload["value"])
+	assert.Equal(t, "munki writes sudoers", create.Payload["reason"])
+	assert.Equal(t, actor.Principal.ID, create.Actor.ID)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", create.TraceID, "the row keeps the trace of the request that made the change")
+	assert.Equal(t, identityapi.AuditDetectionConfigRuleSettingUpdate, setting.Action)
+	assert.Equal(t, "monitor", setting.Payload["mode"])
+	assert.Equal(t, identityapi.AuditDetectionConfigExclusionDelete, deletion.Action)
+	assert.Equal(t, "no longer needed", deletion.Payload["reason"])
+	pending, err = outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "delivered entries are cleared")
+}
+
+// spec:server-detection-rules-engine/detection-config-changes-commit-their-audit-entry/a-refused-change-leaves-no-audit-entry
+func TestService_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	outbox := auditoutbox.NewStore(db)
+	svc := detectionconfig.NewService(store, nil, nil, nil)
+	svc.SetRuleExclusionSupport(map[string][]api.ExclusionMatchType{"sudoers_tamper": {api.ExclusionMatchPathGlob}})
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(7, "ops@fleetdm.com")}
+
+	_, err := svc.CreateExclusion(t.Context(), actor, "r", detectionconfig.CreateExclusionInput{
+		RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchSHA256, Value: "abc",
+	})
+	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+	_, err = svc.UpsertRuleSetting(t.Context(), actor, "r", detectionconfig.UpsertSettingInput{RuleID: "suspicious_exec", Mode: "loud"})
+	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+	require.ErrorIs(t, svc.DeleteExclusion(t.Context(), actor, "r", 999), sql.ErrNoRows)
+
+	pending, err := outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
 }

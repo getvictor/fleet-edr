@@ -11,9 +11,10 @@ import (
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
-func newDrain(t *testing.T, outbox *fakeOutbox, audit *recordingAudit) *AuditDrain {
+func newDrain(t *testing.T, outbox *fakeOutbox, audit *recordingAudit) *auditoutbox.Drain {
 	t.Helper()
 	d, err := NewAuditDrain(outbox, audit, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -117,9 +118,9 @@ func TestAuditEntry_RoundTrips(t *testing.T) {
 
 	entry, err := encodeAuditEntry(original)
 	require.NoError(t, err)
-	require.Equal(t, AuditOutboxKind, entry.Kind)
+	require.Equal(t, auditoutbox.Kind, entry.Kind)
 
-	back, err := decodeAuditEntry(entry.Payload)
+	back, err := auditoutbox.Decode(entry.Payload)
 	require.NoError(t, err)
 	assert.Equal(t, original, back, "every field a rule-content audit row carries survives the outbox")
 }
@@ -144,7 +145,7 @@ func TestAuditEntry_KeysAreTheFormat(t *testing.T) {
 		"action": "rule_content.pack_rollback",
 		"target_type": "rule_content_pack",
 		"target_id": "sha256:abc"
-	}`, string(entry.Payload), "changing a key changes the on-disk format, so it changes AuditOutboxKind too")
+	}`, string(entry.Payload), "changing a key changes the on-disk format, so it changes auditoutbox.Kind too")
 }
 
 // TestDrain_SkipsAnEntryItCannotReadRatherThanStalling is the fix for a defect review found in the first version: stopping at an
@@ -153,7 +154,7 @@ func TestAuditEntry_KeysAreTheFormat(t *testing.T) {
 func TestDrain_SkipsAnEntryItCannotReadRatherThanStalling(t *testing.T) {
 	t.Parallel()
 	outbox := &fakeOutbox{}
-	outbox.add(rulecontentapi.AuditOutboxEntry{Kind: AuditOutboxKind, Payload: []byte(`{not json`)})
+	outbox.add(rulecontentapi.AuditOutboxEntry{Kind: auditoutbox.Kind, Payload: []byte(`{not json`)})
 	outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
 	audit := &recordingAudit{}
 
@@ -162,7 +163,7 @@ func TestDrain_SkipsAnEntryItCannotReadRatherThanStalling(t *testing.T) {
 	assert.Equal(t, 1, delivered, "and the entry behind it still lands")
 	require.Len(t, audit.events, 1)
 	require.Len(t, outbox.entries, 1, "only the poison entry is left")
-	assert.Equal(t, AuditOutboxKind, outbox.entries[0].Kind)
+	assert.Equal(t, auditoutbox.Kind, outbox.entries[0].Kind)
 }
 
 // TestDrain_AnUnknownKindDoesNotBlockTheOnesBehindIt is the same property for version skew rather than corruption: an entry a
@@ -220,13 +221,13 @@ func TestDrain_ADeleteFailureRedeliversRatherThanLosing(t *testing.T) {
 func TestDrain_LimitsOnePass(t *testing.T) {
 	t.Parallel()
 	outbox := &fakeOutbox{}
-	for range DrainBatch + 5 {
+	for range auditoutbox.DrainBatch + 5 {
 		outbox.add(encoded(t, identityapi.AuditRuleContentDocumentPut))
 	}
 	audit := &recordingAudit{}
 
 	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, DrainBatch, delivered)
+	assert.Equal(t, auditoutbox.DrainBatch, delivered)
 	assert.Len(t, outbox.entries, 5, "the rest waits for the next pass")
 }

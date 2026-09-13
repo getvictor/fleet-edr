@@ -12,6 +12,7 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // ErrReasonRequired is returned for a change without a reason. Every change is audited with its reason, and a blank one would leave
@@ -23,13 +24,13 @@ type Service struct {
 	store    *Store
 	commands appcontrol.CommandBatchInserter
 	hosts    appcontrol.HostLister
-	audit    identityapi.AuditRecorder
+	drain    *auditoutbox.Drain
 	logger   *slog.Logger
 }
 
-// NewService builds a Service. store, commands and hosts are required; audit may be nil outside production, which logs each change
-// that goes unaudited.
-func NewService(store *Store, commands appcontrol.CommandBatchInserter, hosts appcontrol.HostLister, audit identityapi.AuditRecorder,
+// NewService builds a Service. store, commands and hosts are required. drain delivers the audit entries changes commit; it may be nil
+// outside production, which leaves them in the outbox and logs each change whose audit row goes undelivered.
+func NewService(store *Store, commands appcontrol.CommandBatchInserter, hosts appcontrol.HostLister, drain *auditoutbox.Drain,
 	logger *slog.Logger) *Service {
 	if store == nil || commands == nil || hosts == nil {
 		panic("watchedpaths.NewService: store, commands and hosts are required")
@@ -37,7 +38,7 @@ func NewService(store *Store, commands appcontrol.CommandBatchInserter, hosts ap
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{store: store, commands: commands, hosts: hosts, audit: audit, logger: logger}
+	return &Service{store: store, commands: commands, hosts: hosts, drain: drain, logger: logger}
 }
 
 // Get returns the stored set.
@@ -60,7 +61,7 @@ type ReplaceResult struct {
 // change with its reason.
 //
 // The stored set is authoritative once written, so a push that does not reach every host does not fail the change: the result counts
-// the hosts it missed, and so does the audit row.
+// the hosts it missed, and so does the audit row. The audit entry commits with the set and is delivered after the push, with its counts.
 //
 // A non-nil expectedVersion is the version the caller's edit started from; the change is refused with ErrVersionConflict when the set
 // has moved on, so a stale edit cannot silently remove paths someone else added.
@@ -73,12 +74,15 @@ func (s *Service) Replace(
 	if err := api.ValidateWatchedPaths(paths); err != nil {
 		return ReplaceResult{}, err
 	}
-	previous, set, err := s.store.Replace(ctx, paths, actor.Principal.ID, expectedVersion)
+	previous, set, auditID, err := s.store.Replace(ctx, paths, actor.Principal.ID, expectedVersion,
+		func(previous, next api.WatchedPathSet) (auditoutbox.Entry, error) {
+			return auditEntry(ctx, actor, reason, previous, ReplaceResult{Set: next}, false)
+		})
 	if err != nil {
 		return ReplaceResult{}, err
 	}
 	result := s.fanout(ctx, set)
-	s.recordAudit(ctx, actor, reason, previous, result)
+	s.completeAudit(ctx, auditID, actor, reason, previous, result)
 	return result, nil
 }
 
@@ -115,9 +119,11 @@ func (s *Service) fanout(ctx context.Context, set api.WatchedPathSet) ReplaceRes
 	return result
 }
 
-func (s *Service) recordAudit(
-	ctx context.Context, actor *identityapi.Actor, reason string, previous api.WatchedPathSet, result ReplaceResult,
-) {
+// auditEntry encodes a replacement's audit row: the reason, the previous and new sets, and, when withCounts, how the push went. It
+// carries the request's trace, so the row is attributed to the request that made the change rather than the one that delivers it.
+func auditEntry(
+	ctx context.Context, actor *identityapi.Actor, reason string, previous api.WatchedPathSet, result ReplaceResult, withCounts bool,
+) (auditoutbox.Entry, error) {
 	set := result.Set
 	payload := map[string]any{
 		"reason":           reason,
@@ -125,24 +131,47 @@ func (s *Service) recordAudit(
 		"paths":            set.Paths,
 		"previous_version": previous.Version,
 		"previous_paths":   previous.Paths,
-		"fanout_hosts":     result.FanoutHosts,
-		"fanout_failed":    result.FanoutFailed,
 	}
-	if result.FanoutSkippedReason != "" {
-		payload["fanout_skipped_reason"] = result.FanoutSkippedReason
+	if withCounts {
+		payload["fanout_hosts"] = result.FanoutHosts
+		payload["fanout_failed"] = result.FanoutFailed
+		if result.FanoutSkippedReason != "" {
+			payload["fanout_skipped_reason"] = result.FanoutSkippedReason
+		}
 	}
-	event := identityapi.AuditEvent{
+	return auditoutbox.Encode(identityapi.AuditEvent{
 		Actor:      actor.Principal,
 		Action:     identityapi.AuditDetectionConfigWatchedPathsUpdate,
 		TargetType: "watched_path_set",
 		TargetID:   strconv.FormatInt(set.Version, 10),
+		TraceID:    auditoutbox.TraceID(ctx),
 		Payload:    payload,
+	})
+}
+
+// completeAudit adds the push's host counts to the replacement's held audit entry and delivers it. The change and its entry are
+// already committed, so every failure here is logged rather than returned: at worst the row arrives late, or without the counts.
+func (s *Service) completeAudit(
+	ctx context.Context, auditID int64, actor *identityapi.Actor, reason string, previous api.WatchedPathSet, result ReplaceResult,
+) {
+	version := result.Set.Version
+	entry, err := auditEntry(ctx, actor, reason, previous, result, true)
+	sealed := false
+	if err == nil {
+		sealed, err = s.store.SealAudit(ctx, auditID, entry)
 	}
-	if s.audit == nil {
-		s.logger.WarnContext(ctx, "watchedpaths: audit recorder not configured; change not audited", "version", set.Version)
+	switch {
+	case err != nil:
+		s.logger.WarnContext(ctx, "watchedpaths: could not add the push's host counts to the audit entry; it is delivered without "+
+			"them once its hold passes", "version", version, "err", err)
+	case !sealed:
+		s.logger.WarnContext(ctx, "watchedpaths: audit row was delivered before the push's host counts were added", "version", version)
+	}
+	if s.drain == nil {
+		s.logger.WarnContext(ctx, "watchedpaths: audit recorder not configured; audit entry left undelivered", "version", version)
 		return
 	}
-	if err := s.audit.Record(ctx, event); err != nil {
-		s.logger.WarnContext(ctx, "watchedpaths: audit record failed", "version", set.Version, "err", err)
+	if _, err := s.drain.Drain(ctx); err != nil {
+		s.logger.WarnContext(ctx, "watchedpaths: audit entry is committed but not yet delivered; the sweep will retry it", "err", err)
 	}
 }

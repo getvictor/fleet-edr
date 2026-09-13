@@ -9,8 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 	"github.com/fleetdm/edr/server/testdb"
@@ -28,6 +30,19 @@ func openStore(t *testing.T) (*detectionconfig.Store, *sqlx.DB) {
 	return detectionconfig.NewStore(db), db
 }
 
+// testAuditEntry is an audit entry for a store call whose test is not about auditing.
+func testAuditEntry(t *testing.T) auditoutbox.Entry {
+	t.Helper()
+	entry, err := auditoutbox.Encode(identityapi.AuditEvent{Action: identityapi.AuditDetectionConfigExclusionCreate})
+	require.NoError(t, err)
+	return entry
+}
+
+// auditFor is CreateExclusion's audit builder for a test that is not about auditing.
+func auditFor(int64) (auditoutbox.Entry, error) {
+	return auditoutbox.Encode(identityapi.AuditEvent{Action: identityapi.AuditDetectionConfigExclusionCreate})
+}
+
 func TestStoreCreateExclusionBumpsVersionAndResolves(t *testing.T) {
 	t.Parallel()
 	s, _ := openStore(t)
@@ -43,7 +58,7 @@ func TestStoreCreateExclusionBumpsVersionAndResolves(t *testing.T) {
 		HostGroupID: api.GlobalScope,
 		Reason:      "Claude Code CLI, version-stamped path",
 		Actor:       "alice",
-	})
+	}, auditFor)
 	require.NoError(t, err)
 
 	v1, err := s.Version(ctx)
@@ -69,7 +84,7 @@ func TestStoreUpsertRuleSettingResolves(t *testing.T) {
 		HostGroupID: api.GlobalScope,
 		Mode:        api.DetectionRuleModeDisabled,
 		Actor:       "alice",
-	})
+	}, testAuditEntry(t))
 	require.NoError(t, err)
 
 	snap, err := s.LoadSnapshot(ctx, nil, nil)
@@ -83,7 +98,7 @@ func TestStoreUpsertRuleSettingResolves(t *testing.T) {
 		Mode:             api.DetectionRuleModeAlert,
 		SeverityOverride: "critical",
 		Actor:            "bob",
-	})
+	}, testAuditEntry(t))
 	require.NoError(t, err)
 
 	all, err := s.ListRuleSettings(ctx)
@@ -104,16 +119,16 @@ func TestStoreDeleteExclusion(t *testing.T) {
 	created, err := s.CreateExclusion(ctx, detectionconfig.CreateExclusionInput{
 		RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob,
 		Value: "/usr/local/bin/munki", HostGroupID: api.GlobalScope, Actor: "alice",
-	})
+	}, auditFor)
 	require.NoError(t, err)
 
-	require.NoError(t, s.DeleteExclusion(ctx, created.ID))
+	require.NoError(t, s.DeleteExclusion(ctx, created.ID, testAuditEntry(t)))
 
 	snap, err := s.LoadSnapshot(ctx, nil, nil)
 	require.NoError(t, err)
 	assert.False(t, snap.Excluded("sudoers_tamper", api.ExclusionMatchPathGlob, "/usr/local/bin/munki", "host-a"))
 
-	assert.ErrorIs(t, s.DeleteExclusion(ctx, created.ID), sql.ErrNoRows, "deleting a missing row returns sql.ErrNoRows")
+	assert.ErrorIs(t, s.DeleteExclusion(ctx, created.ID, testAuditEntry(t)), sql.ErrNoRows, "deleting a missing row returns sql.ErrNoRows")
 }
 
 func TestStoreRejectsInvalidInput(t *testing.T) {
@@ -123,16 +138,16 @@ func TestStoreRejectsInvalidInput(t *testing.T) {
 
 	_, err := s.CreateExclusion(ctx, detectionconfig.CreateExclusionInput{
 		RuleID: "suspicious_exec", MatchType: "bogus", Value: "x", Actor: "alice",
-	})
+	}, auditFor)
 	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest, "invalid match type is rejected")
 
 	_, err = s.UpsertRuleSetting(ctx, detectionconfig.UpsertSettingInput{
 		RuleID: "suspicious_exec", Mode: "bogus", Actor: "alice",
-	})
+	}, testAuditEntry(t))
 	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest, "invalid mode is rejected")
 
 	_, err = s.UpsertRuleSetting(ctx, detectionconfig.UpsertSettingInput{
 		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeAlert, SeverityOverride: "catastrophic", Actor: "alice",
-	})
+	}, testAuditEntry(t))
 	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest, "invalid severity override is rejected before the SQL ENUM")
 }

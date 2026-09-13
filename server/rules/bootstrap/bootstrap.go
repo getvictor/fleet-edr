@@ -20,6 +20,7 @@ import (
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/export"
@@ -81,6 +82,9 @@ type Deps struct {
 	// WatchedPathConvergeInterval is how often the catch-up runs. Optional: zero or negative means
 	// watchedpaths.DefaultConvergeInterval.
 	WatchedPathConvergeInterval time.Duration
+	// AuditSweepInterval is how often the audit outbox sweeps deliver entries a request could not. Optional: zero or negative means
+	// auditoutbox.DefaultSweepInterval. Injectable so a test can watch a sweep deliver.
+	AuditSweepInterval time.Duration
 
 	// Corpus supplies rule definitions from the rulecontent context (ADR-0021): rulecontent produces content, rules consumes and
 	// evaluates it. Optional. When nil, or when the stored corpus is empty or fails to load, the catalog falls back to the corpus
@@ -121,13 +125,18 @@ type Rules struct {
 	// evalStatsFlushInterval is how often that buffer is written. See Deps.EvalStatsFlushInterval.
 	evalStatsFlushInterval time.Duration
 	// auditDrain delivers rule-content audit entries the writing request could not (issue #886). Nil when no outbox was wired.
-	auditDrain       *ruleauthoring.AuditDrain
-	detectionConfigH *operator.DetectionConfigHandler
+	auditDrain *auditoutbox.Drain
+	// detectionConfigAuditDrain delivers detection-config audit entries the writing request could not (issue #1022). Nil without an
+	// audit recorder.
+	detectionConfigAuditDrain *auditoutbox.Drain
+	detectionConfigH          *operator.DetectionConfigHandler
 	// watchedPathConverger is nil unless the watched-path catch-up is wired; see Deps.WatchedPathEnrollments.
 	watchedPathConverger *watchedpaths.Converger
 	// watchedPathConvergeInterval is how often it runs. See Deps.WatchedPathConvergeInterval.
 	watchedPathConvergeInterval time.Duration
-	ruleAuthoringH              *operator.RuleAuthoringHandler
+	// auditSweepInterval is how often both audit outbox sweeps run. See Deps.AuditSweepInterval.
+	auditSweepInterval time.Duration
+	ruleAuthoringH     *operator.RuleAuthoringHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -167,7 +176,17 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	// the rule set is constructed against the live resolver; the initial snapshot is loaded in ApplySchema once the tables exist.
 	detectionConfigStore := detectionconfig.NewStore(deps.DB)
 	evalStatsBuffer := detectionconfig.NewBufferedEvalStats(detectionConfigStore, logger)
-	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
+	// Detection-config changes write their audit rows into this context's outbox in the transaction that makes them, and this drain
+	// delivers them (issue #1022). Nil without a recorder, which only non-production wiring omits.
+	var detectionConfigAuditDrain *auditoutbox.Drain
+	if deps.Audit != nil {
+		var derr error
+		if detectionConfigAuditDrain, derr = auditoutbox.NewDrain(
+			auditoutbox.NewStore(deps.DB), deps.Audit, "detection config", logger); derr != nil {
+			return nil, fmt.Errorf("build detection config audit drain: %w", derr)
+		}
+	}
+	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, detectionConfigAuditDrain, logger)
 
 	// Built empty and filled below by installRuleSet, so the initial load and every later reload go through ONE definition of what
 	// installing a rule set means. Three consumers derive from it and each goes stale silently on its own, which is not a fan-out
@@ -185,7 +204,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	// Mounted only when every half is present: the lifecycle to change documents, the corpus to read them back, and the pack
 	// lifecycle behind the status and rollback routes. Without any one of them the surface would be partial, and a handler that
 	// 500s on some of its routes is worse than routes that are not there.
-	var auditDrain *ruleauthoring.AuditDrain
+	var auditDrain *auditoutbox.Drain
 	if deps.AuditOutbox != nil && deps.Audit != nil {
 		var derr error
 		if auditDrain, derr = ruleauthoring.NewAuditDrain(deps.AuditOutbox, deps.Audit, logger); derr != nil {
@@ -226,7 +245,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	if deps.CommandBatchInserter != nil && deps.EnrolledHostLister != nil {
 		watchedPathStore := watchedpaths.NewStore(deps.DB)
 		detectionConfigH.SetWatchedPaths(watchedpaths.NewService(
-			watchedPathStore, deps.CommandBatchInserter, deps.EnrolledHostLister, deps.Audit, logger))
+			watchedPathStore, deps.CommandBatchInserter, deps.EnrolledHostLister, detectionConfigAuditDrain, logger))
 		if deps.WatchedPathEnrollments != nil && deps.WatchedPathLatestCommands != nil {
 			watchedPathConverger = watchedpaths.NewConverger(watchedPathStore, deps.CommandBatchInserter,
 				deps.WatchedPathEnrollments, deps.WatchedPathLatestCommands, logger)
@@ -238,6 +257,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		evalStatsBuffer:             evalStatsBuffer,
 		evalStatsFlushInterval:      deps.EvalStatsFlushInterval,
 		auditDrain:                  auditDrain,
+		detectionConfigAuditDrain:   detectionConfigAuditDrain,
 		operatorH:                   opH,
 		appControlH:                 appControlH,
 		appControlSt:                appControlStore,
@@ -247,6 +267,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		ruleAuthoringH:              ruleAuthoringH,
 		watchedPathConverger:        watchedPathConverger,
 		watchedPathConvergeInterval: deps.WatchedPathConvergeInterval,
+		auditSweepInterval:          deps.AuditSweepInterval,
 		db:                          deps.DB,
 		logger:                      logger,
 		corpus:                      deps.Corpus,
@@ -340,7 +361,14 @@ func (r *Rules) Run(ctx context.Context) {
 		// still has to drain what an earlier one left, and a drain over an empty table costs one query a minute.
 		func(ctx context.Context) {
 			if r.auditDrain != nil {
-				r.auditDrain.SweepLoop(ctx, ruleauthoring.DefaultSweepInterval)
+				r.auditDrain.SweepLoop(ctx, r.auditSweepInterval)
+			}
+		},
+		// The same for detection-config changes (issue #1022), including a watched-path replacement whose writer died before adding
+		// the push's host counts, once its hold passes.
+		func(ctx context.Context) {
+			if r.detectionConfigAuditDrain != nil {
+				r.detectionConfigAuditDrain.SweepLoop(ctx, r.auditSweepInterval)
 			}
 		},
 		// Queues the watched-path set for hosts that missed its push (issue #998). Absent where the command queue, enrollments or
