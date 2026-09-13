@@ -14,13 +14,14 @@ import (
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // Service applies attributed changes to rule content.
 type Service struct {
 	author   rulecontentapi.Author
 	validate rulecontentapi.Validator
-	drain    *AuditDrain
+	drain    *auditoutbox.Drain
 	logger   *slog.Logger
 }
 

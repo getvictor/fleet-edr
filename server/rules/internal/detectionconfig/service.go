@@ -12,17 +12,18 @@ import (
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // Service is the live detection-config provider. It loads an immutable Snapshot from the Store and swaps it atomically on Reload, so
 // rule evaluation (via api.ExclusionResolver) and the detection engine (via api.RuleModeResolver) always read a consistent
 // point-in-time view without locks and without a restart. The snapshot is a per-replica cache, safe to lose (ADR-0010): each replica
-// converges by reloading. Mutations go through the Service so each one bumps the version (in the store), reloads this replica's
-// snapshot, and writes an audit row. Satisfies api.ExclusionResolver and api.RuleModeResolver.
+// converges by reloading. Mutations go through the Service so each one bumps the version and writes its audit entry (in one store
+// transaction), reloads this replica's snapshot, and delivers the audit entry. Satisfies api.ExclusionResolver and api.RuleModeResolver.
 type Service struct {
 	store      *Store
 	membership Membership
-	audit      identityapi.AuditRecorder
+	drain      *auditoutbox.Drain
 	logger     *slog.Logger
 	snap       atomic.Pointer[Snapshot]
 	// ruleExclusionSupport maps each registered rule id to the exclusion match types it consults (issue #520), injected by bootstrap
@@ -45,16 +46,16 @@ var (
 // own declared default (issue #764) rather than alert unconditionally.
 //
 // membership decides whether a group-scoped record applies to a host; nil means only global records apply (the Phase A norm, since
-// the only host group is the immutable all-hosts group). audit may be nil (a mutation then drops its audit row with a WARN,
-// matching app-control's posture); logger defaults to slog.Default.
-func NewService(store *Store, membership Membership, audit identityapi.AuditRecorder, logger *slog.Logger) *Service {
+// the only host group is the immutable all-hosts group). drain delivers the audit entries mutations commit; nil leaves them in the
+// outbox with a WARN, for non-production constructors that wire no audit recorder. logger defaults to slog.Default.
+func NewService(store *Store, membership Membership, drain *auditoutbox.Drain, logger *slog.Logger) *Service {
 	if store == nil {
 		panic("detectionconfig.NewService: store must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Service{store: store, membership: membership, audit: audit, logger: logger}
+	s := &Service{store: store, membership: membership, drain: drain, logger: logger}
 	s.snap.Store(NewSnapshot(0, nil, nil, membership, nil))
 	return s
 }
@@ -124,8 +125,8 @@ func (s *Service) MatchCounts(ctx context.Context, days api.MatchCountWindow) ([
 	return s.store.MatchCounts(ctx, days)
 }
 
-// CreateExclusion persists an exclusion, reloads this replica's snapshot so the change takes effect immediately, and records an audit
-// row. The store sets created_by from actor; reason rides the audit payload.
+// CreateExclusion persists an exclusion with its audit entry, reloads this replica's snapshot so the change takes effect immediately,
+// and delivers the audit entry. The store sets created_by from actor; reason rides the audit payload.
 func (s *Service) CreateExclusion(
 	ctx context.Context, actor *identityapi.Actor, reason string, in CreateExclusionInput,
 ) (api.DetectionExclusion, error) {
@@ -133,44 +134,55 @@ func (s *Service) CreateExclusion(
 	if err := s.validateExclusionSupport(in); err != nil {
 		return api.DetectionExclusion{}, err
 	}
-	excl, err := s.store.CreateExclusion(ctx, in)
+	excl, err := s.store.CreateExclusion(ctx, in, func(id int64) (auditoutbox.Entry, error) {
+		return auditEntry(ctx, actor, identityapi.AuditDetectionConfigExclusionCreate, "detection_exclusion",
+			strconv.FormatInt(id, 10), reason, map[string]any{
+				"rule_id": in.RuleID, "match_type": string(in.MatchType), "value": in.Value, "host_group_id": in.HostGroupID,
+			})
+	})
 	if err != nil {
 		return api.DetectionExclusion{}, err
 	}
 	s.reloadAfterMutation(ctx)
-	s.emitAudit(ctx, actor, identityapi.AuditDetectionConfigExclusionCreate, "detection_exclusion",
-		strconv.FormatInt(excl.ID, 10), reason, map[string]any{
-			"rule_id": excl.RuleID, "match_type": string(excl.MatchType), "value": excl.Value, "host_group_id": excl.HostGroupID,
-		})
+	s.deliverAudit(ctx)
 	return excl, nil
 }
 
-// DeleteExclusion removes an exclusion, reloads, and audits. Returns sql.ErrNoRows (via the store) when the id does not exist.
+// DeleteExclusion removes an exclusion with its audit entry, reloads, and delivers the entry. Returns sql.ErrNoRows (via the store)
+// when the id does not exist.
 func (s *Service) DeleteExclusion(ctx context.Context, actor *identityapi.Actor, reason string, id int64) error {
-	if err := s.store.DeleteExclusion(ctx, id); err != nil {
+	entry, err := auditEntry(ctx, actor, identityapi.AuditDetectionConfigExclusionDelete, "detection_exclusion",
+		strconv.FormatInt(id, 10), reason, nil)
+	if err != nil {
+		return err
+	}
+	if err := s.store.DeleteExclusion(ctx, id, entry); err != nil {
 		return err
 	}
 	s.reloadAfterMutation(ctx)
-	s.emitAudit(ctx, actor, identityapi.AuditDetectionConfigExclusionDelete, "detection_exclusion",
-		strconv.FormatInt(id, 10), reason, nil)
+	s.deliverAudit(ctx)
 	return nil
 }
 
-// UpsertRuleSetting sets a rule's per-scope mode / severity override, reloads, and audits.
+// UpsertRuleSetting sets a rule's per-scope mode / severity override with its audit entry, reloads, and delivers the entry.
 func (s *Service) UpsertRuleSetting(
 	ctx context.Context, actor *identityapi.Actor, reason string, in UpsertSettingInput,
 ) (api.DetectionRuleSetting, error) {
 	in.Actor = actorIdentifier(actor)
-	setting, err := s.store.UpsertRuleSetting(ctx, in)
+	entry, err := auditEntry(ctx, actor, identityapi.AuditDetectionConfigRuleSettingUpdate, "detection_rule_setting",
+		in.RuleID, reason, map[string]any{
+			"rule_id": in.RuleID, "host_group_id": in.HostGroupID,
+			"mode": string(in.Mode), "severity_override": in.SeverityOverride,
+		})
+	if err != nil {
+		return api.DetectionRuleSetting{}, err
+	}
+	setting, err := s.store.UpsertRuleSetting(ctx, in, entry)
 	if err != nil {
 		return api.DetectionRuleSetting{}, err
 	}
 	s.reloadAfterMutation(ctx)
-	s.emitAudit(ctx, actor, identityapi.AuditDetectionConfigRuleSettingUpdate, "detection_rule_setting",
-		in.RuleID, reason, map[string]any{
-			"rule_id": setting.RuleID, "host_group_id": setting.HostGroupID,
-			"mode": string(setting.Mode), "severity_override": setting.SeverityOverride,
-		})
+	s.deliverAudit(ctx)
 	return setting, nil
 }
 
@@ -182,18 +194,12 @@ func (s *Service) reloadAfterMutation(ctx context.Context) {
 	}
 }
 
-// emitAudit records one operator-action row. Best-effort: a nil recorder or a write failure logs a WARN rather than failing the
-// already-committed mutation (the row is durable; the audit row is not on the critical path).
-func (s *Service) emitAudit(
+// auditEntry encodes one operator-action audit row for the outbox, carrying the request's trace so the row is attributed to the
+// request that made the change rather than to whichever request delivers it.
+func auditEntry(
 	ctx context.Context, actor *identityapi.Actor, action identityapi.AuditAction,
 	targetType, targetID, reason string, payload map[string]any,
-) {
-	if s.audit == nil {
-		// No recorder wired (non-production / tests): the mutation still committed, but flag the dropped row so audit loss is
-		// visible rather than silent. Production always wires the recorder.
-		s.logger.WarnContext(ctx, "detectionconfig: audit recorder not configured; mutation not audited", "action", string(action))
-		return
-	}
+) (auditoutbox.Entry, error) {
 	if payload == nil {
 		payload = map[string]any{}
 	}
@@ -202,13 +208,26 @@ func (s *Service) emitAudit(
 		Action:     action,
 		TargetType: targetType,
 		TargetID:   targetID,
+		TraceID:    identityapi.TraceIDFromContext(ctx),
 		Payload:    payload,
 	}
 	if actor != nil {
 		event.Actor = actor.Principal
 	}
-	if err := s.audit.Record(ctx, event); err != nil {
-		s.logger.WarnContext(ctx, "detectionconfig: audit record failed", "err", err, "action", string(action))
+	return auditoutbox.Encode(event)
+}
+
+// deliverAudit turns the audit entry a mutation just committed into an audit row now, rather than on the next sweep. The entry is
+// already durable, so a failure here delays the row and is logged rather than failing a change that succeeded; the sweep delivers it.
+func (s *Service) deliverAudit(ctx context.Context) {
+	if s.drain == nil {
+		// No recorder wired (non-production / tests): the entry stays in the outbox, and saying so keeps the missing row visible.
+		// Production always wires the recorder.
+		s.logger.WarnContext(ctx, "detectionconfig: audit recorder not configured; audit entry left undelivered")
+		return
+	}
+	if _, err := s.drain.Drain(ctx); err != nil {
+		s.logger.WarnContext(ctx, "detectionconfig: audit entry is committed but not yet delivered; the sweep will retry it", "err", err)
 	}
 }
 

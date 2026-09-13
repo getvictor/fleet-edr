@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,8 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
+	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
+	"github.com/fleetdm/edr/server/rules/internal/watchedpaths"
 )
 
 const watchedPathsRoute = "/api/v1/detection-config/watched-paths"
@@ -124,10 +127,10 @@ func TestWatchedPathsREST_ReplacesTheSetPushesItAndAuditsIt(t *testing.T) {
 	assert.Equal(t, r.actor.Principal, e.Actor)
 	assert.Equal(t, "cover the emond rule too", e.Payload["reason"])
 	assert.EqualValues(t, 1, e.Payload["previous_version"])
-	assert.Equal(t, []rulesapi.WatchedPath{startupItems}, e.Payload["previous_paths"])
-	assert.Equal(t, []rulesapi.WatchedPath{emond, startupItems}, e.Payload["paths"])
-	assert.Equal(t, 3, e.Payload["fanout_hosts"])
-	assert.Equal(t, 0, e.Payload["fanout_failed"])
+	assert.Equal(t, asJSON(t, []rulesapi.WatchedPath{startupItems}), e.Payload["previous_paths"])
+	assert.Equal(t, asJSON(t, []rulesapi.WatchedPath{emond, startupItems}), e.Payload["paths"])
+	assert.EqualValues(t, 3, e.Payload["fanout_hosts"])
+	assert.EqualValues(t, 0, e.Payload["fanout_failed"])
 }
 
 // An empty set is how an operator stops watching everything they added; it is stored and pushed like any other.
@@ -262,7 +265,9 @@ func TestWatchedPathsREST_OrdersConcurrentReplacements(t *testing.T) {
 	}
 	previous := make(map[any]bool, writers)
 	for _, e := range r.audit.snapshot() {
-		assert.Equal(t, e.Payload["version"].(int64)-1, e.Payload["previous_version"], "each change audits the set it replaced")
+		version, ok := e.Payload["version"].(float64)
+		require.True(t, ok, "the audited version is a JSON number")
+		assert.InDelta(t, version-1, e.Payload["previous_version"], 0, "each change audits the set it replaced")
 		previous[e.Payload["previous_version"]] = true
 	}
 	assert.Len(t, previous, writers)
@@ -343,6 +348,53 @@ func TestWatchedPathsREST_RefusesAnInvalidSetWithoutStoringOrPushing(t *testing.
 	assert.Equal(t, int64(0), r.watchedPaths(t).Version)
 	assert.Empty(t, r.inserter.snapshot())
 	assert.Empty(t, r.audit.snapshot())
+	pending, err := auditoutbox.NewStore(r.db).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "and left no audit entry behind")
+}
+
+// spec:server-detection-rules-engine/detection-config-changes-commit-their-audit-entry/a-replacement-s-audit-row-reports-its-push
+// A replacement's audit entry commits with the set but is withheld until the push's host counts are added, so the row that is
+// delivered reports how the push went rather than a row without counts arriving first.
+func TestWatchedPathsAudit_TheEntryWaitsForThePushCounts(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	store := watchedpaths.NewStore(r.db)
+	outbox := auditoutbox.NewStore(r.db)
+	encode := func(targetID string) auditoutbox.Entry {
+		entry, err := auditoutbox.Encode(identityapi.AuditEvent{
+			Action: identityapi.AuditDetectionConfigWatchedPathsUpdate, TargetType: "watched_path_set", TargetID: targetID,
+		})
+		require.NoError(t, err)
+		return entry
+	}
+
+	_, next, auditID, err := store.Replace(t.Context(), []rulesapi.WatchedPath{startupItems}, r.actor.Principal.ID, nil,
+		func(_, next rulesapi.WatchedPathSet) (auditoutbox.Entry, error) {
+			return encode(strconv.FormatInt(next.Version, 10) + " without counts"), nil
+		})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), next.Version)
+	pending, err := outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "the committed entry is withheld while the push runs")
+
+	sealed, err := store.SealAudit(t.Context(), auditID, encode("1 with counts"))
+	require.NoError(t, err)
+	require.True(t, sealed)
+	pending, err = outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	delivered, err := auditoutbox.Decode(pending[0].Payload)
+	require.NoError(t, err)
+	assert.Equal(t, "1 with counts", delivered.TargetID)
+
+	_, _, _, err = store.Replace(t.Context(), []rulesapi.WatchedPath{}, r.actor.Principal.ID, nil,
+		func(_, _ rulesapi.WatchedPathSet) (auditoutbox.Entry, error) {
+			return auditoutbox.Entry{}, errors.New("cannot encode")
+		})
+	require.Error(t, err)
+	assert.Equal(t, int64(1), r.watchedPaths(t).Version, "a replacement whose audit entry cannot be built is not stored")
 }
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-change-without-a-reason-is-refused
@@ -457,7 +509,17 @@ func TestWatchedPathsREST_KeepsTheChangeWhenThePushFails(t *testing.T) {
 	assert.Equal(t, int64(1), r.watchedPaths(t).Version)
 	events := r.audit.snapshot()
 	require.Len(t, events, 1)
-	assert.Equal(t, 2, events[0].Payload["fanout_failed"])
+	assert.EqualValues(t, 2, events[0].Payload["fanout_failed"])
+}
+
+// asJSON is v as an audit payload holds it once the outbox has stored and decoded it: JSON arrays, objects and numbers.
+func asJSON(t *testing.T, v any) any {
+	t.Helper()
+	encoded, err := json.Marshal(v)
+	require.NoError(t, err)
+	var decoded any
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	return decoded
 }
 
 // mustField returns one top-level field of a JSON object as raw bytes.

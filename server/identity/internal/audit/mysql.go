@@ -100,7 +100,7 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	// continue to leave it empty and the ctx fallback preserves the wave-1 behavior.
 	traceID := e.TraceID
 	if traceID == "" {
-		traceID = traceIDFromContext(ctx)
+		traceID = api.TraceIDFromContext(ctx)
 	}
 	actor := e.Actor
 
@@ -383,14 +383,6 @@ func scanListRow(rows *sql.Rows) (api.AuditRow, error) {
 // UI page (history grids show 50-100 typically) but small enough to keep the response under a megabyte even with maximally populated
 // payloads.
 const maxListLimit = 500
-
-func traceIDFromContext(ctx context.Context) string {
-	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() {
-		return ""
-	}
-	return sc.TraceID().String()
-}
 
 func nullString(s string) any {
 	if s == "" {
