@@ -38,6 +38,15 @@ const (
 	defaultEnrollRatePerMin = 30
 	// defaultRetentionDays is the event-row retention window.
 	defaultRetentionDays = 30
+	// defaultAlertRetentionDays is how long an alert is kept after its last triage activity (issue #995). Deliberately the longest tier
+	// and six times the derived-data window: an alert is the investigation and compliance artifact, not a row the server can rebuild.
+	// Roughly what the market keeps for alerts against a shorter window for raw telemetry.
+	defaultAlertRetentionDays = 180
+	// maxRetentionDays caps both retention windows at a hundred years. Every consumer turns a window into a time.Duration of that many
+	// days, and a Duration counts nanoseconds in an int64, so past about 106,751 days the conversion wraps negative. A wrapped window puts
+	// the cutoff in the FUTURE and the next pass deletes every row older than that, which is to say everything: the opposite of what an
+	// operator asking for a very long window meant. Refused at boot instead, with room to spare below the wrap.
+	maxRetentionDays = 36_500
 	// DefaultRetentionInterval is how often the retention runner wakes up. Wired into the retention runner at boot (no longer an env knob).
 	DefaultRetentionInterval = time.Hour
 	// DefaultQueuePruneInterval is how often the event-queue sweep removes acked rows (ADR-0015). Far shorter than the retention
@@ -98,8 +107,19 @@ type Config struct {
 	// monitor-match counters (issue #813), which the rules context prunes by day, and the work-queue entries SET ASIDE after a batch
 	// failed repeatedly (issue #836), aged from when they were withdrawn, which makes this knob the window an operator has to inspect
 	// a host's processing gap. 0 disables all three. Event retention is the ClickHouse archive's native TTL (ADR-0015), not this
-	// knob. Default 30.
+	// knob. Default 30. Alerts are NOT covered by it; see AlertRetentionDays.
 	RetentionDays int
+
+	// AlertRetentionDays is how long an alert is kept after its last triage activity (issue #995). Its own knob on purpose, independent
+	// of RetentionDays in both directions: alerts are the investigation and compliance record and belong on a far longer window than
+	// the derived rows RetentionDays covers, and an operator who disables process pruning for a forensic hold has not thereby decided to
+	// keep, or to discard, every alert. Before this existed nothing pruned alerts at all, which was not a choice anyone made.
+	//
+	// Measured from last triage activity (updated_at), not creation: an alert an analyst acknowledged yesterday survives even if it
+	// was raised long ago, while an untouched one expires. A re-fire of an existing alert deliberately does not refresh that
+	// timestamp, so a standing condition nobody triages still ages out, and its next re-fire raises a fresh alert. 0 disables. Default
+	// 180.
+	AlertRetentionDays int
 
 	// Detection-rule false-positive allowlists and the disabled-rule list moved out of boot-time env to the DB-backed
 	// detection-config surface (issue #459): per-host exclusions + per-rule mode, edited via the admin API/UI and audited.
@@ -181,12 +201,13 @@ func (c Config) ExternalTLS() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:       ":8088",
-		LogLevel:         "info",
-		LogFormat:        "json",
-		EnrollRatePerMin: defaultEnrollRatePerMin,
-		RetentionDays:    defaultRetentionDays,
-		ShutdownDrain:    defaultShutdownDrain,
+		ListenAddr:         ":8088",
+		LogLevel:           "info",
+		LogFormat:          "json",
+		EnrollRatePerMin:   defaultEnrollRatePerMin,
+		RetentionDays:      defaultRetentionDays,
+		AlertRetentionDays: defaultAlertRetentionDays,
+		ShutdownDrain:      defaultShutdownDrain,
 	}
 }
 
@@ -313,6 +334,12 @@ func loadTLSConfig(c *Config, errs *[]error) {
 func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
+	envparse.NonNegativeInt(getenv, "EDR_ALERT_RETENTION_DAYS", &c.AlertRetentionDays, errs)
+	for key, days := range map[string]int{"EDR_RETENTION_DAYS": c.RetentionDays, "EDR_ALERT_RETENTION_DAYS": c.AlertRetentionDays} {
+		if days > maxRetentionDays {
+			*errs = append(*errs, fmt.Errorf("%s=%d exceeds the maximum of %d days; use 0 to disable pruning instead", key, days, maxRetentionDays))
+		}
+	}
 }
 
 // loadLogConfig reads + validates the slog handler's level + format knobs. Lowercases for downstream consumers regardless of how the

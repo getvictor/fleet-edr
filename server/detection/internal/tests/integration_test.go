@@ -283,6 +283,7 @@ type recordingMetrics struct {
 	monitorMatches      int
 	processesReconciled int64
 	processRowsDeleted  int64
+	alertRowsDeleted    int64
 }
 
 func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n int64) {
@@ -329,6 +330,11 @@ func (m *recordingMetrics) ProcessRetentionRowsDeleted(_ context.Context, n int6
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.processRowsDeleted += n
+}
+func (m *recordingMetrics) AlertRetentionRowsDeleted(_ context.Context, n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.alertRowsDeleted += n
 }
 
 // QueueRowsPruned satisfies the recorder interface; this suite asserts queue-prune behavior through the EventLog + runner tests, not

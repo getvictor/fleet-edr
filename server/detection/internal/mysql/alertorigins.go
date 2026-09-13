@@ -63,7 +63,10 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 		cases.WriteString(" WHEN ? THEN ?")
 		caseArgs = append(caseArgs, id, origins[id])
 	}
-	cases.WriteString(" END WHERE id IN (?)")
+	// updated_at is assigned its own value because crediting an alert is not triage activity. The column refreshes itself on any update
+	// that does not set it, and alert retention measures an alert's age from it (issue #995): left alone, this pass would restart the
+	// retention clock on every old alert it credits, and show them in the console as touched today.
+	cases.WriteString(" END, updated_at = updated_at WHERE id IN (?)")
 	updateSQL := cases.String()
 
 	ruleArgs := make([]any, 0, len(ruleIDs))

@@ -282,8 +282,14 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 
 	// Capture the pre-update status before the write so the status-change payload can carry previous_status. A missing row is the
 	// not-found path.
+	//
+	// A locking read, because alert retention deletes alerts concurrently (issue #995). A plain read sees the alert in this transaction's
+	// snapshot while a prune is deleting it, so the UPDATE below waits for the prune, matches nothing, and the call reports success for a
+	// status change that never happened (staged in TestAlertRetention_TriageRacingThePrune). Locked, the two are ordered.
+	// Triage that takes the row first refreshes updated_at, and the prune's own locking read then sees an alert that is no longer
+	// expired and keeps it. A prune that takes it first leaves this read nothing to find, which is the ordinary not-found answer.
 	var prevStatus string
-	if err := tx.GetContext(ctx, &prevStatus, "SELECT status FROM alerts WHERE id = ?", id); err != nil {
+	if err := tx.GetContext(ctx, &prevStatus, "SELECT status FROM alerts WHERE id = ? FOR UPDATE", id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return api.ErrAlertNotFound
 		}

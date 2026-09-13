@@ -180,6 +180,10 @@ type MetricsRecorder interface {
 	// ProcessRetentionRowsDeleted is called by the pipeline's retention runner on every pass with the count of completed process rows
 	// pruned past the retention window. (Raw events left MySQL for ClickHouse native TTL in ADR-0015, so there is no event-row counter.)
 	ProcessRetentionRowsDeleted(ctx context.Context, n int64)
+	// AlertRetentionRowsDeleted is called by the same runner with the count of alerts pruned past the alert retention window (issue #995).
+	// Its own counter rather than folded into the process one: the two windows are independent knobs, and a dashboard watching one must
+	// not read the other's churn as its own.
+	AlertRetentionRowsDeleted(ctx context.Context, n int64)
 	// QueueRowsPruned is called by the pipeline's queue-prune sweep on every pass with the number of acked rows removed from the event
 	// work queue (the visibility EventLog), so operators can watch the sweep keep pace with ingest (ADR-0015).
 	QueueRowsPruned(ctx context.Context, n int64)

@@ -515,6 +515,7 @@ func openDetection(
 		StaleProcessTTL:      config.DefaultStaleProcessTTL,
 		StaleProcessInterval: config.DefaultStaleProcessInterval,
 		RetentionDays:        cfg.RetentionDays,
+		AlertRetentionDays:   cfg.AlertRetentionDays,
 		RetentionInterval:    config.DefaultRetentionInterval,
 		QueuePruneInterval:   config.DefaultQueuePruneInterval,
 		UserExists:           w.identity.Service().UserExists,
