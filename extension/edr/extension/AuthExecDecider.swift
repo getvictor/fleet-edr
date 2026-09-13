@@ -197,7 +197,7 @@ func evaluateAuthExec(
     if let end = walk.consult(tuple.canonicalPath, in: snapshot.pathRules) {
         return end
     }
-    if let reason = unresolvedBinaryReason(for: hashOutcome), snapshot.binaryRules.values.contains(where: { !isDetectRule($0) }) {
+    if let reason = unresolvedBinaryReason(for: hashOutcome), snapshot.hasEnforcingBinaryRules {
         return walk.finish(applyPosture(snapshot.deadlineFallback, reason: reason))
     }
     return walk.finish(.allow)
@@ -205,11 +205,11 @@ func evaluateAuthExec(
 
 /// isDetectRule reports whether a rule is a BLOCK rule in DETECT, the kind of match that is recorded and never decides a verdict.
 ///
-/// The posture above consults it because the hash is computed whenever the snapshot has any BINARY rule, DETECT ones included, so a
-/// DETECT BINARY rule is what makes an unresolved hash possible at all. Without the check, a snapshot whose only BINARY rules are
-/// DETECT would fail closed on a slow hash, while the same snapshot without them skips the hash and allows: the DETECT rule would
-/// have changed the verdict. The scan runs only after a deadline miss or read failure, never on the ordinary path.
-private func isDetectRule(_ rule: ApplicationControlRule) -> Bool {
+/// The posture consults it through hasEnforcingBinaryRules. The hash is computed whenever the snapshot has any BINARY rule, DETECT
+/// ones included, so a DETECT BINARY rule is what makes an unresolved hash possible at all. Without the check, a snapshot whose only
+/// BINARY rules are DETECT would fail closed on a slow hash, while the same snapshot without them skips the hash and allows: the
+/// DETECT rule would have changed the verdict.
+func isDetectRule(_ rule: ApplicationControlRule) -> Bool {
     rule.action == ApplicationControlAction.block && rule.enforcement == ApplicationControlEnforcement.detect
 }
 
