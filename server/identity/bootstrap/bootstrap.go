@@ -538,18 +538,23 @@ func newOIDCProviderConfigFn(store *ssoconfig.Store, appConfig *appconfig.Store)
 	}
 }
 
-// newOIDCJITPolicyFn returns the JIT policy the OIDC provisioner reads at provision time, so a UI edit of the toggle or default role
-// applies on the next sign-in. No stored config means JIT is off (unknown subjects are denied), matching the wave-1 default.
-func newOIDCJITPolicyFn(store *ssoconfig.Store) func(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
-	return func(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
+// newOIDCJITPolicyFn returns the sign-in policy the OIDC provisioner reads at provision time, so a UI edit of the toggle, default role,
+// or group mapping applies on the next sign-in. No stored config means JIT is off (unknown subjects are denied), matching the wave-1
+// default, and no group mapping.
+func newOIDCJITPolicyFn(store *ssoconfig.Store) func(ctx context.Context) (oidc.Policy, error) {
+	return func(ctx context.Context) (oidc.Policy, error) {
 		c, err := store.Get(ctx)
 		if errors.Is(err, ssoconfig.ErrNotFound) {
-			return false, "", nil
+			return oidc.Policy{}, nil
 		}
 		if err != nil {
-			return false, "", err
+			return oidc.Policy{}, err
 		}
-		return c.JITEnabled, c.DefaultRole, nil
+		groupRoles := make(map[string]string, len(c.GroupRoles))
+		for _, gr := range c.GroupRoles {
+			groupRoles[gr.Group] = gr.Role
+		}
+		return oidc.Policy{AllowJIT: c.JITEnabled, DefaultRole: c.DefaultRole, GroupsClaim: c.GroupsClaim, GroupRoles: groupRoles}, nil
 	}
 }
 

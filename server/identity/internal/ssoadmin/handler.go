@@ -26,6 +26,13 @@ const updateBodyLimit = 1 << 16
 // (matches the seeded-role posture and the design's Analyst/Auditor-only selector).
 var allowedJITRoles = map[string]bool{"analyst": true, "auditor": true}
 
+// mappableRoles bounds the role a group mapping may grant: every seeded role an admin can grant in the Users page. super_admin is never
+// granted from an IdP group, as it is never granted by an admin.
+var mappableRoles = map[string]bool{"analyst": true, "senior_analyst": true, "auditor": true, "admin": true}
+
+// maxGroupFieldLen bounds the groups claim name and a mapped group name, matching the groups_claim column (VARCHAR(255)).
+const maxGroupFieldLen = 255
+
 // configStore is the read subset of *ssoconfig.Store the handler needs. Writes go through applyUpdate (transactional). Narrowed to an
 // interface so tests inject a fake.
 type configStore interface {
@@ -107,7 +114,10 @@ type configResponse struct {
 	Scopes      []string `json:"scopes"`
 	JITEnabled  bool     `json:"jit_enabled"`
 	DefaultRole string   `json:"default_role"`
-	SecretSet   bool     `json:"secret_set"`
+	// GroupsClaim and GroupRoles are the group to role mapping: empty and [] when it is off.
+	GroupsClaim string                `json:"groups_claim"`
+	GroupRoles  []ssoconfig.GroupRole `json:"group_roles"`
+	SecretSet   bool                  `json:"secret_set"`
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +138,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 			Configured:  false,
 			ExternalURL: appCfg.ExternalURL,
 			RedirectURL: ssoconfig.RedirectURLFor(appCfg.ExternalURL),
+			GroupRoles:  []ssoconfig.GroupRole{},
 		})
 		return
 	}
@@ -143,13 +154,15 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 // present. An empty string is also treated as "keep", so a UI that always submits the field but leaves it blank never clears a secret;
 // only a non-empty value rotates it.
 type updateRequest struct {
-	Issuer       string   `json:"issuer"`
-	ClientID     string   `json:"client_id"`
-	ClientSecret *string  `json:"client_secret"`
-	ExternalURL  string   `json:"external_url"`
-	Scopes       []string `json:"scopes"`
-	JITEnabled   bool     `json:"jit_enabled"`
-	DefaultRole  string   `json:"default_role"`
+	Issuer       string                `json:"issuer"`
+	ClientID     string                `json:"client_id"`
+	ClientSecret *string               `json:"client_secret"`
+	ExternalURL  string                `json:"external_url"`
+	Scopes       []string              `json:"scopes"`
+	JITEnabled   bool                  `json:"jit_enabled"`
+	DefaultRole  string                `json:"default_role"`
+	GroupsClaim  string                `json:"groups_claim"`
+	GroupRoles   []ssoconfig.GroupRole `json:"group_roles"`
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +281,8 @@ func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, actor api.P
 			"external_url":   externalURL,
 			"jit_enabled":    in.JITEnabled,
 			"default_role":   in.DefaultRole,
+			"groups_claim":   in.GroupsClaim,
+			"group_roles":    in.GroupRoles,
 			"secret_rotated": in.NewSecret != nil,
 		},
 	}); err != nil {
@@ -304,6 +319,10 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, string, bool
 	if !allowedJITRoles[role] {
 		return ssoconfig.UpsertInput{}, "", "invalid_default_role", false
 	}
+	groupsClaim, groupRoles, reason := validGroupMapping(req.GroupsClaim, req.GroupRoles)
+	if reason != "" {
+		return ssoconfig.UpsertInput{}, "", reason, false
+	}
 	var newSecret *string
 	if req.ClientSecret != nil && *req.ClientSecret != "" {
 		s := *req.ClientSecret
@@ -316,10 +335,46 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, string, bool
 		Scopes:      scopes,
 		JITEnabled:  req.JITEnabled,
 		DefaultRole: role,
+		GroupsClaim: groupsClaim,
+		GroupRoles:  groupRoles,
 	}, externalURL, "", true
 }
 
+// validGroupMapping trims and checks the groups claim and the group mappings, returning them normalized (roles lower-cased) or a
+// wire-format reason. The claim and the mappings come together: a claim with no mappings would put every operator in the default role
+// at sign-in, and mappings with no claim would never apply.
+func validGroupMapping(claim string, in []ssoconfig.GroupRole) (string, []ssoconfig.GroupRole, string) {
+	claim = strings.TrimSpace(claim)
+	switch {
+	case len(claim) > maxGroupFieldLen:
+		return "", nil, "invalid_groups_claim"
+	case claim == "" && len(in) > 0:
+		return "", nil, "missing_groups_claim"
+	case claim != "" && len(in) == 0:
+		return "", nil, "missing_group_roles"
+	}
+	out := make([]ssoconfig.GroupRole, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, gr := range in {
+		group := strings.TrimSpace(gr.Group)
+		role := strings.ToLower(strings.TrimSpace(gr.Role))
+		if group == "" || len(group) > maxGroupFieldLen || !mappableRoles[role] {
+			return "", nil, "invalid_group_role"
+		}
+		if seen[group] {
+			return "", nil, "duplicate_group"
+		}
+		seen[group] = true
+		out = append(out, ssoconfig.GroupRole{Group: group, Role: role})
+	}
+	return claim, out, ""
+}
+
 func toResponse(c *ssoconfig.Config, externalURL string) configResponse {
+	groupRoles := c.GroupRoles
+	if groupRoles == nil {
+		groupRoles = []ssoconfig.GroupRole{}
+	}
 	return configResponse{
 		Configured:  true,
 		Issuer:      c.Issuer,
@@ -329,6 +384,8 @@ func toResponse(c *ssoconfig.Config, externalURL string) configResponse {
 		Scopes:      c.Scopes,
 		JITEnabled:  c.JITEnabled,
 		DefaultRole: c.DefaultRole,
+		GroupsClaim: c.GroupsClaim,
+		GroupRoles:  groupRoles,
 		SecretSet:   c.HasSecret,
 	}
 }

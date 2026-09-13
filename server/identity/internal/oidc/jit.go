@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 
 	"github.com/go-sql-driver/mysql"
@@ -24,6 +25,38 @@ const mysqlErrDupEntry = 1062
 // DefaultJITRole is the role JIT-provisioned OIDC users are bound to. The lowest-privilege role available, so a freshly-provisioned
 // operator can read but cannot mutate. An admin promotes them later via the wave-2 admin surface.
 const DefaultJITRole = "analyst"
+
+// roleSuperAdmin is never mapped from an IdP group, so group mapping leaves a user who holds it alone.
+const roleSuperAdmin = "super_admin"
+
+// Policy is how a sign-in treats an OIDC subject, read from the runtime OIDC configuration on every sign-in.
+type Policy struct {
+	// AllowJIT creates an account for an unknown subject.
+	AllowJIT bool
+	// DefaultRole is the role a new account holds and, with group mapping on, the role of a user none of whose groups is mapped.
+	DefaultRole string
+	// GroupsClaim names the ID-token claim listing the user's IdP groups. Empty turns group mapping off.
+	GroupsClaim string
+	// GroupRoles maps an IdP group to the role its members hold.
+	GroupRoles map[string]string
+}
+
+// roleFor is the role group mapping gives the holder of c: the most privileged role mapped from their groups, or DefaultRole when none
+// of their groups is mapped. matched lists the mapped groups they are in, sorted, for the audit row.
+func (p Policy) roleFor(c *Claims) (role string, matched []string) {
+	var roles []string
+	for _, group := range c.Groups(p.GroupsClaim) {
+		if r, ok := p.GroupRoles[group]; ok {
+			matched = append(matched, group)
+			roles = append(roles, r)
+		}
+	}
+	if len(roles) == 0 {
+		return p.DefaultRole, []string{}
+	}
+	slices.Sort(matched)
+	return rbac.MostPrivileged(roles), slices.Compact(matched)
+}
 
 // ErrUnknownIdentity is returned by ProvisionOrFind when JIT is disabled (allowJIT=false) and the OIDC subject does not match an
 // existing identity. The handler maps it to 403 + audit auth.oidc.failure with reason oidc.unknown_subject.
@@ -54,6 +87,9 @@ var ErrEmailConflict = errors.New("oidc: email already bound to another account"
 //  3. New identity (JIT): one transaction inserts users + identities
 //     + role_bindings; emits one audit row (action="user.created",
 //     payload.source="oidc.jit").
+//
+// With group mapping on, a JIT account is created in the role its groups map to, and shapes 1 and 2 then set the user's role to that
+// mapped role (see reconcileRole).
 type Provisioner struct {
 	db          *sqlx.DB
 	users       *users.Store
@@ -63,10 +99,10 @@ type Provisioner struct {
 	logger      *slog.Logger
 	defaultRole string
 	allowJIT    bool
-	// policyFn, when non-nil, supplies the JIT policy (allowJIT + defaultRole) per-call from the runtime OIDC configuration store,
-	// overriding the static defaultRole/allowJIT above. Production wires this to ssoconfig so a UI edit of the JIT toggle / default
-	// role takes effect on the next sign-in without a restart; tests omit it and exercise the static fields directly.
-	policyFn func(ctx context.Context) (allowJIT bool, defaultRole string, err error)
+	// policyFn, when non-nil, supplies the sign-in policy per call from the runtime OIDC configuration store, overriding the static
+	// defaultRole/allowJIT above. Production wires this to ssoconfig so a UI edit of the JIT toggle, default role, or group mapping
+	// takes effect on the next sign-in without a restart; tests that need no mapping omit it and exercise the static fields.
+	policyFn func(ctx context.Context) (Policy, error)
 }
 
 // ProvisionerOptions bundles the per-deployment knobs. Zero values fall through to wave-1 defaults: defaultRole="analyst",
@@ -75,9 +111,9 @@ type ProvisionerOptions struct {
 	AllowJIT    bool
 	DefaultRole string
 	Logger      *slog.Logger
-	// PolicyFn, when non-nil, supplies the JIT policy (allowJIT + defaultRole) at provision time from the runtime OIDC config, taking
-	// precedence over the static AllowJIT/DefaultRole above. Production wires this to the ssoconfig store; tests leave it nil.
-	PolicyFn func(ctx context.Context) (allowJIT bool, defaultRole string, err error)
+	// PolicyFn, when non-nil, supplies the sign-in policy at provision time from the runtime OIDC config, taking precedence over the
+	// static AllowJIT/DefaultRole above. Production wires this to the ssoconfig store.
+	PolicyFn func(ctx context.Context) (Policy, error)
 }
 
 // NewProvisioner constructs a Provisioner over an existing DB + already-constructed stores. db is the same handle the stores share so
@@ -129,26 +165,51 @@ func NewProvisioner(
 //
 // The returned identityID is the row id of the OIDC identity, used
 // by the session-mint path to populate sessions.identity_id (FK).
+//
+// With group mapping on, every outcome but a fresh JIT create (which binds the mapped role directly) then sets the user's role to the
+// one their groups map to.
 func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, identityID int64, err error) {
 	if c == nil || c.Subject == "" {
 		return 0, 0, errors.New("oidc: claims.Subject is required")
 	}
-	allowJIT, defaultRole, err := p.resolvePolicy(ctx)
+	policy, err := p.resolvePolicy(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
+	mapping := policy.GroupsClaim != ""
+	role, matched := policy.DefaultRole, []string{}
+	if mapping {
+		role, matched = policy.roleFor(c)
+	}
+	userID, identityID, created, err := p.findOrCreate(ctx, c, policy.AllowJIT, role, matched)
+	if err != nil {
+		return 0, 0, err
+	}
+	if mapping && !created {
+		if err := p.reconcileRole(ctx, userID, role, matched); err != nil {
+			return 0, 0, err
+		}
+	}
+	return userID, identityID, nil
+}
+
+// findOrCreate resolves the subject to a user as ProvisionOrFind describes, binding role to a JIT-created account. created reports a
+// JIT create, the one outcome whose role is already the one it was given.
+func (p *Provisioner) findOrCreate(
+	ctx context.Context, c *Claims, allowJIT bool, role string, matched []string,
+) (userID, identityID int64, created bool, err error) {
 	existing, err := p.identities.FindByProviderSubject(ctx, identities.ProviderOIDC, c.Subject)
 	switch {
 	case err == nil:
-		return existing.UserID, existing.ID, nil
+		return existing.UserID, existing.ID, false, nil
 	case errors.Is(err, identities.ErrNotFound):
 		// fall through to JIT path
 	default:
-		return 0, 0, fmt.Errorf("oidc: lookup identity: %w", err)
+		return 0, 0, false, fmt.Errorf("oidc: lookup identity: %w", err)
 	}
-	userID, identityID, err = p.provisionNew(ctx, c, allowJIT, defaultRole)
+	userID, identityID, created, err = p.provisionNew(ctx, c, allowJIT, role, matched)
 	if err == nil {
-		return userID, identityID, nil
+		return userID, identityID, created, nil
 	}
 	// Duplicate-key on the identity insert (from adopting a pre-provisioned stub or from a fresh JIT create) means a concurrent callback
 	// for the same subject won. Re-resolve and let the loser ride the winner's commit.
@@ -156,28 +217,67 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 		existing, lookupErr := p.identities.FindByProviderSubject(
 			ctx, identities.ProviderOIDC, c.Subject)
 		if lookupErr == nil {
-			return existing.UserID, existing.ID, nil
+			return existing.UserID, existing.ID, false, nil
 		}
-		return 0, 0, fmt.Errorf("oidc: race-resolve lookup: %w", lookupErr)
+		return 0, 0, false, fmt.Errorf("oidc: race-resolve lookup: %w", lookupErr)
 	}
-	return 0, 0, err
+	return 0, 0, false, err
 }
 
 // provisionNew handles the identity-missing case. It first tries to adopt a pre-provisioned stub (an admin-staged user matching the
 // verified email, issue #509); that path is honored regardless of allowJIT because staging is an explicit admin decision. When there is
-// no stub to adopt, allowJIT governs whether a brand-new account is JIT-created or the unknown subject is rejected.
-func (p *Provisioner) provisionNew(ctx context.Context, c *Claims, allowJIT bool, defaultRole string) (userID, identityID int64, err error) {
+// no stub to adopt, allowJIT governs whether a brand-new account is JIT-created in role or the unknown subject is rejected.
+func (p *Provisioner) provisionNew(
+	ctx context.Context, c *Claims, allowJIT bool, role string, matched []string,
+) (userID, identityID int64, created bool, err error) {
 	adopted, uid, idID, err := p.reconcilePreProvisioned(ctx, c)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	if adopted {
-		return uid, idID, nil
+		return uid, idID, false, nil
 	}
 	if !allowJIT {
-		return 0, 0, ErrUnknownIdentity
+		return 0, 0, false, ErrUnknownIdentity
 	}
-	return p.jitProvision(ctx, c, defaultRole)
+	userID, identityID, err = p.jitProvision(ctx, c, role, matched)
+	return userID, identityID, err == nil, err
+}
+
+// reconcileRole makes role, the one group mapping gives a signed-in user, their single global role, as the admin Users page would, and
+// audits a change with source oidc.groups. The IdP is the source of truth, so a role an admin set by hand is replaced at the next
+// sign-in. Two roles are left alone. super_admin is never mapped from a group, so mapping could only ever take it away. And the last
+// active admin keeps their role rather than leave the deployment with no administrator; the sign-in still succeeds, and a warning is
+// logged.
+func (p *Provisioner) reconcileRole(ctx context.Context, userID int64, role string, matched []string) error {
+	current, err := p.rbac.LiveGlobalRoles(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("oidc: read roles of user %d: %w", userID, err)
+	}
+	if (len(current) == 1 && current[0] == role) || slices.Contains(current, roleSuperAdmin) {
+		return nil
+	}
+	previous, err := p.rbac.SetUserRole(ctx, userID, role)
+	if errors.Is(err, api.ErrLastAdmin) {
+		p.logger.WarnContext(ctx, "oidc group mapping left the last active admin's role unchanged",
+			"user_id", userID, "mapped_role", role)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("oidc: set role of user %d: %w", userID, err)
+	}
+	action := api.AuditRoleBindingUpdate
+	if len(previous) == 0 {
+		action = api.AuditRoleBindingCreate
+	}
+	p.record(ctx, api.AuditEvent{
+		Actor:      api.SystemPrincipal(),
+		Action:     action,
+		TargetType: "user",
+		TargetID:   strconv.FormatInt(userID, 10),
+		Payload:    map[string]any{"from": previous, "to": role, "source": "oidc.groups", "groups": matched},
+	})
+	return nil
 }
 
 // reconcilePreProvisioned adopts a pre-provisioned account (#509) when the OIDC claim carries a verified email matching a staged user.
@@ -268,21 +368,21 @@ func (p *Provisioner) adoptPreProvisioned(ctx context.Context, c *Claims, userID
 	return idID, nil
 }
 
-// resolvePolicy returns the JIT policy (allowJIT + defaultRole) for this provision. When policyFn is wired (production), it reads the
-// runtime OIDC config so a UI edit applies on the next sign-in; otherwise it falls back to the static fields (tests). An empty
-// defaultRole from policyFn falls through to the static default so a misconfigured row never binds an empty role.
-func (p *Provisioner) resolvePolicy(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
+// resolvePolicy returns the sign-in policy for this provision. When policyFn is wired (production), it reads the runtime OIDC config so
+// a UI edit applies on the next sign-in; otherwise it falls back to the static fields. An empty DefaultRole from policyFn falls through
+// to the static default so a misconfigured row never binds an empty role.
+func (p *Provisioner) resolvePolicy(ctx context.Context) (Policy, error) {
 	if p.policyFn == nil {
-		return p.allowJIT, p.defaultRole, nil
+		return Policy{AllowJIT: p.allowJIT, DefaultRole: p.defaultRole}, nil
 	}
-	aj, dr, err := p.policyFn(ctx)
+	policy, err := p.policyFn(ctx)
 	if err != nil {
-		return false, "", fmt.Errorf("oidc: resolve jit policy: %w", err)
+		return Policy{}, fmt.Errorf("oidc: resolve sign-in policy: %w", err)
 	}
-	if dr == "" {
-		dr = p.defaultRole
+	if policy.DefaultRole == "" {
+		policy.DefaultRole = p.defaultRole
 	}
-	return aj, dr, nil
+	return policy, nil
 }
 
 // isDuplicateKey returns true when err wraps a MySQL 1062
@@ -299,7 +399,7 @@ func isDuplicateKey(err error) bool {
 // every modern IdP, but if the IdP omits it we fall back to the subject as a stable display value (the audit row records it verbatim).
 // When the email exists already on a different account we surface ErrEmailConflict so the operator path doesn't silently merge
 // identities. That promotion is an admin action.
-func (p *Provisioner) jitProvision(ctx context.Context, c *Claims, defaultRole string) (userID, identityID int64, err error) {
+func (p *Provisioner) jitProvision(ctx context.Context, c *Claims, role string, matched []string) (userID, identityID int64, err error) {
 	email := jitEmail(c)
 	tx, err := p.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -328,7 +428,7 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims, defaultRole s
 	}
 	if err := p.rbac.BindRole(ctx, tx, rbac.BindRoleRequest{
 		UserID:    user.ID,
-		RoleID:    defaultRole,
+		RoleID:    role,
 		ScopeType: string(api.RoleBindingScopeGlobal),
 		ScopeID:   api.RoleBindingScopeWildcard,
 	}); err != nil {
@@ -338,7 +438,7 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims, defaultRole s
 		return 0, 0, fmt.Errorf("oidc jit: commit: %w", err)
 	}
 	committed = true
-	p.recordCreated(ctx, user, c.Subject, defaultRole)
+	p.recordCreated(ctx, user, c.Subject, role, matched)
 	return user.ID, idID, nil
 }
 
@@ -352,25 +452,31 @@ func jitEmail(c *Claims) string {
 	return "oidc:" + c.Subject
 }
 
-// recordCreated emits an audit row for a successful JIT provisioning. Soft-fail at the request level: a missing audit row does NOT
-// roll the transaction back: the user is real and reachable. The chokepoint's standard authz rows still capture every subsequent
-// action. Per spec, audit-write failures must log at ERROR so the operator pipeline notices the gap.
-func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subject, defaultRole string) {
-	if p.audit == nil {
-		return
-	}
-	if err := p.audit.Record(ctx, api.AuditEvent{
+// recordCreated emits an audit row for a successful JIT provisioning, naming the mapped groups the role came from (none without group
+// mapping, or when no group of the user's is mapped).
+func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subject, role string, matched []string) {
+	p.record(ctx, api.AuditEvent{
 		Actor:      api.UserPrincipal(user.ID, user.Email),
 		Action:     api.AuditAction("user.created"),
 		TargetType: "user",
 		TargetID:   strconv.FormatInt(user.ID, 10),
 		Payload: map[string]any{
 			"subject": subject,
-			"role":    defaultRole,
+			"role":    role,
 			"source":  "oidc.jit",
+			"groups":  matched,
 		},
-	}); err != nil && p.logger != nil {
-		p.logger.ErrorContext(ctx, "oidc jit audit record failed",
-			"err", err, "action", "user.created", "user_id", user.ID)
+	})
+}
+
+// record emits an audit row for a provisioning change. Soft-fail at the request level: a missing audit row does NOT roll the change
+// back: the user and their role are real. The chokepoint's standard authz rows still capture every subsequent action. Per spec,
+// audit-write failures must log at ERROR so the operator pipeline notices the gap.
+func (p *Provisioner) record(ctx context.Context, e api.AuditEvent) {
+	if p.audit == nil {
+		return
+	}
+	if err := p.audit.Record(ctx, e); err != nil {
+		p.logger.ErrorContext(ctx, "oidc provisioning audit record failed", "err", err, "action", e.Action, "user_id", e.TargetID)
 	}
 }

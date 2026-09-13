@@ -135,6 +135,8 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 		"scopes":        []string{"openid", "email", "profile"},
 		"jit_enabled":   true,
 		"default_role":  "auditor",
+		"groups_claim":  "groups",
+		"group_roles":   []map[string]string{{"group": "edr-senior", "role": "senior_analyst"}, {"group": "edr-admins", "role": "admin"}},
 	}
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
@@ -149,6 +151,9 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 	assert.Equal(t, "edr-updated", cfg.ClientID)
 	assert.Equal(t, "new-secret-value", cfg.ClientSecret)
 	assert.Equal(t, "auditor", cfg.DefaultRole)
+	assert.Equal(t, "groups", cfg.GroupsClaim)
+	assert.Equal(t, []ssoconfig.GroupRole{{Group: "edr-senior", Role: "senior_analyst"}, {Group: "edr-admins", Role: "admin"}},
+		cfg.GroupRoles, "the mappings survive the JSON column in the order saved")
 
 	appCfg, _, err := appStore.Get(t.Context())
 	require.NoError(t, err)
@@ -157,6 +162,29 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 	// The response carries the derived read-only redirect, never the secret.
 	assert.Contains(t, w.Body.String(), "https://edr.updated.example.com/api/auth/callback")
 	assert.NotContains(t, w.Body.String(), "new-secret-value")
+
+	// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/group-mappings-are-saved-and-read-back
+	getReq := adminActorCtx(httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil), uid)
+	getW := httptest.NewRecorder()
+	mux.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+	assert.Contains(t, getW.Body.String(),
+		`"groups_claim":"groups","group_roles":[{"group":"edr-senior","role":"senior_analyst"},{"group":"edr-admins","role":"admin"}]`)
+
+	// An update that turns the mapping off stores no mappings, and the read returns an empty list.
+	delete(body, "groups_claim")
+	delete(body, "group_roles")
+	delete(body, "client_secret")
+	raw, err = json.Marshal(body)
+	require.NoError(t, err)
+	offW := httptest.NewRecorder()
+	offReq := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(raw)))
+	mux.ServeHTTP(offW, adminActorCtx(offReq, uid))
+	require.Equal(t, http.StatusOK, offW.Code, "body: %s", offW.Body.String())
+	assert.Contains(t, offW.Body.String(), `"groups_claim":"","group_roles":[]`)
+	var stored []byte
+	require.NoError(t, db.GetContext(t.Context(), &stored, `SELECT group_roles FROM oidc_config WHERE id = 1`))
+	assert.Nil(t, stored, "no mappings are stored as NULL")
 }
 
 // serviceAccountActorCtx pins an actor shaped exactly like the one serviceaccounts.Authenticator produces: a machine caller with no
