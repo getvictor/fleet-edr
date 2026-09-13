@@ -742,11 +742,12 @@ func (e *Engine) routeFinding(
 	case rulesapi.DetectionRuleModeDisabled:
 		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeMonitor:
-		// Counted, then logged at DEBUG. This was an INFO line per match, which was proportionate when monitor was a state an
-		// operator set deliberately on one noisy rule. Issue #764 made it the default for most of the catalog, and several of
-		// those rules match commonplace commands, so an INFO per match is fleet-scale log amplification: every `id` on every host,
-		// re-emitted whenever a batch is retried, since only alert persistence is deduplicated. The counter is the medium built
-		// for a high-frequency per-rule signal, and it is also the one an operator needs to decide whether to promote the rule.
+		// Counted, logged at DEBUG, and kept as a monitor record. The log was an INFO line per match, which was proportionate when
+		// monitor was a state an operator set deliberately on one noisy rule. Issue #764 made it the default for most of the
+		// catalog, and several of those rules match commonplace commands, so an INFO per match is fleet-scale log amplification:
+		// every `id` on every host, and the log line itself is emitted again whenever a batch is retried, unlike the record, whose
+		// write deduplicates. The counter is the medium built for a high-frequency per-rule signal, and the record (issue #994) is
+		// what lets an operator read what the rule matched before promoting it.
 		tally.addMonitorMatch(ruleID, f.HostID, f.Severity)
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
