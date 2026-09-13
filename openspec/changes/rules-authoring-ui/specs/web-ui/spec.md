@@ -2,9 +2,9 @@
 
 ### Requirement: Rules can be written in the console
 
-An operator with `rule_content.write` SHALL be able to create a rule, edit and delete a rule the deployment wrote, and roll back the shipped rules, without leaving the web UI. An operator without `rule_content.write` SHALL NOT be offered any of these.
+An operator with `rule_content.write` SHALL be able to create a rule, edit and delete a rule the deployment wrote, and roll back the shipped rules, without leaving the web UI. An operator without `rule_content.write` SHALL NOT be offered any of these. A rule the server reports as shipped SHALL NOT be opened for editing, however its editor is reached, since shipped rules are tuned rather than rewritten.
 
-Before a rule is saved, the UI SHALL show whether the deployment would load it, as answered by the server's dry run, and SHALL present a refusal as the rule's problem in the loader's own words. Saving SHALL require a passing check of the content being saved, so an edit made after a check SHALL require a new check before it can be saved.
+Before a rule is saved, the UI SHALL show whether its document is valid, as answered by the server's dry run, and SHALL present a refusal as the rule's problem in the loader's own words. The dry run judges the document alone, so the UI SHALL NOT claim a passing check means the deployment will load the rule: a conflict with the deployment's other rules is decided on save, and a refusal then SHALL also be shown in the loader's words. Saving SHALL require a passing check of the content being saved, so an edit made after a check SHALL require a new check before it can be saved, a check that answers after such an edit SHALL NOT count, and a save refused because the rules changed meanwhile SHALL require a new check too.
 
 Every change SHALL require a reason, recorded with the change. A newly created rule SHALL be marked, at the point of creation, as raising no alert until it is promoted, with the way to promote it. Because the server applies stored rules only when it next reloads them, the UI SHALL say so after a change, and the page a create opens SHALL wait for the new rule to be loaded rather than report it as unknown.
 
@@ -25,10 +25,16 @@ The UI SHALL report whether the deployment runs the shipped rules the running bu
 
 #### Scenario: An invalid rule is explained before anything is written
 
-- **GIVEN** a document the deployment would not load
+- **GIVEN** a document the loader refuses
 - **WHEN** the operator checks it
 - **THEN** the loader's reason is shown as the rule's problem
 - **AND** the document cannot be saved
+
+#### Scenario: A shipped rule is not opened for editing
+
+- **GIVEN** an operator with `rule_content.write`
+- **WHEN** they open the editor of a rule the server reports as shipped, for example by typing its address
+- **THEN** the editor does not load the rule's document and says the rule is tuned in Detection tuning instead
 
 #### Scenario: A new rule says it will not alert until promoted
 

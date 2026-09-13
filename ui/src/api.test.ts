@@ -432,7 +432,8 @@ describe("rule content documents", () => {
 describe("rule content writes", () => {
   it("checks a document by path and content, reporting a refusal as a result", async () => {
     const fetchMock = stubFetch({ would_apply: false, warnings: [], refusal: "bad rule" });
-    await expect(checkRuleContentDocument("authored/x.yml", "title: x")).resolves.toEqual({ would_apply: false, warnings: [], refusal: "bad rule" });
+    const refused = { would_apply: false, warnings: [], refusal: "bad rule" };
+    await expect(checkRuleContentDocument("authored/x.yml", "title: x")).resolves.toEqual(refused);
     const [target, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(target.pathname).toBe("/api/v1/rule-content/documents:check");
     expect(init.method).toBe("POST");

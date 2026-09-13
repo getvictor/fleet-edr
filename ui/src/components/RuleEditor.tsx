@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
   checkRuleContentDocument,
+  fetchRuleDocs,
   getRuleContentDocument,
   listRuleContentDocuments,
   putRuleContentDocument,
@@ -17,6 +18,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
+import { isLocallyAuthored } from "./ruleOrigin";
 import "./RuleEditor.scss";
 
 // The directory a new rule's document is stored under. A rule's identity is its file stem, not its path, so the directory is a filing
@@ -41,13 +43,20 @@ detection:
 level: medium
 `;
 
-type LoadState = { kind: "loading" } | { kind: "ready"; path: string } | { kind: "missing" } | { kind: "error"; message: string };
+type LoadState =
+  | { kind: "loading" }
+  | { kind: "ready"; path: string }
+  | { kind: "missing" }
+  | { kind: "shipped" }
+  | { kind: "error"; message: string };
 
 // RuleEditor creates or edits one rule document (issue #1001). The API behind it is built, permissioned, and audited; this is the page
 // that makes it reachable without curl.
 //
-// Check before save is the loop the page is built around: the server's dry run answers with the loader's own verdict, so what the
-// operator sees is exactly whether this deployment would load the rule, with no second rule engine in the browser to disagree with it.
+// Check before save is the loop the page is built around: the server's dry run answers with the loader's own verdict on the document,
+// with no second rule engine in the browser to disagree with it. The dry run judges the document alone. Whether it fits beside the
+// deployment's other rules, an identifier a shipped rule already uses for instance, is decided when it is saved, and a refusal then is
+// shown in the loader's words too.
 export function RuleEditor() {
   const { ruleId } = useParams<{ ruleId: string }>();
   const isNew = ruleId === undefined;
@@ -61,14 +70,18 @@ export function RuleEditor() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [reasonOpen, setReasonOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  // draft counts edits to what a check is about. A check answers for the draft it was started on, so a response that arrives after a
+  // further edit is discarded rather than arming Save for content the server never saw.
+  const draft = useRef(0);
 
   useEffect(() => {
     if (isNew) return undefined;
     let cancelled = false;
     (async () => {
-      const documents = await listRuleContentDocuments();
+      const [rules, documents] = await Promise.all([fetchRuleDocs(), listRuleContentDocuments()]);
       const match = documents.find((d) => ruleDocumentStem(d.path) === ruleId);
       if (match === undefined) return { kind: "missing" } as const;
+      if (isShipped(rules.find((r) => r.id === ruleId)?.origin)) return { kind: "shipped" } as const;
       const text = await getRuleContentDocument(match.path);
       return { kind: "ready", path: match.path, text } as const;
     })()
@@ -88,20 +101,28 @@ export function RuleEditor() {
   }, [isNew, ruleId]);
 
   const path = isNew ? `${authoredDirectory}/${identifier}.yml` : load.kind === "ready" ? load.path : "";
+  const leaveTo = isNew ? "/rules" : `/rules/${encodeURIComponent(ruleId)}`;
   const identifierValid = !isNew || identifierPattern.test(identifier);
 
   // Any edit invalidates the last check: a verdict about different content must not sit beside this content looking current.
-  const onContentChange = (next: string) => {
-    setContent(next);
+  const invalidateCheck = () => {
+    draft.current += 1;
     setCheck(null);
     setSaveError(null);
   };
+  const onContentChange = (next: string) => {
+    setContent(next);
+    invalidateCheck();
+  };
 
   const runCheck = () => {
+    const checked = draft.current;
     setChecking(true);
     setSaveError(null);
     checkRuleContentDocument(path, content)
-      .then(setCheck)
+      .then((result) => {
+        if (draft.current === checked) setCheck(result);
+      })
       .catch((err: unknown) => { setSaveError(err instanceof Error ? err.message : "The check could not be run"); })
       .finally(() => { setChecking(false); });
   };
@@ -119,6 +140,8 @@ export function RuleEditor() {
       .catch((err: unknown) => {
         setReasonOpen(false);
         if (err instanceof ReauthRequiredError) return;
+        // A conflict says to check again, so the passing check it invalidated must not leave Save available.
+        if (err instanceof RuleContentApiError && err.code === conflictCode) setCheck(null);
         setSaveError(saveErrorMessage(err));
       })
       .finally(() => { setSaving(false); });
@@ -126,6 +149,14 @@ export function RuleEditor() {
 
   if (load.kind === "loading") return <EmptyState>Loading the rule document...</EmptyState>;
   if (load.kind === "error") return <EmptyState>The rule document could not be loaded: {load.message}</EmptyState>;
+  if (load.kind === "shipped") {
+    return (
+      <EmptyState>
+        <code>{ruleId}</code> ships with the product, so it is tuned in <Link to="/detection-config">Detection tuning</Link> rather than
+        edited here. <Link to={leaveTo}>Back to the rule</Link>.
+      </EmptyState>
+    );
+  }
   if (load.kind === "missing") {
     return (
       <EmptyState>
@@ -150,7 +181,7 @@ export function RuleEditor() {
               label="Identifier"
               value={identifier}
               placeholder="my_rule"
-              onChange={(e) => { setIdentifier(e.target.value); setCheck(null); }}
+              onChange={(e) => { setIdentifier(e.target.value); invalidateCheck(); }}
             />
             <p className="rule-editor__hint">
               Letters, digits, underscore, and hyphen. It names the rule everywhere, including per-rule settings, and cannot match a
@@ -170,7 +201,7 @@ export function RuleEditor() {
 
         {check !== null && check.would_apply && (
           <div className="rule-editor__verdict rule-editor__verdict--ok" role="status">
-            This deployment would load this rule.
+            The document is valid. Saving also checks it against the deployment&apos;s other rules.
           </div>
         )}
         {check !== null && !check.would_apply && (
@@ -187,7 +218,7 @@ export function RuleEditor() {
         {saveError !== null && <div className="rule-editor__verdict rule-editor__verdict--refused" role="alert">{saveError}</div>}
 
         <div className="rule-editor__actions">
-          <Link to={isNew ? "/rules" : `/rules/${encodeURIComponent(ruleId)}`}>Cancel</Link>
+          <Link to={leaveTo}>Cancel</Link>
           <Button variant="inverse" onClick={runCheck} disabled={!identifierValid || checking} isLoading={checking}>
             Check
           </Button>
@@ -213,11 +244,25 @@ export function RuleEditor() {
   );
 }
 
+// conflictCode is the API's error code for a write that lost a race with another change to the rules.
+const conflictCode = "rule_content.conflict";
+
+// isShipped reports whether the server credits a rule to someone other than this deployment. Such a rule is tuned in Detection tuning
+// rather than edited here, since the next install of shipped content would meet an edit made to it. The Edit link already follows
+// that, and this holds it for an address typed directly.
+//
+// Only a known origin says so. A rule the server does not report (one the loader refused, or one written moments ago and not yet
+// loaded) or reports without an origin (an older replica) is left editable: the permission to write its document is the same either
+// way, and the server is the authority on what it accepts.
+function isShipped(origin: string | undefined): boolean {
+  return origin !== undefined && !isLocallyAuthored(origin);
+}
+
 // saveErrorMessage turns a failed write into something the operator can act on. A refusal carries the loader's reason; a conflict means
 // the rules changed between the check and the write, which a fresh check resolves.
 function saveErrorMessage(err: unknown): string {
   if (err instanceof RuleContentApiError) {
-    if (err.code === "rule_content.conflict") {
+    if (err.code === conflictCode) {
       return "The rules changed while this was being saved. Check again, then save.";
     }
     return `Not saved: ${err.message}`;

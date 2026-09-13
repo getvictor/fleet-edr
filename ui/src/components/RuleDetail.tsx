@@ -47,6 +47,8 @@ export function RuleDetail() {
       fetchRuleDocs()
         .then((rs) => {
           if (cancelled) return;
+          // A failure on an earlier rule's load must not hide this one's, since the page is kept across rules.
+          setError(null);
           setEntries(rs);
           const found = rs.some((r) => r.id === ruleId);
           if (saved === "created" && !found && Date.now() < deadline) {

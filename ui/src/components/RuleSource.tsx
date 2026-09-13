@@ -19,6 +19,9 @@ type SourceState =
   | { kind: "builtin" }
   | { kind: "error"; message: string };
 
+const deleteDescription =
+  "The rule stops being evaluated when the server next reloads its rules, within 30 seconds. Alerts it already raised are kept.";
+
 // RuleSource shows the file a rule is loaded from, as written (issue #1001). Rules loaded from the stored corpus are Sigma YAML with an
 // x-engine block, and reading one as written is how an operator sees exactly what it matches. A rule built into the server is not loaded
 // from that corpus, and says so rather than showing an empty panel.
@@ -104,7 +107,7 @@ export function RuleSource({ ruleId, editable = false }: { readonly ruleId: stri
       {deleteOpen && (
         <ReasonModal
           title={`Delete ${ruleId}`}
-          description="The rule stops being evaluated when the server next reloads its rules, within 30 seconds. Alerts it already raised are kept."
+          description={deleteDescription}
           confirmLabel="Delete"
           confirmVariant="alert"
           placeholder="Why is this rule being deleted?"

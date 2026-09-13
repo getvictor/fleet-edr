@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PermissionsProvider } from "../permissions";
 import { PermissionAction } from "../permissions-core";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router";
 import { RuleDetail } from "./RuleDetail";
 import * as api from "../api";
 import type { RuleDocEntry } from "../api";
@@ -74,6 +74,28 @@ describe("RuleDetail loading and error states", () => {
     vi.mocked(api.fetchRuleDocs).mockRejectedValue("nope");
     renderAt("suspicious_exec");
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/failed to load rule docs/i));
+  });
+
+  // The page is kept across rules, so moving to another rule reloads it; a failure on the first must not hide the second.
+  it("clears an earlier failure once another rule loads", async () => {
+    vi.mocked(api.fetchRuleDocs).mockRejectedValueOnce(new Error("boom")).mockResolvedValue([makeEntry({ id: "other_rule" })]);
+    function Next() {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => { void navigate("/rules/other_rule"); }}>next</button>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/rules/suspicious_exec"]}>
+        <Next />
+        <Routes>
+          <Route path="/rules/:ruleId" element={<RuleDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+
+    fireEvent.click(screen.getByRole("button", { name: "next" }));
+    expect(await screen.findByText("Suspicious exec")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("renders the unknown-rule empty state with a back link when the id is not found", async () => {
@@ -440,7 +462,9 @@ describe("RuleDetail after a save", () => {
 
     expect(await screen.findByText(/Unknown rule/)).toBeVisible();
     await act(() => vi.advanceTimersByTimeAsync(10_000));
-    expect(screen.getByRole("status")).toHaveTextContent(/^Rule saved\. The server applies it when it next reloads its rules, within 30 seconds\.$/);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /^Rule saved\. The server applies it when it next reloads its rules, within 30 seconds\.$/,
+    );
     expect(api.fetchRuleDocs).toHaveBeenCalledTimes(1);
   });
 
