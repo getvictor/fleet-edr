@@ -1,5 +1,6 @@
-import type { APIRequestContext } from "@playwright/test";
+import type { ResultSetHeader } from "mysql2/promise";
 import { test, expect } from "../../fixtures/test";
+import { openDB } from "../../fixtures/db";
 
 // The Value column of the detection tuning exclusion table (issue #1032), covered here because the defect is layout and jsdom does
 // none: an exclusion value is usually a path or glob with no spaces, so it gave the browser nowhere to break and widened the whole
@@ -17,38 +18,53 @@ const REASON = "e2e: detection-tuning-exclusion-value-wrap";
 // 24rem at the root font size; the style under test states the cap in rem, so the test reads the root size rather than assuming 16px.
 const CAP_REM = 24;
 
-async function csrfToken(request: APIRequestContext): Promise<string> {
-  const resp = await request.get("/api/session");
-  expect(resp.status()).toBe(200);
-  return ((await resp.json()) as { csrf_token: string }).csrf_token;
+// The row is written straight to the database rather than through the API, so the shared signed-in page only navigates and asserts,
+// which is the contract signedInAdminShared states. The exclusion list reads the table directly, so no config version bump is needed
+// for the row to render. Leftovers from an interrupted run are cleared first, keyed on the reason this spec alone uses.
+async function seedExclusion(): Promise<number> {
+  const db = await openDB();
+  try {
+    await db.query("DELETE FROM detection_exclusions WHERE reason = ?", [REASON]);
+    const [result] = await db.query<ResultSetHeader>(
+      `INSERT INTO detection_exclusions (rule_id, match_type, value, host_group_id, reason, enabled, created_by)
+       VALUES ('suspicious_exec', 'parent_path_glob', ?, 0, ?, 1, 'sys')`,
+      [LONG_VALUE, REASON],
+    );
+    return result.insertId;
+  } finally {
+    await db.end();
+  }
+}
+
+async function dropExclusion(id: number): Promise<void> {
+  const db = await openDB();
+  try {
+    await db.query("DELETE FROM detection_exclusions WHERE id = ?", [id]);
+  } finally {
+    await db.end();
+  }
 }
 
 test.describe("detection tuning exclusion Value column", () => {
   // spec:web-ui/long-exclusion-values-wrap-within-a-capped-value-column/a-long-value-wraps-at-the-cap
   test("a long value wraps at the column cap instead of widening the table", async ({ signedInAdminShared: page }) => {
-    const csrf = await csrfToken(page.request);
-    const created = await page.request.post("/api/v1/detection-config/exclusions", {
-      headers: { "X-Csrf-Token": csrf, "Content-Type": "application/json" },
-      data: { rule_id: "suspicious_exec", match_type: "parent_path_glob", value: LONG_VALUE, reason: REASON },
-    });
-    expect(created.status()).toBe(201);
-    const { id } = (await created.json()) as { id: number };
-
+    const id = await seedExclusion();
     try {
       await page.goto("/ui/detection-config");
       const value = page.locator("table td code", { hasText: LONG_VALUE });
       await expect(value).toBeVisible();
 
       const layout = await value.evaluate((code, capRem) => {
-        const style = getComputedStyle(code);
-        const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
-        const lineHeight = Number.isNaN(parseFloat(style.lineHeight)) ? parseFloat(style.fontSize) * 1.2 : parseFloat(style.lineHeight);
-        const box = code.getBoundingClientRect();
+        // Lines are counted as the text's line boxes, one client rect per line, rather than by dividing the box height by a
+        // line-height. A computed line-height can be a unitless multiplier or "normal", and either turns that division into a
+        // number that says nothing about wrapping.
+        const range = document.createRange();
+        range.selectNodeContents(code);
         const wrapper = code.closest("table")?.parentElement;
         return {
-          width: box.width,
-          lines: Math.round(box.height / lineHeight),
-          cap: rootFontSize * capRem,
+          width: code.getBoundingClientRect().width,
+          lines: range.getClientRects().length,
+          cap: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * capRem,
           tableScrollsHorizontally: wrapper ? wrapper.scrollWidth > wrapper.clientWidth : true,
         };
       }, CAP_REM);
@@ -59,10 +75,7 @@ test.describe("detection tuning exclusion Value column", () => {
       expect(layout.lines).toBeGreaterThan(1);
       expect(layout.tableScrollsHorizontally).toBe(false);
     } finally {
-      const deleted = await page.request.delete(`/api/v1/detection-config/exclusions/${String(id)}?reason=${encodeURIComponent(REASON)}`, {
-        headers: { "X-Csrf-Token": csrf },
-      });
-      expect(deleted.status()).toBe(204);
+      await dropExclusion(id);
     }
   });
 });
