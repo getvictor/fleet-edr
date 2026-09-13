@@ -11,5 +11,5 @@ Issue #1003. The vendored SigmaHQ macOS rules are pinned by a manifest test, whi
 
 ## Out of scope
 
-- The scheduled job that runs the check weekly and opens a pull request. It follows in its own change.
+- The scheduled job that runs the check weekly and raises what it finds for review. It follows in its own change.
 - Non-macOS trees, until there is an agent for that platform.
