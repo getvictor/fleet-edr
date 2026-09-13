@@ -182,7 +182,8 @@ func TestWatchedPathSet_JSONRoundTrip(t *testing.T) {
 					Match: rapid.SampledFrom([]WatchedPathMatch{WatchedPathLiteral, WatchedPathPrefix}).Draw(t, "match"),
 				}
 			}), 0, 8).Draw(t, "paths"),
-			UpdatedBy: rapid.String().Draw(t, "updated_by"),
+			UpdatedBy:      rapid.String().Draw(t, "updated_by"),
+			UpdatedByLabel: rapid.String().Draw(t, "updated_by_label"),
 		}
 		if rapid.Bool().Draw(t, "updated") {
 			at := time.UnixMicro(rapid.Int64Range(0, 1<<50).Draw(t, "updated_at")).UTC()

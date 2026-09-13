@@ -1494,8 +1494,8 @@ export async function deleteDetectionExclusion(id: number, reason: string): Prom
   );
 }
 
-// WatchedPath is one entry in the watched-path set (issue #998): an absolute path, and whether it covers exactly that file (`literal`) or
-// every path starting with it (`prefix`).
+// WatchedPath is one entry in the watched-path set: an absolute path, and whether it covers exactly that file (`literal`) or every
+// path starting with it (`prefix`).
 export interface WatchedPath {
   path: string;
   match: "literal" | "prefix";

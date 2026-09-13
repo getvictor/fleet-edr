@@ -82,9 +82,12 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
   }
 
   const changed = !sameEntries(draft, stored.paths);
-  const trimmed = newPath.trim();
+  // The path is added exactly as typed: the server allows spaces in a path, so trimming would watch a different file. A path that is
+  // only whitespace is not offered.
   const canAdd =
-    trimmed !== "" && draft.length < stored.max_paths && !draft.some((p) => entryKey(p) === entryKey({ path: trimmed, match: newMatch }));
+    newPath.trim() !== "" &&
+    draft.length < stored.max_paths &&
+    !draft.some((p) => entryKey(p) === entryKey({ path: newPath, match: newMatch }));
 
   const clearOutcome = () => {
     setSaved(null);
@@ -206,7 +209,7 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
               variant="inverse"
               disabled={!canAdd || saving}
               onClick={() => {
-                editDraft([...draft, { path: trimmed, match: newMatch }]);
+                editDraft([...draft, { path: newPath, match: newMatch }]);
                 setNewPath("");
               }}
             >

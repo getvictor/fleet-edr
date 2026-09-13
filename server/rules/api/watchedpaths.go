@@ -50,8 +50,8 @@ type WatchedPathSet struct {
 	// UpdatedAt and UpdatedBy are zero until the first change.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 	UpdatedBy string     `json:"updated_by,omitempty"`
-	// UpdatedByLabel is the display label the REST handler resolves from UpdatedBy (a principal id) at read time: a user's email, a
-	// service account's name, or "system". Empty when it could not be resolved, and never stored.
+	// UpdatedByLabel is the display label the REST handler resolves from UpdatedBy at read time: a user's email, a service
+	// account's name, or "system". Empty when it could not be resolved, and never stored.
 	UpdatedByLabel string `json:"updated_by_label,omitempty"`
 }
 

@@ -112,7 +112,7 @@ describe("WatchedPaths", () => {
     const replace = vi.spyOn(api, "replaceWatchedPaths").mockResolvedValue(makeResult(saved, { fanout_hosts: 3, fanout_failed: 1 }));
 
     fireEvent.click(screen.getByRole("button", { name: "Remove /Library/StartupItems/" }));
-    addPath("  /Library/Security/SecurityAgentPlugins/ ", "prefix");
+    addPath("/Library/Security/SecurityAgentPlugins/", "prefix");
     expect(screen.getByLabelText("Path")).toHaveValue("");
     expect(screen.getByText("2 of 32 paths. Last saved", { exact: false })).toBeVisible();
     expect(replace).not.toHaveBeenCalled();
@@ -249,6 +249,18 @@ describe("WatchedPaths", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent("Saved as version 3.");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("adds a path exactly as typed, since a path may contain spaces", async () => {
+    await renderLoaded(makeSet({ paths: [] }));
+    const replace = vi.spyOn(api, "replaceWatchedPaths").mockResolvedValue(makeResult([]));
+
+    addPath("/Users/Shared/report ", "literal");
+    await saveWithReason("canary");
+
+    await waitFor(() => {
+      expect(replace).toHaveBeenCalledWith([{ path: "/Users/Shared/report ", match: "literal" }], "canary", 2);
+    });
   });
 
   it("sends nothing when the reason prompt is cancelled", async () => {

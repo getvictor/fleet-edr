@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -203,6 +204,33 @@ func TestWatchedPathsHandler_PassesTheExpectedVersionThrough(t *testing.T) {
 			assert.Equal(t, tc.want, svc.gotExpect)
 		})
 	}
+}
+
+// The PUT body is the client's wire shape: every field, including a list that is present but empty and a version that is absent,
+// survives Marshal then Unmarshal.
+func TestReplaceWatchedPathsRequest_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		want := replaceWatchedPathsRequest{Reason: rapid.String().Draw(t, "reason")}
+		if rapid.Bool().Draw(t, "has_paths") {
+			paths := rapid.SliceOfN(rapid.Custom(func(t *rapid.T) api.WatchedPath {
+				return api.WatchedPath{
+					Path:  rapid.String().Draw(t, "path"),
+					Match: rapid.SampledFrom([]api.WatchedPathMatch{api.WatchedPathLiteral, api.WatchedPathPrefix}).Draw(t, "match"),
+				}
+			}), 0, 8).Draw(t, "paths")
+			want.Paths = &paths
+		}
+		if rapid.Bool().Draw(t, "has_expected_version") {
+			version := rapid.Int64().Draw(t, "expected_version")
+			want.ExpectedVersion = &version
+		}
+		b, err := json.Marshal(want)
+		require.NoError(t, err)
+		var got replaceWatchedPathsRequest
+		require.NoError(t, json.Unmarshal(b, &got))
+		assert.Equal(t, want, got)
+	})
 }
 
 func TestWatchedPathsHandler_GetFailureIs500(t *testing.T) {

@@ -2466,7 +2466,10 @@ components:
           description: Principal id of whoever made the last change; absent until the first change.
         updated_by_label:
           type: string
-          description: Display label resolved from updated_by at read time (a user's email, a service account's name, or "system"). Absent until the first change, or when the principal cannot be resolved; clients fall back to updated_by.
+          description: >-
+            Display label resolved from updated_by at read time (a user's email, a
+            service account's name, or "system"). Absent until the first change, or
+            when the principal cannot be resolved; clients fall back to updated_by.
     DetectionConfigError:
       type: object
       required: [error, message]
