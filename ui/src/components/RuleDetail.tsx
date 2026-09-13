@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
 import { vettedHTTPURL } from "../urls";
+import { PermissionAction, useCan } from "../permissions-core";
+import { RuleSource } from "./RuleSource";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
@@ -22,6 +24,7 @@ export function RuleDetail() {
   const { ruleId } = useParams<{ ruleId: string }>();
   const [entries, setEntries] = useState<RuleDocEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const can = useCan();
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +63,9 @@ export function RuleDetail() {
       )}
 
       {entry && <RuleBody entry={entry} />}
+      {/* The source reads are gated on rule_content.read, so an operator without it is shown the documentation and nothing that
+          would only fail. */}
+      {entry && can(PermissionAction.RuleContentRead) && <RuleSource ruleId={entry.id} />}
     </>
   );
 }

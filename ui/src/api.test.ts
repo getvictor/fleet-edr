@@ -12,6 +12,9 @@ import {
   setUnauthorizedHandler,
   Unauthorized401Error,
   ReauthRequiredError,
+  getRuleContentDocument,
+  listRuleContentDocuments,
+  ruleDocumentStem,
 } from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
@@ -385,5 +388,27 @@ describe("unauthorized handler signalling", () => {
     setUnauthorizedHandler(null);
     await expect(listAlerts()).rejects.toBeInstanceOf(Unauthorized401Error);
     expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+});
+
+describe("rule content documents", () => {
+  it("reads a document as text, encoding each path segment but keeping the slashes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("title: x\n", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const body = await getRuleContentDocument("authored/keychain extra.yml");
+    expect(body).toBe("title: x\n");
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.pathname).toBe("/api/v1/rule-content/documents/authored/keychain%20extra.yml");
+  });
+
+  it("treats a null document list as empty", async () => {
+    stubFetch({ corpus_version: 1, documents: null });
+    await expect(listRuleContentDocuments()).resolves.toEqual([]);
+  });
+
+  it("names a rule by its document's file stem", () => {
+    expect(ruleDocumentStem("authored/keychain_extra.yml")).toBe("keychain_extra");
+    expect(ruleDocumentStem("keychain_extra.yaml")).toBe("keychain_extra");
+    expect(ruleDocumentStem("nested/dir/rule")).toBe("rule");
   });
 });

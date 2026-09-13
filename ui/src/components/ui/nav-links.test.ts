@@ -17,6 +17,7 @@ describe("firstPermittedRoute", () => {
       permissions: [PermissionAction.AppControlRead],
       expected: "/app-control",
     },
+    { name: "a rule-content-only operator lands on Rules", permissions: [PermissionAction.RuleContentRead], expected: "/rules" },
     { name: "an empty permission set lands on the ungated Coverage", permissions: [], expected: "/coverage" },
   ];
   it.each(cases)("$name", ({ permissions, expected }) => {
