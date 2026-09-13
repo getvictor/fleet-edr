@@ -329,10 +329,10 @@ final class EventSerializerTests: XCTestCase {
     // What this cannot distinguish, and the requirement's "not the rule's own stored identifier" clause can: today every
     // layer is a map keyed by `rule.identifier`, so a match always returns a value equal to it. The clause is a
     // constraint on future divergence (a case-folded or glob-matched layer would break the equality), and it matches the
-    // code, since emitBlockEvent is handed the matched identifier and not the rule. No test can separate the two while
+    // code, since emitRuleMatchEvent is handed the matched identifier and not the rule. No test can separate the two while
     // the maps are keyed this way; asserting otherwise here would be a test that cannot fail dressed as one that can.
     //
-    // The marker previously sat on a decideAuthExec test that emits no event at all. The ESF glue in emitBlockEvent
+    // The marker previously sat on a decideAuthExec test that emits no event at all. The ESF glue in emitRuleMatchEvent
     // (audit token to pid, es_token to path) needs an es_message_t and stays at the system / VM layer; the mapping
     // from decision to wire shape is the part that is unit-testable, and it is where the field names live.
     func testBlockPayloadCarriesTheMatchedIdentifierNotTheRuleIdentifier() throws {

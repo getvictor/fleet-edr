@@ -73,3 +73,18 @@ func makeTuple(
         canonicalPath: canonicalPath
     )
 }
+
+/// decideAuthExec is the kernel verdict evaluateAuthExec reaches, for the tests that are about the verdict alone. A test about
+/// what a DETECT rule reports calls evaluateAuthExec and reads wouldBlock as well.
+func decideAuthExec(
+    tuple: AuthTuple,
+    snapshot: ApplicationControlSnapshot,
+    hashOutcome: HashOutcome
+) -> AuthDecision {
+    return evaluateAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome).decision
+}
+
+/// evaluation wraps a verdict that matched no DETECT rule, for tests that hand an evaluation to authResultIsCacheable.
+func evaluation(_ decision: AuthDecision) -> AuthEvaluation {
+    return AuthEvaluation(decision: decision, wouldBlock: nil)
+}

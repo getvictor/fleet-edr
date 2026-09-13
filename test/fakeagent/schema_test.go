@@ -66,6 +66,8 @@ var payloadFixtures = map[string]string{
 	"sensor_recovery_failed":     `{"provider":"network_extension","outcome":"attempts_exhausted","attempts":3}`,
 	"application_control_block": `{"pid":101,"path":"/tmp/tool","rule_id":"r-1","rule_type":"CDHASH","identifier":"abc",` +
 		`"severity":"high","policy_id":1,"policy_version":2}`,
+	"application_control_would_block": `{"pid":101,"path":"/tmp/tool","rule_id":"r-1","rule_type":"TEAMID","identifier":"EQHXZ8M8AV",` +
+		`"severity":"high","policy_id":1,"policy_version":2}`,
 	"application_control_undecided": `{"pid":101,"path":"/tmp/tool","verdict":"allow","reason":"deadline",` +
 		`"file_size_bytes":4096,"policy_id":1,"policy_version":2}`,
 	"application_control_resync": `{"policy_id":1,"previous_version":5,"new_version":2,"previous_epoch":1,"new_epoch":2,` +
@@ -206,7 +208,7 @@ func TestEventSchema_ShippedScenarioEnvelopesValidate(t *testing.T) {
 		}
 	}
 	// The corpus is the evidence, so record what it actually reached: an assertion that it covers every type would fail on the
-	// three application_control_* types, which the agent emits reactively and no scenario produces.
+	// four application_control_* types, which the agent emits reactively and no scenario produces.
 	t.Logf("scenario corpus exercised %d event types: %v", len(seen), sortedKeys(seen))
 	assert.Greater(t, len(seen), 5, "scenario corpus should exercise more than a handful of event types")
 }
