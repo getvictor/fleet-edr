@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -208,6 +209,24 @@ func TestWatchedPathsREST_OrdersConcurrentReplacements(t *testing.T) {
 		previous[e.Payload["previous_version"]] = true
 	}
 	assert.Len(t, previous, writers)
+}
+
+// The largest set the API accepts, 32 entries at the longest path, fits the request body cap rather than being refused before it is
+// validated.
+func TestWatchedPathsREST_AcceptsTheLargestValidSet(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	largest := make([]rulesapi.WatchedPath, rulesapi.MaxWatchedPaths)
+	for i := range largest {
+		prefix := fmt.Sprintf("/Library/Watched/%02d-", i)
+		path := prefix + strings.Repeat("a", rulesapi.MaxWatchedPathBytes-len(prefix))
+		largest[i] = rulesapi.WatchedPath{Path: path, Match: rulesapi.WatchedPathLiteral}
+	}
+
+	resp := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": largest, "reason": "largest set"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Len(t, r.watchedPaths(t).Paths, rulesapi.MaxWatchedPaths)
 }
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-set-the-server-would-not-watch-is-refused

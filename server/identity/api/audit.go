@@ -76,7 +76,8 @@ const (
 	AuditAppControlPolicyDelete   AuditAction = "application_control.policy_delete"
 
 	// Detection configuration (issue #459). Records who created/deleted a false-positive exclusion or changed a rule's mode /
-	// severity, with the operator-supplied reason in the payload so a reviewer can trace tuning decisions.
+	// severity, with the operator-supplied reason in the payload so a reviewer can trace tuning decisions. A watched-path update
+	// (issue #998) records a replacement of the file paths hosts watch, with the previous and new sets and how far the push reached.
 	AuditDetectionConfigExclusionCreate    AuditAction = "detection_config.exclusion_create"
 	AuditDetectionConfigExclusionDelete    AuditAction = "detection_config.exclusion_delete"
 	AuditDetectionConfigRuleSettingUpdate  AuditAction = "detection_config.rule_setting_update"

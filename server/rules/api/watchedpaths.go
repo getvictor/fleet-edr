@@ -63,16 +63,13 @@ var BuiltInWatchedPaths = []WatchedPath{
 // many times over.
 const MaxWatchedPaths = 32
 
-// MaxWatchedPathBytes bounds one path, at the macOS PATH_MAX.
-const MaxWatchedPathBytes = 1024
+// MaxWatchedPathBytes bounds one path: the macOS PATH_MAX of 1024 counts the terminating NUL of the C string es_mute_path takes, so the
+// longest path it can mute is one byte shorter.
+const MaxWatchedPathBytes = 1023
 
 // ErrInvalidWatchedPaths is returned for a set the server refuses. The wrapped message names the entry and the reason, and the REST
 // handler returns it to the operator.
 var ErrInvalidWatchedPaths = errors.New("invalid watched paths")
-
-// firmlinkedRoots are the top-level directories macOS keeps under /private. A path is judged by its root-linked form, so /private/etc
-// and /etc are held to the same depth rule.
-var firmlinkedRoots = []string{"/etc", "/tmp", "/var"}
 
 // ValidateWatchedPaths checks a proposed set. It is the one place the set is validated: the agent checks only the envelope and the
 // extension applies what it is given.
@@ -135,23 +132,19 @@ func validateWatchedPath(p WatchedPath) error {
 	return nil
 }
 
-// privateSpelling returns a path under /etc, /tmp or /var in its /private form, and any other path unchanged.
+// privateSpelling returns a path under /etc, /tmp or /var in its /private form, and any other path unchanged. The mapping itself is
+// macOSPathAlias's, which detection-config path matching also uses, so the two cannot disagree about which paths are firmlinked.
 func privateSpelling(path string) string {
-	for _, root := range firmlinkedRoots {
-		if path == root || strings.HasPrefix(path, root+"/") {
-			return "/private" + path
-		}
+	if alias := macOSPathAlias(path); strings.HasPrefix(alias, "/private/") {
+		return alias
 	}
 	return path
 }
 
 // rootLinked returns a path under /private/etc, /private/tmp or /private/var in its root-linked form, and any other path unchanged.
 func rootLinked(path string) string {
-	for _, root := range firmlinkedRoots {
-		private := "/private" + root
-		if path == private || strings.HasPrefix(path, private+"/") {
-			return strings.TrimPrefix(path, "/private")
-		}
+	if alias := macOSPathAlias(path); alias != "" && !strings.HasPrefix(alias, "/private/") {
+		return alias
 	}
 	return path
 }

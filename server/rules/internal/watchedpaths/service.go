@@ -52,13 +52,9 @@ type ReplaceResult struct {
 	FanoutHosts  int `json:"fanout_hosts"`
 	FanoutFailed int `json:"fanout_failed"`
 	// FanoutSkippedReason says why the set was queued for no host when that was a failure rather than an empty fleet:
-	// fanoutSkippedHostListError when the enrolled hosts could not be listed. Empty otherwise.
+	// appcontrol.FanoutSkipReasonHostLister when the enrolled hosts could not be listed. Empty otherwise.
 	FanoutSkippedReason string `json:"fanout_skipped_reason,omitempty"`
 }
-
-// fanoutSkippedHostListError is the skip reason for a push that reached no host because the enrolled hosts could not be listed. The
-// same string application control records for its host-lister failure, so one audit query finds both.
-const fanoutSkippedHostListError = "host_lister_error"
 
 // Replace validates paths, stores them as the new set, queues a set_watched_paths command for every enrolled host, and audits the
 // change with its reason.
@@ -88,7 +84,7 @@ func (s *Service) fanout(ctx context.Context, set api.WatchedPathSet) ReplaceRes
 	hostIDs, err := s.hosts(ctx)
 	if err != nil {
 		s.logger.WarnContext(ctx, "watchedpaths: host list failed; set not pushed", "version", set.Version, "err", err)
-		result.FanoutSkippedReason = fanoutSkippedHostListError
+		result.FanoutSkippedReason = appcontrol.FanoutSkipReasonHostLister
 		return result
 	}
 	if len(hostIDs) == 0 {

@@ -32,6 +32,11 @@ type replaceWatchedPathsRequest struct {
 	Reason string             `json:"reason"`
 }
 
+// watchedPathsBodyLimit caps the PUT body. It is sized from the largest set the API accepts rather than shared with the other
+// detection-config routes: 32 entries of 1023 bytes, each byte possibly escaped to two in JSON, plus a reason, is under 70 KiB, and a
+// cap below that would refuse a valid set with a 413 before validation saw it.
+const watchedPathsBodyLimit = 96 * 1024
+
 // msgWatchedPathsRequired is the refusal for a PUT without a paths list.
 const msgWatchedPathsRequired = "paths is required; send an empty list to stop watching every path added"
 
@@ -65,7 +70,7 @@ func (h *DetectionConfigHandler) handleReplaceWatchedPaths(w http.ResponseWriter
 		return
 	}
 	var req replaceWatchedPathsRequest
-	if !h.decode(ctx, w, r, &req) {
+	if !h.decodeCapped(ctx, w, r, &req, watchedPathsBodyLimit) {
 		return
 	}
 	if req.Paths == nil {

@@ -447,7 +447,12 @@ func (h *DetectionConfigHandler) handleUpsertRuleSetting(w http.ResponseWriter, 
 // already written an error response. The read+size invariant (read one byte past the limit so an over-cap body is rejected with a
 // typed 413 rather than silently truncated) lives in httpserver.DecodeCappedJSON.
 func (h *DetectionConfigHandler) decode(ctx context.Context, w http.ResponseWriter, r *http.Request, dst any) bool {
-	outcome := httpserver.DecodeCappedJSON(r, detectionConfigReadBodyLimit, dst)
+	return h.decodeCapped(ctx, w, r, dst, detectionConfigReadBodyLimit)
+}
+
+// decodeCapped is decode with a route-specific body cap, for a route whose largest valid body exceeds the shared one.
+func (h *DetectionConfigHandler) decodeCapped(ctx context.Context, w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	outcome := httpserver.DecodeCappedJSON(r, limit, dst)
 	if outcome == httpserver.BodyReadFailed {
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCReadBody, "could not read request body")
 		return false

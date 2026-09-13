@@ -63,9 +63,10 @@ type Deps struct {
 	// command per mutation in a couple of round trips rather than one per host. Optional: when nil, the application-control REST
 	// routes are not mounted (the rules context still constructs cleanly so non-REST consumers like tools/gen-rule-docs keep working).
 	CommandBatchInserter appcontrol.CommandBatchInserter
-	// HostLister enumerates the deployment's enrolled hosts for the fan-out. cmd/main passes a wrapper over
-	// detection.api.Service.ListHosts that projects each HostSummary down to its host_id. Same optional-when-nil contract as
-	// CommandBatchInserter; nil disables the REST surface.
+	// HostLister enumerates the hosts the application-control fan-out pushes to. cmd/main passes a wrapper over
+	// detection.api.Service.ListHosts that projects each HostSummary down to its host_id, so it lists hosts the detection context has
+	// seen events from rather than active enrollments. Same optional-when-nil contract as CommandBatchInserter; nil disables the
+	// application-control REST surface.
 	HostLister appcontrol.HostLister
 	// EnrolledHostLister enumerates the hosts with an active enrollment, which is who a watched-path set is pushed to (issue #998).
 	// cmd/main passes the endpoint context's ActiveHostIDs. Separate from HostLister because that one lists hosts the detection

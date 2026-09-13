@@ -131,3 +131,14 @@ func TestSetWatchedPathsPayload_WireShape(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"version":3,"epoch":7,"paths":[{"path":"/etc/emond.d/","match":"prefix"}]}`, string(b))
 }
+
+// PATH_MAX is 1024 and counts the NUL that terminates the C string es_mute_path takes, so a 1023-byte path is the longest that fits.
+// Pinned with literals rather than the constant, which is the thing being checked.
+func TestValidateWatchedPaths_LeavesRoomForTheNUL(t *testing.T) {
+	t.Parallel()
+	path := func(n int) []WatchedPath {
+		return []WatchedPath{{Path: "/Library/" + strings.Repeat("a", n-len("/Library/")), Match: WatchedPathLiteral}}
+	}
+	require.NoError(t, ValidateWatchedPaths(path(1023)))
+	require.ErrorIs(t, ValidateWatchedPaths(path(1024)), ErrInvalidWatchedPaths)
+}
