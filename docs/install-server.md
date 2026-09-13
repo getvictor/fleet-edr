@@ -216,6 +216,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Process-record TTL, 0 disables, at most 36500. Event retention is the ClickHouse archive's native time-based expiry, configured on the archive, not here |
 | `EDR_ALERT_RETENTION_DAYS` | no | 180 | How long an alert is kept after its last triage activity, 0 disables, at most 36500. Independent of `EDR_RETENTION_DAYS` in both directions. See [alert retention](operations.md#alert-retention) |
+| `EDR_MONITOR_RETENTION_DAYS` | no | 7 | How long a monitor record (a match from a rule in monitor mode) is kept, 0 disables, at most 36500. Independent of both windows above. See [monitor records](operations.md#monitor-records) |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
 | `EDR_SECRET_KEY` / `EDR_SECRET_KEY_FILE` | yes | none | Deployment root secret (≥ 32 bytes). Every long-lived server-side key derives from it via HKDF: the host-token HMAC pepper and the cookie signing key (OIDC state cookie + WebAuthn registration session). Required on every boot. Rotating it invalidates every host token (fleet-wide re-enroll) plus every session and in-flight ceremony; see [operations.md](operations.md#edr-root-secret) |

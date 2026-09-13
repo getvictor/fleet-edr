@@ -480,3 +480,77 @@ func TestAlertRetention_TriageRacingThePrune(t *testing.T) {
 		assert.Equal(t, 2, f.eventLinks(expired), "with its evidence")
 	})
 }
+
+// monitorRecord inserts a monitor record (issue #994) last written lastActivity ago: the alert fixture with the disposition switched,
+// so the two differ in nothing but the column the prunes are scoped by.
+func (f *alertFixture) monitorRecord(lastActivity time.Duration, linkedEvents int) int64 {
+	f.t.Helper()
+	id := f.alert(lastActivity, 0, linkedEvents)
+	// updated_at restated: the UPDATE would otherwise refresh it to the wall clock and undo the fixture's age.
+	_, err := f.db.ExecContext(context.Background(), `UPDATE alerts SET disposition = 'monitor', updated_at = updated_at WHERE id = ?`, id)
+	require.NoError(f.t, err)
+	return id
+}
+
+// runWindows runs one retention pass with every window set explicitly.
+func runWindows(t *testing.T, db *sqlx.DB, processDays, alertDays, monitorDays int, rec *recordingMetrics) {
+	t.Helper()
+	opts := pipeline.RetentionOptions{
+		RetentionDays:              processDays,
+		AlertRetentionDays:         alertDays,
+		MonitorRecordRetentionDays: monitorDays,
+		Now:                        func() time.Time { return retentionNow },
+		BatchSize:                  2,
+	}
+	if rec != nil {
+		opts.Metrics = rec
+	}
+	_, err := pipeline.NewRetention(db, opts).Run(t.Context())
+	require.NoError(t, err)
+}
+
+// spec:server-detection-rules-engine/monitor-mode-matches-are-kept-as-records/monitor-records-and-alerts-expire-on-their-own-windows
+//
+// TestMonitorRecordRetention_EachWindowPrunesOnlyItsOwnDisposition is the assertion that catches the likely slip the issue names: the two
+// windows wired to the same rows. Every age is chosen to sit on opposite sides of the two cutoffs, so either prune reaching into the
+// other's disposition deletes a row this test requires to survive.
+func TestMonitorRecordRetention_EachWindowPrunesOnlyItsOwnDisposition(t *testing.T) {
+	t.Parallel()
+	f := newAlertFixture(t)
+	const day = 24 * time.Hour
+
+	expiredRecords := []int64{f.monitorRecord(8*day, 2), f.monitorRecord(9*day, 2), f.monitorRecord(10*day, 2)}
+	freshRecord := f.monitorRecord(6*day, 2)
+	alertPastMonitorWindow := f.alert(8*day, 0, 2)
+	expiredAlert := f.alert(181*day, 0, 2)
+
+	rec := &recordingMetrics{}
+	runWindows(t, f.db, 0, 180, 7, rec)
+
+	for _, id := range expiredRecords {
+		assert.False(t, f.exists("alerts", id), "a monitor record past its window is pruned")
+		assert.Zero(t, f.eventLinks(id), "with its event links")
+	}
+	assert.True(t, f.exists("alerts", freshRecord), "a monitor record inside its window is kept, however the alert window is set")
+	assert.True(t, f.exists("alerts", alertPastMonitorWindow), "an alert past the monitor window but inside its own is kept")
+	assert.False(t, f.exists("alerts", expiredAlert), "an alert past its own window is still pruned")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, int64(3), rec.monitorRecordRowsDeleted, "monitor records are counted on their own metric, across batches")
+	assert.Equal(t, int64(1), rec.alertRowsDeleted, "and alerts on theirs")
+}
+
+// spec:server-detection-rules-engine/monitor-mode-matches-are-kept-as-records/a-zero-monitor-record-window-prunes-no-monitor-record
+//
+// TestMonitorRecordRetention_ZeroDisablesTheMonitorPrune: with the monitor window at 0 a monitor record of any age is kept, even one far
+// past the alert window that is enabled in the same pass.
+func TestMonitorRecordRetention_ZeroDisablesTheMonitorPrune(t *testing.T) {
+	t.Parallel()
+	f := newAlertFixture(t)
+	ancient := f.monitorRecord(400*24*time.Hour, 1)
+
+	runWindows(t, f.db, 30, 180, 0, nil)
+
+	assert.True(t, f.exists("alerts", ancient), "a disabled monitor window keeps the record, and the alert window does not reach it")
+}

@@ -18,7 +18,7 @@ import (
 // displaying no credit at all. That is the Detection Rule License obligation unmet for exactly those rows.
 //
 // #824 measured the affected population at ZERO across both dev lanes and did not build this, which was the right trade then: the
-// set is empty in practice because vendored rules ship in monitor mode (#764), monitor resolution returns before persistence, and
+// set is empty in practice because vendored rules ship in monitor mode (#764), monitor resolution then returned before persistence, and
 // promotion only became possible in #814. It is not empty by CONSTRUCTION though, and #814 is now shipping, so the population
 // stops being hypothetical with the release that first puts promotion in an operator's hands.
 //

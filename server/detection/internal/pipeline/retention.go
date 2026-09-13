@@ -29,6 +29,9 @@ type RetentionOptions struct {
 	// AlertRetentionDays is how long an alert is kept after its last triage activity (issue #995). 0 disables the alert prune. Independent
 	// of RetentionDays in both directions: either can be 0 while the other runs.
 	AlertRetentionDays int
+	// MonitorRecordRetentionDays is how long a monitor record is kept (issue #994). 0 disables the monitor-record prune. Independent of
+	// both other windows: the alert prune never deletes a monitor record and this one never deletes an alert.
+	MonitorRecordRetentionDays int
 	// Interval between runs. Default 1h.
 	Interval time.Duration
 	// BatchSize is the per-iteration DELETE cap. Default 10_000.
@@ -42,17 +45,21 @@ type RetentionOptions struct {
 }
 
 const (
-	attrRetentionDays      = "edr.retention.days"
-	attrAlertRetentionDays = "edr.retention.alerts.days"
-	attrAlertRowsDeleted   = "edr.retention.alerts.rows_deleted"
+	attrRetentionDays              = "edr.retention.days"
+	attrAlertRetentionDays         = "edr.retention.alerts.days"
+	attrAlertRowsDeleted           = "edr.retention.alerts.rows_deleted"
+	attrMonitorRecordRetentionDays = "edr.retention.monitor_records.days"
+	attrMonitorRecordRowsDeleted   = "edr.retention.monitor_records.rows_deleted"
 )
 
-// RetentionRunner executes retention passes on a cadence. Each pass runs two prunes, on two independent windows, in this order:
+// RetentionRunner executes retention passes on a cadence. Each pass runs three prunes, on three independent windows, in this order:
 //   - alerts whose last triage activity (updated_at) is older than AlertRetentionDays, with their event links (issue #995);
-//   - completed `processes` whose exit_time_ns is older than RetentionDays, skipping any process an alert still references.
+//   - monitor records last written (updated_at) longer ago than MonitorRecordRetentionDays, with their event links (issue #994);
+//   - completed `processes` whose exit_time_ns is older than RetentionDays, skipping any process an alert or monitor record references.
 //
-// Alerts go first so a process record an expired alert was holding is collected in the same pass. Either window may be 0 while the other
-// runs. Event retention is handled by the ClickHouse archive's native TTL (ADR-0015), not here.
+// The alerts table holds both alerts and monitor records, and each of the first two prunes selects only its own disposition. Both go
+// before the process prune so a process record either was holding is collected in the same pass. Any window may be 0 while the others
+// run. Event retention is handled by the ClickHouse archive's native TTL (ADR-0015), not here.
 //
 // The process prune keys on exit_time_ns, never fork_time_ns: a still-running record (exit_time_ns IS NULL, which includes the live
 // snapshot working set) is therefore never deleted, and a long-running process that only recently exited is retained for the full
@@ -60,14 +67,15 @@ const (
 // (ProcessTTLRunner, issue #6) and become prunable here once their synthesized exit ages past the window; that two-job split is why this
 // prune can safely ignore NULL-exit rows. Per-batch DELETE bounds InnoDB row-lock footprint.
 type RetentionRunner struct {
-	db                 retentionDeleter
-	retentionDays      int
-	alertRetentionDays int
-	interval           time.Duration
-	batchSize          int
-	logger             *slog.Logger
-	metrics            api.MetricsRecorder
-	now                func() time.Time
+	db                         retentionDeleter
+	retentionDays              int
+	alertRetentionDays         int
+	monitorRecordRetentionDays int
+	interval                   time.Duration
+	batchSize                  int
+	logger                     *slog.Logger
+	metrics                    api.MetricsRecorder
+	now                        func() time.Time
 }
 
 // NewRetention builds a RetentionRunner. Panics if db is nil.
@@ -80,6 +88,9 @@ func NewRetention(db retentionDeleter, opts RetentionOptions) *RetentionRunner {
 	}
 	if opts.AlertRetentionDays < 0 {
 		opts.AlertRetentionDays = 0
+	}
+	if opts.MonitorRecordRetentionDays < 0 {
+		opts.MonitorRecordRetentionDays = 0
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Hour
@@ -94,14 +105,15 @@ func NewRetention(db retentionDeleter, opts RetentionOptions) *RetentionRunner {
 		opts.Now = func() time.Time { return time.Now().UTC() }
 	}
 	return &RetentionRunner{
-		db:                 db,
-		retentionDays:      opts.RetentionDays,
-		alertRetentionDays: opts.AlertRetentionDays,
-		interval:           opts.Interval,
-		batchSize:          opts.BatchSize,
-		logger:             opts.Logger,
-		metrics:            opts.Metrics,
-		now:                opts.Now,
+		db:                         db,
+		retentionDays:              opts.RetentionDays,
+		alertRetentionDays:         opts.AlertRetentionDays,
+		monitorRecordRetentionDays: opts.MonitorRecordRetentionDays,
+		interval:                   opts.Interval,
+		batchSize:                  opts.BatchSize,
+		logger:                     opts.Logger,
+		metrics:                    opts.Metrics,
+		now:                        opts.Now,
 	}
 }
 
@@ -111,26 +123,29 @@ func (r *RetentionRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 
 // Loop runs retention passes until ctx is done.
 //
-// It stops only when BOTH windows are disabled. It used to stop whenever the process window was 0, which was right while that was the
-// runner's only job; with alerts on their own knob, that early return would have silently disabled alert pruning for every operator who
-// turned process pruning off for a forensic hold, which is the opposite of what either setting says.
+// It stops only when EVERY window is disabled. It used to stop whenever the process window was 0, which was right while that was the
+// runner's only job; with alerts and monitor records on their own knobs, that early return would have silently disabled their pruning for
+// every operator who turned process pruning off for a forensic hold, which is the opposite of what any of the settings says.
 func (r *RetentionRunner) Loop(ctx context.Context) {
-	if r.retentionDays == 0 && r.alertRetentionDays == 0 {
-		r.logger.InfoContext(ctx, "retention disabled", attrRetentionDays, 0, attrAlertRetentionDays, 0)
+	if r.retentionDays == 0 && r.alertRetentionDays == 0 && r.monitorRecordRetentionDays == 0 {
+		r.logger.InfoContext(ctx, "retention disabled",
+			attrRetentionDays, 0, attrAlertRetentionDays, 0, attrMonitorRecordRetentionDays, 0)
 		return
 	}
 	runPeriodic(ctx, r.interval, r.logger, "retention", r.Run)
 }
 
-// Run executes one retention pass: the alert prune, then the process prune. It returns the number of PROCESS records pruned, which is what
-// its callers have always read; the alert count is reported through its own span attribute, metric, and log line instead of being summed
-// into a number that meant one thing for years. Event retention is ClickHouse-native TTL (ADR-0015), not part of this pass.
+// Run executes one retention pass: the alert prune, the monitor-record prune, then the process prune. It returns the number of PROCESS
+// records pruned, which is what its callers have always read; the other counts are reported through their own span attributes, metrics,
+// and log lines instead of being summed into a number that meant one thing for years. Event retention is ClickHouse-native TTL (ADR-0015), not part of this pass.
 func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 	// Alerts BEFORE processes, so a process row an expired alert was holding is collected in this same pass rather than an hour later.
 	// The process prune skips any row an alert still references; running it first would see the expiring alert's reference and keep
 	// the row until the next pass. Either order converges, but this one does not leave a pass's worth of rows behind for no reason.
-	if err := r.pruneAlerts(ctx); err != nil {
-		return 0, err
+	for _, w := range r.alertWindows() {
+		if err := r.pruneAlerts(ctx, w); err != nil {
+			return 0, err
+		}
 	}
 	if r.retentionDays == 0 {
 		return 0, nil
@@ -171,48 +186,87 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 	return processes, nil
 }
 
-// pruneAlerts deletes alerts whose last triage activity is older than the alert window, in batches, and reports the count through the
-// span, the metric, and the run log. A no-op when the alert window is disabled.
+// alertWindow is one disposition's retention window over the alerts table: which rows it prunes, how long they are kept, and where its
+// count is reported.
+type alertWindow struct {
+	disposition api.AlertDisposition
+	days        int
+	daysAttr    string
+	deletedAttr string
+	cutoffAttr  string
+	logMsg      string
+	record      func(ctx context.Context, n int64)
+}
+
+// alertWindows lists the two windows over the alerts table. Separate windows rather than one prune with a per-row age, because they answer
+// different questions on different scales: an alert is the investigation and compliance record and is kept for months, a monitor record is
+// evidence for a promote decision made over a week, and there are several times as many of them (issue #994).
+func (r *RetentionRunner) alertWindows() []alertWindow {
+	return []alertWindow{
+		{
+			disposition: api.AlertDispositionAlert, days: r.alertRetentionDays,
+			daysAttr: attrAlertRetentionDays, deletedAttr: attrAlertRowsDeleted, cutoffAttr: "edr.retention.alerts.cutoff",
+			logMsg: "alert retention run",
+			record: func(ctx context.Context, n int64) {
+				if r.metrics != nil {
+					r.metrics.AlertRetentionRowsDeleted(ctx, n)
+				}
+			},
+		},
+		{
+			disposition: api.AlertDispositionMonitor, days: r.monitorRecordRetentionDays,
+			daysAttr: attrMonitorRecordRetentionDays, deletedAttr: attrMonitorRecordRowsDeleted, cutoffAttr: "edr.retention.monitor_records.cutoff",
+			logMsg: "monitor record retention run",
+			record: func(ctx context.Context, n int64) {
+				if r.metrics != nil {
+					r.metrics.MonitorRecordRetentionRowsDeleted(ctx, n)
+				}
+			},
+		},
+	}
+}
+
+// pruneAlerts deletes the rows of w's disposition whose updated_at is older than w's window, in batches, and reports the count through the
+// span, the metric, and the run log. A no-op when the window is disabled.
 //
 // Keyed on updated_at, the last status change, not on created_at. An alert an analyst acknowledged or reopened inside the window is one
 // somebody is working, and deleting it because it was raised long ago would take evidence out from under an open investigation. The
 // dedup path deliberately never touches updated_at when a finding re-fires, so a standing condition that nobody triages still ages out,
-// and its next re-fire raises a fresh alert rather than being lost.
-func (r *RetentionRunner) pruneAlerts(ctx context.Context) error {
-	if r.alertRetentionDays == 0 {
+// and its next re-fire raises a fresh alert rather than being lost. A monitor record is never triaged, so for it updated_at is when it
+// was written.
+func (r *RetentionRunner) pruneAlerts(ctx context.Context, w alertWindow) error {
+	if w.days == 0 {
 		return nil
 	}
-	cutoff := r.now().Add(-time.Duration(r.alertRetentionDays) * 24 * time.Hour)
+	cutoff := r.now().Add(-time.Duration(w.days) * 24 * time.Hour)
 	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attribute.Int(attrAlertRetentionDays, r.alertRetentionDays))
+	span.SetAttributes(attribute.Int(w.daysAttr, w.days))
 
-	// A failed batch still reports the batches before it, which committed: those alerts are gone whether or not a later batch failed.
+	// A failed batch still reports the batches before it, which committed: those rows are gone whether or not a later batch failed.
 	var total int64
 	var err error
 	for {
 		var n int64
-		n, err = r.pruneAlertBatch(ctx, cutoff)
+		n, err = r.pruneAlertBatch(ctx, w.disposition, cutoff)
 		total += n
 		if err != nil || n < int64(r.batchSize) {
 			break
 		}
 	}
-	span.SetAttributes(attribute.Int64(attrAlertRowsDeleted, total))
-	if r.metrics != nil {
-		r.metrics.AlertRetentionRowsDeleted(ctx, total)
-	}
+	span.SetAttributes(attribute.Int64(w.deletedAttr, total))
+	w.record(ctx, total)
 	if err != nil {
-		return fmt.Errorf("retention delete alerts batch: %w", err)
+		return fmt.Errorf("retention delete %s batch: %w", w.disposition, err)
 	}
-	r.logger.InfoContext(ctx, "alert retention run",
-		attrAlertRetentionDays, r.alertRetentionDays,
-		"edr.retention.alerts.cutoff", cutoff,
-		attrAlertRowsDeleted, total,
+	r.logger.InfoContext(ctx, w.logMsg,
+		w.daysAttr, w.days,
+		w.cutoffAttr, cutoff,
+		w.deletedAttr, total,
 	)
 	return nil
 }
 
-// pruneAlertBatch deletes one batch of expired alerts and returns how many it removed.
+// pruneAlertBatch deletes one batch of expired rows of one disposition, alerts or monitor records, and returns how many it removed.
 //
 // A transaction rather than a single DELETE, because of alert_events. Its foreign key to alerts carries no ON DELETE CASCADE, so an alert
 // with linked events cannot be deleted until those links are, and every alert has linked events: a plain DELETE FROM alerts would fail on
@@ -227,7 +281,7 @@ func (r *RetentionRunner) pruneAlerts(ctx context.Context) error {
 // InnoDB broke that deadlock by rolling back the detection write on every run.
 //
 // alert_event_payloads and webhook_delivery both cascade from alerts, so they need no statement of their own.
-func (r *RetentionRunner) pruneAlertBatch(ctx context.Context, cutoff time.Time) (int64, error) {
+func (r *RetentionRunner) pruneAlertBatch(ctx context.Context, disposition api.AlertDisposition, cutoff time.Time) (int64, error) {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin alert retention batch: %w", err)
@@ -237,10 +291,10 @@ func (r *RetentionRunner) pruneAlertBatch(ctx context.Context, cutoff time.Time)
 	var ids []int64
 	if err := tx.SelectContext(ctx, &ids, `
 		SELECT id FROM alerts
-		WHERE updated_at < ?
+		WHERE disposition = ? AND updated_at < ?
 		ORDER BY updated_at
 		LIMIT ?
-		FOR UPDATE`, cutoff, r.batchSize); err != nil {
+		FOR UPDATE`, string(disposition), cutoff, r.batchSize); err != nil {
 		return 0, fmt.Errorf("select expired alerts: %w", err)
 	}
 	if len(ids) == 0 {

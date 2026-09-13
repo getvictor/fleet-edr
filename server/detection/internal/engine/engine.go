@@ -125,6 +125,15 @@ type Engine struct {
 	// healthNotifier enqueues the webhook deliveries for a recorded health episode (issue #778). Defaulted to the store by New when
 	// there is one, and injectable so a test can observe the enqueue without a database. Nil records the episode and notifies nobody.
 	healthNotifier healthNotifier
+	// monitorRecords keeps a monitor-mode finding as a monitor record (issue #994). Defaulted to the store by New when there is one. Nil
+	// counts the match and keeps no record, which is what the routing tests below want for the reason healthNotifier gives.
+	monitorRecords monitorRecorder
+}
+
+// monitorRecorder is the one write the monitor route needs, split out of the concrete store for the same reason as healthNotifier: the
+// routing tests run the engine with a nil store so that reaching alert persistence panics, and a monitor-mode finding must not.
+type monitorRecorder interface {
+	InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error)
 }
 
 // healthNotifier is the one outbox write the health route needs. An interface rather than the concrete store because the health
@@ -148,6 +157,7 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	e.active.Store(newRuleSet(nil))
 	if s != nil {
 		e.healthNotifier = s
+		e.monitorRecords = s
 	}
 	return e
 }
@@ -156,8 +166,8 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 func (e *Engine) SetMetrics(m api.MetricsRecorder) { e.metrics = m }
 
 // SetModeResolver installs the per-host rule-mode resolver (issue #459). It routes each finding by the (rule, host) resolved mode:
-// disabled drops it, monitor records an observability signal without persisting an alert, alert persists (applying a severity
-// override).
+// disabled drops it, monitor counts it and keeps a monitor record rather than an alert (issue #994), alert persists (applying a
+// severity override).
 //
 // Nil (the default) applies each rule's own declared default with no override (issue #764), NOT alert unconditionally. A rule that
 // declares nothing still alerts, so this is the pre-config behavior for every hand-written rule; a rule that declares monitor must
@@ -171,6 +181,9 @@ func (e *Engine) SetHealthEpisodeRecorder(r endpointapi.HealthEpisodeRecorder) {
 // setHealthNotifier replaces the webhook enqueue for health episodes. Unexported: production takes the store New installed, and only a
 // test in this package needs to observe the enqueue or make it fail.
 func (e *Engine) setHealthNotifier(n healthNotifier) { e.healthNotifier = n }
+
+// setMonitorRecords replaces where monitor records are written. Unexported for the same reason as setHealthNotifier.
+func (e *Engine) setMonitorRecords(m monitorRecorder) { e.monitorRecords = m }
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r rulesapi.Rule) {
@@ -694,8 +707,8 @@ func evaluate(
 }
 
 // routeFinding applies the resolved mode to a single finding before persistence (issue #459): a `disabled` (rule, host) drops the
-// finding, `monitor` records an observability signal without persisting an alert, and `alert` persists, applying any severity
-// override. Keeping this off persistFinding keeps the mode policy in one place and persistFinding focused on the insert.
+// finding, `monitor` counts it and keeps a monitor record rather than an alert (issue #994), and `alert` persists, applying any
+// severity override. Keeping this off persistFinding keeps the mode policy in one place and persistFinding focused on the insert.
 //
 // ruleDefault is the mode the RULE declares for itself (issue #764), and it is what applies when no setting matches. It is also
 // what applies when no mode resolver is wired at all, which matters: a deployment or a test with no detection-config service must
@@ -737,6 +750,9 @@ func (e *Engine) routeFinding(
 		tally.addMonitorMatch(ruleID, f.HostID, f.Severity)
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+		if err := e.keepMonitorRecord(ctx, isHealthRule, f, techniques, origin); err != nil {
+			return 0, err
+		}
 		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the persist path below.
@@ -874,6 +890,48 @@ func (e *Engine) notifyHealthEpisode(ctx context.Context, ruleID string, id int6
 // It reports whether an alert was newly CREATED, which is not the same as whether persistence succeeded: an alert deduplicated on
 // insert is a success that raised nothing, and a span or counter that treats the two alike reports alerts nobody received.
 func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string, origin string) (bool, error) {
+	_, created, err := e.store.InsertAlert(ctx, alertFromFinding(f, techniques, origin, api.AlertDispositionAlert), f.EventIDs)
+	if err != nil {
+		return false, fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
+	}
+	if !created {
+		// Dedup-skip path: same rule + process + host. Evaluator noise.
+		return false, nil
+	}
+	e.logger.InfoContext(ctx, "detection alert created",
+		"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+	if e.metrics != nil {
+		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
+	}
+	return true, nil
+}
+
+// keepMonitorRecord keeps a monitor-mode finding as a monitor record (issue #994): everything an alert would have carried, so an
+// operator deciding whether to promote the rule can read what it matched instead of weighing a count.
+//
+// Deliberately none of what persistFinding does once a row is new. No log line, because this is the high-volume path the per-match INFO
+// was removed from; no alert-created metric, because nothing was alerted; and the store enqueues no webhook delivery for it.
+//
+// A health-signal rule keeps no record. Its findings are recorded as host health episodes rather than alerts when it alerts (issue #778),
+// so a monitor record of one would put an operational fault in the table that path exists to keep it out of; the count still records
+// that the rule matched.
+//
+// A failure fails the batch, as an alert write does. The batch is retried, and the dedup key makes the retry's write a no-op for any
+// record the failed attempt already committed.
+func (e *Engine) keepMonitorRecord(ctx context.Context, isHealthRule bool, f api.Finding, techniques []string, origin string) error {
+	if isHealthRule || e.monitorRecords == nil {
+		return nil
+	}
+	record := alertFromFinding(f, techniques, origin, api.AlertDispositionMonitor)
+	if _, _, err := e.monitorRecords.InsertAlert(ctx, record, f.EventIDs); err != nil {
+		return fmt.Errorf("persist monitor record for rule %s on host %s: %w", f.RuleID, f.HostID, err)
+	}
+	return nil
+}
+
+// alertFromFinding builds the row a finding is persisted as, for either disposition, so an alert and a monitor record of the same finding
+// carry the same fields by construction.
+func alertFromFinding(f api.Finding, techniques []string, origin string, disposition api.AlertDisposition) api.Alert {
 	if f.Techniques == nil {
 		f.Techniques = techniques
 	}
@@ -888,10 +946,11 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 	if source == "" {
 		source = api.AlertSourceDetection
 	}
-	_, created, err := e.store.InsertAlert(ctx, api.Alert{
+	return api.Alert{
 		HostID:      f.HostID,
 		RuleID:      f.RuleID,
 		Source:      source,
+		Disposition: disposition,
 		Severity:    f.Severity,
 		Title:       f.Title,
 		Description: f.Description,
@@ -899,20 +958,7 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 		ProcessID:   f.ProcessID,
 		Subject:     f.Subject,
 		Techniques:  f.Techniques,
-	}, f.EventIDs)
-	if err != nil {
-		return false, fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
 	}
-	if !created {
-		// Dedup-skip path: same rule + process + host. Evaluator noise.
-		return false, nil
-	}
-	e.logger.InfoContext(ctx, "detection alert created",
-		"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-	if e.metrics != nil {
-		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
-	}
-	return true, nil
 }
 
 // boolToCount renders a per-attempt flag as the additive count the statistics carry.

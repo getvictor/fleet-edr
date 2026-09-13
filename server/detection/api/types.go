@@ -371,10 +371,13 @@ type Alert struct {
 	Subject    string          `db:"subject" json:"-"`
 	Techniques JSONStringSlice `db:"techniques" json:"techniques,omitempty"`
 	Status     AlertStatus     `db:"status" json:"status"`
-	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
-	ResolvedAt *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
-	UpdatedBy  *string         `db:"updated_by" json:"updated_by,omitempty"`
+	// Disposition says whether this row is an alert or a monitor record (issue #994): a match from a rule in monitor mode, kept so an
+	// operator can read what the rule would have raised. Empty on an Alert handed to InsertAlert means an alert.
+	Disposition AlertDisposition `db:"disposition" json:"disposition"`
+	CreatedAt   time.Time        `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time        `db:"updated_at" json:"updated_at"`
+	ResolvedAt  *time.Time       `db:"resolved_at" json:"resolved_at,omitempty"`
+	UpdatedBy   *string          `db:"updated_by" json:"updated_by,omitempty"`
 }
 
 // AlertSource records what subsystem emitted an alert. The schema's `source` ENUM mirrors this set. Including source in the alert
@@ -387,6 +390,17 @@ const (
 	// AlertSourceApplicationControl is the source for alerts
 	// produced by an application_control_block ingest event.
 	AlertSourceApplicationControl = "application_control"
+)
+
+// AlertDisposition distinguishes an alert from a monitor record (issue #994). The schema's `disposition` ENUM mirrors this set.
+//
+// A monitor record carries everything an alert carries so it can be read and pivoted from, and nothing that makes a row an alert: it is
+// excluded from the default alert list, never delivered to a webhook, never triaged, and kept on its own shorter retention window.
+type AlertDisposition string
+
+const (
+	AlertDispositionAlert   AlertDisposition = "alert"
+	AlertDispositionMonitor AlertDisposition = "monitor"
 )
 
 // AlertStatus enumerates the operator-driven alert lifecycle. Schema-level ENUM('open','acknowledged','resolved'); the UI presents
@@ -592,12 +606,16 @@ type TimeRange = httpserver.TimeRange
 // AlertFilter is the optional scope an operator passes to ListAlerts. Mirrors the existing GET /api/alerts query params so the wire
 // shape is preserved; Since / Until / Offset are deferred follow-ups (filed alongside the time-range and pagination work).
 type AlertFilter struct {
-	HostID    string
-	Status    AlertStatus
-	Severity  string
-	Source    string
-	ProcessID int64
-	Limit     int
+	HostID   string
+	Status   AlertStatus
+	Severity string
+	Source   string
+	RuleID   string
+	// Disposition selects alerts or monitor records. Empty selects alerts, so a caller that says nothing about monitor records never
+	// receives one.
+	Disposition AlertDisposition
+	ProcessID   int64
+	Limit       int
 }
 
 // ProcessTreeResult is one process-tree read plus the metadata that lets a client be honest about what it is NOT showing (issue

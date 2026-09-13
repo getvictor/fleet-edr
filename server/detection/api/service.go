@@ -184,6 +184,9 @@ type MetricsRecorder interface {
 	// Its own counter rather than folded into the process one: the two windows are independent knobs, and a dashboard watching one must
 	// not read the other's churn as its own.
 	AlertRetentionRowsDeleted(ctx context.Context, n int64)
+	// MonitorRecordRetentionRowsDeleted is called by the same runner with the count of monitor records pruned past their own window
+	// (issue #994). Separate from the alert counter for the same reason that one is separate from the process counter.
+	MonitorRecordRetentionRowsDeleted(ctx context.Context, n int64)
 	// QueueRowsPruned is called by the pipeline's queue-prune sweep on every pass with the number of acked rows removed from the event
 	// work queue (the visibility EventLog), so operators can watch the sweep keep pace with ingest (ADR-0015).
 	QueueRowsPruned(ctx context.Context, n int64)

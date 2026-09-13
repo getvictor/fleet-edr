@@ -116,6 +116,13 @@ func (s *Service) UpdateAlertStatus(ctx context.Context, id int64, status api.Al
 		return api.Alert{}, err
 	}
 
+	// A monitor record is not triaged (issue #994): nobody was alerted to it, and a status write would refresh updated_at and restart
+	// its retention clock. Checked on the row read above rather than inside the store's write, which is safe because a row's
+	// disposition never changes after it is written.
+	if current.Disposition == api.AlertDispositionMonitor {
+		return api.Alert{}, fmt.Errorf("%w: monitor records are not triaged", api.ErrInvalidAlertTransition)
+	}
+
 	if !canTransition(current.Status, status) {
 		return api.Alert{}, fmt.Errorf("%w: %s -> %s", api.ErrInvalidAlertTransition, current.Status, status)
 	}

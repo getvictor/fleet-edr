@@ -274,16 +274,17 @@ func (r *execFiringStub) Platforms() []rulesapi.Platform {
 // recordingMetrics captures every hook invocation so tests can assert
 // observability survived the phase-5 wiring rewrite.
 type recordingMetrics struct {
-	setAside            int64
-	setAsideHost        string
-	mu                  sync.Mutex
-	eventsIngested      int
-	heartbeatsDropped   int
-	alertsCreated       int
-	monitorMatches      int
-	processesReconciled int64
-	processRowsDeleted  int64
-	alertRowsDeleted    int64
+	setAside                 int64
+	setAsideHost             string
+	mu                       sync.Mutex
+	eventsIngested           int
+	heartbeatsDropped        int
+	alertsCreated            int
+	monitorMatches           int
+	processesReconciled      int64
+	processRowsDeleted       int64
+	alertRowsDeleted         int64
+	monitorRecordRowsDeleted int64
 }
 
 func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n int64) {
@@ -335,6 +336,12 @@ func (m *recordingMetrics) AlertRetentionRowsDeleted(_ context.Context, n int64)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.alertRowsDeleted += n
+}
+
+func (m *recordingMetrics) MonitorRecordRetentionRowsDeleted(_ context.Context, n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.monitorRecordRowsDeleted += n
 }
 
 // QueueRowsPruned satisfies the recorder interface; this suite asserts queue-prune behavior through the EventLog + runner tests, not

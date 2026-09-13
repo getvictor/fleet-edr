@@ -146,6 +146,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.MonitorMatched(ctx, "proc_creation_macos_applescript", "medium", 2)
 	r.ProcessRetentionRowsDeleted(ctx, 7)
 	r.AlertRetentionRowsDeleted(ctx, 11)
+	r.MonitorRecordRetentionRowsDeleted(ctx, 13)
 	r.QueueRowsPruned(ctx, 9)
 	r.QueueDropped(ctx, 3, false)
 	r.QueueDropped(ctx, 5, true)
@@ -171,6 +172,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	// Its own series rather than a share of the process one, because the two windows are configured independently (issue #995) and an
 	// operator watching either needs to see that one move.
 	assert.Equal(t, int64(11), findSum(t, rm, "edr.retention.alerts.rows_deleted", nil))
+	assert.Equal(t, int64(13), findSum(t, rm, "edr.retention.monitor_records.rows_deleted", nil))
 	assert.Equal(t, int64(9), findSum(t, rm, "edr.event_queue.rows_pruned", nil))
 	assert.Equal(t, int64(3), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": false}))
 	assert.Equal(t, int64(5), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": true}))
@@ -242,6 +244,7 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 		r.MonitorMatched(ctx, "r", "s", 1)
 		r.ProcessRetentionRowsDeleted(ctx, 1)
 		r.AlertRetentionRowsDeleted(ctx, 1)
+		r.MonitorRecordRetentionRowsDeleted(ctx, 1)
 		r.QueueDropped(ctx, 1, false)
 		r.QueueDropped(ctx, 1, true)
 	})

@@ -547,6 +547,52 @@ func TestHandleListAlerts(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, "[]\n", string(body))
 	})
+
+	// The handler passes disposition through as given and leaves the empty default to the store, which applies it for every caller
+	// rather than only this one (issue #994). What it must not do is drop the parameter or read it into the wrong field.
+	t.Run("disposition and rule_id reach the service filter", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			query           string
+			wantDisposition api.AlertDisposition
+			wantRuleID      string
+		}{
+			{query: "", wantDisposition: ""},
+			{query: "?disposition=alert", wantDisposition: api.AlertDispositionAlert},
+			{query: "?disposition=monitor&rule_id=proc_creation_macos_curl", wantDisposition: api.AlertDispositionMonitor,
+				wantRuleID: "proc_creation_macos_curl"},
+		}
+		for _, tc := range cases {
+			t.Run("query "+tc.query, func(t *testing.T) {
+				t.Parallel()
+				filters := make(chan api.AlertFilter, 1)
+				svc := fakeService{listAlerts: func(_ context.Context, f api.AlertFilter) ([]api.Alert, error) {
+					filters <- f
+					return nil, nil
+				}}
+				srv := newOperatorServer(t, svc, allowAllAuthZ{})
+				resp := doGet(t, srv, "/api/alerts"+tc.query)
+				defer resp.Body.Close()
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				got := <-filters
+				assert.Equal(t, tc.wantDisposition, got.Disposition)
+				assert.Equal(t, tc.wantRuleID, got.RuleID)
+			})
+		}
+	})
+
+	// spec:server-rest-api/filterable-alerts-list/an-unknown-disposition-is-rejected
+	//
+	// An unrecognised disposition must not quietly select nothing: a client that typos it would read the empty list as "this rule has no
+	// monitor records", which is exactly the wrong conclusion to promote on.
+	t.Run("unknown disposition returns 400 without reaching the service", func(t *testing.T) {
+		t.Parallel()
+		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/alerts?disposition=everything")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Equal(t, errInvalidDisposition, readErrorEnvelope(t, resp))
+	})
 }
 
 func TestHandleGetAlert(t *testing.T) {
