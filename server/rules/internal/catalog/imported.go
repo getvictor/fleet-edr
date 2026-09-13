@@ -385,11 +385,10 @@ func parseImported(name string, raw []byte, authored bool) (*importedRule, error
 
 // categoryIsInert reports whether a category maps to an event type the agent emits too narrowly for the category's rules to fire.
 //
-// `file_event` is the case. It maps to `open`, but since #301 the agent's file client inverts target-path muting to observe ONLY
-// /etc/sudoers and /etc/sudoers.d/ (WatchedPaths.builtIn in the extension), so an `open` event exists for no other path. An
-// upstream file_event rule watching launch daemons or startup items would therefore load, register, and never once fire. The
-// extension can now take further paths pushed by the server (#998), but nothing here knows which paths a host watches, so a
-// pushed set does not yet change this.
+// `file_event` is the case. It maps to `open`, but since #301 the agent's file client inverts target-path muting, so it observes only
+// the paths it is told to watch: /etc/sudoers and /etc/sudoers.d/ always (WatchedPaths.builtIn in the extension), plus any set the
+// server pushes (#998). An upstream file_event rule watching launch daemons or startup items fires only on a host watching those
+// paths, and the loader cannot know that any host is, so importing the rule would register a detection that may never fire.
 //
 // That is exactly the outcome the refusal contract exists to prevent: a rule that can never match is indistinguishable from the
 // behaviour never occurring. Refusing it says so, where importing it would look like coverage we do not have.
