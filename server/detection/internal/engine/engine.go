@@ -80,9 +80,9 @@ const (
 	// written. Its own bucket rather than folded into routeAlerted because the two land on different surfaces and an operator
 	// counting alerts must not be told a health episode was one (issue #778).
 	routeHealthOpened
-	// routeHealthDuplicate: the same, but an episode for this fault was already open so nothing new was recorded. Split from
-	// routeHealthOpened for the reason routeDuplicate is split from routeAlerted: the fault is re-asserted for as long as it lasts,
-	// so counting these as episodes would report hundreds of records for one outage.
+	// routeHealthDuplicate: the same, but this occurrence was already recorded so nothing new was written. Split from
+	// routeHealthOpened for the reason routeDuplicate is split from routeAlerted: event delivery is at-least-once, so a redelivered
+	// report is routine, and counting it as an episode would report records that do not exist.
 	routeHealthDuplicate
 	// routeHealthDropped: a health finding that could not be recorded at all, because the rule supplied no detail or because no
 	// recorder is wired. Counted apart from both so the span cannot report an episode where persistence created none.
@@ -520,7 +520,7 @@ func (e *Engine) evaluateRule(
 	// for a rule that produced nothing.
 	// healthEpisodes is its own counter rather than a fourth way to be "alerted": these land on the host health surface, so folding
 	// them into alert_count would report alerts an operator cannot find in the alert list (issue #778). It counts episodes OPENED,
-	// so it reads like alert_count does; healthFindings carries the rest (a re-assertion of an already-open fault, or a finding that
+	// so it reads like alert_count does; healthFindings carries the rest (a redelivery of an occurrence already recorded, or a finding that
 	// could not be recorded), which would otherwise vanish from the span entirely.
 	var alerted, suppressed, duplicates, healthEpisodes, healthFindings int
 	// Chains this rule declined because an ancestor had no record, counted as the delta across its own evaluation so a
@@ -749,10 +749,10 @@ func (e *Engine) routeFinding(
 
 // recordHealthEpisode records a health-signal finding as a host health episode instead of persisting an alert.
 //
-// The episode is keyed by the finding's host, the component the rule named, and the health kind, and the store makes at most one of
-// those open at a time. That is why nothing here compares against what is already stored: the fault is level state on the agent and
-// is re-reported for as long as it lasts, so the dedup has to hold under concurrent ingest across replicas, which a read-then-write
-// here would not.
+// The episode is identified by the finding's host and the event that reported it, and the store is unique on that pair. That is why
+// nothing here compares against what is already stored: the agent emits one event per outage, so the repetition this sees is a
+// redelivery of that event under at-least-once delivery, and the dedup has to hold under concurrent ingest across replicas, which a
+// read-then-write here would not.
 //
 // A missing recorder drops the finding rather than falling back to an alert. See the field's comment: putting an operational fault
 // back in the analyst queue because a dependency is unwired would undo the change rather than degrade it.
@@ -796,8 +796,8 @@ func (e *Engine) recordHealthEpisode(ctx context.Context, ruleID string, f api.F
 	if err != nil {
 		return 0, fmt.Errorf("record health episode for rule %s: %w", ruleID, err)
 	}
-	// Logged only on the edge. The fault is re-reported for as long as it lasts, so logging every call would turn one outage into a
-	// log line per batch for its whole duration, which is the shape the agent-side emitter already avoids for the same reason.
+	// Logged only when a record is actually created. A redelivered batch re-evaluates the same event, so logging every call would
+	// repeat one outage's line on every replay, which is noise an operator reads as more outages than there were.
 	if !opened {
 		return routeHealthDuplicate, nil
 	}

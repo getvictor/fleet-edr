@@ -15,8 +15,8 @@ func selfHealEpisode(hostID, component string, openedAtNs int64) api.HealthEpiso
 	return selfHealEpisodeFor(hostID, component, "content_filter", openedAtNs)
 }
 
-// selfHealEpisodeFor names the provider, which is the episode's subject: two providers under one extension are two outages and must
-// not collide on one open episode.
+// selfHealEpisodeFor names the provider as the episode's subject, and derives a distinct source event per provider, which is how two
+// providers under one extension arrive: as two events, and so as two outages.
 func selfHealEpisodeFor(hostID, component, provider string, openedAtNs int64) api.HealthEpisode {
 	return selfHealEpisodeOf(hostID, component, provider, "evt-"+component+"-"+provider, openedAtNs)
 }
@@ -236,7 +236,8 @@ func TestCloseHealthEpisodes_HealthyWithNothingOpenIsNotAnError(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900), rc("endpoint_security_extension", 900)), 900)
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a",
+		recov(rc("network_extension", 900), rc("endpoint_security_extension", 900)), 900)
 	require.NoError(t, err)
 	assert.Zero(t, closed)
 
@@ -270,10 +271,10 @@ func TestCloseHealthEpisodes_DoesNotReachOtherHosts(t *testing.T) {
 
 // spec:server-host-status/the-server-records-host-health-episodes/two-parts-of-one-component-failing-are-two-episodes
 //
-// TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes is the collision the subject exists to prevent. One extension
-// owns both capture providers and the self-heal controller reports each independently, so keying the open episode on the component
-// alone would let the second provider's failure collide with the first's and be discarded, taking its provider, outcome and attempt
-// count with it. The host would then be recorded as having one provider down while two were.
+// TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes: one extension owns both capture providers and the self-heal
+// controller reports each independently, as two events. An identity too coarse to tell them apart (a key on the component alone, as
+// an earlier cut had) would let the second provider's failure collide with the first and be discarded, taking its provider, outcome
+// and attempt count with it, and the host would read as having one provider down while two were.
 func TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
@@ -292,7 +293,7 @@ func TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes(t *testin
 	}
 	assert.ElementsMatch(t, []string{"content_filter", "dns_proxy"}, subjects)
 
-	// Re-asserting one of them still does not open a third: the subject narrows the key, it does not remove the deduplication.
+	// Redelivering one of them still does not open a third: the occurrence is the identity, so a repeat of one event is not an outage.
 	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", "dns_proxy", 200))
 	require.NoError(t, err)
 	assert.False(t, opened, "the same provider's event redelivered is the same occurrence")

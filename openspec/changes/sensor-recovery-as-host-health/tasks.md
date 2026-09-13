@@ -2,9 +2,9 @@
 
 ## This change (recording)
 
-- [x] Migration: `host_health_episodes`, with one open episode per (host, component, kind) enforced by the schema rather than by a read-then-write
+- [x] Migration: `host_health_episodes`, unique on the occurrence (host, source event) so a redelivered report collapses onto the record it already made, open or closed, enforced by the schema rather than by a read-then-write
 - [x] `endpoint/api`: the episode type and the recorder interface the detection engine depends on
-- [x] `endpoint` store: open an episode, close it on recovery, and leave a re-asserted fault alone
+- [x] `endpoint` store: open an episode, close it on recovery, and leave a redelivered occurrence alone
 - [x] Close open episodes from the status check-in when the component reports healthy
 - [x] `rules/api`: carry the provider, outcome, and attempt count on the finding as fields
 - [x] Engine: route a health-kind finding to the recorder instead of to the alerts table, leaving projections and detections alone

@@ -526,9 +526,9 @@ type Finding struct {
 type HealthDetail struct {
 	Kind      string
 	Component string
-	// Subject is which thing inside the component is at fault (for a capture-provider failure, the provider). It is part of the
-	// episode's open-episode identity, because one component can own several independently failing parts and without it the second
-	// one's failure would collide with the first's episode and its detail would be discarded.
+	// Subject is which thing inside the component is at fault (for a capture-provider failure, the provider). Data an operator reads
+	// and filters on rather than identity: the episode is identified by the event that reported it, so two parts failing under one
+	// component are already two episodes because they arrive as two events.
 	Subject string
 	// OccurredAtNs is when the fault happened ON THE HOST, taken from the triggering event rather than from the server's clock. The
 	// episode's value is the interval it measures, and its other end is stamped from the agent's own transition instant, so opening
