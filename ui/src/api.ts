@@ -1008,7 +1008,17 @@ export interface SSOConfig {
   scopes: string[] | null;
   jit_enabled: boolean;
   default_role: string;
+  // groups_claim and group_roles are the group to role mapping: an SSO sign-in sets the operator's role from the groups the named
+  // ID-token claim lists. Empty and [] when the mapping is off.
+  groups_claim: string;
+  group_roles: SSOGroupRole[];
   secret_set: boolean;
+}
+
+// SSOGroupRole grants role to the members of the IdP group named group.
+export interface SSOGroupRole {
+  group: string;
+  role: string;
 }
 
 // SSOConfigUpdate is the PUT body. client_secret is OMITTED to keep the stored secret,
@@ -1022,6 +1032,8 @@ export interface SSOConfigUpdate {
   scopes: string[];
   jit_enabled: boolean;
   default_role: string;
+  groups_claim: string;
+  group_roles: SSOGroupRole[];
 }
 
 export async function getSSOConfig(): Promise<SSOConfig> {
