@@ -113,11 +113,13 @@ func TestOpenHealthEpisode_ARedeliveredEventDoesNotOpenASecond(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, opened)
 
-	for _, at := range []int64{200, 300, 400} {
+	// A plain loop rather than subtests: each redelivery is asserted against the store the previous one left behind, so the steps are
+	// sequential by nature and cannot be parallel subtests (tparallel), and serial subtests would name steps without isolating them.
+	for _, atNs := range []int64{200, 300, 400} {
 		opened, err = s.OpenHealthEpisode(t.Context(),
-			selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", at))
+			selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", atNs))
 		require.NoError(t, err)
-		assert.False(t, opened, "a redelivered event is the same occurrence and is already recorded")
+		assert.False(t, opened, "a redelivered event is the same occurrence and is already recorded (delivery at %d)", atNs)
 	}
 
 	got := openEpisodes(t, db, "host-a")
@@ -340,23 +342,46 @@ func TestCloseHealthEpisodes_StampsTheComponentsOwnTransitionInstant(t *testing.
 	assert.Equal(t, int64(500), *all[0].ResolvedAtNs, "the outage ended when the host says it ended, not when we heard about it")
 }
 
-// TestCloseHealthEpisodes_CannotEndBeforeItBegan: a host whose clock moved backwards between the two reports would otherwise
-// produce a negative outage, which is not a number any surface can render honestly.
-func TestCloseHealthEpisodes_CannotEndBeforeItBegan(t *testing.T) {
+// TestCloseHealthEpisodes_ARecoveryThatPredatesTheFaultDoesNotCloseIt covers the case the close exists to get right and an earlier
+// cut got wrong. A healthy snapshot taken BEFORE the fault can arrive after the fault event, delayed in transit, and still be the
+// newest health row, so the ordering guard alone lets it through. Its component's healthy transition predates the opening, which
+// means it describes the component before it failed, not a recovery from that failure.
+//
+// Stamping GREATEST(opened, transition) instead turned this into a zero-length outage and closed a fault that was still in progress:
+// the host this record exists to surface would read as fixed. The same rule is what stops a skewed host from recording an episode
+// that ends before it began, because such a resolution never satisfies it.
+func TestCloseHealthEpisodes_ARecoveryThatPredatesTheFaultDoesNotCloseIt(t *testing.T) {
 	t.Parallel()
-	s, db := newTestStoreWithDB(t)
+	cases := []struct {
+		name         string
+		transitionNs int64
+		wantClosed   bool
+	}{
+		{"a transition before the fault opened is the pre-fault state", 400, false},
+		{"a transition at the instant the fault opened is a recovery", 1_000, true},
+		{"a transition after the fault opened is a recovery", 1_500, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, db := newTestStoreWithDB(t)
+			_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 1_000))
+			require.NoError(t, err)
 
-	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 1_000))
-	require.NoError(t, err)
+			_, err = s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", tc.transitionNs)), 2_000)
+			require.NoError(t, err)
 
-	// A transition instant BEFORE the episode opened: clock skew on the host.
-	_, err = s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 400)), 2_000)
-	require.NoError(t, err)
-
-	all := allEpisodes(t, db, "host-a")
-	require.Len(t, all, 1)
-	require.NotNil(t, all[0].ResolvedAtNs)
-	assert.GreaterOrEqual(t, *all[0].ResolvedAtNs, all[0].OpenedAtNs, "an episode may be instantaneous but never negative")
+			all := allEpisodes(t, db, "host-a")
+			require.Len(t, all, 1)
+			if !tc.wantClosed {
+				assert.Nil(t, all[0].ResolvedAtNs, "a reading of the component before it failed says nothing about whether it recovered")
+				return
+			}
+			require.NotNil(t, all[0].ResolvedAtNs)
+			assert.Equal(t, tc.transitionNs, *all[0].ResolvedAtNs)
+			assert.GreaterOrEqual(t, *all[0].ResolvedAtNs, all[0].OpenedAtNs, "an episode may be instantaneous but never negative")
+		})
+	}
 }
 
 // TestCloseHealthEpisodes_IgnoresASnapshotThatLostTheOrderingRace: host_health is last-writer-wins on reported_at_ns, so a delayed

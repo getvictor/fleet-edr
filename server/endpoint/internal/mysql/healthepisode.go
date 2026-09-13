@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jmoiron/sqlx"
-
 	"github.com/fleetdm/edr/server/endpoint/api"
 )
 
@@ -84,13 +82,22 @@ func (s *Store) CloseHealthEpisodes(
 	if len(recovered) == 0 {
 		return 0, nil
 	}
-	// resolved_at_ns is per component: GREATEST against opened_at_ns so a host whose clock moved backwards between the two reports
-	// cannot produce an episode that ends before it began, which would render as a negative outage.
-	var resolution strings.Builder
+	// Each recovered component contributes a (component, instant) pair, and an episode closes only if its component recovered AT OR
+	// AFTER the episode opened. A component whose healthy transition predates the fault is not evidence of recovery: it says the
+	// component was healthy BEFORE it failed, which is exactly what a delayed pre-fault snapshot looks like when it arrives after the
+	// fault event and still happens to be the newest health row. An earlier cut stamped GREATEST(opened_at_ns, instant) instead,
+	// which turned that case into a plausible zero-length outage and closed a fault that was still in progress, hiding precisely the
+	// host this record exists to surface. Declining to close is the honest answer, and it is the same answer a vanished component
+	// gets: we have not been told the fault ended.
+	//
+	// The same condition keeps a skewed host from recording a negative outage, because a resolution before the opening never
+	// satisfies it. The cost is that a host whose clock jumped backwards mid-outage leaves the episode open until it reports a
+	// transition past the opening; erring toward "not known to be fixed" is the direction this record already takes.
+	var resolution, match strings.Builder
 	resolution.WriteString("CASE component")
-	args := make([]any, 0, len(recovered)*2)
-	types := make([]string, 0, len(recovered))
-	for _, c := range recovered {
+	setArgs := make([]any, 0, len(recovered)*2)
+	whereArgs := make([]any, 0, len(recovered)*2)
+	for i, c := range recovered {
 		at := c.AtNs
 		// A component that reports no transition instant (an older agent, or a state it has held since boot) falls back to the
 		// snapshot's own time, which is the freshest instant we can honestly attribute the recovery to. A transition cannot have
@@ -99,23 +106,28 @@ func (s *Store) CloseHealthEpisodes(
 		if at <= 0 || at > snapshotAtNs {
 			at = snapshotAtNs
 		}
-		resolution.WriteString(" WHEN ? THEN GREATEST(opened_at_ns, ?)")
-		args = append(args, c.Type, at)
-		types = append(types, c.Type)
+		resolution.WriteString(" WHEN ? THEN ?")
+		setArgs = append(setArgs, c.Type, at)
+		if i > 0 {
+			match.WriteString(" OR ")
+		}
+		match.WriteString("(component = ? AND opened_at_ns <= ?)")
+		whereArgs = append(whereArgs, c.Type, at)
 	}
 	resolution.WriteString(" END")
 
-	query, inArgs, err := sqlx.In(`
+	query := `
 		UPDATE host_health_episodes
-		SET resolved_at_ns = `+resolution.String()+`
+		SET resolved_at_ns = ` + resolution.String() + `
 		WHERE host_id = ?
 		  AND resolved_at_ns IS NULL
-		  AND component IN (?)
-		  AND ? >= COALESCE((SELECT reported_at_ns FROM host_health WHERE host_id = ?), 0)
-	`, append(append(args, hostID), types, snapshotAtNs, hostID)...)
-	if err != nil {
-		return 0, fmt.Errorf("close host health episodes: build query: %w", err)
-	}
+		  AND (` + match.String() + `)
+		  AND ? >= COALESCE((SELECT reported_at_ns FROM host_health WHERE host_id = ?), 0)`
+	inArgs := make([]any, 0, len(setArgs)+len(whereArgs)+3)
+	inArgs = append(inArgs, setArgs...)
+	inArgs = append(inArgs, hostID)
+	inArgs = append(inArgs, whereArgs...)
+	inArgs = append(inArgs, snapshotAtNs, hostID)
 	res, err := s.db.ExecContext(ctx, query, inArgs...)
 	if err != nil {
 		return 0, fmt.Errorf("close host health episodes: %w", err)
