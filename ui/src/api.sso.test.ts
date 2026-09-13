@@ -44,7 +44,7 @@ describe("SSO config API client", () => {
     const mock = stubFetch({ configured: true });
     await updateSSOConfig({
       issuer: "https://idp", client_id: "cid", external_url: "https://e",
-      scopes: ["openid"], jit_enabled: true, default_role: "analyst",
+      scopes: ["openid"], jit_enabled: true, default_role: "analyst", groups_claim: "", group_roles: [],
     });
     const [target, init] = mock.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
     expect(target.toString()).toContain("/api/settings/sso");

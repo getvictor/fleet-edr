@@ -4,6 +4,7 @@ package rbac_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -232,4 +233,147 @@ func insertBinding(t *testing.T, db *sqlx.DB, b bindingFixture) {
 		 VALUES (?, ?, ?, ?, ?)`,
 		b.UserID, b.RoleID, b.ScopeType, b.ScopeID, b.ExpiresAt)
 	require.NoError(t, err, "insert binding role=%s for user=%d", b.RoleID, b.UserID)
+}
+
+// SyncUserRole replaces an active user's global role, and leaves alone a user who already holds exactly that role, one who holds
+// super_admin, and one who is not active, reporting whether it changed anything.
+func TestSyncUserRole(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		status      string
+		roles       []string
+		wantChanged bool
+		wantRoles   []string
+	}{
+		{name: "an analyst is set to senior analyst", status: "active", roles: []string{"analyst"}, wantChanged: true,
+			wantRoles: []string{"senior_analyst"}},
+		{name: "two legacy bindings collapse to one", status: "active", roles: []string{"analyst", "auditor"}, wantChanged: true,
+			wantRoles: []string{"senior_analyst"}},
+		{name: "a user with no role is bound", status: "active", wantChanged: true, wantRoles: []string{"senior_analyst"}},
+		{name: "a user already holding the role is left alone", status: "active", roles: []string{"senior_analyst"},
+			wantRoles: []string{"senior_analyst"}},
+		{name: "a super admin is left alone", status: "active", roles: []string{"super_admin"}, wantRoles: []string{"super_admin"}},
+		{name: "a disabled user is left alone", status: "disabled", roles: []string{"analyst"}, wantRoles: []string{"analyst"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := openSchema(t)
+			ctx := t.Context()
+			// Another active admin, so no case trips the last-admin guard.
+			admin := insertUser(t, db, "admin@example.com")
+			insertBinding(t, db, bindingFixture{UserID: admin, RoleID: "admin", ScopeType: "global", ScopeID: "*"})
+			uid := insertUser(t, db, "target@example.com")
+			_, err := db.ExecContext(ctx, `UPDATE users SET status = ? WHERE id = ?`, tc.status, uid)
+			require.NoError(t, err)
+			for _, role := range tc.roles {
+				insertBinding(t, db, bindingFixture{UserID: uid, RoleID: role, ScopeType: "global", ScopeID: "*"})
+			}
+			store := rbac.New(db)
+
+			previous, changed, err := store.SyncUserRole(ctx, uid, "senior_analyst")
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantChanged, changed)
+			assert.ElementsMatch(t, tc.roles, previous)
+			got, err := store.LiveGlobalRoles(ctx, uid)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantRoles, got)
+		})
+	}
+
+	t.Run("the last active admin is refused and keeps the role", func(t *testing.T) {
+		t.Parallel()
+		db := openSchema(t)
+		uid := insertUser(t, db, "only-admin@example.com")
+		insertBinding(t, db, bindingFixture{UserID: uid, RoleID: "admin", ScopeType: "global", ScopeID: "*"})
+		store := rbac.New(db)
+		_, changed, err := store.SyncUserRole(t.Context(), uid, "analyst")
+		require.ErrorIs(t, err, api.ErrLastAdmin)
+		assert.False(t, changed)
+		got, err := store.LiveGlobalRoles(t.Context(), uid)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"admin"}, got)
+	})
+}
+
+// A super_admin grant committed after SyncUserRole's plain read, but before its locked write, is seen by the locked recheck: the
+// sync leaves the user alone rather than replace the grant it had not read. A second transaction holds the admin sentinel so the sync
+// has to wait on it after deciding a change is needed, and grants super_admin before letting it through.
+func TestSyncUserRole_RechecksUnderTheLock(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		apply func(t *testing.T, tx *sqlx.Tx, uid int64)
+		want  []string
+	}{
+		{
+			name: "a super_admin grant",
+			apply: func(t *testing.T, tx *sqlx.Tx, uid int64) {
+				t.Helper()
+				_, err := tx.ExecContext(t.Context(), `DELETE FROM role_bindings WHERE user_id = ?`, uid)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(t.Context(),
+					`INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id) VALUES (?, 'super_admin', 'global', '*')`, uid)
+				require.NoError(t, err)
+			},
+			want: []string{"super_admin"},
+		},
+		{
+			name: "a disable",
+			apply: func(t *testing.T, tx *sqlx.Tx, uid int64) {
+				t.Helper()
+				_, err := tx.ExecContext(t.Context(), `UPDATE users SET status = 'disabled' WHERE id = ?`, uid)
+				require.NoError(t, err)
+			},
+			want: []string{"analyst"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := openSchema(t)
+			ctx := t.Context()
+			admin := insertUser(t, db, "admin@example.com")
+			insertBinding(t, db, bindingFixture{UserID: admin, RoleID: "admin", ScopeType: "global", ScopeID: "*"})
+			uid := insertUser(t, db, "target@example.com")
+			insertBinding(t, db, bindingFixture{UserID: uid, RoleID: "analyst", ScopeType: "global", ScopeID: "*"})
+			store := rbac.New(db)
+
+			holder, err := db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+			require.NoError(t, err)
+			defer func() { _ = holder.Rollback() }()
+			var locked []string
+			require.NoError(t, holder.SelectContext(ctx, &locked,
+				`SELECT id FROM roles WHERE id IN ('admin', 'super_admin') ORDER BY id FOR UPDATE`))
+
+			type result struct {
+				changed bool
+				err     error
+			}
+			done := make(chan result, 1)
+			go func() {
+				_, changed, err := store.SyncUserRole(ctx, uid, "senior_analyst")
+				done <- result{changed, err}
+			}()
+			assert.Eventually(t, func() bool {
+				var waiting int
+				// A lock wait on this test's own roles table, so a concurrent test's wait cannot satisfy it.
+				_ = db.GetContext(ctx, &waiting, `
+					SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+					JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+					WHERE l.OBJECT_SCHEMA = DATABASE() AND l.OBJECT_NAME = 'roles'`)
+				return waiting > 0
+			}, 5*time.Second, 20*time.Millisecond, "the sync waits on the admin sentinel after its plain read")
+
+			tc.apply(t, holder, uid)
+			require.NoError(t, holder.Commit())
+			got := <-done
+			require.NoError(t, got.err)
+			assert.False(t, got.changed, "the locked recheck sees the committed change and writes nothing")
+			roles, err := store.LiveGlobalRoles(ctx, uid)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, roles)
+		})
+	}
 }

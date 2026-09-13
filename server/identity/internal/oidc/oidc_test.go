@@ -44,3 +44,27 @@ func TestGenerateFlowSecrets_Unique(t *testing.T) {
 	assert.NotEqual(t, n1, n2)
 	assert.NotEqual(t, v1, v2)
 }
+
+// Groups reads the configured claim as a JSON array of names or as a single name, and anything else as no groups.
+func TestClaims_Groups(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		raw  map[string]any
+		want []string
+	}{
+		{"array of names", map[string]any{"groups": []any{"edr-admins", "engineering"}}, []string{"edr-admins", "engineering"}},
+		{"single name", map[string]any{"groups": "edr-admins"}, []string{"edr-admins"}},
+		{"non-string elements are skipped", map[string]any{"groups": []any{"edr-admins", 7.0, nil}}, []string{"edr-admins"}},
+		{"empty array", map[string]any{"groups": []any{}}, []string{}},
+		{"another shape", map[string]any{"groups": map[string]any{"edr-admins": true}}, nil},
+		{"absent claim", map[string]any{"roles": []any{"edr-admins"}}, nil},
+		{"no claims", nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, (&oidc.Claims{Raw: tc.raw}).Groups("groups"))
+		})
+	}
+}

@@ -12,6 +12,8 @@ const baseConfig: api.SSOConfig = {
   scopes: ["openid", "email", "profile"],
   jit_enabled: true,
   default_role: "analyst",
+  groups_claim: "",
+  group_roles: [],
   secret_set: true,
 };
 
@@ -57,6 +59,20 @@ describe("SSOSettings", () => {
     await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
     expect(upd.mock.calls[0][0]).not.toHaveProperty("client_secret");
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+  });
+
+  it("sends back the loaded group mapping when saving", async () => {
+    const mapped = { ...baseConfig, groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }] };
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(mapped);
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(mapped);
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
+    expect(upd.mock.calls[0][0]).toMatchObject({
+      groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }],
+    });
   });
 
   it("includes client_secret on save when a new value is entered (rotate)", async () => {

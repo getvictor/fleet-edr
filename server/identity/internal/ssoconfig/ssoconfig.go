@@ -3,6 +3,7 @@ package ssoconfig
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -28,9 +29,19 @@ type Config struct {
 	Scopes       []string
 	JITEnabled   bool
 	DefaultRole  string
-	Version      int64
-	UpdatedAt    time.Time
-	UpdatedBy    sql.NullString
+	// GroupsClaim names the ID-token claim listing the operator's IdP groups. Empty means group to role mapping is off.
+	GroupsClaim string
+	// GroupRoles maps IdP groups to roles, in the order the admin entered them.
+	GroupRoles []GroupRole
+	Version    int64
+	UpdatedAt  time.Time
+	UpdatedBy  sql.NullString
+}
+
+// GroupRole grants Role to the members of the IdP group Group. The JSON shape is both the stored column's and the admin API's.
+type GroupRole struct {
+	Group string `json:"group"`
+	Role  string `json:"role"`
 }
 
 // CallbackPath is the OIDC redirect/callback route the server serves. The registered redirect URI is the deployment external URL +
@@ -67,13 +78,16 @@ type row struct {
 	Scopes          string         `db:"scopes"`
 	JITEnabled      bool           `db:"jit_enabled"`
 	DefaultRole     string         `db:"default_role"`
+	GroupsClaim     string         `db:"groups_claim"`
+	GroupRoles      []byte         `db:"group_roles"`
 	Version         int64          `db:"config_version"`
 	UpdatedAt       time.Time      `db:"updated_at"`
 	UpdatedBy       sql.NullString `db:"updated_by"`
 }
 
 // UpsertInput is the write shape. NewSecret nil leaves the stored secret unchanged (rotate-only semantics); a non-nil pointer (even to
-// "") rotates it to the sealed new value. UpdatedBy nil records an env-seed (no operator); non-nil records the acting user id.
+// "") rotates it to the sealed new value. Every other field replaces what is stored, the group mapping included, so a writer that
+// leaves it empty turns mapping off. UpdatedBy nil records an env-seed (no operator); non-nil records the acting user id.
 type UpsertInput struct {
 	Issuer      string
 	ClientID    string
@@ -81,6 +95,8 @@ type UpsertInput struct {
 	Scopes      []string
 	JITEnabled  bool
 	DefaultRole string
+	GroupsClaim string
+	GroupRoles  []GroupRole
 	UpdatedBy   string
 }
 
@@ -102,7 +118,7 @@ func New(db *sqlx.DB, sealer *Sealer) *Store {
 }
 
 const selectConfig = `
-	SELECT issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role,
+	SELECT issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles,
 	       config_version, updated_at, updated_by
 	FROM oidc_config
 	WHERE id = 1`
@@ -119,7 +135,23 @@ func (s *Store) fetch(ctx context.Context) (*row, error) {
 	return &r, nil
 }
 
-func toConfig(r *row) *Config {
+// encodeGroupRoles is the group_roles column value for pairs: NULL for none ([]byte(nil) is what binds as NULL), otherwise the JSON
+// array. GroupRole holds only strings, so encoding it cannot fail.
+func encodeGroupRoles(pairs []GroupRole) []byte {
+	if len(pairs) == 0 {
+		return nil
+	}
+	encoded, _ := json.Marshal(pairs)
+	return encoded
+}
+
+func toConfig(r *row) (*Config, error) {
+	var groupRoles []GroupRole
+	if r.GroupRoles != nil {
+		if err := json.Unmarshal(r.GroupRoles, &groupRoles); err != nil {
+			return nil, fmt.Errorf("ssoconfig: decode group_roles: %w", err)
+		}
+	}
 	return &Config{
 		Issuer:      r.Issuer,
 		ClientID:    r.ClientID,
@@ -127,10 +159,12 @@ func toConfig(r *row) *Config {
 		Scopes:      splitScopes(r.Scopes),
 		JITEnabled:  r.JITEnabled,
 		DefaultRole: r.DefaultRole,
+		GroupsClaim: r.GroupsClaim,
+		GroupRoles:  groupRoles,
 		Version:     r.Version,
 		UpdatedAt:   r.UpdatedAt,
 		UpdatedBy:   r.UpdatedBy,
-	}
+	}, nil
 }
 
 // Get returns the configuration WITHOUT the client secret. HasSecret reports whether one is set. This is the read used by the admin
@@ -140,7 +174,7 @@ func (s *Store) Get(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return toConfig(r), nil
+	return toConfig(r)
 }
 
 // GetDecrypted returns the configuration WITH the plaintext client secret opened. Used only by the OIDC login/resolver path that needs
@@ -150,7 +184,10 @@ func (s *Store) GetDecrypted(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := toConfig(r)
+	c, err := toConfig(r)
+	if err != nil {
+		return nil, err
+	}
 	if len(r.ClientSecretEnc) > 0 {
 		pt, err := s.sealer.Open(r.ClientSecretEnc)
 		if err != nil {
@@ -170,6 +207,27 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 
 // UpsertTx is Upsert against a caller-supplied executor (*sqlx.Tx or the Store's *sqlx.DB), so the write can join a transaction that
 // also updates other tables atomically (e.g. the SSO admin update that writes oidc_config and app_config together).
+const (
+	upsertRotatingClientKey = `
+		INSERT INTO oidc_config
+			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles, config_version, updated_by)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+		ON DUPLICATE KEY UPDATE
+			issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
+			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
+			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
+			config_version = config_version + 1, updated_by = VALUES(updated_by)`
+	upsertKeepingClientKey = `
+		INSERT INTO oidc_config
+			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles, config_version, updated_by)
+		VALUES (1, ?, ?, NULL, ?, ?, ?, ?, ?, 1, ?)
+		ON DUPLICATE KEY UPDATE
+			issuer = VALUES(issuer), client_id = VALUES(client_id),
+			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
+			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
+			config_version = config_version + 1, updated_by = VALUES(updated_by)`
+)
+
 func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInput) error {
 	scopes := strings.Join(in.Scopes, ",")
 	// An unset updater records the system principal (env-seed / background write), matching the column's NOT NULL DEFAULT 'sys' and its
@@ -179,36 +237,22 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 		updatedBy = api.PrincipalSystemID
 	}
 
-	if in.NewSecret != nil {
-		sealed, err := s.sealer.Seal([]byte(*in.NewSecret))
-		if err != nil {
-			return err
-		}
-		_, err = ext.ExecContext(ctx, `
-			INSERT INTO oidc_config
-				(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_by)
-			VALUES (1, ?, ?, ?, ?, ?, ?, 1, ?)
-			ON DUPLICATE KEY UPDATE
-				issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
-				scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled),
-				default_role = VALUES(default_role), config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, updatedBy)
-		if err != nil {
-			return fmt.Errorf("ssoconfig: upsert with secret: %w", err)
-		}
-		return nil
-	}
+	groupRoles := encodeGroupRoles(in.GroupRoles)
+	// The two statements differ only in whether they write the sealed client secret column.
 
-	// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
-	_, err := ext.ExecContext(ctx, `
-		INSERT INTO oidc_config
-			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_by)
-		VALUES (1, ?, ?, NULL, ?, ?, ?, 1, ?)
-		ON DUPLICATE KEY UPDATE
-			issuer = VALUES(issuer), client_id = VALUES(client_id),
-			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled),
-			default_role = VALUES(default_role), config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, updatedBy)
+	var err error
+	if in.NewSecret != nil {
+		sealed, sealErr := s.sealer.Seal([]byte(*in.NewSecret))
+		if sealErr != nil {
+			return sealErr
+		}
+		_, err = ext.ExecContext(ctx, upsertRotatingClientKey,
+			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
+	} else {
+		// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
+		_, err = ext.ExecContext(ctx, upsertKeepingClientKey,
+			in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
+	}
 	if err != nil {
 		return fmt.Errorf("ssoconfig: upsert: %w", err)
 	}

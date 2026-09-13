@@ -279,12 +279,21 @@ func TestSeedOIDCConfig(t *testing.T) {
 		ctx := t.Context()
 		require.NoError(t, SeedOIDCConfig(ctx, db, sealerKeyA,
 			OIDCSeedInput{Issuer: "https://first.example.com", ClientID: "cid", ClientSecret: "shh"}))
+		// A group mapping saved for the first provider must not carry over to the provider a forced seed replaces it with.
+		first, err := store.Get(ctx)
+		require.NoError(t, err)
+		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
+			Issuer: first.Issuer, ClientID: first.ClientID, JITEnabled: true, DefaultRole: "analyst",
+			GroupsClaim: "groups", GroupRoles: []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}},
+		}))
 		require.NoError(t, SeedOIDCConfig(ctx, db, sealerKeyA, OIDCSeedInput{
 			Issuer: "https://second.example.com", ClientID: "cid2", ClientSecret: "other", Force: true,
 		}))
 		cfg, err := store.GetDecrypted(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, "https://second.example.com", cfg.Issuer, "Force re-seeds over the existing config")
+		assert.Empty(t, cfg.GroupsClaim, "Force clears the previous provider's group mapping")
+		assert.Empty(t, cfg.GroupRoles)
 	})
 }
 
@@ -360,8 +369,8 @@ func TestNewOIDCProviderConfigFn(t *testing.T) {
 	})
 }
 
-// TestNewOIDCJITPolicyFn exercises the JIT-policy closure the provisioner reads: no stored config means JIT off (deny unknown
-// subjects); a stored config surfaces its JIT toggle + default role.
+// TestNewOIDCJITPolicyFn exercises the sign-in policy closure the provisioner reads: no stored config means JIT off (deny unknown
+// subjects); a stored config surfaces its JIT toggle, default role, and group mapping.
 func TestNewOIDCJITPolicyFn(t *testing.T) {
 	t.Parallel()
 
@@ -369,25 +378,28 @@ func TestNewOIDCJITPolicyFn(t *testing.T) {
 		t.Parallel()
 		_, store := newSSOStore(t, sealerKeyA)
 		fn := newOIDCJITPolicyFn(store)
-		allow, role, err := fn(t.Context())
+		policy, err := fn(t.Context())
 		require.NoError(t, err)
-		assert.False(t, allow)
-		assert.Empty(t, role)
+		assert.Equal(t, oidc.Policy{}, policy)
 	})
 
-	t.Run("stored config surfaces its JIT toggle and role", func(t *testing.T) {
+	t.Run("stored config surfaces its JIT toggle, role, and group mapping", func(t *testing.T) {
 		t.Parallel()
 		_, store := newSSOStore(t, sealerKeyA)
 		ctx := t.Context()
 		secret := "shh"
 		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 			Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: &secret, JITEnabled: true, DefaultRole: "auditor",
+			GroupsClaim: "groups",
+			GroupRoles:  []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
 		}))
 		fn := newOIDCJITPolicyFn(store)
-		allow, role, err := fn(ctx)
+		policy, err := fn(ctx)
 		require.NoError(t, err)
-		assert.True(t, allow)
-		assert.Equal(t, "auditor", role)
+		assert.Equal(t, oidc.Policy{
+			AllowJIT: true, DefaultRole: "auditor", GroupsClaim: "groups",
+			GroupRoles: map[string]string{"edr-admins": "admin", "edr-senior": "senior_analyst"},
+		}, policy)
 	})
 
 	t.Run("a non-ErrNotFound store read error is surfaced, not silently JIT-off", func(t *testing.T) {
@@ -397,7 +409,7 @@ func TestNewOIDCJITPolicyFn(t *testing.T) {
 		db, store := newSSOStore(t, sealerKeyA)
 		require.NoError(t, db.Close())
 		fn := newOIDCJITPolicyFn(store)
-		_, _, err := fn(t.Context())
+		_, err := fn(t.Context())
 		require.Error(t, err)
 	})
 }

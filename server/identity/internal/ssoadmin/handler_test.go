@@ -408,3 +408,110 @@ func TestHandleTestConnection_storedIssuerAndErrors(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
+
+// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/a-group-mapped-to-super-admin-is-rejected
+func TestHandleUpdate_groupMappingValidation(t *testing.T) {
+	t.Parallel()
+	base := func(claim string, roles ...ssoconfig.GroupRole) updateRequest {
+		return updateRequest{
+			Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst",
+			GroupsClaim: claim, GroupRoles: roles,
+		}
+	}
+	long := strings.Repeat("g", maxGroupFieldLen+1)
+	cases := []struct {
+		name   string
+		req    updateRequest
+		reason string
+	}{
+		{"super admin role", base("groups", ssoconfig.GroupRole{Group: "edr-root", Role: "super_admin"}), "invalid_group_role"},
+		{"unknown role", base("groups", ssoconfig.GroupRole{Group: "edr-x", Role: "owner"}), "invalid_group_role"},
+		{"blank group", base("groups", ssoconfig.GroupRole{Group: "  ", Role: "admin"}), "invalid_group_role"},
+		{"overlong group", base("groups", ssoconfig.GroupRole{Group: long, Role: "admin"}), "invalid_group_role"},
+		{"group named twice", base("groups",
+			ssoconfig.GroupRole{Group: "edr-admins", Role: "admin"},
+			ssoconfig.GroupRole{Group: " edr-admins ", Role: "auditor"}), "duplicate_group"},
+		{"mappings without a claim", base(" ", ssoconfig.GroupRole{Group: "edr-admins", Role: "admin"}), "missing_groups_claim"},
+		{"claim without mappings", base("groups"), "missing_group_roles"},
+		{"overlong claim", base(long, ssoconfig.GroupRole{Group: "edr-admins", Role: "admin"}), "invalid_groups_claim"},
+		{"overlong non-ASCII group", base("groups", ssoconfig.GroupRole{Group: strings.Repeat("日", maxGroupFieldLen+1), Role: "admin"}),
+			"invalid_group_role"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ap := &captureApply{}
+			h := NewHandler(&fakeStore{}, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			w := httptest.NewRecorder()
+			h.handleUpdate(w, putReq(t, tc.req))
+			require.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), tc.reason)
+			assert.False(t, ap.called, "an invalid request must not reach the write")
+		})
+	}
+}
+
+// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/group-mappings-are-saved-and-read-back
+func TestHandleUpdate_groupMappingIsNormalizedWrittenAuditedAndReturned(t *testing.T) {
+	t.Parallel()
+	ap := &captureApply{}
+	audit := &captureAudit{}
+	saved := []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-auditors", Role: "auditor"}}
+	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid", GroupsClaim: "groups", GroupRoles: saved}}
+	h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, audit, okProbe, nil)
+
+	w := httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, updateRequest{
+		Issuer: "https://idp.example.com", ClientID: "cid", ExternalURL: "https://edr.example.com", Scopes: []string{"openid"},
+		JITEnabled: true, DefaultRole: "analyst",
+		GroupsClaim: " groups ",
+		GroupRoles:  []ssoconfig.GroupRole{{Group: " edr-admins", Role: "ADMIN"}, {Group: "edr-auditors", Role: "auditor"}},
+	}))
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, ap.called)
+	assert.Equal(t, "groups", ap.oidcIn.GroupsClaim)
+	assert.Equal(t, saved, ap.oidcIn.GroupRoles, "groups are trimmed and roles lower-cased, in the order submitted")
+	require.Len(t, audit.events, 1)
+	assert.Equal(t, "groups", audit.events[0].Payload["groups_claim"])
+	assert.Equal(t, saved, audit.events[0].Payload["group_roles"])
+
+	var body configResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "groups", body.GroupsClaim)
+	assert.Equal(t, saved, body.GroupRoles)
+}
+
+// With no mapping stored, the read returns an empty claim and an empty list rather than null, configured or not.
+func TestHandleGet_groupRolesIsAnArrayWhenOff(t *testing.T) {
+	t.Parallel()
+	for name, store := range map[string]*fakeStore{
+		"unconfigured": {},
+		"configured":   {cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := NewHandler(store, &fakeAppCfg{}, noopApply, allowAuthZ{}, nil, okProbe, nil)
+			w := httptest.NewRecorder()
+			h.handleGet(w, withActor(httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil), 42))
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.Contains(t, w.Body.String(), `"group_roles":[]`)
+			assert.Contains(t, w.Body.String(), `"groups_claim":""`)
+		})
+	}
+}
+
+// The 255 bound is in characters, as the column is: a claim and a group of 255 multi-byte characters are accepted.
+func TestHandleUpdate_groupFieldsAreBoundedInCharacters(t *testing.T) {
+	t.Parallel()
+	wide := strings.Repeat("日", maxGroupFieldLen)
+	ap := &captureApply{}
+	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://i", ClientID: "c"}}
+	h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	w := httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, updateRequest{
+		Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst",
+		GroupsClaim: wide, GroupRoles: []ssoconfig.GroupRole{{Group: wide, Role: "admin"}},
+	}))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, wide, ap.oidcIn.GroupsClaim)
+}

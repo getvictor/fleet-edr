@@ -115,15 +115,38 @@ func (c *Client) AuthURL(state, nonce, codeChallenge string) string {
 	)
 }
 
-// Claims is the per-flow subset of ID-token claims the JIT provisioner reads. Subject is the stable per-user identifier (always
-// present per OIDC spec). Email is best-effort; some IdPs require an extra scope. EmailVerified mirrors the IdP's email_verified claim
-// it is true when the IdP attests the address is owned by the subject, false when the IdP says it is not, nil when the IdP omitted
-// the claim entirely. Name is whatever the IdP populates as preferred display (preferred_username falls through to name when present).
+// Claims is the verified ID token's claims as the provisioner reads them: the named fields it always uses, and Raw, every claim.
+// Subject is the stable per-user identifier (always present per OIDC spec). Email is best-effort; some IdPs require an extra scope.
+// EmailVerified mirrors the IdP's email_verified claim it is true when the IdP attests the address is owned by the subject, false when
+// the IdP says it is not, nil when the IdP omitted the claim entirely. Name is whatever the IdP populates as preferred display
+// (preferred_username falls through to name when present).
 type Claims struct {
 	Subject       string
 	Email         string
 	EmailVerified *bool
 	Name          string
+	// Raw is every claim the ID token carries, decoded from JSON, so a claim whose name the deployment configures at runtime (the
+	// groups claim) is read without a field for it.
+	Raw map[string]any
+}
+
+// Groups returns the values of the claim named name as IdP groups: the string elements of a JSON array, or a lone string, which is how
+// some providers send a single group. A missing claim, or a claim of any other shape, carries no groups.
+func (c *Claims) Groups(name string) []string {
+	switch v := c.Raw[name].(type) {
+	case string:
+		return []string{v}
+	case []any:
+		groups := make([]string, 0, len(v))
+		for _, g := range v {
+			if s, ok := g.(string); ok {
+				groups = append(groups, s)
+			}
+		}
+		return groups
+	default:
+		return nil
+	}
 }
 
 // EmailTrusted reports whether c.Email may be used as a primary account binding. Per OIDC core §5.1: when email_verified is present
@@ -177,6 +200,10 @@ func (c *Client) Exchange(ctx context.Context, code, codeVerifier, expectedNonce
 	if err := idToken.Claims(&raw); err != nil {
 		return nil, fmt.Errorf("oidc: decode claims: %w", err)
 	}
+	var all map[string]any
+	if err := idToken.Claims(&all); err != nil {
+		return nil, fmt.Errorf("oidc: decode claims: %w", err)
+	}
 	display := raw.Name
 	if display == "" {
 		display = raw.PreferredUsername
@@ -186,6 +213,7 @@ func (c *Client) Exchange(ctx context.Context, code, codeVerifier, expectedNonce
 		Email:         raw.Email,
 		EmailVerified: raw.EmailVerified,
 		Name:          display,
+		Raw:           all,
 	}, nil
 }
 

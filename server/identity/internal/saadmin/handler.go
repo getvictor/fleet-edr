@@ -15,6 +15,7 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/adminhttp"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/serviceaccounts"
 )
 
@@ -37,12 +38,7 @@ const (
 // admin-bound service account holds the console-management actions, including service_account.*, so its token is a full-control
 // credential that can mint more service accounts: grant it only when automation genuinely needs admin). super_admin remains excluded:
 // a non-human credential with the unrestricted wildcard is never warranted. When custom roles land, this becomes a grant-based check.
-var bindableRoles = map[string]bool{
-	"analyst":        true,
-	"senior_analyst": true,
-	"auditor":        true,
-	"admin":          true,
-}
+var bindableRoles = rbac.GrantableRoles
 
 // ManagementStore is the persistence the CRUD handler needs.
 type ManagementStore interface {

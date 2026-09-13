@@ -17,6 +17,7 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/adminhttp"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
@@ -34,18 +35,7 @@ const (
 
 // bindableRoles is the set of seeded roles the UI offers and an admin may grant. super_admin is excluded here and handled separately:
 // only a super_admin actor may grant it (the UI never offers it). When custom roles land this becomes a grant-based check.
-var bindableRoles = map[string]bool{
-	"analyst":        true,
-	"senior_analyst": true,
-	"auditor":        true,
-	roleAdmin:        true,
-}
-
-// roleRank orders the seeded roles so the list can show a single effective role when a user (via legacy hand-written SQL) holds more
-// than one global binding. Higher wins.
-//
-//nolint:mnd // ordinal ranks of the seeded roles, not magic constants
-var roleRank = map[string]int{roleSuperAdmin: 5, roleAdmin: 4, "senior_analyst": 3, "analyst": 2, "auditor": 1}
+var bindableRoles = rbac.GrantableRoles
 
 // UsersStore is the users-table surface the handler needs.
 type UsersStore interface {
@@ -112,7 +102,7 @@ func view(u users.AdminUser, roles []string) userView {
 	}
 	return userView{
 		ID: u.ID, Email: u.Email, DisplayName: u.DisplayName.String,
-		Role: effectiveRole(roles), Roles: roles, Status: u.Status, IsBreakglass: u.IsBreakglass,
+		Role: rbac.MostPrivileged(roles), Roles: roles, Status: u.Status, IsBreakglass: u.IsBreakglass,
 	}
 }
 
@@ -398,16 +388,6 @@ func (h *Handler) record(ctx context.Context, r *http.Request, action api.AuditA
 func (h *Handler) internal(ctx context.Context, w http.ResponseWriter, what string, err error) {
 	h.logger.ErrorContext(ctx, what, "err", err)
 	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]string{"error": "internal"})
-}
-
-func effectiveRole(roles []string) string {
-	best, bestRank := "", -1
-	for _, r := range roles {
-		if roleRank[r] > bestRank {
-			best, bestRank = r, roleRank[r]
-		}
-	}
-	return best
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, reason string) {

@@ -114,7 +114,7 @@ export function SSOSettings() {
   }
 
   async function handleSave() {
-    if (!form) return;
+    if (!form || !config) return;
     const invalid = validate(form);
     if (invalid) {
       setSaveError(invalid);
@@ -138,6 +138,10 @@ export function SSOSettings() {
         // an admin disable JIT and pre-provision operators is not built yet, so there is no UI to turn this off.
         jit_enabled: true,
         default_role: form.defaultRole,
+        // The update replaces the whole configuration, like every field on this page, and the page does not edit the group mapping,
+        // so it sends back the mapping it loaded rather than clearing it.
+        groups_claim: config.groups_claim,
+        group_roles: config.group_roles,
       });
       setConfig(updated);
       setForm(toForm(updated));
@@ -315,7 +319,9 @@ export function SSOSettings() {
                 </span>
               ))}
             </div>
-            <p className="sso-settings__help">Group-to-role mapping (the groups scope) ships in a future release.</p>
+            <p className="sso-settings__help">
+              Group to role mapping, and any scope your provider needs to send the groups claim, are set through the SSO settings API.
+            </p>
           </div>
         </div>
       </Card>
@@ -338,7 +344,7 @@ export function SSOSettings() {
             <option value="analyst">Analyst</option>
             <option value="auditor">Auditor</option>
           </Select>
-          <p className="sso-settings__help">Never auto-grant admin from an SSO claim.</p>
+          <p className="sso-settings__help">The default role is never admin.</p>
         </div>
       </Card>
 
