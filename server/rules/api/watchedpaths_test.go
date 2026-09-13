@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -141,4 +142,28 @@ func TestValidateWatchedPaths_LeavesRoomForTheNUL(t *testing.T) {
 	}
 	require.NoError(t, ValidateWatchedPaths(path(1023)))
 	require.ErrorIs(t, ValidateWatchedPaths(path(1024)), ErrInvalidWatchedPaths)
+}
+
+// The set's encoded size is bounded because the fan-out repeats the payload on every row of a batched insert. It is measured as the
+// server encodes it, so a path of escapable bytes counts at its escaped size.
+func TestValidateWatchedPaths_BoundsTheEncodedSetSize(t *testing.T) {
+	t.Parallel()
+	// Eight paths of ~1000 bytes encode to just under 8 KiB; one more path of the same size passes it.
+	entry := func(i int) WatchedPath {
+		return WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: WatchedPathLiteral}
+	}
+	fits := []WatchedPath{entry(0), entry(1), entry(2), entry(3), entry(4), entry(5), entry(6), entry(7)}
+	encoded, err := json.Marshal(fits)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), MaxWatchedPathSetBytes)
+	require.NoError(t, ValidateWatchedPaths(fits))
+
+	require.ErrorContains(t, ValidateWatchedPaths(append(slices.Clone(fits), entry(8))), "at most 8192")
+
+	// Two paths of '<' bytes, each within the per-path limit and about 2 KiB raw together, but each '<' encodes as \u003c, six bytes.
+	escaped := []WatchedPath{
+		{Path: "/Library/a/" + strings.Repeat("<", 1000), Match: WatchedPathLiteral},
+		{Path: "/Library/b/" + strings.Repeat("<", 1000), Match: WatchedPathLiteral},
+	}
+	require.ErrorContains(t, ValidateWatchedPaths(escaped), "at most 8192")
 }

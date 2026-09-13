@@ -993,7 +993,7 @@ paths:
         counts them.
 
         The set is refused, and nothing stored or queued, when it has more than
-        `max_paths` entries or any entry whose path is not absolute, has an
+        `max_paths` entries, encodes to more than 8 KiB, or has any entry whose path is not absolute, has an
         empty, `.` or `..` segment, is longer than 1023 bytes in its `/private`
         spelling, or contains an
         ASCII control character (NUL included); whose `match` is not `literal` or `prefix`; that is

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -67,6 +68,12 @@ const MaxWatchedPaths = 32
 // longest path it can mute is one byte shorter.
 const MaxWatchedPathBytes = 1023
 
+// MaxWatchedPathSetBytes bounds the whole set as the server encodes it into a command payload. The fan-out repeats that payload on every
+// row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet the
+// server is designed to work under. Real watched paths are short; the bound only bites on a set of many maximum-length paths, which
+// MaxWatchedPaths and MaxWatchedPathBytes alone would allow at over 30 KiB.
+const MaxWatchedPathSetBytes = 8 * 1024
+
 // ErrInvalidWatchedPaths is returned for a set the server refuses. The wrapped message names the entry and the reason, and the REST
 // handler returns it to the operator.
 var ErrInvalidWatchedPaths = errors.New("invalid watched paths")
@@ -95,6 +102,11 @@ func ValidateWatchedPaths(paths []WatchedPath) error {
 			return fmt.Errorf("%w: entry %d (%q): listed more than once", ErrInvalidWatchedPaths, i, p.Path)
 		}
 		seen[key] = struct{}{}
+	}
+	// Measured with the encoder the payload is written with, so JSON escaping (which can grow a byte to six) is counted as sent.
+	encoded, _ := json.Marshal(paths)
+	if len(encoded) > MaxWatchedPathSetBytes {
+		return fmt.Errorf("%w: the set encodes to %d bytes, at most %d", ErrInvalidWatchedPaths, len(encoded), MaxWatchedPathSetBytes)
 	}
 	return nil
 }

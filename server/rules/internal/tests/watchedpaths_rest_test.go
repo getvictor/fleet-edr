@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -211,22 +213,60 @@ func TestWatchedPathsREST_OrdersConcurrentReplacements(t *testing.T) {
 	assert.Len(t, previous, writers)
 }
 
-// The largest set the API accepts, 32 entries at the longest path, fits the request body cap rather than being refused before it is
-// validated.
-func TestWatchedPathsREST_AcceptsTheLargestValidSet(t *testing.T) {
+// The largest set the API accepts reaches validation rather than being refused by the body cap, even sent with every byte escaped the
+// way a client's JSON encoder may write it, and one past the size bound is refused by validation, not by the cap.
+func TestWatchedPathsREST_BodyCapFitsTheLargestValidSet(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
-	largest := make([]rulesapi.WatchedPath, rulesapi.MaxWatchedPaths)
-	for i := range largest {
-		prefix := fmt.Sprintf("/Library/Watched/%02d-", i)
-		path := prefix + strings.Repeat("a", rulesapi.MaxWatchedPathBytes-len(prefix))
-		largest[i] = rulesapi.WatchedPath{Path: path, Match: rulesapi.WatchedPathLiteral}
+	put := func(paths []rulesapi.WatchedPath) (int, string) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"paths": paths, "reason": "largest set"})
+		require.NoError(t, err)
+		// Rewrite every character inside the path strings as a \uXXXX escape: the same JSON, as large as a client can make it.
+		escaped := escapePathCharacters(string(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, r.srv.URL+watchedPathsRoute, strings.NewReader(escaped))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := r.srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(b)
 	}
+	entry := func(i int) rulesapi.WatchedPath {
+		path := fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970)
+		return rulesapi.WatchedPath{Path: path, Match: rulesapi.WatchedPathLiteral}
+	}
+	largest := []rulesapi.WatchedPath{entry(0), entry(1), entry(2), entry(3), entry(4), entry(5), entry(6), entry(7)}
 
-	resp := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": largest, "reason": "largest set"})
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Len(t, r.watchedPaths(t).Paths, rulesapi.MaxWatchedPaths)
+	status, body := put(largest)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Len(t, r.watchedPaths(t).Paths, len(largest))
+
+	status, body = put(append(slices.Clone(largest), entry(8)))
+	assert.Equal(t, http.StatusBadRequest, status, "one past the bound is refused by validation, not by the body cap")
+	assert.Contains(t, body, "at most 8192")
+}
+
+// escapePathCharacters rewrites every letter, digit, '-' and '/' inside the "path" string values of body as a \uXXXX escape.
+func escapePathCharacters(body string) string {
+	var out strings.Builder
+	const key = `"path":"`
+	for {
+		i := strings.Index(body, key)
+		if i < 0 {
+			out.WriteString(body)
+			return out.String()
+		}
+		out.WriteString(body[:i+len(key)])
+		body = body[i+len(key):]
+		end := strings.IndexByte(body, '"')
+		for _, c := range body[:end] {
+			fmt.Fprintf(&out, `\u%04x`, c)
+		}
+		body = body[end:]
+	}
 }
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-set-the-server-would-not-watch-is-refused
