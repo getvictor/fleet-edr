@@ -319,7 +319,9 @@ export function SSOSettings() {
                 </span>
               ))}
             </div>
-            <p className="sso-settings__help">Group to role mapping, and the groups scope it needs, are set through the SSO settings API.</p>
+            <p className="sso-settings__help">
+              Group to role mapping, and any scope your provider needs to send the groups claim, are set through the SSO settings API.
+            </p>
           </div>
         </div>
       </Card>

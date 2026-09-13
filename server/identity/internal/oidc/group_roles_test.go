@@ -224,3 +224,25 @@ func TestProvisionOrFind_AnAdoptedAccountTakesItsMappedRole(t *testing.T) {
 	assert.Equal(t, map[string]any{"from": []string{"auditor"}, "to": "senior_analyst", "source": "oidc.groups",
 		"groups": []string{"edr-senior"}}, g.rec.events[0].Payload)
 }
+
+// An SSO user who holds no role (their binding removed by hand) is bound to their mapped role at sign-in, and that is recorded as a
+// role binding create, by the system principal, with the matched groups.
+func TestProvisionOrFind_AUserWithNoRoleIsBoundToTheirMappedRole(t *testing.T) {
+	t.Parallel()
+	g := newGroupsDB(t)
+	uid := g.ssoUser(t, "judy", "analyst")
+	_, err := g.db.ExecContext(t.Context(), `DELETE FROM role_bindings WHERE user_id = ?`, uid)
+	require.NoError(t, err)
+
+	_, _, err = g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("judy", "edr-auditors"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"auditor"}, g.roles(t, uid))
+	require.Len(t, g.rec.events, 1)
+	e := g.rec.events[0]
+	assert.Equal(t, api.AuditRoleBindingCreate, e.Action)
+	assert.Equal(t, api.SystemPrincipal(), e.Actor)
+	assert.Equal(t, "oidc.groups", e.Payload["source"])
+	assert.Equal(t, "auditor", e.Payload["to"])
+	assert.Empty(t, e.Payload["from"])
+	assert.Equal(t, []string{"edr-auditors"}, e.Payload["groups"])
+}
