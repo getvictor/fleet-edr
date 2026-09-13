@@ -4,3 +4,4 @@
 - [x] Add `-apply`: verbatim copies verified against the blob id, manifest regeneration, no deletion, no count updates.
 - [x] Import the two `rules-threat-hunting/macos` rules, add the pbpaste fixture, and update the pinned counts deliberately.
 - [x] Regenerate the rule reference and ATT&CK layer; add `task sigma:upstream-check`.
+- [x] Add the weekly workflow: review branch, tracking issue, catalog tests reported, branches under review left alone.

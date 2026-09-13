@@ -34,14 +34,18 @@ jobs:
       SYNC_BRANCH: sigma-sync/upstream
       ISSUE_TITLE: Vendored Sigma rules differ from upstream
     steps:
+      # Always main, whichever ref a manual run was started from: the sync branch is built on this checkout, so another ref would
+      # carry its own commits into it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
+      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-matching-corpus-changes-nothing-and-closes-the-report
       - name: Compare with upstream and bring the corpus up to date
         id: sync
         env:
@@ -64,20 +68,29 @@ jobs:
             exit 0
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
-          # The generated rule reference and ATT&CK layer are checked against the catalog in CI, so regenerate them with it.
-          go run ./tools/gen-rule-docs
-          go run ./tools/gen-attack-layer
 
-      - name: Run the catalog tests
+      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-rule-that-breaks-the-corpus-is-still-reported
+      - name: Regenerate the rule docs and run the catalog tests
         id: tests
         if: steps.sync.outputs.changed == 'true'
         run: |
-          # Expected to fail when a rule is added or removed: TestLoadImported_TheWholeUpstreamCorpus pins the import and refusal
-          # counts, and a new runnable rule needs a regression fixture. A person updates those after reading the rule.
+          # Neither may stop the job. A new rule is expected to fail the tests, since TestLoadImported_TheWholeUpstreamCorpus pins the
+          # import and refusal counts and a new runnable rule needs a regression fixture; and a rule that stops the corpus loading
+          # fails the generators too. Either way the branch is still pushed and the output goes into the tracking issue.
           set +e
-          go test ./server/rules/internal/catalog/ > "$RUNNER_TEMP/tests.txt" 2>&1
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          out="$RUNNER_TEMP/tests.txt"
+          # The generated rule reference and ATT&CK layer are checked against the catalog in CI, so they are regenerated with it.
+          { go run ./tools/gen-rule-docs && go run ./tools/gen-attack-layer; } > "$out" 2>&1
+          generated=$?
+          go test ./server/rules/internal/catalog/ >> "$out" 2>&1
+          tested=$?
+          if [ "$generated" -ne 0 ] || [ "$tested" -ne 0 ]; then
+            echo "exit=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit=0" >> "$GITHUB_OUTPUT"
+          fi
 
+      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-pull-request-under-review-is-left-alone
       - name: Push the sync branch
         id: push
         if: steps.sync.outputs.changed == 'true'
@@ -91,15 +104,21 @@ jobs:
             echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          remote="https://github.com/$GITHUB_REPOSITORY.git"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          header="http.https://github.com/.extraheader=AUTHORIZATION: basic $auth"
+          # The branch as it was when no pull request was open. The push replaces only that, so a push to the branch in the meantime
+          # makes this run fail rather than erase it.
+          seen="$(git -c "$header" ls-remote "$remote" "refs/heads/$SYNC_BRANCH" | cut -f1)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$SYNC_BRANCH"
           git add server/rules/internal/catalog/imported docs/detection-rules.md docs/attack-navigator-layer.json
           git commit -m "Sync vendored Sigma rules with upstream"
-          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
-            push --force "https://github.com/$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$SYNC_BRANCH"
+          git -c "$header" push --force-with-lease="refs/heads/$SYNC_BRANCH:$seen" "$remote" "HEAD:refs/heads/$SYNC_BRANCH"
 
+      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-reach-a-review-branch-and-the-report
+      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-withdrawal-alone-is-reported-without-a-branch-change
       - name: Open, update or close the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,6 +135,14 @@ jobs:
               gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --comment "The vendored corpus matches SigmaHQ again."
             fi
             exit 0
+          fi
+
+          # The failure lines, or the end of the output when there are none, as for a build error or a panic (go test prints a bare FAIL
+          # for those, so it is not matched). Written to a file and read whole, so a long match cannot end the step on a broken pipe.
+          failures="$RUNNER_TEMP/failures.txt"
+          if [ "$CHANGED" = "true" ] && [ "$TEST_EXIT" = "1" ]; then
+            tests="$RUNNER_TEMP/tests.txt"
+            grep -E '^\s*(--- FAIL|Error:|Messages:|panic:)' "$tests" > "$failures" || tail -n 30 "$tests" > "$failures"
           fi
 
           body="$RUNNER_TEMP/issue.md"
@@ -139,16 +166,15 @@ jobs:
               echo "## Catalog tests"
               echo
               if [ "$TEST_EXIT" = "0" ]; then
-                echo "\`go test ./server/rules/internal/catalog/\` passes on the branch."
+                echo "The rule docs regenerate and \`go test ./server/rules/internal/catalog/\` passes on the branch."
               else
-                echo "\`go test ./server/rules/internal/catalog/\` fails on the branch, which is expected when a rule is added or"
-                echo "removed. After reading the rule, update the pinned counts in \`TestLoadImported_TheWholeUpstreamCorpus\` and add a"
-                echo "positive regression fixture for a new runnable rule. The failing output:"
+                echo "Regenerating the rule docs or \`go test ./server/rules/internal/catalog/\` fails on the branch. A test failure is"
+                echo "expected when a rule is added or removed: after reading the rule, update the pinned counts in"
+                echo "\`TestLoadImported_TheWholeUpstreamCorpus\` and add a positive regression fixture for a new runnable rule. A"
+                echo "generator failure means an upstream rule stops the corpus loading. The output:"
                 echo
                 echo '```text'
-                # The test failure lines, or the end of the output when there are none (a build error or panic).
-                tests="$RUNNER_TEMP/tests.txt"
-                { grep -E '^\s*(--- FAIL|FAIL|Error:|Messages:)' "$tests" || tail -n 30 "$tests"; } | head -60
+                sed -n '1,60p' "$failures"
                 echo '```'
               fi
             fi
