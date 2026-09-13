@@ -183,13 +183,13 @@ type Rule interface {
 
 ### Where detection rules come from
 
-The rules the engine evaluates are loaded from the `rulecontent` context's storage, not from the binary. On first boot the corpus is seeded from the copy vendored into the build, so a fresh deployment runs exactly the rules that build shipped; thereafter storage is the source of truth, which is what lets a detection change without a release (ADR-0021, issue #766).
+The rules the engine evaluates are loaded from the `rulecontent` context's storage, not from the binary. On first boot the corpus is seeded from the copy vendored into the build, so a fresh deployment runs exactly the rules that build shipped; thereafter storage is the source of truth, which is what lets a detection change without a release (ADR-0021).
 
 The corpus is replaced as a whole and carries a version counter, so a replica can notice a change by reading one row rather than re-reading every rule. A corpus that fails to load is rejected entirely and the engine keeps evaluating the rules embedded in the build, which means a storage problem costs the ability to change detections rather than the detections themselves. The rule that decides which stored files are rule content is the loader's own, shared with the seed so the two cannot disagree.
 
 The per-detection parameter files (`server/rules/internal/catalog/pack/`) remain compiled in: they tune rules whose matching logic is Go code, so shipping them without that code would not deliver a new detection.
 
-Each bounded context owns its own tables; there are no cross-context foreign keys (ADR-0004). Raw events no longer live in MySQL: the durable event archive is a ClickHouse table owned by `visibility`, and the ephemeral MySQL `event_queue` (also `visibility`) holds only the unprocessed working set (ADR-0015, ADR-0016). In MySQL, the `detection` context owns:
+Each bounded context owns its own tables; there are no cross-context foreign keys (ADR-0004). Raw events do not live in MySQL: the durable event archive is a ClickHouse table owned by `visibility`, and the ephemeral MySQL `event_queue` (also `visibility`) holds only the unprocessed working set (ADR-0015, ADR-0016). In MySQL, the `detection` context owns:
 
 | Table                  | Purpose                                                                          |
 | ---------------------- | -------------------------------------------------------------------------------- |

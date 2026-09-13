@@ -8,6 +8,10 @@ name: Markdown lint
 #     MD041 (first-line heading).
 #   - Prettier (.prettierrc.yaml, proseWrap: never) owns prose wrapping + table
 #     column alignment, matching the repo's no-hard-wrap convention.
+#
+# A third job, doc-issues, checks public docs reference only OPEN GitHub issues
+# (tools/doc-issue-lint). It is not path-gated and also runs daily: closing an
+# issue can turn a doc no PR touched into a finding.
 
 on:
   push:
@@ -19,7 +23,13 @@ on:
       - ".prettierignore"
       - "Taskfile.yml"
       - ".github/workflows/md-lint.yml"
+      - "docs/api/openapi.yaml"
+      - "docs/attack-navigator-layer.json"
+      - "server/rules/internal/catalog/pack/*.yml"
+      - "tools/doc-issue-lint/**"
   pull_request:
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -88,3 +98,25 @@ jobs:
 
       - name: Check markdown prose wrap + table style via Taskfile
         run: task lint:md:prose
+
+  doc-issues:
+    name: Public docs reference only open issues
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check issue references in public docs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git ls-files -z | go run ./tools/doc-issue-lint

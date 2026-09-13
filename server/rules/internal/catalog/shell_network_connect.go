@@ -88,7 +88,7 @@ func (r *ShellNetworkConnect) Doc() api.Documentation {
 			"The rule fires on the LAST link (the connection) rather than the shell's exec. That makes it race-immune " +
 			"across the agent's flush boundaries: a chain completing in ~150ms but straddling a 1-second flush boundary " +
 			"still resolves, because the whole ancestor chain has been ingested by the time the trigger lands.\n\n" +
-			"Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. At this rule's " +
+			"`suspicious_exec` covers the same chain executing a binary from a temp directory. At this rule's " +
 			"monitor default a chain doing both raises one `suspicious_exec` alert and records a match here; once this rule " +
 			"is promoted the same chain raises one alert per rule.\n\n" +
 			"30 seconds is the temporal cap between the shell exec and the connection.",
@@ -101,7 +101,7 @@ func (r *ShellNetworkConnect) Doc() api.Documentation {
 		Limitations: []string{
 			"The window bounds how long after the shell exec a connection still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not fire; a lookup to a publicly routable resolver still does.",
-			"Exclusions saved against `suspicious_exec` before the split (issue #776) do not apply here, because exclusions are keyed by rule id. Re-add any that should silence this shape too.",
+			"Exclusions are keyed by rule id, so one saved against `suspicious_exec` does not silence this rule on the same parent, and vice versa. Add one to each rule to silence a parent on both shapes.",
 			"A shell started directly by launchd has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.",
 		},
 	}

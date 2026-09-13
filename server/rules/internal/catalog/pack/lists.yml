@@ -1,4 +1,4 @@
-# Shared list definitions (issue #759).
+# Shared list definitions.
 #
 # A list belongs here when MORE THAN ONE rule matches against it. A list only one rule uses is that rule's param, in its own file
 # under x-engine.params. The split follows from what reads the value: a rule's own code reads a param, and code shared across

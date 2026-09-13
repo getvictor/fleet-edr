@@ -24,6 +24,10 @@ These two getting-started paths want opposite treatments:
 
 The files that carry a pinned deploy tag are `docs/quickstart-vm.md`, `docs/install-server.md`, `docs/install-agent-manual.md`, `docs/mdm-deployment.md`, `docs/fleet-deployment.md`, `bootstrap.sh`, and `docker-compose.prod.README.md`. They reference only the current release tag; historical or upgrade-path version mentions belong in [`../CHANGELOG.md`](../CHANGELOG.md), not in these files, because the bump rewrites every version token in them wholesale.
 
+## Public docs describe the product as it is
+
+Operator-facing docs, the OpenAPI spec, and the rule pack files describe the current product. They do not narrate how it got there: a sentence like "until issue #N this rule also fired on..." or "earlier versions of this page recommended..." is history, and history belongs in [`../CHANGELOG.md`](../CHANGELOG.md), where the docs at each release tag already preserve what that release did. Linking an open issue is fine, because it points a reader at a known gap that is still being worked on. `tools/doc-issue-lint` (`task lint:docs:issues`, run in `.github/workflows/md-lint.yml` on every pull request and daily) fails when a public doc references a closed issue or any pull request, so a reference to an open issue has to be reworded once that issue closes. ADRs, runbooks, and contributor docs such as this one are out of its scope; the list lives in the tool.
+
 ## Two gates back this
 
 - **Docs stay in step with code.** `Docs sync` (`.github/workflows/docs-sync.yml`), a sibling of the OpenSpec sync gate, fails a PR that changes a user-facing surface (the React UI, an HTTP request handler, or a detection rule) without also touching `docs/` or `CHANGELOG.md`. Like the OpenSpec gate it fires on path, so it has false positives (an internal refactor, a non-visible UI tweak). The opt-out is an auditable assertion that the change is not user-facing: the `no-docs-change` label or a `[no-docs-change]` tag in the PR title. It is never a way to skip documenting a real user-facing change.

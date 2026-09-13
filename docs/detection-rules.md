@@ -19,8 +19,8 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 
 | File | Why not |
 | --- | --- |
-| `imported/file_event/file_event_macos_emond_launch_daemon.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), so a file_event rule watching anything else could never fire |
-| `imported/file_event/file_event_macos_susp_startup_item_created.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), so a file_event rule watching anything else could never fire |
+| `imported/file_event/file_event_macos_emond_launch_daemon.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
+| `imported/file_event/file_event_macos_susp_startup_item_created.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
 
 ## Index
 
@@ -126,7 +126,7 @@ Detects the chain shape: non-shell parent → shell child → temp-directory exe
 
 The rule fires on the LAST link of the chain (the temp exec) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
-Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now `shell_network_connect`, which ships in monitor: a chain doing both raises one alert here and records a match there, and raises one alert per rule once that rule is promoted.
+The same chain making an outbound connection is `shell_network_connect`, which ships in monitor: a chain doing both raises one alert here and records a match there, and raises one alert per rule once that rule is promoted.
 
 30 seconds is the temporal cap between the shell exec and the temp exec.
 
@@ -139,7 +139,7 @@ Until issue #776 this rule also fired on the same chain making an outbound conne
 ### Limitations
 
 - The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
-- Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.
+- Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa.
 - A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. Skipped chains are counted per rule on the server's detection traces. A shell started directly by launchd is a different case: it has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.
 
 ## shell_network_connect
@@ -163,7 +163,7 @@ Detects the chain shape: non-shell parent → shell child → outbound network_c
 
 The rule fires on the LAST link (the connection) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain completing in ~150ms but straddling a 1-second flush boundary still resolves, because the whole ancestor chain has been ingested by the time the trigger lands.
 
-Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. At this rule's monitor default a chain doing both raises one `suspicious_exec` alert and records a match here; once this rule is promoted the same chain raises one alert per rule.
+`suspicious_exec` covers the same chain executing a binary from a temp directory. At this rule's monitor default a chain doing both raises one `suspicious_exec` alert and records a match here; once this rule is promoted the same chain raises one alert per rule.
 
 30 seconds is the temporal cap between the shell exec and the connection.
 
@@ -176,7 +176,7 @@ Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-d
 
 - The window bounds how long after the shell exec a connection still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
 - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not fire; a lookup to a publicly routable resolver still does.
-- Exclusions saved against `suspicious_exec` before the split (issue #776) do not apply here, because exclusions are keyed by rule id. Re-add any that should silence this shape too.
+- Exclusions are keyed by rule id, so one saved against `suspicious_exec` does not silence this rule on the same parent, and vice versa. Add one to each rule to silence a parent on both shapes.
 - A shell started directly by launchd has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.
 
 ## persistence_launchagent
@@ -236,7 +236,7 @@ The matching dylib path is redacted in alert text (a sensitive payload location)
 
 ### Limitations
 
-- Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not, and never was despite earlier wording here: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records (issue #791). Capturing the environment is tracked as issue #862.
+- Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records. Capturing the environment is tracked as issue #862.
 - DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.
 
 ## shell_from_office
@@ -391,9 +391,8 @@ The rule reads renames as well as writes, so an attacker who writes a temp file 
 
 ### Limitations
 
-- Truncation and deletion are not detected: `: > /etc/sudoers` destroys the policy and emits nothing at all, because open(O_TRUNC) is a different kernel path from the CREATE/WRITE/RENAME this rule reads. Tracked as #934.
+- Truncation and deletion are not reported by this rule, which reads CREATE/WRITE/RENAME: emptying or deleting a sudoers file is reported by `sudoers_destroyed`.
 - A rename whose destination sudo will load fires whoever performed it, so an administrator committing a legitimate visudo edit of a /etc/sudoers.d/ fragment is reported alongside an attacker promoting a file into place. From the endpoint's view the two are the same operation on the same path, and the rule deliberately does not filter on platform-binary status (see the description). Operators tune with a path-glob exclusion on the writer.
-- On an agent predating #301, which sends real open(2) flags, a writer that opens a sudoers file write-mode with no content-changing flag and then writes is no longer reported. #801 moved the lock-versus-modification decision into the field supplier, which does not distinguish writers, where the rule's own suppression named sudo alone. sudo's own lock is still not an alert, and no agent shipping today can produce either shape.
 
 ## sudoers_destroyed
 

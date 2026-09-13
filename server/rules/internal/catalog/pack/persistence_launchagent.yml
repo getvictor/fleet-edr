@@ -21,7 +21,7 @@ logsource:
   category: process_creation
 detection:
   # The launchctl binaries whose invocation this rule is about. Matched with |re rather than a plain value or a list because a
-  # plain Sigma value folds case, while the Go rule this replaces compared against an exact set.
+  # plain Sigma value folds case, and the match is meant to be exact.
   selection_binary:
     Image|re: '^(/bin/launchctl|/usr/bin/launchctl)$'
   # The subcommands that actually register a job. `launchctl list` or `print` naming a plist path is not persistence, which is why
@@ -32,7 +32,7 @@ detection:
   # The target must be a LaunchAgent plist, and it must be an ARGUMENT rather than anywhere in the command line.
   # CommandArguments holds the operands after the subcommand, and Sigma matches a list-valued field when any element does, which is
   # exactly the question the rule asks. Case-insensitive here deliberately: the path is a filesystem path on a case-insensitive
-  # volume, and the Go regexp this replaces carried (?i) for the same reason.
+  # volume.
   selection_target:
     CommandArguments|re: '(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$'
   condition: selection_binary and selection_subcommand and selection_target
