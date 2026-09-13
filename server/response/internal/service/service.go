@@ -190,6 +190,12 @@ func (s *Service) UndeliverableByHost(ctx context.Context, hostIDs []string) (ma
 	return s.store.UndeliverableByHost(ctx, hostIDs, time.Now().Add(-api.UndeliverableWindow))
 }
 
+// LatestOfType returns each host's most recently queued command of commandType. A pass-through: which command counts as latest (the
+// highest id, the order commands were queued in) is the store's query.
+func (s *Service) LatestOfType(ctx context.Context, commandType string, hostIDs []string) (map[string]api.Command, error) {
+	return s.store.LatestOfType(ctx, commandType, hostIDs)
+}
+
 // validTargetStatus reports whether the agent-supplied status is a legal target for an UpdateStatus call. pending is rejected here
 // because the agent must transition forward.
 func validTargetStatus(s api.Status) bool {

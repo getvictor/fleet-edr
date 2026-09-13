@@ -14,7 +14,8 @@ import "context"
 //     fan-out time, via a method-value closure;
 //   - cmd/main: UndeliverableByHost, handed to the detection context
 //     so host health can report a host that is not taking commands
-//     (issue #732).
+//     (issue #732), and LatestOfType, handed to the rules context so
+//     the watched-path push can find hosts that missed a set (#998).
 //
 // Endpoint consumes the single-row Insert and rules consumes the
 // batched InsertBatch as method values satisfying their closure
@@ -56,4 +57,9 @@ type Service interface {
 	// the OTel gauge it was written for, and could not have answered this question anyway, since "is THIS host taking commands" is
 	// not recoverable from a total.
 	UndeliverableByHost(ctx context.Context, hostIDs []string) (map[string]Undeliverable, error)
+
+	// LatestOfType returns, for each of hostIDs, that host's most recently queued command of commandType. Hosts with none are absent.
+	// The watched-path push consumes it to find hosts whose last command did not carry the current set, or never reached them (issue
+	// #998).
+	LatestOfType(ctx context.Context, commandType string, hostIDs []string) (map[string]Command, error)
 }

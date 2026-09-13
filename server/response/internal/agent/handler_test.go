@@ -342,3 +342,8 @@ func TestHandleUpdate_BodyCap(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
+
+func (f fakeService) LatestOfType(context.Context, string, []string) (map[string]api.Command, error) {
+	// Only the watched-path catch-up in the rules context reads this (issue #998).
+	panic("fakeService.LatestOfType must not be called from the agent handler")
+}

@@ -384,3 +384,8 @@ func TestHandleCancel(t *testing.T) {
 		})
 	}
 }
+
+func (fakeService) LatestOfType(context.Context, string, []string) (map[string]api.Command, error) {
+	// Only the watched-path catch-up in the rules context reads this (issue #998).
+	panic("fakeService.LatestOfType must not be called from the operator handler")
+}
