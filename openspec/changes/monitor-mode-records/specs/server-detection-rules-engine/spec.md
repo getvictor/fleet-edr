@@ -2,7 +2,9 @@
 
 ### Requirement: Monitor-mode matches are kept as records
 
-A finding from a rule that resolves to `monitor` for its host SHALL be persisted as a monitor record, carrying the same context an alert carries: the host, the rule, the severity, the title, the description, the linked process where there is one, the technique identifiers, and the triggering events with their evidence copies. The daily monitor-match counter SHALL continue to count the match as it did before. A count alone cannot tell an operator whether a rule's matches are benign, and that judgement is what promoting a rule turns on.
+A finding from a detection rule that resolves to `monitor` for its host SHALL be persisted as a monitor record, carrying the same context an alert carries: the host, the rule, the severity, the title, the description, the linked process where there is one, the technique identifiers, and the triggering events with their evidence copies. The daily monitor-match counter SHALL continue to count the match as it did before. A count alone cannot tell an operator whether a rule's matches are benign, and that judgement is what promoting a rule turns on.
+
+A rule that declares itself a health signal SHALL NOT keep monitor records; its match in monitor mode is counted and nothing else. Out of monitor mode its findings are recorded as host health episodes rather than alerts, so a monitor record of one would put an operational fault in the alert store that route exists to keep it out of.
 
 A monitor record SHALL NOT be an alert. It SHALL NOT be delivered to any webhook destination, SHALL NOT be counted as a created alert, and SHALL NOT be triaged: a request to change its status SHALL be refused, because a monitor record has not been triaged and a status write would restart its retention clock. A finding from a rule that resolves to `alert` SHALL raise an alert as before and SHALL NOT also be kept as a monitor record.
 
@@ -18,6 +20,12 @@ Monitor records SHALL be deleted once they are older than a monitor-record reten
 - **WHEN** an event it matches is evaluated for that host
 - **THEN** a monitor record is persisted carrying the rule, host, severity, title, description, process link, techniques, and triggering events
 - **AND** no alert is persisted, and the match is counted as before
+
+#### Scenario: A health-signal rule in monitor mode keeps no record
+
+- **GIVEN** a rule that declares itself a health signal, resolved to `monitor` for a host
+- **WHEN** a finding from it is evaluated
+- **THEN** no monitor record is persisted, and the match is counted
 
 #### Scenario: An alert-mode match is not also kept as a monitor record
 

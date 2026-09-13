@@ -62,6 +62,8 @@ func TestEngine_MonitorFindingIsKeptAsAMonitorRecord(t *testing.T) {
 	require.Len(t, tally, 1, "and the match is still counted")
 }
 
+// spec:server-detection-rules-engine/monitor-mode-matches-are-kept-as-records/a-health-signal-rule-in-monitor-mode-keeps-no-record
+//
 // TestEngine_MonitorHealthRuleKeepsNoRecord: a health-signal rule in monitor mode is counted and keeps no record. Its findings are
 // host health episodes when it records anything (issue #778), so a monitor record would put an operational fault in the alerts table.
 func TestEngine_MonitorHealthRuleKeepsNoRecord(t *testing.T) {

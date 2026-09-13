@@ -657,6 +657,24 @@ func TestHandleGetAlert(t *testing.T) {
 		assert.Len(t, ids, 2)
 	})
 
+	// spec:server-rest-api/alert-detail-with-linked-event-ids/the-detail-of-a-monitor-record-reports-its-disposition
+	//
+	// The detail endpoint serves monitor records too (issue #994), and the disposition is how a client knows not to offer triage on one.
+	t.Run("a monitor record's detail reports its disposition", func(t *testing.T) {
+		t.Parallel()
+		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
+			return api.Alert{HostID: "host-a", RuleID: "r", Disposition: api.AlertDispositionMonitor}, []string{"evt-1"}, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/alerts/42")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var parsed map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+		assert.Equal(t, "monitor", parsed["disposition"])
+		assert.Equal(t, []any{"evt-1"}, parsed["event_ids"])
+	})
+
 	// spec:server-detection-rules-engine/alert-evidence-is-self-contained/evidence-survives-event-archive-expiry
 	t.Run("happy path includes self-contained event payloads", func(t *testing.T) {
 		t.Parallel()
