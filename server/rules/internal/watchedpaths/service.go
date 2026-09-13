@@ -108,7 +108,9 @@ func (s *Service) fanout(ctx context.Context, set api.WatchedPathSet) ReplaceRes
 	return result
 }
 
-func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, reason string, previous api.WatchedPathSet, result ReplaceResult) {
+func (s *Service) recordAudit(
+	ctx context.Context, actor *identityapi.Actor, reason string, previous api.WatchedPathSet, result ReplaceResult,
+) {
 	set := result.Set
 	payload := map[string]any{
 		"reason":           reason,

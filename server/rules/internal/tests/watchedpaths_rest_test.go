@@ -67,7 +67,8 @@ func TestWatchedPathsREST_ReplacesTheSetPushesItAndAuditsIt(t *testing.T) {
 	r := newAppControlRig(t, hosts)
 	emond := rulesapi.WatchedPath{Path: "/etc/emond.d/rules/", Match: rulesapi.WatchedPathPrefix}
 
-	first := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "watch startup items"})
+	first := r.do(t, http.MethodPut, watchedPathsRoute,
+		map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "watch startup items"})
 	first.Body.Close()
 	require.Equal(t, http.StatusOK, first.StatusCode)
 
@@ -94,8 +95,8 @@ func TestWatchedPathsREST_ReplacesTheSetPushesItAndAuditsIt(t *testing.T) {
 	// decode.
 	commands := r.inserter.snapshot()
 	require.Len(t, commands, 6, "two changes, three hosts each")
-	wantPayload := fmt.Sprintf(
-		`{"version":2,"epoch":%d,"paths":[{"path":"/etc/emond.d/rules/","match":"prefix"},{"path":"/Library/StartupItems/","match":"prefix"}]}`,
+	wantPayload := fmt.Sprintf(`{"version":2,"epoch":%d,"paths":[`+
+		`{"path":"/etc/emond.d/rules/","match":"prefix"},{"path":"/Library/StartupItems/","match":"prefix"}]}`,
 		stored.UpdatedAt.UnixMicro())
 	gotHosts := make([]string, 0, 3)
 	for _, c := range commands[3:] {
@@ -269,7 +270,8 @@ func TestWatchedPathsREST_EnforcesReadAndWritePermissions(t *testing.T) {
 func TestWatchedPathsREST_EpochAdvancesPastAClockThatWentBack(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
-	first := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "first"})
+	first := r.do(t, http.MethodPut, watchedPathsRoute,
+		map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "first"})
 	first.Body.Close()
 	_, err := r.db.ExecContext(t.Context(), `UPDATE watched_path_set SET updated_at = NOW(6) + INTERVAL 1 DAY WHERE id = 1`)
 	require.NoError(t, err)

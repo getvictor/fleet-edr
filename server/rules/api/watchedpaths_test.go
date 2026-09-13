@@ -45,6 +45,11 @@ func TestValidateWatchedPaths_RefusesWhatItShouldNotWatch(t *testing.T) {
 		{"NUL, which would truncate the path the kernel receives", []WatchedPath{prefix("/Users/\x00ignored/")}, "control character"},
 		{"delete character", []WatchedPath{literal("/etc/hosts\x7f")}, "control character"},
 		{"too long", []WatchedPath{literal("/" + strings.Repeat("a", MaxWatchedPathBytes))}, "longer than"},
+		{
+			"fits as written but not in its /private spelling",
+			[]WatchedPath{literal("/etc/" + strings.Repeat("a", MaxWatchedPathBytes-len("/etc/")))},
+			"longer than",
+		},
 		{"literal ending in a slash", []WatchedPath{literal("/Library/StartupItems/")}, `must not end in "/"`},
 		{"prefix without a trailing slash", []WatchedPath{prefix("/Library/StartupItems")}, `must end in "/"`},
 		{"root prefix", []WatchedPath{prefix("/")}, "segment"},
@@ -121,7 +126,8 @@ func TestSetWatchedPathsPayload_JSONRoundTrip(t *testing.T) {
 // TestSetWatchedPathsPayload_WireShape pins the literal keys the extension decodes (WatchedPaths.swift).
 func TestSetWatchedPathsPayload_WireShape(t *testing.T) {
 	t.Parallel()
-	b, err := json.Marshal(SetWatchedPathsPayload{Version: 3, Epoch: 7, Paths: []WatchedPath{{Path: "/etc/emond.d/", Match: WatchedPathPrefix}}})
+	payload := SetWatchedPathsPayload{Version: 3, Epoch: 7, Paths: []WatchedPath{{Path: "/etc/emond.d/", Match: WatchedPathPrefix}}}
+	b, err := json.Marshal(payload)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"version":3,"epoch":7,"paths":[{"path":"/etc/emond.d/","match":"prefix"}]}`, string(b))
 }

@@ -77,7 +77,8 @@ var firmlinkedRoots = []string{"/etc", "/tmp", "/var"}
 // ValidateWatchedPaths checks a proposed set. It is the one place the set is validated: the agent checks only the envelope and the
 // extension applies what it is given.
 //
-// A path must be absolute, clean (no empty, "." or ".." segment), within MaxWatchedPathBytes, and free of ASCII control characters
+// A path must be absolute, clean (no empty, "." or ".." segment), within MaxWatchedPathBytes in its /private spelling (the one the
+// extension mutes and the kernel reports for /etc, /tmp and /var), and free of ASCII control characters
 // (NUL included, which would truncate the path the kernel receives). A prefix
 // names a directory, so it ends in "/", and it must lie below a top-level directory: a prefix such as "/Users/" or "/Library/" would
 // put every write under that tree on the wire, which is the firehose ADR-0008 removed. A literal names a file, so it does not end in
@@ -105,8 +106,9 @@ func validateWatchedPath(p WatchedPath) error {
 	switch {
 	case !strings.HasPrefix(p.Path, "/"):
 		return errors.New("the path must be absolute")
-	case len(p.Path) > MaxWatchedPathBytes:
-		return fmt.Errorf("the path is longer than %d bytes", MaxWatchedPathBytes)
+	case len(privateSpelling(p.Path)) > MaxWatchedPathBytes:
+		// The extension also mutes a firmlinked path in its /private spelling, the one the kernel reports, which is the longer.
+		return fmt.Errorf("the path is longer than %d bytes in its /private spelling", MaxWatchedPathBytes)
 	case strings.ContainsFunc(p.Path, func(r rune) bool { return r < 0x20 || r == 0x7f }):
 		return errors.New("the path contains an ASCII control character")
 	}
@@ -131,6 +133,16 @@ func validateWatchedPath(p WatchedPath) error {
 		return fmt.Errorf("unknown match %q, want %q or %q", p.Match, WatchedPathLiteral, WatchedPathPrefix)
 	}
 	return nil
+}
+
+// privateSpelling returns a path under /etc, /tmp or /var in its /private form, and any other path unchanged.
+func privateSpelling(path string) string {
+	for _, root := range firmlinkedRoots {
+		if path == root || strings.HasPrefix(path, root+"/") {
+			return "/private" + path
+		}
+	}
+	return path
 }
 
 // rootLinked returns a path under /private/etc, /private/tmp or /private/var in its root-linked form, and any other path unchanged.

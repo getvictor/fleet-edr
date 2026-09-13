@@ -994,7 +994,8 @@ paths:
 
         The set is refused, and nothing stored or queued, when it has more than
         `max_paths` entries or any entry whose path is not absolute, has an
-        empty, `.` or `..` segment, is longer than 1024 bytes, or contains an
+        empty, `.` or `..` segment, is longer than 1024 bytes in its `/private`
+        spelling, or contains an
         ASCII control character (NUL included); whose `match` is not `literal` or `prefix`; that is
         a `literal` ending in `/`, a `prefix` not ending in `/`, or a `prefix`
         naming a top-level directory (judged through `/private` for `/etc`,

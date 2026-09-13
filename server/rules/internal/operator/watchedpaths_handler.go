@@ -43,7 +43,8 @@ func (h *DetectionConfigHandler) SetWatchedPaths(svc watchedPathsService) {
 
 func (h *DetectionConfigHandler) handleGetWatchedPaths(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionDetectionConfigRead, identityapi.Resource{Type: "detection_config"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionDetectionConfigRead, identityapi.Resource{Type: "detection_config"}) {
 		return
 	}
 	set, err := h.watchedPaths.Get(ctx)
@@ -59,7 +60,8 @@ func (h *DetectionConfigHandler) handleGetWatchedPaths(w http.ResponseWriter, r 
 
 func (h *DetectionConfigHandler) handleReplaceWatchedPaths(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionDetectionConfigWrite, identityapi.Resource{Type: "detection_config"}) {
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionDetectionConfigWrite, identityapi.Resource{Type: "detection_config"}) {
 		return
 	}
 	var req replaceWatchedPathsRequest

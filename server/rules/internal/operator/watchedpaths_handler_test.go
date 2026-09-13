@@ -61,7 +61,8 @@ func watchedPathsServer(t *testing.T, svc watchedPathsService, withActor bool) *
 
 func TestWatchedPathsHandler_GetReportsTheSetBuiltInPathsAndBound(t *testing.T) {
 	t.Parallel()
-	svc := &fakeWatchedPaths{set: api.WatchedPathSet{Version: 2, Paths: []api.WatchedPath{{Path: "/Library/StartupItems/", Match: "prefix"}}}}
+	set := api.WatchedPathSet{Version: 2, Paths: []api.WatchedPath{{Path: "/Library/StartupItems/", Match: "prefix"}}}
+	svc := &fakeWatchedPaths{set: set}
 	resp := dcDo(t, watchedPathsServer(t, svc, true), http.MethodGet, "/api/v1/detection-config/watched-paths", "")
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -87,8 +88,11 @@ func TestWatchedPathsHandler_ReplaceMapsEachOutcome(t *testing.T) {
 	}{
 		{"stored", nil, http.StatusOK, `"fanout_failed":1`},
 		{"no reason", watchedpaths.ErrReasonRequired, http.StatusBadRequest, "reason is required"},
-		{"invalid set", fmt.Errorf("%w: entry 0 (%q): a prefix must lie below a top-level directory", api.ErrInvalidWatchedPaths, "/Users/"),
-			http.StatusBadRequest, "below a top-level directory"},
+		{
+			"invalid set",
+			fmt.Errorf("%w: entry 0 (%q): a prefix must lie below a top-level directory", api.ErrInvalidWatchedPaths, "/Users/"),
+			http.StatusBadRequest, "below a top-level directory",
+		},
 		{"store failure", errors.New("database unavailable"), http.StatusInternalServerError, "internal error"},
 	}
 	for _, tc := range cases {
@@ -128,7 +132,8 @@ func TestWatchedPathsHandler_ReplaceRejectsABadBodyAndAMissingActor(t *testing.T
 	noList.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, noList.StatusCode)
 
-	noActor := dcDo(t, watchedPathsServer(t, svc, false), http.MethodPut, "/api/v1/detection-config/watched-paths", `{"paths":[],"reason":"r"}`)
+	noActor := dcDo(t, watchedPathsServer(t, svc, false), http.MethodPut, "/api/v1/detection-config/watched-paths",
+		`{"paths":[],"reason":"r"}`)
 	noActor.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, noActor.StatusCode)
 	assert.Nil(t, svc.gotActor, "neither request reaches the service")
