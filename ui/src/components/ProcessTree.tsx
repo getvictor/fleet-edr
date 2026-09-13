@@ -608,7 +608,15 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
 
       {alertDetail && (
         <div className="alert-breadcrumb">
-          <Link to="/alerts" className="alert-breadcrumb__back">&larr; Alerts</Link>
+          {/* A monitor record (issue #994) opens on this same investigation surface, but it was reached from its rule's records
+              rather than from the alert queue, and it is not in that queue, so the way back goes to where it came from. */}
+          {alertDetail.disposition === "monitor" ? (
+            <Link to={`/rules/${encodeURIComponent(alertDetail.rule_id)}/monitor-records`} className="alert-breadcrumb__back">
+              &larr; Monitor records
+            </Link>
+          ) : (
+            <Link to="/alerts" className="alert-breadcrumb__back">&larr; Alerts</Link>
+          )}
           <span className="alert-breadcrumb__sep">/</span>
           <span className="alert-breadcrumb__id">#{String(alertDetail.id)}</span>
           <Badge variant={SEVERITY_VARIANTS[alertDetail.severity] ?? "neutral"}>
@@ -661,15 +669,21 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           </span>
           {/* Status + triage sit in the alert header itself (next to its id/severity/title), the industry-standard place for a
               detection's lifecycle controls, rather than floating on their own row below the description. */}
-          <AlertTriageActions
-            alertId={alertDetail.id}
-            status={alertDetail.status}
-            onStatusChange={(status) => {
-              setLoadedAlert((prev) => (prev ? { ...prev, status } : prev));
-              // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
-              setAlertRefreshKey((k) => k + 1);
-            }}
-          />
+          {/* A monitor record has no lifecycle: nobody was alerted to it and the server refuses a status change on it, so it says what
+              it is where the triage controls would otherwise be, instead of offering buttons that can only fail. */}
+          {alertDetail.disposition === "monitor" ? (
+            <Badge variant="neutral">Monitor record</Badge>
+          ) : (
+            <AlertTriageActions
+              alertId={alertDetail.id}
+              status={alertDetail.status}
+              onStatusChange={(status) => {
+                setLoadedAlert((prev) => (prev ? { ...prev, status } : prev));
+                // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
+                setAlertRefreshKey((k) => k + 1);
+              }}
+            />
+          )}
           {/* Process-optional alerts have no chain to focus, so this generic chain toggle would be a confusing second control
               next to the info bar's widen/collapse button below. Show it only for process-backed alerts. */}
           {!isProcessOptionalAlert && (

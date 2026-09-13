@@ -163,6 +163,17 @@ describe("listAlerts query-string composition", () => {
     expect(url).toContain("limit=25");
   });
 
+  // The monitor records page (issue #994) reaches its rows through these two. Without disposition the server serves alerts, so a
+  // client that dropped it would list alerts under a monitor-records heading.
+  it("forwards disposition and rule_id", async () => {
+    const fetchMock = stubFetch([]);
+    await listAlerts({ disposition: "monitor", rule_id: "proc_creation_macos_curl" });
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("disposition=monitor");
+    expect(url).toContain("rule_id=proc_creation_macos_curl");
+  });
+
   it("emits no query string when no filters are passed", async () => {
     const fetchMock = stubFetch([]);
     await listAlerts();

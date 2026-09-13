@@ -884,6 +884,32 @@ describe("ProcessTreeView alert attribution", () => {
 });
 
 
+// spec:web-ui/monitor-records-are-reachable-from-the-observed-count/a-monitor-record-offers-no-triage
+//
+// A monitor record (issue #994) opens on the alert investigation surface, but it has no lifecycle and the server refuses a status change
+// on it, so the surface must not offer the controls. The alert case alongside proves the controls are there to be removed.
+describe("ProcessTreeView monitor record", () => {
+  it("labels a monitor record and offers no triage, and leads back to its rule's records", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, disposition: "monitor" });
+    const { container } = renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText("Monitor record")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /acknowledge|resolve|reopen/i })).toBeNull();
+    const back = container.querySelector(".alert-breadcrumb__back");
+    expect(back).toHaveAttribute("href", "/rules/privilege_launchd_plist_write/monitor-records");
+    expect(back).toHaveTextContent("Monitor records");
+  });
+
+  it("keeps triage and the Alerts back link for an alert", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, disposition: "alert" });
+    const { container } = renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByRole("button", { name: "Acknowledge" })).toBeVisible();
+    expect(screen.queryByText("Monitor record")).toBeNull();
+    expect(container.querySelector(".alert-breadcrumb__back")).toHaveAttribute("href", "/alerts");
+  });
+});
+
 // The Graph and the Timeline are meant to share one alert focus. The Timeline's scope is keyed on the (pid, pidversion) pair, so
 // a chain whose processes carry no pidversion cannot be scoped and the whole host stream is shown instead. These cover the
 // WIRING: ProcessTreeView deciding which of those two situations it is in and telling the Timeline. Deleting the computation

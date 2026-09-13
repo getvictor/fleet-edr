@@ -724,6 +724,36 @@ describe("DetectionConfig observed column", () => {
     expect(screen.getByTitle(/approximately 4,102 matches on 3 hosts in the last 7 days/)).toBeInTheDocument();
   });
 
+  // spec:web-ui/monitor-records-are-reachable-from-the-observed-count/an-operator-opens-the-records-behind-a-count
+  //
+  // The count is where the promote decision is made, so the records behind it are one link from it (issue #994). Only a rule with a
+  // count gets the link: one with nothing recorded, or whose counts failed to load, would open onto records the column gives no reason
+  // to expect.
+  it("links a counted rule to its monitor records, and no other", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry(),
+        makeRuleEntry({ id: "quiet_rule", doc: { ...makeRuleEntry().doc, title: "Quiet rule" } }),
+      ],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 12, hosts: 1, last_seen: "" }],
+    });
+    renderPage();
+
+    const link = await screen.findByRole("link", { name: "monitor records for suspicious_exec" });
+    expect(link).toHaveAttribute("href", "/rules/suspicious_exec/monitor-records");
+    expect(screen.getByLabelText("no matches recorded for quiet_rule")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "monitor records for quiet_rule" })).toBeNull();
+  });
+
+  it("offers no records link when the counts could not be read", async () => {
+    stubReads({ rules: [makeRuleEntry()] });
+    vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("boom"));
+    renderPage();
+
+    expect(await screen.findByLabelText("match counts unavailable for suspicious_exec")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /monitor records for/ })).toBeNull();
+  });
+
   // The disclosure both abbreviated columns use (issue #902).
   //
   // The gap being closed: the precise figures lived in a native `title`, which opens on POINTER HOVER ONLY. A sighted keyboard

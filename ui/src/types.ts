@@ -289,6 +289,10 @@ export interface Alert {
   techniques?: string[];
   process_id: number;
   status: string;
+  // disposition is "monitor" for a monitor record (issue #994): a match from a rule in monitor mode, kept so it can be read before the
+  // rule is promoted. It is not an alert: it is never notified and cannot be triaged, so a surface showing one must not offer triage.
+  // Optional because a server predating the field omits it, which means every row it serves is an alert.
+  disposition?: "alert" | "monitor";
   created_at: string;
   updated_at: string;
   resolved_at?: string;

@@ -1,0 +1,20 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.monitor-records__rule-id {
+  font-size: $x-small;
+}
+
+.monitor-records__explanation,
+.monitor-records__limit {
+  max-width: 60rem;
+  margin: 0 0 $pad-medium;
+  font-size: $x-small;
+  color: $ui-fleet-black-75;
+}
+
+.monitor-records__origin {
+  font-size: $xx-small;
+  color: $ui-fleet-black-50;
+}
