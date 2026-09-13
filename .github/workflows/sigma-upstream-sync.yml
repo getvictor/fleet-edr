@@ -1,0 +1,189 @@
+name: Sigma upstream sync
+
+# Weekly, and on demand: compare the vendored SigmaHQ macOS corpus (server/rules/internal/catalog/imported) with upstream (issue
+# #1003). When upstream has new, changed or moved macOS rules, the job commits them verbatim to the sigma-sync/upstream branch. It
+# keeps one open tracking issue carrying the report, the catalog test result, and a link that opens the pull request, and closes the
+# issue once the corpus matches again. A rule withdrawn upstream changes no file, so it is reported in the issue and never deleted.
+# The job never pushes to main and never merges: a rule change is detection content and gets a human read.
+#
+# The pull request is opened by a person from that link, not by this job. This repository does not let GitHub Actions create pull
+# requests, and a pull request opened with the workflow's token would not start CI, which is the check that makes a person update
+# the pinned import counts after reading a new rule.
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: sigma-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # push the sync branch
+      issues: write # open, update or close the tracking issue
+      pull-requests: read # find an open pull request from the sync branch
+    env:
+      SYNC_BRANCH: sigma-sync/upstream
+      ISSUE_TITLE: Vendored Sigma rules differ from upstream
+    steps:
+      # Always main, whichever ref a manual run was started from: the sync branch is built on this checkout, so another ref would
+      # carry its own commits into it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Compare with upstream and bring the corpus up to date
+        id: sync
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Built rather than run with `go run`, which exits 1 for any failure and would hide exit status 3, "differs".
+          go build -o "$RUNNER_TEMP/sigma-sync" ./tools/sigma-sync
+          set +e
+          "$RUNNER_TEMP/sigma-sync" -report "$RUNNER_TEMP/report.md"
+          status=$?
+          set -e
+          case "$status" in
+            0) echo "differs=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            3) echo "differs=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$status" ;;
+          esac
+          "$RUNNER_TEMP/sigma-sync" -apply -report "$RUNNER_TEMP/report.md"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate the rule docs and run the catalog tests
+        id: tests
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          # Neither may stop the job. A new rule is expected to fail the tests, since TestLoadImported_TheWholeUpstreamCorpus pins the
+          # import and refusal counts and a new runnable rule needs a regression fixture; and a rule that stops the corpus loading
+          # fails the generators too. Either way the branch is still pushed and the output goes into the tracking issue.
+          set +e
+          out="$RUNNER_TEMP/tests.txt"
+          # The generated rule reference and ATT&CK layer are checked against the catalog in CI, so they are regenerated with it.
+          { go run ./tools/gen-rule-docs && go run ./tools/gen-attack-layer; } > "$out" 2>&1
+          generated=$?
+          if [ "$generated" -ne 0 ]; then
+            # A generator that failed may have truncated its output already, so the branch keeps the committed files instead.
+            git checkout -- docs/detection-rules.md docs/attack-navigator-layer.json
+          fi
+          go test ./server/rules/internal/catalog/ >> "$out" 2>&1
+          tested=$?
+          if [ "$generated" -ne 0 ] || [ "$tested" -ne 0 ]; then
+            echo "exit=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the sync branch
+        id: push
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          remote="https://github.com/$GITHUB_REPOSITORY.git"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          header="http.https://github.com/.extraheader=AUTHORIZATION: basic $auth"
+          # The branch as it is before the open pull request check below. The push replaces only that, so a pull request opened and
+          # pushed to after this read makes this run fail rather than erase the reviewer's commit.
+          seen="$(git -c "$header" ls-remote "$remote" "refs/heads/$SYNC_BRANCH" | cut -f1)"
+          # A pull request already open from the branch is a person's review in progress, possibly with their commits on it, so it
+          # is left alone. Upstream changes made since reach the branch in the first run after it merges.
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --state open --json url --jq '.[0].url // ""')"
+          if [ -n "$open_pr" ]; then
+            echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$SYNC_BRANCH"
+          git add server/rules/internal/catalog/imported docs/detection-rules.md docs/attack-navigator-layer.json
+          git commit -m "Sync vendored Sigma rules with upstream"
+          git -c "$header" push --force-with-lease="refs/heads/$SYNC_BRANCH:$seen" "$remote" "HEAD:refs/heads/$SYNC_BRANCH"
+
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIFFERS: ${{ steps.sync.outputs.differs }}
+          CHANGED: ${{ steps.sync.outputs.changed }}
+          TEST_EXIT: ${{ steps.tests.outputs.exit }}
+          OPEN_PR: ${{ steps.push.outputs.open_pr }}
+        run: |
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq 'map(select(.title == env.ISSUE_TITLE)) | .[0].number // ""')"
+          if [ "$DIFFERS" != "true" ]; then
+            echo "The vendored corpus matches upstream."
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --comment "The vendored corpus matches SigmaHQ again."
+            fi
+            exit 0
+          fi
+
+          # The failure lines, or the end of the output when there are none, as for a build error or a panic (go test prints a bare FAIL
+          # for those, so it is not matched). Written to a file and read whole, so a long match cannot end the step on a broken pipe.
+          failures="$RUNNER_TEMP/failures.txt"
+          if [ "$TEST_EXIT" = "1" ]; then
+            tests="$RUNNER_TEMP/tests.txt"
+            grep -E '^\s*(--- FAIL|Error:|Messages:|panic:)' "$tests" > "$failures" || tail -n 30 "$tests" > "$failures"
+          fi
+
+          body="$RUNNER_TEMP/issue.md"
+          {
+            cat "$RUNNER_TEMP/report.md"
+            echo
+            echo "## Next step"
+            echo
+            if [ "$CHANGED" != "true" ]; then
+              echo "No vendored file changes: upstream withdrew a rule this repository still vendors. Decide whether to remove it, and"
+              echo "record why. This issue stays open until the corpus matches upstream."
+            elif [ -n "$OPEN_PR" ]; then
+              echo "A pull request from \`$SYNC_BRANCH\` is already open, $OPEN_PR, and this run left it alone. Changes upstream"
+              echo "made since it was opened reach the branch in the first run after it merges. The test result below is for this"
+              echo "run's snapshot, not the branch."
+            else
+              echo "[Open the pull request](https://github.com/$GITHUB_REPOSITORY/compare/main...$SYNC_BRANCH?expand=1) from"
+              echo "\`$SYNC_BRANCH\`, which this run updated. Opening it yourself starts CI."
+            fi
+            if [ "$CHANGED" = "true" ]; then
+              echo
+              echo "## Catalog tests"
+              echo
+              if [ "$TEST_EXIT" = "0" ]; then
+                echo "The rule docs regenerate and \`go test ./server/rules/internal/catalog/\` passes."
+              else
+                echo "Regenerating the rule docs or \`go test ./server/rules/internal/catalog/\` fails. A test failure is"
+                echo "expected when a rule is added or removed: after reading the rule, update the pinned counts in"
+                echo "\`TestLoadImported_TheWholeUpstreamCorpus\` and add a positive regression fixture for a new runnable rule. A"
+                echo "generator failure means an upstream rule stops the corpus loading. The output:"
+                echo
+                echo '```text'
+                sed -n '1,60p' "$failures"
+                echo '```'
+              fi
+            fi
+            echo
+            echo "Updated by the [Sigma upstream sync run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          } > "$body"
+
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$body"
+          fi
