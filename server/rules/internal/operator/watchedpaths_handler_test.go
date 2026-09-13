@@ -121,22 +121,28 @@ func TestWatchedPathsHandler_GetFailureIs500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
-func TestWatchedPathsHandler_ReplaceRejectsABadBodyAndAMissingActor(t *testing.T) {
+func TestWatchedPathsHandler_ReplaceRefusesBeforeTheService(t *testing.T) {
 	t.Parallel()
-	svc := &fakeWatchedPaths{}
-	bad := dcDo(t, watchedPathsServer(t, svc, true), http.MethodPut, "/api/v1/detection-config/watched-paths", `{`)
-	bad.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, bad.StatusCode)
-
-	noList := dcDo(t, watchedPathsServer(t, svc, true), http.MethodPut, "/api/v1/detection-config/watched-paths", `{"reason":"r"}`)
-	noList.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, noList.StatusCode)
-
-	noActor := dcDo(t, watchedPathsServer(t, svc, false), http.MethodPut, "/api/v1/detection-config/watched-paths",
-		`{"paths":[],"reason":"r"}`)
-	noActor.Body.Close()
-	assert.Equal(t, http.StatusInternalServerError, noActor.StatusCode)
-	assert.Nil(t, svc.gotActor, "neither request reaches the service")
+	cases := []struct {
+		name       string
+		withActor  bool
+		body       string
+		wantStatus int
+	}{
+		{"malformed JSON", true, `{`, http.StatusBadRequest},
+		{"no paths list", true, `{"reason":"r"}`, http.StatusBadRequest},
+		{"no actor on the context", false, `{"paths":[],"reason":"r"}`, http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeWatchedPaths{}
+			resp := dcDo(t, watchedPathsServer(t, svc, tc.withActor), http.MethodPut, "/api/v1/detection-config/watched-paths", tc.body)
+			resp.Body.Close()
+			assert.Equal(t, tc.wantStatus, resp.StatusCode)
+			assert.Nil(t, svc.gotActor, "the request does not reach the service")
+		})
+	}
 }
 
 // Without the command queue and host list the push needs, the routes are not offered at all rather than failing on use.

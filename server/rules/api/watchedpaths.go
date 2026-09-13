@@ -68,8 +68,8 @@ const MaxWatchedPaths = 32
 // longest path it can mute is one byte shorter.
 const MaxWatchedPathBytes = 1023
 
-// MaxWatchedPathSetBytes bounds the whole set as the server encodes it into a command payload. The fan-out repeats that payload on every
-// row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet the
+// MaxWatchedPathSetBytes bounds the whole set as the server encodes it into a command payload. The fan-out repeats that payload on
+// every row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet the
 // server is designed to work under. Real watched paths are short; the bound only bites on a set of many maximum-length paths, which
 // MaxWatchedPaths and MaxWatchedPathBytes alone would allow at over 30 KiB.
 const MaxWatchedPathSetBytes = 8 * 1024

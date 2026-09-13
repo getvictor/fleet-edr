@@ -161,14 +161,20 @@ func TestWatchedPathsREST_RefusesARequestWithoutAList(t *testing.T) {
 	put := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "add"})
 	put.Body.Close()
 
-	for _, body := range []map[string]any{
-		{"reason": "no list"},
-		{"path": []rulesapi.WatchedPath{}, "reason": "misspelled field"},
-		{"paths": nil, "reason": "null list"},
-	} {
-		resp := r.do(t, http.MethodPut, watchedPathsRoute, body)
-		resp.Body.Close()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "%v", body)
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"omitted", map[string]any{"reason": "no list"}},
+		{"misspelled", map[string]any{"path": []rulesapi.WatchedPath{}, "reason": "misspelled field"}},
+		{"null", map[string]any{"paths": nil, "reason": "null list"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := r.do(t, http.MethodPut, watchedPathsRoute, tc.body)
+			resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
 	}
 
 	stored := r.watchedPaths(t)

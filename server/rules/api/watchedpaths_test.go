@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -166,4 +167,62 @@ func TestValidateWatchedPaths_BoundsTheEncodedSetSize(t *testing.T) {
 		{Path: "/Library/b/" + strings.Repeat("<", 1000), Match: WatchedPathLiteral},
 	}
 	require.ErrorContains(t, ValidateWatchedPaths(escaped), "at most 8192")
+}
+
+// TestWatchedPathSet_JSONRoundTrip pins the REST shape of the stored set: every field survives Marshal then Unmarshal, including an
+// absent update time and actor, which the seeded set reports.
+func TestWatchedPathSet_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		want := WatchedPathSet{
+			Version: rapid.Int64().Draw(t, "version"),
+			Paths: rapid.SliceOfN(rapid.Custom(func(t *rapid.T) WatchedPath {
+				return WatchedPath{
+					Path:  rapid.String().Draw(t, "path"),
+					Match: rapid.SampledFrom([]WatchedPathMatch{WatchedPathLiteral, WatchedPathPrefix}).Draw(t, "match"),
+				}
+			}), 0, 8).Draw(t, "paths"),
+			UpdatedBy: rapid.String().Draw(t, "updated_by"),
+		}
+		if rapid.Bool().Draw(t, "updated") {
+			at := time.UnixMicro(rapid.Int64Range(0, 1<<50).Draw(t, "updated_at")).UTC()
+			want.UpdatedAt = &at
+		}
+		b, err := json.Marshal(want)
+		require.NoError(t, err)
+		var got WatchedPathSet
+		require.NoError(t, json.Unmarshal(b, &got))
+		if want.Paths == nil {
+			want.Paths = []WatchedPath{}
+		}
+		if got.Paths == nil {
+			got.Paths = []WatchedPath{}
+		}
+		assert.Equal(t, want, got)
+	})
+}
+
+// FuzzValidateWatchedPaths feeds arbitrary entries through the validator. It must not panic, and an entry it accepts must meet the rules
+// the extension relies on: absolute, within the byte bound in its /private spelling, and free of ASCII control characters.
+func FuzzValidateWatchedPaths(f *testing.F) {
+	for _, seed := range []struct{ path, match string }{
+		{"/Library/StartupItems/", "prefix"},
+		{"/etc/emond.d/rules/rule.plist", "literal"},
+		{"/Users/", "prefix"},
+		{"/private/etc/../x", "literal"},
+		{"/Users/\x00ignored/", "prefix"},
+		{"", "literal"},
+	} {
+		f.Add(seed.path, seed.match)
+	}
+	f.Fuzz(func(t *testing.T, path, match string) {
+		entry := WatchedPath{Path: path, Match: WatchedPathMatch(match)}
+		if ValidateWatchedPaths([]WatchedPath{entry}) != nil {
+			return
+		}
+		assert.True(t, strings.HasPrefix(path, "/"))
+		assert.LessOrEqual(t, len(privateSpelling(path)), MaxWatchedPathBytes)
+		assert.False(t, strings.ContainsFunc(path, func(r rune) bool { return r < 0x20 || r == 0x7f }))
+		assert.Contains(t, []WatchedPathMatch{WatchedPathLiteral, WatchedPathPrefix}, entry.Match)
+	})
 }
