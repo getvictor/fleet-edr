@@ -289,6 +289,7 @@ seed_oidc 1
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
     tests/qa/detection-tuning-cost-column.spec.ts \
+    tests/qa/detection-tuning-exclusion-value-wrap.spec.ts \
     tests/qa/rule-detail-mode-row.spec.ts \
     tests/qa/host-health-components.spec.ts \
     tests/qa/detection-config-fixture.spec.ts \
