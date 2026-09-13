@@ -92,11 +92,13 @@ enum WatchedPaths {
     /// The server is where a set is validated, but a mute is applied here, and what reaches the kernel is a C string: a path carrying a
     /// NUL, or `..` segments, can read as a deep path to a component count while muting a top-level one, and a top-level prefix puts
     /// every write under that tree on the wire, the firehose ADR-0008 removed after it delayed detection by about 12 minutes. A server
-    /// bug should not be able to bring that back, so every rule the server applies to an entry is applied again: an absolute path
-    /// within maxPathBytes, free of control characters (NUL included), with no empty, `.` or `..` segment; a literal that does not end
-    /// in "/"; and a prefix that ends in "/" and lies below a top-level directory, judged through /private for /etc, /tmp and /var.
+    /// bug should not be able to bring that back, so every rule the server applies to an entry is applied again: an absolute path whose
+    /// /private spelling fits within maxPathBytes, free of ASCII control characters (NUL included), with no empty, `.` or `..` segment;
+    /// a literal that does not end in "/"; and a prefix that ends in "/" and lies below a top-level directory, judged through /private
+    /// for /etc, /tmp and /var.
     static func isAcceptable(_ path: String, _ match: WatchedPathMatch) -> Bool {
-        guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes,
+        // Every spelling the client mutes must fit, and the /private one of a firmlinked path is the longer.
+        guard path.hasPrefix("/"), spellings(of: path).allSatisfy({ $0.utf8.count <= maxPathBytes }),
               !path.unicodeScalars.contains(where: { $0.value < firstPrintable || $0.value == deleteCharacter }) else {
             return false
         }

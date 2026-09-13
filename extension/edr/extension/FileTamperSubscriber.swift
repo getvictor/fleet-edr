@@ -123,9 +123,10 @@ final class FileTamperSubscriber: Sendable {
     /// reconcile mutes and unmutes the difference between the applied targets and those the current pushed set calls for. Runs on
     /// applyQueue.
     ///
-    /// Mutes come first and unmutes only follow when every mute succeeded. A mute that fails leaves the client watching everything it
-    /// watched before this update, the paths the update drops included, rather than dropping them while the paths meant to replace
-    /// them are missing; the failed target is not recorded as applied, so the next update tries it again.
+    /// Mutes come first and unmutes only follow when every mute succeeded. A mute that fails leaves this process watching everything it
+    /// watched before the update, the paths the update drops included, rather than dropping them while the paths meant to replace them
+    /// are missing; the failed target is not recorded as applied, so the next update tries it again. A restarted extension starts from
+    /// the persisted set instead (#1018).
     ///
     /// A built-in path that fails to mute is fatal, as it was when the set was fixed: after inversion that path would silently go
     /// unobserved, and the shipped sudoers rules would go blind with it. A pushed path that fails is logged instead, because the set
