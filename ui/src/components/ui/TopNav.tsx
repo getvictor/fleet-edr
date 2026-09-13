@@ -14,10 +14,12 @@ interface TopNavProps {
   // When the session was minted via the break-glass flow, a small badge
   // signals that the operator is NOT in a normal SSO session.
   readonly authMethod?: string;
+  // roles are the session's role ids, named in the account menu.
+  readonly roles?: readonly string[];
   readonly onLogout?: () => void;
 }
 
-export function TopNav({ user, authMethod, onLogout }: TopNavProps) {
+export function TopNav({ user, authMethod, roles, onLogout }: TopNavProps) {
   const location = useLocation();
   const can = useCan();
   // Hide nav entries the operator's role does not confer. An entry with no gating
@@ -51,7 +53,7 @@ export function TopNav({ user, authMethod, onLogout }: TopNavProps) {
           })}
         </ul>
         {user && onLogout && (
-          <AccountMenu user={user} authMethod={authMethod} onLogout={onLogout} />
+          <AccountMenu user={user} authMethod={authMethod} roles={roles} onLogout={onLogout} />
         )}
       </div>
     </nav>

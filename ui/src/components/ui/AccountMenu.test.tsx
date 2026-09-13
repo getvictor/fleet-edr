@@ -109,7 +109,8 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
   });
 
-  it("shows a break-glass badge for a local_password session", () => {
+  // spec:web-ui/the-account-menu-names-the-session-s-role-and-sign-in-method/an-sso-operator-sees-their-role-and-sign-in-method
+  it("names the session's roles and its sign-in method inside the dropdown only", () => {
     function Wrapper({ children }: { children: ReactNode }) {
       return (
         <MemoryRouter>
@@ -118,9 +119,51 @@ describe("AccountMenu", () => {
       );
     }
     render(
-      <AccountMenu user={{ id: 1, email: "bg@fleetdm.com" }} authMethod="local_password" onLogout={vi.fn()} />,
+      <AccountMenu user={{ id: 1, email: "sa@fleetdm.com" }} authMethod="oidc" roles={["senior_analyst", "auditor"]} onLogout={vi.fn()} />,
       { wrapper: Wrapper },
     );
+    expect(screen.queryByText(/Role:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Break-glass")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByText("Role: Senior analyst, Auditor")).toBeVisible();
+    expect(screen.getByText("Signed in with SSO")).toBeVisible();
+  });
+
+  // spec:web-ui/the-account-menu-names-the-session-s-role-and-sign-in-method/a-break-glass-operator-sees-their-role-and-sign-in-method
+  it("names a break-glass session's role and says it was signed in with break-glass", () => {
+    function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <MemoryRouter>
+          <PermissionsProvider permissions={[]}>{children}</PermissionsProvider>
+        </MemoryRouter>
+      );
+    }
+    render(
+      <AccountMenu user={{ id: 1, email: "bg@fleetdm.com" }} authMethod="local_password" roles={["super_admin"]} onLogout={vi.fn()} />,
+      { wrapper: Wrapper },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByText("Role: Super admin")).toBeVisible();
+    expect(screen.getByText("Signed in with break-glass")).toBeVisible();
+  });
+
+  it("says a session with no role has none, and names no sign-in method it does not know", () => {
+    renderMenu([]);
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByText("Role: none")).toBeVisible();
+    expect(screen.queryByText(/Signed in with/)).not.toBeInTheDocument();
+  });
+
+  it("shows a break-glass badge for a local_password session", () => {
+    function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <MemoryRouter>
+          <PermissionsProvider permissions={[]}>{children}</PermissionsProvider>
+        </MemoryRouter>
+      );
+    }
+    render(<AccountMenu user={{ id: 1, email: "bg@fleetdm.com" }} authMethod="local_password" onLogout={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByText("Break-glass")).toBeInTheDocument();
   });
 });

@@ -1760,6 +1760,10 @@ components:
             id: {type: integer, format: int64}
             email: {type: string, format: email}
         csrf_token: {type: string}
+        roles:
+          type: array
+          items: {type: string}
+          description: The ids of the roles the operator holds deployment-wide, sorted.
 
     ErrorResponse:
       type: object

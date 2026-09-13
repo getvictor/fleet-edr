@@ -7,15 +7,11 @@ import { Input, Select } from "../ui/Input";
 import { Badge, type BadgeVariant } from "../ui/Badge";
 import { CopyButton } from "../ui/CopyButton";
 import "./ServiceAccounts.scss";
+import { BINDABLE_ROLES, roleLabel } from "../../roles";
 
 // Bindable roles match the server allowlist. admin is permitted (full control, including managing other service accounts); super_admin
 // is never bindable to a non-human credential.
-const ROLES = [
-  { value: "analyst", label: "Analyst" },
-  { value: "senior_analyst", label: "Senior analyst" },
-  { value: "auditor", label: "Auditor" },
-  { value: "admin", label: "Admin" },
-] as const;
+const ROLES = BINDABLE_ROLES;
 
 // MAX_EXPIRY_DAYS mirrors the server cap; the form validates against it before submitting.
 const MAX_EXPIRY_DAYS = 365;
@@ -42,9 +38,6 @@ function roleVariant(role: string): BadgeVariant {
   }
 }
 
-function roleLabel(role: string): string {
-  return ROLES.find((r) => r.value === role)?.label ?? role;
-}
 
 function formatDate(s?: string): string {
   if (!s) return "Never";

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthedApp } from "./App";
 import { setUnauthorizedHandler, setForbiddenHandler } from "./api";
@@ -100,6 +100,22 @@ describe("home view routing", () => {
     stubAuthedSession([PermissionAction.HostRead]);
     renderAuthedApp();
     expect(await screen.findByText("No hosts reporting yet.")).toBeInTheDocument();
+  });
+});
+
+describe("AuthedApp account menu", () => {
+  it("names the role the session probe returns", async () => {
+    const mock = vi.fn((input: unknown): Promise<FakeResponse> => {
+      const url = String(input);
+      if (url.includes("/api/session")) {
+        return Promise.resolve(makeResponse({ ...authedSession, permissions: [PermissionAction.HostRead], roles: ["auditor"] }, 200));
+      }
+      return Promise.resolve(makeResponse([], 200));
+    });
+    vi.stubGlobal("fetch", mock);
+    renderAuthedApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Account menu" }));
+    expect(screen.getByText("Role: Auditor")).toBeVisible();
   });
 });
 

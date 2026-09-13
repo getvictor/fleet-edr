@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ReactNode } from "react";
 
@@ -75,5 +75,19 @@ describe("TopNav alert-first order and active state", () => {
   it("marks Hosts active on the host list route", () => {
     renderNav(ALL_NAV_PERMISSIONS, null, "/hosts");
     expect(screen.getByRole("link", { name: "Hosts" })).toHaveClass("top-nav__link--active");
+  });
+});
+
+describe("TopNav account menu", () => {
+  it("passes the session's roles to the account menu", () => {
+    render(
+      <MemoryRouter>
+        <PermissionsProvider permissions={[]}>
+          <TopNav user={{ id: 1, email: "op@example.com" }} authMethod="oidc" roles={["admin"]} onLogout={() => undefined} />
+        </PermissionsProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByText("Role: Admin")).toBeVisible();
   });
 });

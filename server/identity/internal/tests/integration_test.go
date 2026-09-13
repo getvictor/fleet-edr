@@ -172,7 +172,12 @@ func TestSessionProbe_IncludesEffectivePermissions(t *testing.T) {
 	rbacStore := identityrbac.New(db)
 	sessionsStore := identitysessions.New(db, identitysessions.Options{})
 
-	probe := func(t *testing.T, roleID string) []string {
+	type sessionBody struct {
+		User        struct{ Email string } `json:"user"`
+		Permissions []string               `json:"permissions"`
+		Roles       []string               `json:"roles"`
+	}
+	probeBody := func(t *testing.T, roleID string) sessionBody {
 		t.Helper()
 		u, err := usersStore.Create(ctx, identityusers.CreateRequest{
 			Email: roleID + "@example.com", Password: "long-enough-password-for-test",
@@ -192,14 +197,21 @@ func TestSessionProbe_IncludesEffectivePermissions(t *testing.T) {
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var body struct {
-			User        struct{ Email string } `json:"user"`
-			Permissions []string               `json:"permissions"`
-		}
+		var body sessionBody
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 		require.NotNil(t, body.Permissions, "permissions must be a present (non-null) array")
-		return body.Permissions
+		return body
 	}
+	probe := func(t *testing.T, roleID string) []string {
+		t.Helper()
+		return probeBody(t, roleID).Permissions
+	}
+
+	// spec:ui-authentication-session/the-session-probe-names-the-operator-s-roles/the-probe-returns-the-roles-the-session-carries
+	t.Run("the probe names the role the session carries", func(t *testing.T) {
+		body := probeBody(t, "auditor")
+		assert.Equal(t, []string{"auditor"}, body.Roles)
+	})
 
 	// spec:ui-authentication-session/current-user-lookup/session-probe-while-logged-in
 	t.Run("analyst is gated to read plus comment", func(t *testing.T) {

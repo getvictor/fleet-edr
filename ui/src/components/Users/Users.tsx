@@ -7,28 +7,10 @@ import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
 import { Badge, type BadgeVariant } from "../ui/Badge";
 import "./Users.scss";
+import { BINDABLE_ROLES, roleLabel } from "../../roles";
 
-// ROLES are the seeded roles an admin may assign. super_admin is intentionally absent: the UI never grants it (only a super_admin may,
-// via break-glass / SQL), and rows that already hold it render read-only. Mirrors the service-account bindable set.
-const ROLES = [
-  { value: "analyst", label: "Analyst" },
-  { value: "senior_analyst", label: "Senior analyst" },
-  { value: "auditor", label: "Auditor" },
-  { value: "admin", label: "Admin" },
-] as const;
-
-const ROLE_LABELS = new Map<string, string>([
-  ["analyst", "Analyst"],
-  ["senior_analyst", "Senior analyst"],
-  ["auditor", "Auditor"],
-  ["admin", "Admin"],
-  ["super_admin", "Super admin"],
-  ["", "No role"],
-]);
-
-function roleLabel(role: string): string {
-  return ROLE_LABELS.get(role) ?? role;
-}
+// ROLES are the seeded roles an admin may assign; see BINDABLE_ROLES.
+const ROLES = BINDABLE_ROLES;
 
 function roleVariant(role: string): BadgeVariant {
   switch (role) {

@@ -33,7 +33,7 @@ type AuthState =
   // permissions is the operator's effective action set from the session probe, or
   // undefined when the server didn't return one (older server). Threaded into the
   // PermissionsProvider so the capability seam can gate nav + affordances.
-  | { status: "authed"; user: SessionInfo["user"]; authMethod: string; permissions: string[] | undefined };
+  | { status: "authed"; user: SessionInfo["user"]; authMethod: string; permissions: string[] | undefined; roles: string[] };
 
 // Routes are top-level. /ui/login (and the break-glass pages) are
 // public; /ui/* otherwise probes /api/session and gates
@@ -83,6 +83,7 @@ export function AuthedApp() {
           user: info.user,
           authMethod: info.auth_method ?? "local_password",
           permissions: info.permissions,
+          roles: info.roles ?? [],
         });
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -160,6 +161,7 @@ export function AuthedApp() {
       <TopNav
         user={auth.user}
         authMethod={auth.authMethod}
+        roles={auth.roles}
         onLogout={() => { handleLogout().catch(() => undefined); }}
       />
       <main className="app-page">
