@@ -318,8 +318,8 @@ func (r *Registry) MarkDisconnected(compType string) {
 	})
 }
 
-// transition applies mutate under the lock, stamps the transition time only when the status actually changed, and pulses Changed() on a
-// real change so "since when" stays meaningful and the poster does not wake for no-op updates.
+// transition applies mutate under the lock, stamps the transition time only when the status or reason actually changed, and pulses
+// Changed() on a real change so "since when" stays meaningful and the poster does not wake for no-op updates.
 func (r *Registry) transition(compType string, mutate func(*componentState)) {
 	r.mu.Lock()
 	s, ok := r.comps[compType]
@@ -327,12 +327,15 @@ func (r *Registry) transition(compType string, mutate func(*componentState)) {
 		r.mu.Unlock()
 		return
 	}
-	before := s.status
+	beforeStatus, beforeReason := s.status, s.reason
 	mutate(s)
-	if s.status != before {
+	// A new reason is a new condition even at the same status: never_connected to reboot_required stays unhealthy but names a
+	// different fix, so it is dated from now and posted now rather than at the next periodic tick. The message alone is not
+	// compared, so rewording within one reason does not restamp.
+	changed := s.status != beforeStatus || s.reason != beforeReason
+	if changed {
 		s.lastTransitionNs = r.nowNs()
 	}
-	changed := s.status != before
 	r.mu.Unlock()
 	if changed {
 		r.notify()

@@ -151,10 +151,17 @@ func TestRegistry_MarkRebootRequiredUntilTheNextSession(t *testing.T) {
 	r := newRegistryWithClock(seqClock(1000))
 	r.Register(ComponentNetworkExtension, "Network extension") // stamp 1000
 
-	r.MarkRebootRequired(ComponentNetworkExtension)
+	drainChanged(r)
+	r.MarkRebootRequired(ComponentNetworkExtension) // stamp 1001: a new reason at the same status is a transition
 	got := r.Snapshot()[0]
 	assert.Equal(t, StatusUnhealthy, got.Status)
 	assert.Equal(t, reasonRebootRequired, got.Reason)
+	assert.EqualValues(t, 1001, got.LastTransitionNs, "the restart condition is dated from when it was found, not from registration")
+	select {
+	case <-r.Changed():
+	default:
+		t.Fatal("a new reason pulses Changed so the poster reports it now")
+	}
 	assert.Equal(t, "Network extension: the previous version is still registered until the Mac restarts; restart it to finish the upgrade",
 		got.Message)
 
