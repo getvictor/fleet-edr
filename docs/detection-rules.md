@@ -20,6 +20,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | File | Why not |
 | --- | --- |
 | `imported/file_event/file_event_macos_emond_launch_daemon.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
+| `imported/file_event/file_event_macos_python_path_configuration_files.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
 | `imported/file_event/file_event_macos_susp_startup_item_created.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
 
 ## Index
@@ -73,6 +74,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`proc_creation_macos_office_susp_child_processes`](#proc_creation_macos_office_susp_child_processes) | Suspicious Microsoft Office Child Process - MacOS | high | monitor | T1059.002, T1137.002, T1204.002 |
 | [`proc_creation_macos_osacompile_runonly_execution`](#proc_creation_macos_osacompile_runonly_execution) | OSACompile Run-Only Execution | high | monitor | T1059.002 |
 | [`proc_creation_macos_payload_decoded_and_decrypted`](#proc_creation_macos_payload_decoded_and_decrypted) | Payload Decoded and Decrypted via Built-in Utilities | medium | monitor | T1059, T1204, T1140 |
+| [`proc_creation_macos_pbpaste_execution`](#proc_creation_macos_pbpaste_execution) | Clipboard Data Collection Via Pbpaste | medium | monitor | T1115 |
 | [`proc_creation_macos_persistence_via_plistbuddy`](#proc_creation_macos_persistence_via_plistbuddy) | Potential Persistence Via PlistBuddy | high | monitor | T1543.001, T1543.004 |
 | [`proc_creation_macos_remote_access_tools_meshagent_arguments`](#proc_creation_macos_remote_access_tools_meshagent_arguments) | Remote Access Tool - Potential MeshAgent Execution - MacOS | medium | monitor | T1219.002 |
 | [`proc_creation_macos_remote_access_tools_renamed_meshagent_execution`](#proc_creation_macos_remote_access_tools_renamed_meshagent_execution) | Remote Access Tool - Renamed MeshAgent Execution - MacOS | high | monitor | T1219.002, T1036.003 |
@@ -1485,6 +1487,40 @@ Detects when a built-in utility is used to decode and decrypt a payload after a 
 ### References
 
 - <https://github.com/elastic/protections-artifacts/commit/746086721fd385d9f5c6647cada1788db4aea95f#diff-5d42c3d772e04f1e8d0eb60f5233bc79def1ea73105a2d8822f44164f77ef823>
+
+## proc_creation_macos_pbpaste_execution
+
+**Clipboard Data Collection Via Pbpaste**  
+Clipboard Data Collection Via Pbpaste
+
+| | |
+| --- | --- |
+| Rule ID | `proc_creation_macos_pbpaste_execution` |
+| Severity | `medium` |
+| Default mode | `monitor` |
+| Source | SigmaHQ, by Daniel Cortez |
+| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
+| ATT&CK | [`T1115`](https://attack.mitre.org/techniques/T1115/) |
+| Event types | `exec` |
+
+### Description
+
+Detects execution of the "pbpaste" utility, which retrieves the contents of the clipboard (a.k.a. pasteboard) and writes them to the standard output (stdout).
+The utility is often used for creating new files with the clipboard content or for piping clipboard contents to other commands.
+It can also be used in shell scripts that may require clipboard content as input.
+Attackers can abuse this utility in order to collect data from the user clipboard, which may contain passwords or sensitive information.
+Use this rule to hunt for potential abuse of the utility by looking at the parent process and any potentially suspicious command line content.
+
+
+### Known false-positive sources
+
+- Legitimate administration activities
+
+### References
+
+- <https://www.loobins.io/binaries/pbpaste/>
+- <https://medium.com/@NullByteWht/hacking-macos-how-to-dump-1password-keepassx-lastpass-passwords-in-plaintext-723c5b1c311b>
+- <https://media.defense.gov/2021/Jul/19/2002805003/-1/-1/1/CSA_CHINESE_STATE-SPONSORED_CYBER_TTPS.PDF>
 
 ## proc_creation_macos_persistence_via_plistbuddy
 

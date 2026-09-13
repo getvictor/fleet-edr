@@ -197,7 +197,7 @@
       "techniqueID": "T1115",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_clipboard_access_via_osascript"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_clipboard_access_via_osascript, proc_creation_macos_pbpaste_execution"
     },
     {
       "techniqueID": "T1133",

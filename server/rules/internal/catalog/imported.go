@@ -102,7 +102,7 @@ type sigmaFile struct {
 	// Author is the upstream rule's attribution, carried into the operator-facing reference (DRL 1.1).
 	Author string `yaml:"author"`
 	// References are the upstream rule's own citations, carried through so an operator can read what the detection was written
-	// from. All 69 files in the vendored corpus carry at least one.
+	// from. All 71 files in the vendored corpus carry at least one.
 	References []string `yaml:"references"`
 }
 
@@ -584,7 +584,7 @@ func (r *importedRule) evalEvent(
 //go:embed imported
 var importedCorpus embed.FS
 
-// importedRules is the corpus loaded once. Memoized because loadImported walks 69 files and compiles a detection for each, which is
+// importedRules is the corpus loaded once. Memoized because loadImported walks 71 files and compiles a detection for each, which is
 // start-up work, not per-call work.
 var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
 	rules, rejected, err := loadImported(importedCorpus, "imported", nil)

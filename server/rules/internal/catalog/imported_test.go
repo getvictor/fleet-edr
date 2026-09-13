@@ -25,11 +25,11 @@ import (
 //
 // TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
 // description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and each rule this sensor cannot run is refused BY NAME with a
-// reason. 67 of the 69 import; the other two are refused for one reason, which is the contract working.
+// reason. 68 of the 71 import; the other three are refused for one reason, which is the contract working.
 //
-// It was 66 and three. The third refusal was the meshagent rule, refused for OriginalFileName, and it imports now that the field
-// is supplied from the code-signing identifier. Both remaining refusals are the file_event pair, which watch paths this agent
-// emits no events for (issue #998).
+// The corpus is every macOS rule across SigmaHQ's rule trees: 69 from rules/ and two from rules-threat-hunting/ (issue #1003). Of
+// the latter, the pbpaste rule imports and the Python path configuration rule is a third file_event refusal. All three refusals
+// are file_event rules, which watch paths this agent emits no events for (issue #998).
 //
 // The fixtures are the upstream tree copied byte-for-byte, including its `<category>/` layout, so this exercises the directory walk
 // the production loader does. Asserting the exact counts rather than a lower bound is the point: a version that imported one rule
@@ -40,7 +40,7 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	rules, rejected, err := loadImported(importedCorpus, "imported", nil)
 	require.NoError(t, err)
 
-	assert.Len(t, rules, 67, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
+	assert.Len(t, rules, 68, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
 
 	// Two refusals, one reason, and the reason is the refusal contract working rather than a gap.
 	reasons := map[string]string{}
@@ -48,11 +48,14 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 		reasons[path.Base(r.File)] = r.Reason
 		assert.NotContains(t, r.Reason, r.File, "the reason does not repeat the file, which the rejection already carries")
 	}
-	require.Len(t, rejected, 2, "two rules in a category this agent collects too narrowly")
+	require.Len(t, rejected, 3, "three rules in a category this agent collects too narrowly")
 
 	assert.NotContains(t, reasons, "proc_creation_macos_remote_access_tools_renamed_meshagent_execution.yml",
 		"it reads OriginalFileName, which is now supplied from the code-signing identifier, so it imports")
-	for _, f := range []string{"file_event_macos_emond_launch_daemon.yml", "file_event_macos_susp_startup_item_created.yml"} {
+	for _, f := range []string{
+		"file_event_macos_emond_launch_daemon.yml", "file_event_macos_susp_startup_item_created.yml",
+		"file_event_macos_python_path_configuration_files.yml",
+	} {
 		assert.Contains(t, reasons[f], "/etc/sudoers",
 			"a file_event rule cannot fire on this agent, and the reason says which telemetry is missing")
 	}
@@ -115,7 +118,7 @@ func TestSeverityFor(t *testing.T) {
 		{level: "high", want: api.SeverityHigh},
 		{level: "medium", want: api.SeverityMedium},
 		{level: "low", want: api.SeverityLow},
-		// 7 of the 69 macOS rules are informational. It has no counterpart here, and refusing them would fork the corpus over a
+		// 7 of the 71 vendored macOS rules are informational. It has no counterpart here, and refusing them would fork the corpus over a
 		// label, so it lands at the lowest severity we can raise.
 		{level: "informational", want: api.SeverityLow},
 		{level: "MEDIUM", want: api.SeverityMedium},
