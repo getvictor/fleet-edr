@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fleetdm/edr/server/coordination/leader"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -94,6 +95,32 @@ func TestBackfillAlertOrigins(t *testing.T) {
 			"claim this project wrote their blocklist")
 	assert.Equal(t, "Someone Else", originOfAlert(t, ctx, d, alreadyCredited),
 		"an origin already recorded must never be overwritten")
+}
+
+// spec:server-detection-rules-engine/alerts-expire-on-their-own-window/crediting-an-alert-does-not-restart-its-retention-clock
+//
+// TestBackfillAlertOrigins_KeepsLastTriageActivity: crediting an alert is bookkeeping, not triage. updated_at refreshes itself on any
+// UPDATE that leaves it unset, and alert retention measures age from it, so a backfill that forgot it would hand every old uncredited
+// alert a fresh retention window on the boot that credited it.
+func TestBackfillAlertOrigins_KeepsLastTriageActivity(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	db := d.Store().DB()
+
+	id := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":1}`)
+	lastTriage := time.Date(2025, 1, 2, 3, 4, 5, 600000000, time.UTC)
+	_, err := db.ExecContext(ctx, `UPDATE alerts SET updated_at = ? WHERE id = ?`, lastTriage, id)
+	require.NoError(t, err)
+
+	updated, err := d.Store().BackfillAlertOrigins(ctx, map[string]string{"proc_creation_macos_applescript": "SigmaHQ"})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), updated)
+	require.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, id), "the alert is credited")
+
+	var after time.Time
+	require.NoError(t, db.GetContext(ctx, &after, `SELECT updated_at FROM alerts WHERE id = ?`, id))
+	assert.True(t, lastTriage.Equal(after), "crediting must not move updated_at: want %s, got %s", lastTriage, after)
 }
 
 // TestBackfillAlertOrigins_IsIdempotent pins that this can run on every boot, which is what makes a boot-time one-shot safe to

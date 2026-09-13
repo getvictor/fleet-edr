@@ -585,11 +585,14 @@ func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 // It counts only the sweeps that are ENABLED. A disabled one returns from its Loop immediately, so the coordinator releases its lock
 // connection straight away and re-takes it on the next poll rather than holding it; counting it would make the sizing pessimistic
 // and could refuse a pool that is adequate. Without a coordinator there are no leader loops at all and nothing to reserve.
+//
+// Retention counts as enabled when EITHER of its windows is. One runner prunes both, and its Loop keeps running, holding its lock, while
+// either window is nonzero, so an operator who turns process pruning off and leaves the alert window on still has that connection held.
 func reservedLeaderConns(deps Deps) int {
 	if deps.Coordinator == nil {
 		return 0
 	}
-	return pipeline.LeaderGatedConns(deps.StaleProcessTTL > 0, deps.RetentionDays > 0)
+	return pipeline.LeaderGatedConns(deps.StaleProcessTTL > 0, deps.RetentionDays > 0 || deps.AlertRetentionDays > 0)
 }
 
 // connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the

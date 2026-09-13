@@ -119,6 +119,9 @@ func TestAlertRetention_PrunesPastTheWindowAndKeepsInside(t *testing.T) {
 	}
 	inside := f.alert(179*day, 0, 3)
 	justInside := f.alert(180*day-time.Minute, 0, 3)
+	// Exactly at the cutoff is not OLDER than the window, so it stays. The fixed clock makes the stamp equal the cutoff to the
+	// microsecond, which is what lets a `<=` in the prune's predicate fail this test rather than pass it.
+	atTheCutoff := f.alert(180*day, 0, 3)
 
 	rec := &recordingMetrics{}
 	runRetention(t, f.db, 0, 180, rec)
@@ -129,6 +132,7 @@ func TestAlertRetention_PrunesPastTheWindowAndKeepsInside(t *testing.T) {
 	}
 	assert.True(t, f.exists("alerts", inside), "an alert inside the window survives")
 	assert.True(t, f.exists("alerts", justInside), "an alert a minute inside the window survives")
+	assert.True(t, f.exists("alerts", atTheCutoff), "an alert exactly at the cutoff is not older than the window, and survives")
 	assert.Equal(t, 3, f.eventLinks(inside), "a surviving alert keeps every event link")
 
 	rec.mu.Lock()
@@ -200,39 +204,43 @@ func TestAlertRetention_IsIndependentOfTheProcessWindow(t *testing.T) {
 	t.Parallel()
 	const day = 24 * time.Hour
 
-	t.Run("process pruning off, alert pruning on", func(t *testing.T) {
-		t.Parallel()
-		f := newAlertFixture(t)
-		expired := f.alert(181*day, 0, 1)
-		oldProc := f.completedProcess()
+	// Every case seeds the same two rows, an unpinned process past any process window and an alert of the given age, and asserts both,
+	// so each direction shows the other window left alone.
+	cases := []struct {
+		name          string
+		processDays   int
+		alertDays     int
+		alertAge      time.Duration
+		wantAlertKept bool
+		wantProcKept  bool
+	}{
+		{
+			name: "process pruning off, alert pruning on", processDays: 0, alertDays: 180, alertAge: 181 * day,
+			wantAlertKept: false, wantProcKept: true,
+		},
+		{
+			name: "alert pruning off, process pruning on", processDays: 30, alertDays: 0, alertAge: 181 * day,
+			wantAlertKept: true, wantProcKept: false,
+		},
+		// Past a 30-day process window but inside a 180-day alert window: the alert window, not the process window, decides.
+		{
+			name: "a shorter process window does not shorten the alert window", processDays: 30, alertDays: 180, alertAge: 90 * day,
+			wantAlertKept: true, wantProcKept: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAlertFixture(t)
+			alertID := f.alert(tc.alertAge, 0, 1)
+			procID := f.completedProcess()
 
-		runRetention(t, f.db, 0, 180, nil)
+			runRetention(t, f.db, tc.processDays, tc.alertDays, nil)
 
-		assert.False(t, f.exists("alerts", expired), "the alert window still prunes with the process window disabled")
-		assert.True(t, f.exists("processes", oldProc), "and the disabled process window prunes nothing")
-	})
-
-	t.Run("alert pruning off, process pruning on", func(t *testing.T) {
-		t.Parallel()
-		f := newAlertFixture(t)
-		expired := f.alert(181*day, 0, 1)
-		oldProc := f.completedProcess()
-
-		runRetention(t, f.db, 30, 0, nil)
-
-		assert.True(t, f.exists("alerts", expired), "a disabled alert window keeps the alert")
-		assert.False(t, f.exists("processes", oldProc), "while the process window still prunes")
-	})
-
-	t.Run("a shorter process window does not shorten the alert window", func(t *testing.T) {
-		t.Parallel()
-		f := newAlertFixture(t)
-		inAlertWindow := f.alert(90*day, 0, 1) // past a 30-day process window, inside a 180-day alert window
-
-		runRetention(t, f.db, 30, 180, nil)
-
-		assert.True(t, f.exists("alerts", inAlertWindow), "the alert window, not the process window, decides an alert's fate")
-	})
+			assert.Equal(t, tc.wantAlertKept, f.exists("alerts", alertID), "alert kept")
+			assert.Equal(t, tc.wantProcKept, f.exists("processes", procID), "process kept")
+		})
+	}
 }
 
 // TestAlertRetention_Loop_RunsWhenOnlyTheAlertWindowIsSet: Loop used to return immediately whenever the process window was 0, back when
@@ -260,4 +268,125 @@ func TestAlertRetention_Loop_RunsWhenOnlyTheAlertWindowIsSet(t *testing.T) {
 		"Loop must run the alert prune even though the process window is disabled")
 	cancel()
 	<-done
+}
+
+// spec:server-detection-rules-engine/alerts-expire-on-their-own-window/a-re-fire-during-a-prune-completes-cleanly
+//
+// TestAlertRetention_ARefireDuringThePruneCompletesCleanly pins what the prune's FOR UPDATE buys, by staging the interleaving that needs
+// it: a re-fire has already claimed the expired alert's row through InsertAlert's dedup statement and is about to link its evidence
+// when the prune starts.
+//
+// With the lock the prune waits at its SELECT, the re-fire links and commits, and the prune then removes the alert with every link,
+// including the one just added. Without it the prune does not wait there. It deletes the existing links, taking next-key locks on that
+// range of alert_events, and then waits on the alert row the re-fire holds, while the re-fire waits on those gap locks to insert its
+// link. InnoDB resolves that deadlock by rolling one of them back, so either the detection write or the retention pass fails.
+//
+// The staging is deterministic rather than a timing race: the re-fire does not link until performance_schema shows the prune blocked
+// on a lock inside this test's own database.
+func TestAlertRetention_ARefireDuringThePruneCompletesCleanly(t *testing.T) {
+	t.Parallel()
+	f := newAlertFixture(t)
+	ctx := t.Context()
+	expired := f.alert(181*24*time.Hour, 0, 2)
+
+	// The first half of InsertAlert's dedup path, held open on its own connection. subject-1 is the fixture's first subject, so this
+	// collides with the expired alert on the dedup key exactly as a re-fire of the same finding would.
+	refire, err := f.db.BeginTxx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = refire.Rollback() }()
+	_, err = refire.ExecContext(ctx, `
+		INSERT INTO alerts (host_id, rule_id, severity, title, description, subject)
+		VALUES ('host-ret', 'r1', 'high', 't', 'd', 'subject-1')
+		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = updated_at`)
+	require.NoError(t, err)
+
+	pruned := make(chan error, 1)
+	go func() {
+		_, runErr := pipeline.NewRetention(f.db, pipeline.RetentionOptions{
+			AlertRetentionDays: 180,
+			Now:                func() time.Time { return retentionNow },
+		}).Run(ctx)
+		pruned <- runErr
+	}()
+
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := f.db.GetContext(ctx, &waiting, `
+			SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+			JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+			WHERE l.OBJECT_SCHEMA = DATABASE()`)
+		return err == nil && waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "the prune must reach a lock the re-fire holds before the re-fire links its evidence")
+
+	_, linkErr := refire.ExecContext(ctx, `INSERT IGNORE INTO alert_events (alert_id, event_id) VALUES (?, 'evt-refire')`, expired)
+	commitErr := refire.Commit()
+
+	select {
+	case runErr := <-pruned:
+		require.NoError(t, runErr, "the retention pass must not be the deadlock victim")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the retention pass did not finish")
+	}
+	require.NoError(t, linkErr, "the re-fire's evidence link must not be the deadlock victim")
+	require.NoError(t, commitErr)
+
+	assert.False(t, f.exists("alerts", expired), "the expired alert is pruned: a re-fire is not triage activity")
+	assert.Zero(t, f.eventLinks(expired), "with every link, including the one the re-fire added, so nothing is left orphaned")
+}
+
+// TestAlertRetention_AFailedBatchLeavesTheAlertWhole pins why each batch is a transaction. A batch deletes an alert's event links before
+// the alert itself, so a failure between the two must roll the links back: otherwise a pass that failed would still have stripped the
+// evidence from alerts it then kept. It also pins that the failure reaches the caller, rather than a pass reporting success.
+func TestAlertRetention_AFailedBatchLeavesTheAlertWhole(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		stage func(t *testing.T, f *alertFixture, alertID int64) context.Context
+	}{
+		{
+			// A test-only table referencing the alert makes the second DELETE fail on its foreign key, after the first has run.
+			name: "the alert delete fails after its links were deleted",
+			stage: func(t *testing.T, f *alertFixture, alertID int64) context.Context {
+				t.Helper()
+				_, err := f.db.ExecContext(t.Context(),
+					`CREATE TABLE retention_blocker (alert_id BIGINT NOT NULL, FOREIGN KEY (alert_id) REFERENCES alerts (id))`)
+				require.NoError(t, err)
+				_, err = f.db.ExecContext(t.Context(), `INSERT INTO retention_blocker (alert_id) VALUES (?)`, alertID)
+				require.NoError(t, err)
+				return t.Context()
+			},
+		},
+		{
+			name: "the batch cannot start",
+			stage: func(t *testing.T, _ *alertFixture, _ int64) context.Context {
+				t.Helper()
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				return ctx
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAlertFixture(t)
+			expired := f.alert(181*24*time.Hour, 0, 3)
+			ctx := tc.stage(t, f, expired)
+
+			rec := &recordingMetrics{}
+			_, err := pipeline.NewRetention(f.db, pipeline.RetentionOptions{
+				AlertRetentionDays: 180,
+				Now:                func() time.Time { return retentionNow },
+				Metrics:            rec,
+			}).Run(ctx)
+
+			require.Error(t, err, "a failed batch must fail the pass")
+			assert.True(t, f.exists("alerts", expired), "the alert the batch could not delete is still there")
+			assert.Equal(t, 3, f.eventLinks(expired), "with every event link it had, because the batch rolled back")
+			rec.mu.Lock()
+			defer rec.mu.Unlock()
+			assert.Zero(t, rec.alertRowsDeleted, "and nothing is counted as deleted")
+		})
+	}
 }

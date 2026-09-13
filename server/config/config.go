@@ -42,6 +42,11 @@ const (
 	// and six times the derived-data window: an alert is the investigation and compliance artifact, not a row the server can rebuild.
 	// Roughly what the market keeps for alerts against a shorter window for raw telemetry.
 	defaultAlertRetentionDays = 180
+	// maxRetentionDays caps both retention windows at a hundred years. Every consumer turns a window into a time.Duration of that many
+	// days, and a Duration counts nanoseconds in an int64, so past about 106,751 days the conversion wraps negative. A wrapped window puts
+	// the cutoff in the FUTURE and the next pass deletes every row older than that, which is to say everything: the opposite of what an
+	// operator asking for a very long window meant. Refused at boot instead, with room to spare below the wrap.
+	maxRetentionDays = 36_500
 	// DefaultRetentionInterval is how often the retention runner wakes up. Wired into the retention runner at boot (no longer an env knob).
 	DefaultRetentionInterval = time.Hour
 	// DefaultQueuePruneInterval is how often the event-queue sweep removes acked rows (ADR-0015). Far shorter than the retention
@@ -330,6 +335,11 @@ func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
 	envparse.NonNegativeInt(getenv, "EDR_ALERT_RETENTION_DAYS", &c.AlertRetentionDays, errs)
+	for key, days := range map[string]int{"EDR_RETENTION_DAYS": c.RetentionDays, "EDR_ALERT_RETENTION_DAYS": c.AlertRetentionDays} {
+		if days > maxRetentionDays {
+			*errs = append(*errs, fmt.Errorf("%s=%d exceeds the maximum of %d days; use 0 to disable pruning instead", key, days, maxRetentionDays))
+		}
+	}
 }
 
 // loadLogConfig reads + validates the slog handler's level + format knobs. Lowercases for downstream consumers regardless of how the

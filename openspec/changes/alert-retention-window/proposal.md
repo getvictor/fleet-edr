@@ -10,7 +10,7 @@ There is a compliance edge as well. Frameworks such as PCI DSS expect a stated r
 
 ## What changes
 
-A new knob, `EDR_ALERT_RETENTION_DAYS`, default 180, prunes alerts on the existing hourly retention pass. It is the longest tier: raw events are 30 days (ClickHouse TTL) and derived records 30 days (`EDR_RETENTION_DAYS`). `0` disables it.
+A new knob, `EDR_ALERT_RETENTION_DAYS`, default 180, prunes alerts on the existing hourly retention pass. By default it is the longest tier: raw events are 30 days (ClickHouse TTL) and derived records 30 days (`EDR_RETENTION_DAYS`). `0` disables it. Both windows are capped at 36,500 days, because a larger value wraps negative once converted to a duration and would put the cutoff in the future.
 
 ## Decisions worth a reviewer's attention
 
@@ -20,7 +20,9 @@ A new knob, `EDR_ALERT_RETENTION_DAYS`, default 180, prunes alerts on the existi
 
 **Alerts are pruned before processes in a pass**, so a process record an expired alert was holding is collected in the same pass rather than an hour later.
 
-**Each batch is a transaction.** `alert_events` references `alerts` with no `ON DELETE CASCADE`, and every alert has linked events, so a plain `DELETE FROM alerts` fails on its first row with a foreign-key violation. Removing the links first in the same transaction, with the selected alerts locked, also stops a concurrent re-fire from attaching new evidence to an alert whose older evidence was just removed.
+**Each batch is a transaction.** `alert_events` references `alerts` with no `ON DELETE CASCADE`, and every alert has linked events, so a plain `DELETE FROM alerts` fails on its first row with a foreign-key violation. Removing the links first in the same transaction means a batch that fails part way leaves its alerts whole. The selected alerts are locked before the links are touched. Without that, a re-fire that already holds the alert row deadlocks against the prune, and InnoDB rolls back the detection write.
+
+**Crediting an alert keeps its `updated_at`.** The boot-time origin backfill updated `origin` without setting `updated_at`, so the column refreshed itself and every old alert it credited would have started a fresh retention window.
 
 **A new index on `alerts(updated_at)`**, the counterpart to the index the process prune already has. Without it each batch is a full scan and the `FOR UPDATE` would lock every row scanned.
 

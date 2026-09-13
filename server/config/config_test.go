@@ -133,6 +133,28 @@ func TestLoad(t *testing.T) {
 			wantErr: "EDR_ALERT_RETENTION_DAYS",
 		},
 		{
+			// Past about 106,751 days a window wraps negative as a time.Duration and puts the cutoff in the future, which deletes
+			// everything. Both windows share the cap, and each is checked on its own.
+			// spec:server-detection-rules-engine/alerts-expire-on-their-own-window/a-window-too-long-to-represent-is-refused-at-startup
+			name:    "an EDR_ALERT_RETENTION_DAYS past the maximum is rejected",
+			env:     withExtra(minEnv, map[string]string{"EDR_ALERT_RETENTION_DAYS": "200000"}),
+			wantErr: "EDR_ALERT_RETENTION_DAYS=200000 exceeds the maximum",
+		},
+		{
+			name:    "an EDR_RETENTION_DAYS past the maximum is rejected",
+			env:     withExtra(minEnv, map[string]string{"EDR_RETENTION_DAYS": "36501"}),
+			wantErr: "EDR_RETENTION_DAYS=36501 exceeds the maximum",
+		},
+		{
+			name: "both retention windows at the maximum are accepted",
+			env:  withExtra(minEnv, map[string]string{"EDR_RETENTION_DAYS": "36500", "EDR_ALERT_RETENTION_DAYS": "36500"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, 36500, c.RetentionDays)
+				assert.Equal(t, 36500, c.AlertRetentionDays)
+			},
+		},
+		{
 			// Removed tuning knobs must be inert: setting them (even to unparseable junk that the old parsers would have
 			// rejected) must not fail boot. The trimmed surface ignores them and uses the fixed defaults.
 			// spec:server-configuration/the-server-configuration-surface-is-intentionally-minimal/a-removed-tuning-variable-is-ignored-at-boot

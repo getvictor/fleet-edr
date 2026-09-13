@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -43,6 +44,7 @@ type RetentionOptions struct {
 const (
 	attrRetentionDays      = "edr.retention.days"
 	attrAlertRetentionDays = "edr.retention.alerts.days"
+	attrAlertRowsDeleted   = "edr.retention.alerts.rows_deleted"
 )
 
 // RetentionRunner executes retention passes on a cadence. Each pass runs two prunes, on two independent windows, in this order:
@@ -184,41 +186,45 @@ func (r *RetentionRunner) pruneAlerts(ctx context.Context) error {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Int(attrAlertRetentionDays, r.alertRetentionDays))
 
+	// A failed batch still reports the batches before it, which committed: those alerts are gone whether or not a later batch failed.
 	var total int64
+	var err error
 	for {
-		n, err := r.pruneAlertBatch(ctx, cutoff)
+		var n int64
+		n, err = r.pruneAlertBatch(ctx, cutoff)
 		total += n
-		if err != nil {
-			span.SetAttributes(attribute.Int64("edr.retention.alerts.rows_deleted", total))
-			if r.metrics != nil {
-				r.metrics.AlertRetentionRowsDeleted(ctx, total)
-			}
-			return fmt.Errorf("retention delete alerts batch: %w", err)
-		}
-		if n < int64(r.batchSize) {
+		if err != nil || n < int64(r.batchSize) {
 			break
 		}
 	}
-	span.SetAttributes(attribute.Int64("edr.retention.alerts.rows_deleted", total))
+	span.SetAttributes(attribute.Int64(attrAlertRowsDeleted, total))
 	if r.metrics != nil {
 		r.metrics.AlertRetentionRowsDeleted(ctx, total)
+	}
+	if err != nil {
+		return fmt.Errorf("retention delete alerts batch: %w", err)
 	}
 	r.logger.InfoContext(ctx, "alert retention run",
 		attrAlertRetentionDays, r.alertRetentionDays,
 		"edr.retention.alerts.cutoff", cutoff,
-		"edr.retention.alerts.rows_deleted", total,
+		attrAlertRowsDeleted, total,
 	)
 	return nil
 }
 
 // pruneAlertBatch deletes one batch of expired alerts and returns how many it removed.
 //
-// A transaction rather than a single DELETE, for two reasons that are both about alert_events. Its foreign key to alerts carries no ON
-// DELETE CASCADE, so an alert with linked events cannot be deleted until those links are, and every alert has linked events: a plain
-// DELETE FROM alerts would fail on its first row. And the two deletes must be atomic against a re-fire. InsertAlert's dedup takes a lock
-// on the alert row and re-links new events to it; without the FOR UPDATE here, a re-fire landing between the two statements could link
-// fresh evidence to an alert whose older links were just removed, and the alert would survive having lost part of its record. Locking the
-// selected rows first makes that re-fire wait, then find no alert, and raise a fresh one.
+// A transaction rather than a single DELETE, because of alert_events. Its foreign key to alerts carries no ON DELETE CASCADE, so an alert
+// with linked events cannot be deleted until those links are, and every alert has linked events: a plain DELETE FROM alerts would fail on
+// its first row. Deleting the links first then needs the two statements to be atomic, or a batch that failed at the second would leave
+// alerts it kept stripped of their evidence.
+//
+// The FOR UPDATE is about a finding re-firing against an alert this batch is expiring. InsertAlert's dedup statement takes the alert row
+// first and links the new evidence after. Locking the selected rows up front orders the two: a re-fire already holding the row finishes
+// before this batch reads it, and its new link is deleted with the alert; one arriving later waits, finds no alert, and raises a fresh
+// one. Without the lock this batch deletes the links first, taking next-key locks on that alert_events range, then waits on the alert
+// row, while the re-fire waits on those gap locks to insert its link. Staged in TestAlertRetention_ARefireDuringThePruneCompletesCleanly,
+// InnoDB broke that deadlock by rolling back the detection write on every run.
 //
 // alert_event_payloads and webhook_delivery both cascade from alerts, so they need no statement of their own.
 func (r *RetentionRunner) pruneAlertBatch(ctx context.Context, cutoff time.Time) (int64, error) {
@@ -241,18 +247,16 @@ func (r *RetentionRunner) pruneAlertBatch(ctx context.Context, cutoff time.Time)
 		return 0, tx.Commit()
 	}
 
-	eventsQuery, eventsArgs, err := sqlx.In(`DELETE FROM alert_events WHERE alert_id IN (?)`, ids)
-	if err != nil {
-		return 0, fmt.Errorf("build alert_events delete: %w", err)
+	// Placeholders built directly: ids is non-empty here, which is the only input sqlx.In would have rejected.
+	in := "?" + strings.Repeat(", ?", len(ids)-1)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
 	}
-	if _, err := tx.ExecContext(ctx, eventsQuery, eventsArgs...); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM alert_events WHERE alert_id IN (`+in+`)`, args...); err != nil {
 		return 0, fmt.Errorf("delete expired alerts' event links: %w", err)
 	}
-	alertsQuery, alertsArgs, err := sqlx.In(`DELETE FROM alerts WHERE id IN (?)`, ids)
-	if err != nil {
-		return 0, fmt.Errorf("build alerts delete: %w", err)
-	}
-	res, err := tx.ExecContext(ctx, alertsQuery, alertsArgs...)
+	res, err := tx.ExecContext(ctx, `DELETE FROM alerts WHERE id IN (`+in+`)`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired alerts: %w", err)
 	}
