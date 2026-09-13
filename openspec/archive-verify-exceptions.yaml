@@ -462,8 +462,9 @@
     the v0.5.0 archive, because what happens to the bytes afterwards is the snapshot requirement's contract.
 
 # ---------------------------------------------------------------------------------------------------------------------------
-# The last three: two requirements restated by the unbuilt Detect-mode change around behaviour that did ship under other
-# requirements, and one user-management requirement that was never built. Audited at the close of #905.
+# The last three: two requirements the unbuilt Detect-mode change wrote (one restating an existing requirement, one added) around
+# behaviour that did ship under other requirements, and one user-management requirement that was never built. Audited at the close
+# of #905.
 # ---------------------------------------------------------------------------------------------------------------------------
 
 - requirement: server-detection-rules-engine/alert-dedup-key-depends-on-source
@@ -471,18 +472,19 @@
   reason: >-
     Superseded. The archived key for application control, (source, host_id, rule_id) with no process, existed so a would-block
     alert and the block that follows it would collapse into one row, which is Detect mode (#929) and was never built. What shipped
-    is the canonical key (source, host id, rule id, subject): application_control_block findings are process-backed and take the
-    process id as their subject (catalog/application_control_block.go), exactly as catalog rules do. The store's unique key is
-    uk_alerts_dedup over (source, disposition, host_id, rule_id, subject), disposition separating monitor records from alerts. The
-    catalog-rule half of the archived text is the canonical requirement's own
+    is the canonical requirement's subject semantics: application_control_block findings are process-backed and take the process id
+    as their subject (catalog/application_control_block.go), exactly as catalog rules do. The store enforces that as uk_alerts_dedup
+    over five columns, (source, disposition, host_id, rule_id, subject), the fifth, disposition, keeping a monitor record and an
+    alert of the same finding apart. The catalog-rule half of the archived text is the canonical requirement's own
     first scenario.
 
 - requirement: server-detection-rules-engine/alerts-list-filters-by-source-and-subtype
   covered_by: server-rest-api/filterable-alerts-list
   reason: >-
-    The source half shipped and is specified there: GET /api/alerts filters by source, conjunctively with the other filters. The
-    subtype half, and all three of the archived scenarios (would-block alerts only, an unknown subtype, a source filter ignoring
-    subtype), are Detect mode (#929): no alert carries a subtype and the API accepts no subtype parameter.
+    The source half shipped and is specified there: GET /api/alerts filters by source, conjunctively with the other filters. Of the
+    three archived scenarios, filtering to a catalog source is that shipped behaviour. The other two, would-block alerts only and an
+    unknown subtype, are the subtype half, which is Detect mode (#929): no alert carries a subtype and the API accepts no subtype
+    parameter.
 
 - requirement: web-ui/account-menu-surfaces-role-and-authentication-method
   tracked_by: "#1038"
