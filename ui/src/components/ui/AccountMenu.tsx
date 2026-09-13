@@ -8,7 +8,8 @@ interface AccountMenuProps {
   readonly user: { id: number; email: string };
   // authMethod is the session's authn flow; "local_password" surfaces a break-glass badge.
   readonly authMethod?: string;
-  // roles are the session's role ids, named inside the dropdown so an operator can see what their session carries.
+  // roles are the session's role ids, named inside the dropdown so an operator can see what their session carries. Undefined (an older
+  // server that does not send them) names no role; an empty array is a session with none.
   readonly roles?: readonly string[];
   readonly onLogout: () => void;
 }
@@ -37,7 +38,7 @@ function signInLabel(authMethod?: string): string | null {
 // design. Closes on outside-click and Escape. Implemented as a disclosure (trigger carries
 // aria-expanded) rather than the ARIA menu pattern: the items are plain links/buttons, so
 // menu/menuitem roles would promise arrow-key navigation that this control does not provide.
-export function AccountMenu({ user, authMethod, roles = [], onLogout }: AccountMenuProps) {
+export function AccountMenu({ user, authMethod, roles, onLogout }: AccountMenuProps) {
   const can = useCan();
   const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
 
@@ -67,10 +68,12 @@ export function AccountMenu({ user, authMethod, roles = [], onLogout }: AccountM
       {open && (
         <div className="account-menu__dropdown">
           <div className="account-menu__header">
-            <div>{user.email}</div>
-            <div className="account-menu__session">
-              Role: {roles.length === 0 ? "none" : roles.map(roleLabel).join(", ")}
-            </div>
+            <div className="account-menu__email">{user.email}</div>
+            {roles !== undefined && (
+              <div className="account-menu__session">
+                Role: {roles.length === 0 ? "none" : roles.map(roleLabel).join(", ")}
+              </div>
+            )}
             {signIn !== null && <div className="account-menu__session">Signed in with {signIn}</div>}
           </div>
           {can(PermissionAction.SSOManage) && (

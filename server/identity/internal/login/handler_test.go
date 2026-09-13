@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/login"
@@ -28,8 +30,10 @@ type sessionResponse struct {
 		ID    int64  `json:"id"`
 		Email string `json:"email"`
 	} `json:"user"`
-	CSRFToken  string `json:"csrf_token"`
-	AuthMethod string `json:"auth_method"`
+	CSRFToken   string   `json:"csrf_token"`
+	AuthMethod  string   `json:"auth_method"`
+	Permissions []string `json:"permissions"`
+	Roles       []string `json:"roles"`
 }
 
 // setupServer wires the GET + DELETE /api/session handler stack the way main.go does. Returns the HTTP server + the users /
@@ -167,4 +171,48 @@ func TestLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ss.Get(t.Context(), raw)
 	require.Error(t, err)
+}
+
+// spec:ui-authentication-session/the-session-probe-names-the-operator-s-roles/the-probe-returns-the-roles-the-session-carries
+//
+// For any set of live bindings, in any order and with repeats, the probe's roles decode to exactly the distinct global role ids, sorted,
+// and permissions stay an array. The bindings are put on the request context directly, since the store hands them back in index order
+// and could not produce the unsorted or repeated sets this needs.
+func TestGet_RolesNameEachGlobalRoleOnceSorted_PBT(t *testing.T) {
+	t.Parallel()
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	us := users.New(db)
+	svc := service.New(us, sessions.New(db, sessions.Options{}), rbac.New(db), nil, slog.Default())
+	mux := http.NewServeMux()
+	login.New(svc, login.Options{Logger: slog.Default()}).RegisterAuthedRoutes(mux)
+	u, err := us.Create(t.Context(), users.CreateRequest{Email: "roles@example.com", Password: "long-enough-test-password"})
+	require.NoError(t, err)
+
+	roleIDs := []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
+	scopes := []api.RoleBindingScopeType{api.RoleBindingScopeGlobal, "host_group", "host"}
+	rapid.Check(t, func(rt *rapid.T) {
+		bindings := rapid.SliceOf(rapid.Custom(func(rt *rapid.T) api.RoleBinding {
+			return api.RoleBinding{
+				RoleID:    rapid.SampledFrom(roleIDs).Draw(rt, "role"),
+				ScopeType: rapid.SampledFrom(scopes).Draw(rt, "scope"),
+			}
+		})).Draw(rt, "bindings")
+		want := []string{}
+		for _, b := range bindings {
+			if b.ScopeType == api.RoleBindingScopeGlobal && !slices.Contains(want, b.RoleID) {
+				want = append(want, b.RoleID)
+			}
+		}
+		slices.Sort(want)
+
+		ctx := api.WithActor(api.WithSession(t.Context(), &api.Session{UserID: u.ID}), &api.Actor{Roles: bindings})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/session", nil))
+		require.Equal(rt, http.StatusOK, rec.Code)
+		var body sessionResponse
+		require.NoError(rt, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Equal(rt, want, body.Roles)
+		require.NotNil(rt, body.Permissions)
+	})
 }

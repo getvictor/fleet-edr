@@ -6,7 +6,7 @@ import { AccountMenu } from "./AccountMenu";
 import { PermissionsProvider } from "../../permissions";
 import { PermissionAction } from "../../permissions-core";
 
-function renderMenu(permissions: string[] | undefined, onLogout = vi.fn()) {
+function renderMenu(permissions: string[] | undefined, onLogout = vi.fn(), roles?: readonly string[]) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <MemoryRouter>
@@ -14,7 +14,7 @@ function renderMenu(permissions: string[] | undefined, onLogout = vi.fn()) {
       </MemoryRouter>
     );
   }
-  render(<AccountMenu user={{ id: 1, email: "mike@fleetdm.com" }} onLogout={onLogout} />, { wrapper: Wrapper });
+  render(<AccountMenu user={{ id: 1, email: "mike@fleetdm.com" }} roles={roles} onLogout={onLogout} />, { wrapper: Wrapper });
   return { onLogout };
 }
 
@@ -149,10 +149,18 @@ describe("AccountMenu", () => {
   });
 
   it("says a session with no role has none, and names no sign-in method it does not know", () => {
-    renderMenu([]);
+    renderMenu([], vi.fn(), []);
     fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     expect(screen.getByText("Role: none")).toBeVisible();
     expect(screen.queryByText(/Signed in with/)).not.toBeInTheDocument();
+  });
+
+  // spec:web-ui/the-account-menu-names-the-session-s-role-and-sign-in-method/a-session-whose-roles-are-not-reported-names-no-role
+  it("names no role when the server did not send the session's roles", () => {
+    renderMenu([]);
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByText("mike@fleetdm.com")).toBeVisible();
+    expect(screen.queryByText(/Role:/)).not.toBeInTheDocument();
   });
 
   it("shows a break-glass badge for a local_password session", () => {

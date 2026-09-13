@@ -1751,7 +1751,7 @@ components:
 
     SessionResponse:
       type: object
-      required: [user, csrf_token]
+      required: [user, csrf_token, roles]
       properties:
         user:
           type: object
@@ -1763,7 +1763,8 @@ components:
         roles:
           type: array
           items: {type: string}
-          description: The ids of the roles the operator holds deployment-wide, sorted.
+          uniqueItems: true
+          description: The ids of the roles the operator holds deployment-wide, sorted, each once. Always present; empty when the operator holds none.
 
     ErrorResponse:
       type: object

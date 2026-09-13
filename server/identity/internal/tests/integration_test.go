@@ -177,15 +177,14 @@ func TestSessionProbe_IncludesEffectivePermissions(t *testing.T) {
 		Permissions []string               `json:"permissions"`
 		Roles       []string               `json:"roles"`
 	}
-	probeBody := func(t *testing.T, roleID string) sessionBody {
+	probeBindings := func(t *testing.T, email string, bindings ...identityrbac.BindRoleRequest) sessionBody {
 		t.Helper()
-		u, err := usersStore.Create(ctx, identityusers.CreateRequest{
-			Email: roleID + "@example.com", Password: "long-enough-password-for-test",
-		})
+		u, err := usersStore.Create(ctx, identityusers.CreateRequest{Email: email, Password: "long-enough-password-for-test"})
 		require.NoError(t, err)
-		require.NoError(t, rbacStore.BindRole(ctx, rbacStore.DB(), identityrbac.BindRoleRequest{
-			UserID: u.ID, RoleID: roleID, ScopeType: string(api.RoleBindingScopeGlobal), ScopeID: api.RoleBindingScopeWildcard,
-		}))
+		for _, b := range bindings {
+			b.UserID = u.ID
+			require.NoError(t, rbacStore.BindRole(ctx, rbacStore.DB(), b))
+		}
 		sess, err := sessionsStore.Create(ctx, u.ID, identitysessions.CreateOptions{AuthMethod: "oidc"})
 		require.NoError(t, err)
 
@@ -202,6 +201,13 @@ func TestSessionProbe_IncludesEffectivePermissions(t *testing.T) {
 		require.NotNil(t, body.Permissions, "permissions must be a present (non-null) array")
 		return body
 	}
+	global := func(roleID, scopeID string) identityrbac.BindRoleRequest {
+		return identityrbac.BindRoleRequest{RoleID: roleID, ScopeType: string(api.RoleBindingScopeGlobal), ScopeID: scopeID}
+	}
+	probeBody := func(t *testing.T, roleID string) sessionBody {
+		t.Helper()
+		return probeBindings(t, roleID+"@example.com", global(roleID, api.RoleBindingScopeWildcard))
+	}
 	probe := func(t *testing.T, roleID string) []string {
 		t.Helper()
 		return probeBody(t, roleID).Permissions
@@ -211,6 +217,18 @@ func TestSessionProbe_IncludesEffectivePermissions(t *testing.T) {
 	t.Run("the probe names the role the session carries", func(t *testing.T) {
 		body := probeBody(t, "auditor")
 		assert.Equal(t, []string{"auditor"}, body.Roles)
+	})
+
+	// spec:ui-authentication-session/the-session-probe-names-the-operator-s-roles/the-probe-returns-the-roles-the-session-carries
+	t.Run("the probe names each global role once, sorted, and no scoped one", func(t *testing.T) {
+		body := probeBindings(t, "several-roles@example.com",
+			global("senior_analyst", api.RoleBindingScopeWildcard),
+			global("auditor", api.RoleBindingScopeWildcard),
+			// A second global row for the same role, which only hand-written SQL makes: the role is still named once.
+			global("auditor", "legacy"),
+			identityrbac.BindRoleRequest{RoleID: "admin", ScopeType: "host_group", ScopeID: "g1"},
+		)
+		assert.Equal(t, []string{"auditor", "senior_analyst"}, body.Roles)
 	})
 
 	// spec:ui-authentication-session/current-user-lookup/session-probe-while-logged-in

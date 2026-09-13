@@ -33,7 +33,7 @@ type AuthState =
   // permissions is the operator's effective action set from the session probe, or
   // undefined when the server didn't return one (older server). Threaded into the
   // PermissionsProvider so the capability seam can gate nav + affordances.
-  | { status: "authed"; user: SessionInfo["user"]; authMethod: string; permissions: string[] | undefined; roles: string[] };
+  | { status: "authed"; user: SessionInfo["user"]; authMethod: string; permissions: string[] | undefined; roles: string[] | undefined };
 
 // Routes are top-level. /ui/login (and the break-glass pages) are
 // public; /ui/* otherwise probes /api/session and gates
@@ -83,7 +83,7 @@ export function AuthedApp() {
           user: info.user,
           authMethod: info.auth_method ?? "local_password",
           permissions: info.permissions,
-          roles: info.roles ?? [],
+          roles: info.roles,
         });
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -122,15 +122,15 @@ export function AuthedApp() {
   useEffect(() => {
     // When the server returns a genuine 403 for an action the UI believed was
     // permitted (e.g. the operator's role was changed after the session probe),
-    // refresh the permission set so the now-stale affordance is hidden on the next
-    // render. createDedupedRunner collapses a burst of simultaneous denials into a
+    // refresh the permission set (and the roles the account menu names) so the now-stale
+    // affordance is hidden on the next render. createDedupedRunner collapses a burst of simultaneous denials into a
     // single /api/session refetch rather than a request storm (the throttle the
     // capability-gating spec requires). A failed/again-denied refetch is a no-op for
     // auth state: the per-fetch 401 path handles session loss; a repeat 403 just
     // means still-denied.
     const refresh = createDedupedRunner(async () => {
       const info = await currentSession();
-      setAuth((prev) => (prev.status === "authed" ? { ...prev, permissions: info.permissions } : prev));
+      setAuth((prev) => (prev.status === "authed" ? { ...prev, permissions: info.permissions, roles: info.roles } : prev));
     });
     setForbiddenHandler(refresh);
     return () => { setForbiddenHandler(null); };
