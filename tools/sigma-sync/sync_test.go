@@ -195,6 +195,46 @@ func TestCompare_RefusesTwoUpstreamRulesForOneRuleID(t *testing.T) {
 	}
 }
 
+// A rule upstream moved to another category is the same rule id, so it is moved rather than kept twice, which the loader would refuse.
+// A move that also changes the rule, or only the case of its name, is still a move.
+func TestRun_MovesARuleUpstreamRecategorised(t *testing.T) {
+	t.Parallel()
+	dir := vendor(t, map[string]string{
+		"process_creation/moved.yml":     "title: moved\n",
+		"process_creation/Renamed.yml":   "title: renamed\n",
+		"process_creation/unchanged.yml": "title: unchanged\n",
+	})
+	src := fakeUpstream{files: map[string][]byte{
+		"rules/macos/file_event/moved.yml":           []byte("title: moved and edited\n"),
+		"rules/macos/process_creation/renamed.yml":   []byte("title: renamed\n"),
+		"rules/macos/process_creation/unchanged.yml": []byte("title: unchanged\n"),
+	}}
+	reportPath := filepath.Join(t.TempDir(), "report.md")
+
+	require.NoError(t, run(t.Context(), src, dir, true, reportPath))
+
+	assert.Equal(t, "title: moved and edited\n", read(t, dir, "file_event/moved.yml"))
+	assert.NoFileExists(t, filepath.Join(dir, "process_creation", "moved.yml"))
+	// Listed rather than stat'ed, because on a case-insensitive filesystem Renamed.yml "exists" as long as renamed.yml does.
+	entries, err := os.ReadDir(filepath.Join(dir, "process_creation"))
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.ElementsMatch(t, []string{"renamed.yml", "unchanged.yml"}, names)
+	assert.Equal(t, "title: renamed\n", read(t, dir, "process_creation/renamed.yml"))
+	manifest := read(t, dir, manifestName)
+	assert.Contains(t, manifest, "  file_event/moved.yml\n")
+	assert.NotContains(t, manifest, "process_creation/moved.yml")
+	assert.NotContains(t, manifest, "Renamed.yml")
+	text := read(t, filepath.Dir(reportPath), "report.md")
+	assert.Contains(t, text, "## Moved rules")
+	assert.Contains(t, text, "`process_creation/moved.yml` to `file_event/moved.yml`, from `rules/macos/file_event/moved.yml`")
+	assert.NotContains(t, text, "## Withdrawn upstream")
+	assert.NotContains(t, text, "## New rules")
+}
+
 // A rule file whose extension is upper or mixed case is one the loader runs, so it is compared and recorded like any other.
 func TestRun_ARuleWithAnUppercaseExtensionIsSynced(t *testing.T) {
 	t.Parallel()

@@ -44,15 +44,24 @@ type withdrawal struct {
 	Deprecated string
 }
 
+// move is a vendored rule upstream now keeps in another category: the same rule id at a different vendored path.
+type move struct {
+	upstreamRule
+	From string
+}
+
 // diff is how the vendored tree differs from an upstream snapshot.
 type diff struct {
 	Commit    string
 	New       []upstreamRule
 	Changed   []upstreamRule
+	Moved     []move
 	Withdrawn []withdrawal
 }
 
-func (d diff) empty() bool { return len(d.New) == 0 && len(d.Changed) == 0 && len(d.Withdrawn) == 0 }
+func (d diff) empty() bool {
+	return len(d.New) == 0 && len(d.Changed) == 0 && len(d.Moved) == 0 && len(d.Withdrawn) == 0
+}
 
 // localPathFor maps an upstream path to its place in the vendored tree, and reports whether the path is a macOS rule at all.
 //
@@ -94,10 +103,13 @@ func gitBlobSHA(content []byte) string {
 }
 
 // compare reports how the vendored tree at dir differs from the upstream snapshot.
+//
+// A vendored rule is matched to upstream by rule id, the case-folded file stem, which is how the corpus loader identifies it, not by
+// path. Matching by path would read a rule upstream moved to another category as one withdrawn and one new, and keeping both would
+// leave two files with one rule id, which the loader refuses.
 func compare(dir, commit string, entries []treeEntry) (diff, error) {
 	d := diff{Commit: commit}
-	rules := map[string]upstreamRule{}
-	byID := map[string]string{}
+	rules := map[string]upstreamRule{} // by rule id
 	deprecated := map[string]string{}
 	for _, e := range entries {
 		if parts := strings.Split(e.Path, "/"); len(parts) >= 3 && parts[0] == "deprecated" && parts[1] == "macos" {
@@ -107,33 +119,39 @@ func compare(dir, commit string, entries []treeEntry) (diff, error) {
 		if !ok {
 			continue
 		}
-		if prior, dup := byID[ruleIDKey(local)]; dup {
-			return diff{}, fmt.Errorf("upstream %s and %s would be one rule id in the vendored corpus", prior, e.Path)
+		id := ruleIDKey(local)
+		if prior, dup := rules[id]; dup {
+			return diff{}, fmt.Errorf("upstream %s and %s would be one rule id in the vendored corpus", prior.RepoPath, e.Path)
 		}
-		byID[ruleIDKey(local)] = e.Path
-		rules[local] = upstreamRule{RepoPath: e.Path, LocalPath: local, BlobSHA: e.BlobSHA}
+		rules[id] = upstreamRule{RepoPath: e.Path, LocalPath: local, BlobSHA: e.BlobSHA}
 	}
 
 	vendored, err := vendoredRules(dir)
 	if err != nil {
 		return diff{}, err
 	}
+	seen := map[string]bool{}
 	for local, content := range vendored {
-		rule, ok := rules[local]
+		id := ruleIDKey(local)
+		seen[id] = true
+		rule, ok := rules[id]
 		switch {
 		case !ok:
 			d.Withdrawn = append(d.Withdrawn, withdrawal{LocalPath: local, Deprecated: deprecated[path.Base(local)]})
+		case rule.LocalPath != local:
+			d.Moved = append(d.Moved, move{upstreamRule: rule, From: local})
 		case gitBlobSHA(content) != rule.BlobSHA:
 			d.Changed = append(d.Changed, rule)
 		}
 	}
-	for local, rule := range rules {
-		if _, ok := vendored[local]; !ok {
+	for id, rule := range rules {
+		if !seen[id] {
 			d.New = append(d.New, rule)
 		}
 	}
 	slices.SortFunc(d.New, byLocalPath)
 	slices.SortFunc(d.Changed, byLocalPath)
+	slices.SortFunc(d.Moved, func(a, b move) int { return strings.Compare(a.LocalPath, b.LocalPath) })
 	slices.SortFunc(d.Withdrawn, func(a, b withdrawal) int { return strings.Compare(a.LocalPath, b.LocalPath) })
 	return d, nil
 }
@@ -161,13 +179,17 @@ func vendoredRules(dir string) (map[string][]byte, error) {
 	return out, err
 }
 
-// apply brings the vendored tree up to the snapshot: it copies every new and changed rule verbatim and regenerates the manifest.
-// A withdrawn rule is left in place, because upstream may have withdrawn it for a reason worth recording before it is removed.
+// apply brings the vendored tree up to the snapshot: it copies every new, changed and moved rule verbatim, removes a moved rule's old
+// copy, and regenerates the manifest. A withdrawn rule is left in place, because upstream may have withdrawn it for a reason worth
+// recording before it is removed; a moved rule is the same rule at a new path, so its old copy goes.
 //
 // Every file is downloaded and checked against its blob id before anything is written, so a failed or corrupted download leaves
 // the tree as it was rather than half-synced.
 func apply(ctx context.Context, src upstream, dir string, d diff) error {
 	toWrite := append(slices.Clone(d.New), d.Changed...)
+	for _, m := range d.Moved {
+		toWrite = append(toWrite, m.upstreamRule)
+	}
 	contents := make([][]byte, len(toWrite))
 	for i, rule := range toWrite {
 		content, err := src.File(ctx, d.Commit, rule.RepoPath)
@@ -178,6 +200,13 @@ func apply(ctx context.Context, src upstream, dir string, d diff) error {
 			return fmt.Errorf("download %s: content has blob id %s, the snapshot says %s", rule.RepoPath, got, rule.BlobSHA)
 		}
 		contents[i] = content
+	}
+	// A moved rule's old copy goes before anything is written. After would be wrong on a case-insensitive filesystem, macOS's
+	// default: a rule whose name changed only in case would be written over its old copy and then removed with it.
+	for _, m := range d.Moved {
+		if err := os.Remove(filepath.Join(dir, filepath.FromSlash(m.From))); err != nil {
+			return err
+		}
 	}
 	for i, rule := range toWrite {
 		dst := filepath.Join(dir, filepath.FromSlash(rule.LocalPath))
@@ -231,6 +260,12 @@ func report(d diff) string {
 		"Copied verbatim. Each imports in monitor mode, or is refused by name if it reads telemetry this sensor does not supply.",
 		ruleLines(d.New))
 	section("Changed rules", "Copied verbatim; the diff is the review.", ruleLines(d.Changed))
+	moved := make([]string, len(d.Moved))
+	for i, m := range d.Moved {
+		moved[i] = "`" + m.From + "` to `" + m.LocalPath + "`, from `" + m.RepoPath + "`"
+	}
+	section("Moved rules",
+		"The same rule id upstream now keeps at another path. Copied verbatim to its new path, and its old copy removed.", moved)
 	withdrawn := make([]string, len(d.Withdrawn))
 	for i, w := range d.Withdrawn {
 		withdrawn[i] = "`" + w.LocalPath + "`: no longer among upstream's rules"

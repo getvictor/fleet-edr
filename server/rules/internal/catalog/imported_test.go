@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -682,9 +683,18 @@ func TestImportedCorpus_MatchesTheVendoredManifest(t *testing.T) {
 		want[name] = sum
 	}
 
+	// Compared as whole maps so one assertion reports every edit, addition and deletion at once rather than stopping at the first.
+	assert.Equal(t, want, corpusFileSums(t, fsys),
+		"a vendored rule file differs from the manifest; regenerate it only as part of a deliberate re-sync")
+}
+
+// corpusFileSums hashes every file the corpus loader would read, by the loader's own test for one, so the manifest pins exactly the
+// files that run: a rule file the loader reads and the manifest skipped would be unpinned content.
+func corpusFileSums(t *testing.T, fsys fs.FS) map[string]string {
+	t.Helper()
 	got := map[string]string{}
 	require.NoError(t, fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(name, ".yml") {
+		if err != nil || d.IsDir() || !IsCorpusFile(name) {
 			return err
 		}
 		body, readErr := fs.ReadFile(fsys, name)
@@ -694,9 +704,21 @@ func TestImportedCorpus_MatchesTheVendoredManifest(t *testing.T) {
 		got[name] = fmt.Sprintf("%x", sha256.Sum256(body))
 		return nil
 	}))
+	return got
+}
 
-	// Compared as whole maps so one assertion reports every edit, addition and deletion at once rather than stopping at the first.
-	assert.Equal(t, want, got, "a vendored rule file differs from the manifest; regenerate it only as part of a deliberate re-sync")
+func TestCorpusFileSums_CoversEveryFileTheLoaderReads(t *testing.T) {
+	t.Parallel()
+	fsys := fstest.MapFS{
+		"process_creation/a.yml": {Data: []byte("a")},
+		"process_creation/b.YML": {Data: []byte("b")},
+		"README.md":              {Data: []byte("not a rule")},
+		"MANIFEST.sha256":        {Data: []byte("not a rule")},
+	}
+	assert.Equal(t, map[string]string{
+		"process_creation/a.yml": fmt.Sprintf("%x", sha256.Sum256([]byte("a"))),
+		"process_creation/b.YML": fmt.Sprintf("%x", sha256.Sum256([]byte("b"))),
+	}, corpusFileSums(t, fsys))
 }
 
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-structurally-invalid-detection-block-fails-the-import

@@ -2,9 +2,9 @@
 
 ### Requirement: The vendored corpus is compared with upstream
 
-The project SHALL be able to compare its vendored SigmaHQ macOS rules with one snapshot of upstream, across every upstream rule tree that has macOS rules, and report each rule upstream added, each it changed, and each vendored rule it no longer carries among its rules. A vendored rule that differs from upstream by any byte SHALL be reported as changed.
+The project SHALL be able to compare its vendored SigmaHQ macOS rules with one snapshot of upstream, across every upstream rule tree that has macOS rules, and report each rule upstream added, each it changed, each it moved to another category, and each vendored rule it no longer carries among its rules. A rule SHALL be matched by its rule id, not its path, so a moved rule is not read as one withdrawn and one added. A vendored rule that differs from upstream by any byte SHALL be reported as changed.
 
-Bringing the corpus up to date SHALL copy new and changed rules byte-for-byte and regenerate the vendored manifest. It SHALL NOT delete a rule upstream withdrew, because upstream may have withdrawn it for a reason worth recording first. It SHALL NOT change the pinned import and refusal counts, so a new rule fails the corpus test until a person has read it. A downloaded file that does not match the snapshot SHALL leave the corpus unchanged.
+Bringing the corpus up to date SHALL copy new, changed and moved rules byte-for-byte, remove a moved rule's old copy, and regenerate the vendored manifest. It SHALL NOT delete a rule upstream withdrew, because upstream may have withdrawn it for a reason worth recording first. It SHALL NOT change the pinned import and refusal counts, so a new rule fails the corpus test until a person has read it. A downloaded file that does not match the snapshot SHALL leave the corpus unchanged.
 
 #### Scenario: A corpus that matches upstream changes nothing
 
