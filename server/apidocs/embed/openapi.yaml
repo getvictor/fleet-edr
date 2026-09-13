@@ -946,6 +946,105 @@ paths:
               schema:
                 $ref: "#/components/schemas/DetectionConfigError"
 
+  /api/v1/detection-config/watched-paths:
+    get:
+      tags: [Detection tuning]
+      summary: Read the watched-path set
+      description: |
+        Returns the file paths every host's file-tamper client watches on top of
+        its built-in paths, the built-in paths themselves, and the maximum number
+        of entries. Version 0 is the empty set no operator has changed.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Watched-path set
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/WatchedPathSet"
+                  - type: object
+                    required: [built_in, max_paths]
+                    properties:
+                      built_in:
+                        type: array
+                        description: Paths every host watches whatever the set holds. The set adds to these and cannot remove them.
+                        items:
+                          $ref: "#/components/schemas/WatchedPath"
+                      max_paths:
+                        type: integer
+                        description: The most entries a set may hold.
+        "403":
+          description: Caller lacks detection_config.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+    put:
+      tags: [Detection tuning]
+      summary: Replace the watched-path set
+      description: |
+        Replaces the set whole, stores it as the next version, and queues a
+        `set_watched_paths` command for every enrolled host. `reason` is
+        required and audited with the previous and new sets. A command that
+        cannot be queued for some hosts does not fail the change; the response
+        counts them.
+
+        The set is refused, and nothing stored or queued, when it has more than
+        `max_paths` entries or any entry whose path is not absolute, has an
+        empty, `.` or `..` segment, is longer than 1024 bytes, or contains a
+        control character; whose `match` is not `literal` or `prefix`; that is
+        a `literal` ending in `/`, a `prefix` not ending in `/`, or a `prefix`
+        naming a top-level directory (judged through `/private` for `/etc`,
+        `/tmp` and `/var`); or that repeats another entry.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths, reason]
+              properties:
+                paths:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/WatchedPath"
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Set replaced
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [set, fanout_hosts, fanout_failed]
+                properties:
+                  set:
+                    $ref: "#/components/schemas/WatchedPathSet"
+                  fanout_hosts:
+                    type: integer
+                    description: Enrolled hosts the command was queued for.
+                  fanout_failed:
+                    type: integer
+                    description: Of those, hosts the command could not be queued for.
+        "400":
+          description: Invalid input, a blank reason, or a set the server refuses; the message names the entry and why.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
   /api/v1/detection-config/rule-match-counts:
     get:
       tags: [Detection tuning]
@@ -2305,6 +2404,35 @@ components:
             Human-readable detail. For a refusal this carries the loader's
             own reason, naming what to fix, rather than a rephrasing of it.
 
+    WatchedPath:
+      type: object
+      required: [path, match]
+      properties:
+        path:
+          type: string
+          description: An absolute path.
+        match:
+          type: string
+          enum: [literal, prefix]
+          description: "`literal` covers exactly that file; `prefix` covers every path starting with it."
+    WatchedPathSet:
+      type: object
+      required: [version, paths]
+      properties:
+        version:
+          type: integer
+          format: int64
+        paths:
+          type: array
+          items:
+            $ref: "#/components/schemas/WatchedPath"
+        updated_at:
+          type: string
+          format: date-time
+          description: Absent until the first change.
+        updated_by:
+          type: string
+          description: Principal id of whoever made the last change; absent until the first change.
     DetectionConfigError:
       type: object
       required: [error, message]

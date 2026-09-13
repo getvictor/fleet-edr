@@ -60,7 +60,9 @@ type DetectionConfigHandler struct {
 	svc            detectionConfigService
 	authz          identityapi.AuthZ
 	principalLabel principalLabelResolver
-	logger         *slog.Logger
+	// watchedPaths serves the watched-path routes; nil leaves them unregistered (see SetWatchedPaths).
+	watchedPaths watchedPathsService
+	logger       *slog.Logger
 	// matchCountCap is the furthest back a match-count read may reach. Seeded with the constant maximum at construction and
 	// narrowed by SetCounterRetentionCap once the deployment's retention is known, so there is exactly ONE place that decides what an
 	// unconfigured or disabled retention means (api.EffectiveMatchCountCap) rather than a second fallback here that agrees with
@@ -161,6 +163,10 @@ func (h *DetectionConfigHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/v1/detection-config/rule-match-counts", h.handleListMatchCounts)
 	mux.HandleFunc("GET /api/v1/detection-config/rule-eval-stats", h.handleListEvalStats)
 	mux.HandleFunc("PUT /api/v1/detection-config/rule-settings", h.handleUpsertRuleSetting)
+	if h.watchedPaths != nil {
+		mux.HandleFunc("GET /api/v1/detection-config/watched-paths", h.handleGetWatchedPaths)
+		mux.HandleFunc("PUT /api/v1/detection-config/watched-paths", h.handleReplaceWatchedPaths)
+	}
 }
 
 func (h *DetectionConfigHandler) handleListExclusions(w http.ResponseWriter, r *http.Request) {

@@ -26,6 +26,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/operator"
 	"github.com/fleetdm/edr/server/rules/internal/ruleauthoring"
 	"github.com/fleetdm/edr/server/rules/internal/service"
+	"github.com/fleetdm/edr/server/rules/internal/watchedpaths"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 )
 
@@ -202,6 +203,8 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 			Logger:   logger,
 		})
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
+		detectionConfigH.SetWatchedPaths(watchedpaths.NewService(
+			watchedpaths.NewStore(deps.DB), deps.CommandBatchInserter, deps.HostLister, deps.Audit, logger))
 	}
 	r := &Rules{
 		svc:                    svc,
@@ -655,6 +658,8 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 //	GET  /api/v1/app-control/policies                    (when CommandBatchInserter + HostLister are wired)
 //	GET  /api/v1/app-control/policies/{id}               (when CommandBatchInserter + HostLister are wired)
 //	POST /api/v1/app-control/policies/{id}/rules         (when CommandBatchInserter + HostLister are wired)
+//	GET  /api/v1/detection-config/watched-paths          (when CommandBatchInserter + HostLister are wired)
+//	PUT  /api/v1/detection-config/watched-paths          (when CommandBatchInserter + HostLister are wired)
 //	GET  /api/v1/rule-content/documents                  (when RuleAuthor + Corpus are wired)
 //	POST /api/v1/rule-content/documents:check            (when RuleAuthor + Corpus are wired)
 //	GET  /api/v1/rule-content/documents/{path...}        (when RuleAuthor + Corpus are wired)
