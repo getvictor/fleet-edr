@@ -706,20 +706,6 @@ func (e *Engine) routeFinding(
 	}
 	f.Severity = api.ApplyModifiers(f.Severity, f.Modifiers)
 
-	// A health signal is recorded rather than alerted (issue #778). The decision is made on the kind the RULE declares, not on
-	// whether this particular finding happens to carry a health payload: the declaration is the contract, and keying on the payload
-	// would let a detection that set the field by mistake escape the alert queue, while a health rule that forgot to set it would
-	// quietly land in the queue the declaration exists to keep it out of.
-	//
-	// Placed after the mode switch resolves severity but before the mode is ACTED on, because the two policies answer different
-	// questions and only one of them applies. Mode decides whether an operator wants to be told; kind decides which surface is
-	// being told. A health rule set to monitor is a contradiction the settings surface does not offer (the rule is absent from the
-	// tunable catalog, so no setting can name it), and honouring a mode nobody can set would mean a fault silently going
-	// unrecorded because of a row nobody wrote.
-	if isHealthRule {
-		return e.recordHealthEpisode(ctx, ruleID, f)
-	}
-
 	switch mode {
 	case rulesapi.DetectionRuleModeDisabled:
 		return routeSuppressed, nil
@@ -734,8 +720,23 @@ func (e *Engine) routeFinding(
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeAlert:
-		// Fall through to the severity-override + persist path below.
+		// Fall through to the persist path below.
 	}
+
+	// A health signal is recorded rather than alerted (issue #778). The decision is made on the kind the RULE declares, not on
+	// whether this particular finding happens to carry a health payload: the declaration is the contract, and keying on the payload
+	// would let a detection that set the field by mistake escape the alert queue, while a health rule that forgot to set it would
+	// quietly land in the queue the declaration exists to keep it out of.
+	//
+	// Placed AFTER the mode switch has acted, so mode and kind compose the way they read: mode decides whether an operator wants
+	// this recorded at all, kind decides which surface records it. An earlier cut checked kind first on the grounds that no setting
+	// could name a rule absent from the tunable catalog. That was wrong: UpsertRuleSetting does not validate its rule_id against the
+	// registered set, so an operator can store a disabled or monitor setting for this rule, and ignoring it would have silently
+	// overridden a choice they made deliberately.
+	if isHealthRule {
+		return e.recordHealthEpisode(ctx, ruleID, f)
+	}
+
 	created, err := e.persistFinding(ctx, f, techniques, origin)
 	if err != nil {
 		return 0, err
@@ -769,15 +770,24 @@ func (e *Engine) recordHealthEpisode(ctx context.Context, ruleID string, f api.F
 			"rule", ruleID, "host", f.HostID)
 		return routeHealthDropped, nil
 	}
+	// The occurrence is the episode's identity, so a finding that cites no event cannot be recorded: without one, a redelivery
+	// would open a second episode for an outage already recorded, which is the property the identity exists to hold.
+	if len(f.EventIDs) == 0 {
+		e.logger.ErrorContext(ctx, "health finding dropped: no source event to record it against",
+			"rule", ruleID, "host", f.HostID)
+		return routeHealthDropped, nil
+	}
 	opened, err := e.healthRecorder.OpenHealthEpisode(ctx, endpointapi.HealthEpisode{
-		HostID:      f.HostID,
-		Component:   f.Health.Component,
-		Subject:     f.Health.Subject,
-		Kind:        f.Health.Kind,
-		Severity:    f.Severity,
-		Title:       f.Title,
-		Description: f.Description,
-		Detail:      f.Health.Detail,
+		HostID:    f.HostID,
+		Component: f.Health.Component,
+		Subject:   f.Health.Subject,
+		Kind:      f.Health.Kind,
+		// The first cited event. A health finding is raised from exactly one report, unlike a detection that can correlate several.
+		SourceEventID: f.EventIDs[0],
+		Severity:      f.Severity,
+		Title:         f.Title,
+		Description:   f.Description,
+		Detail:        f.Health.Detail,
 		// The host's clock, from the event that reported the fault. The episode's other end is stamped from the agent's own
 		// transition instant, so taking this one from the server would measure queue backlog as part of the outage and, on a
 		// backlogged queue, could stamp an opening later than the recovery that ends it.

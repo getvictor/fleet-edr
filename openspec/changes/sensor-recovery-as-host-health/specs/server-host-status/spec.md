@@ -6,7 +6,7 @@ A component's health is level state: it reports what is true now and is overwrit
 
 An episode SHALL identify the host and the component it concerns, SHALL name the kind of fault, and SHALL record when it began. It SHALL carry the fault's own machine-readable detail, so an operator reading the record does not have to parse prose to learn which component to act on.
 
-Where a component owns several independently failing parts, the episode SHALL also name WHICH part is at fault, and that name SHALL be part of the episode's identity. Two parts failing under one component are two outages, and an identity that could not tell them apart would discard the second one's detail entirely.
+Where a component owns several independently failing parts, the episode SHALL also name WHICH part is at fault. Two parts failing under one component are two outages and SHALL be recorded as two episodes, each keeping its own detail.
 
 A report that cannot name the component SHALL still be recorded, because it names a host that is not capturing and that is what an operator has to act on. Such an episode has nothing to close it and stays open: reporting a fault we cannot tie to a component is honest, and inventing a component to make it resolvable would not be.
 
@@ -14,7 +14,9 @@ An episode's opening and closing instants SHALL both be observed on the host rat
 
 An episode SHALL be closed when the component it concerns reports healthy again, recording the instant it closed. An episode that has not closed SHALL be distinguishable from one that has, so "this host is not capturing now" and "this host was not capturing for eleven hours last week" are separate answers drawn from the same record.
 
-The system SHALL record at most one open episode per host, component, faulting part, and fault kind. A fault re-asserted while its episode is open SHALL leave that episode open and unchanged rather than opening a second one, because the level state that re-asserts it does so on every check-in for as long as the fault persists, and an episode per check-in would describe one outage as hundreds.
+An episode SHALL be identified by the occurrence it records, so that recording the same occurrence again changes nothing. A fault is reported once per outage, and the repetition the system actually sees is REDELIVERY of that one report: delivery is at-least-once, so a report can be processed, acknowledged poorly, and processed again. Recording SHALL therefore collapse on the occurrence whether or not the episode has closed in between, and a later outage SHALL open its own episode because it is its own occurrence.
+
+Identifying an episode by "a fault of this kind is open for this component" instead is NOT sufficient, and is worth stating because it is the obvious design and it is wrong here: the key stops matching the moment the episode closes, so a redelivery arriving after a recovery records the same outage a second time.
 
 A component reporting healthy when no episode is open SHALL be accepted and change nothing. A host reporting healthy for a component it has never reported a fault for is the overwhelmingly common case and is not an error.
 
@@ -40,11 +42,12 @@ A component reporting healthy when no episode is open SHALL be accepted and chan
 - **THEN** an episode is recorded for that host
 - **AND** it remains open, because no component recovery can be matched to it
 
-#### Scenario: A re-asserted fault does not open a second episode
+#### Scenario: A redelivered report does not open a second episode
 
-- **GIVEN** a host with an open episode for a component
-- **WHEN** the same fault is reported again for that host and component
-- **THEN** the open episode is unchanged and no second episode is opened
+- **GIVEN** a host with an episode recorded for a reported fault
+- **WHEN** the same report is delivered and processed again
+- **THEN** the recorded episode is unchanged and no second episode is opened
+- **AND** this holds whether that episode is still open or has already closed
 
 #### Scenario: An episode closes when the component recovers
 

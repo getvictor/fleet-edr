@@ -19,6 +19,17 @@ type HealthEpisodeKind = string
 // condition, so the record and the level state that reports it read as one thing.
 const KindSelfHealFailed HealthEpisodeKind = "self_heal_failed"
 
+// The widths the episode's identifying columns are stored at. Exported because the producer has to respect them: a value that does
+// not fit fails the insert, and that failure reaches the caller as a persistence error, which nacks the whole event batch and has it
+// retried forever. A producer that cannot fit its value refuses the finding instead, which costs one report rather than a stuck
+// queue. These are ours-to-ours values (the agent reports registered component and provider names), so exceeding them means a
+// malformed or hostile report rather than a legitimate long name.
+const (
+	MaxHealthComponentLen = 64
+	MaxHealthSubjectLen   = 128
+	MaxHealthKindLen      = 64
+)
+
 // HealthEpisode is a component fault that needed a person, recorded as an interval rather than as level state.
 //
 // It exists because the two questions an operator asks have different shapes. "Is this host capturing right now" is level state
@@ -34,16 +45,21 @@ type HealthEpisode struct {
 	ID        int64  `db:"id" json:"id"`
 	HostID    string `db:"host_id" json:"host_id"`
 	Component string `db:"component" json:"component"`
-	// Subject is WHICH thing inside the component is at fault, and it is part of the open-episode identity. One component can own
-	// several independently failing parts (network_extension owns both content_filter and dns_proxy), so without it the second
-	// part's failure would collide with the first's episode and its detail would be discarded. Empty for a fault that concerns the
-	// component as a whole.
-	Subject     string            `db:"subject" json:"subject,omitempty"`
-	Kind        HealthEpisodeKind `db:"kind" json:"kind"`
-	Severity    string            `db:"severity" json:"severity"`
-	Title       string            `db:"title" json:"title"`
-	Description string            `db:"description" json:"description,omitempty"`
-	Detail      NullRawJSON       `db:"detail" json:"detail,omitempty"`
+	// Subject is WHICH thing inside the component is at fault (for a capture-provider failure, the provider). Data an operator reads
+	// and filters on, not identity: two providers failing under one extension are two outages because they arrive as two events.
+	Subject string            `db:"subject" json:"subject,omitempty"`
+	Kind    HealthEpisodeKind `db:"kind" json:"kind"`
+	// SourceEventID is the occurrence this episode records, and with the host it is the episode's identity.
+	//
+	// The producer emits one event per outage, so the only repetition the server sees is REDELIVERY of that event: delivery is
+	// at-least-once, so a batch can be evaluated, acked poorly, and evaluated again. Keying on the occurrence collapses those onto
+	// one record whether or not the episode has closed in between, and lets a genuinely later outage open its own because it
+	// carries its own event. It is the same identity the alert this replaced deduplicated on.
+	SourceEventID string      `db:"source_event_id" json:"source_event_id"`
+	Severity      string      `db:"severity" json:"severity"`
+	Title         string      `db:"title" json:"title"`
+	Description   string      `db:"description" json:"description,omitempty"`
+	Detail        NullRawJSON `db:"detail" json:"detail,omitempty"`
 	// OpenedAtNs and ResolvedAtNs are both AGENT-observed instants, not server processing times. The interval between them is the
 	// whole value of the record, and mixing the two clocks would measure queue backlog and delivery delay as part of the outage, or
 	// on a skewed host produce a resolution before its own opening.
@@ -77,8 +93,8 @@ type SelfHealFailedDetail struct {
 // engine holds one: it evaluates the agent's report and decides that the finding is a health signal rather than a detection, but
 // host health is the endpoint context's to own, so the engine states the fact and this context decides what storing it means.
 //
-// OpenHealthEpisode is idempotent for as long as the episode it opens stays open. A fault is level state on the agent, re-asserted
-// on every check-in for as long as it persists, so a recorder that opened a row per report would describe one outage as hundreds.
+// OpenHealthEpisode is idempotent on the occurrence it records, so a redelivered event collapses onto the episode it already opened
+// rather than opening a second one for an outage that is already recorded.
 type HealthEpisodeRecorder interface {
 	OpenHealthEpisode(ctx context.Context, e HealthEpisode) (opened bool, err error)
 }

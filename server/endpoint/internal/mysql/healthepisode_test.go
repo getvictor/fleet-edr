@@ -18,20 +18,27 @@ func selfHealEpisode(hostID, component string, openedAtNs int64) api.HealthEpiso
 // selfHealEpisodeFor names the provider, which is the episode's subject: two providers under one extension are two outages and must
 // not collide on one open episode.
 func selfHealEpisodeFor(hostID, component, provider string, openedAtNs int64) api.HealthEpisode {
+	return selfHealEpisodeOf(hostID, component, provider, "evt-"+component+"-"+provider, openedAtNs)
+}
+
+// selfHealEpisodeOf names the source event too, which IS the episode's identity: two calls with one event id are one occurrence
+// however else they differ.
+func selfHealEpisodeOf(hostID, component, provider, eventID string, openedAtNs int64) api.HealthEpisode {
 	detail, err := json.Marshal(api.SelfHealFailedDetail{Provider: provider, Outcome: "enable_ineffective", Attempts: 5})
 	if err != nil {
 		panic(err)
 	}
 	return api.HealthEpisode{
-		HostID:      hostID,
-		Component:   component,
-		Subject:     provider,
-		Kind:        api.KindSelfHealFailed,
-		Severity:    "critical",
-		Title:       "EDR sensor could not be restored",
-		Description: "automatic recovery gave up on content_filter",
-		Detail:      detail,
-		OpenedAtNs:  openedAtNs,
+		HostID:        hostID,
+		Component:     component,
+		Subject:       provider,
+		SourceEventID: eventID,
+		Kind:          api.KindSelfHealFailed,
+		Severity:      "critical",
+		Title:         "EDR sensor could not be restored",
+		Description:   "automatic recovery gave up on content_filter",
+		Detail:        detail,
+		OpenedAtNs:    openedAtNs,
 	}
 }
 
@@ -42,7 +49,7 @@ func openEpisodes(t *testing.T, db *sqlx.DB, hostID string) []api.HealthEpisode 
 	t.Helper()
 	var out []api.HealthEpisode
 	require.NoError(t, db.SelectContext(t.Context(), &out, `
-		SELECT id, host_id, component, subject, kind, severity, title, description, detail, opened_at_ns, resolved_at_ns
+		SELECT id, host_id, component, subject, kind, source_event_id, severity, title, description, detail, opened_at_ns, resolved_at_ns
 		FROM host_health_episodes WHERE host_id = ? AND resolved_at_ns IS NULL ORDER BY id`, hostID))
 	return out
 }
@@ -51,7 +58,7 @@ func allEpisodes(t *testing.T, db *sqlx.DB, hostID string) []api.HealthEpisode {
 	t.Helper()
 	var out []api.HealthEpisode
 	require.NoError(t, db.SelectContext(t.Context(), &out, `
-		SELECT id, host_id, component, subject, kind, severity, title, description, detail, opened_at_ns, resolved_at_ns
+		SELECT id, host_id, component, subject, kind, source_event_id, severity, title, description, detail, opened_at_ns, resolved_at_ns
 		FROM host_health_episodes WHERE host_id = ? ORDER BY id`, hostID))
 	return out
 }
@@ -90,31 +97,59 @@ func TestOpenHealthEpisode_RecordsTheFaultsOwnFields(t *testing.T) {
 	assert.Equal(t, api.SelfHealFailedDetail{Provider: "content_filter", Outcome: "enable_ineffective", Attempts: 5}, detail)
 }
 
-// spec:server-host-status/the-server-records-host-health-episodes/a-re-asserted-fault-does-not-open-a-second-episode
+// spec:server-host-status/the-server-records-host-health-episodes/a-redelivered-report-does-not-open-a-second-episode
 //
-// TestOpenHealthEpisode_ReAssertingAFaultDoesNotOpenASecond is the property the whole schema shape exists for. The fault is level
-// state on the agent and is re-reported for as long as it lasts, so a recorder that opened a row per report would describe one
-// outage as hundreds and make the duration meaningless.
+// TestOpenHealthEpisode_ARedeliveredEventDoesNotOpenASecond is the property the identity exists for. The agent emits one event per
+// outage, so the repetition the server sees is REDELIVERY: event delivery is at-least-once, so a batch can be evaluated, acked
+// poorly, and evaluated again. Each replay must collapse onto the episode already recorded.
 //
-// The later report also must not MOVE the opened_at time: the episode's value is when the outage began, and re-stamping it on every
-// report would leave a week-long outage permanently reporting that it started a minute ago.
-func TestOpenHealthEpisode_ReAssertingAFaultDoesNotOpenASecond(t *testing.T) {
+// A replay must also not MOVE the opened_at time: the episode's value is when the outage began, and re-stamping it would leave a
+// week-long outage permanently reporting that it started a minute ago.
+func TestOpenHealthEpisode_ARedeliveredEventDoesNotOpenASecond(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", 100))
 	require.NoError(t, err)
 	require.True(t, opened)
 
 	for _, at := range []int64{200, 300, 400} {
-		opened, err = s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", at))
+		opened, err = s.OpenHealthEpisode(t.Context(),
+			selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", at))
 		require.NoError(t, err)
-		assert.False(t, opened, "a fault that already has an open episode is not opened again")
+		assert.False(t, opened, "a redelivered event is the same occurrence and is already recorded")
 	}
 
 	got := openEpisodes(t, db, "host-a")
-	require.Len(t, got, 1, "one outage is one episode however many times it is reported")
-	assert.Equal(t, int64(100), got[0].OpenedAtNs, "the episode keeps the instant the outage began, not the latest report")
+	require.Len(t, got, 1, "one outage is one episode however many times its event is delivered")
+	assert.Equal(t, int64(100), got[0].OpenedAtNs, "the episode keeps the instant the outage began, not the latest delivery")
+}
+
+// TestOpenHealthEpisode_ARedeliveryAfterTheEpisodeClosedIsStillTheSameOccurrence is the case an open-episode key could not hold, and
+// the reason the identity is the occurrence rather than "is something open for this component".
+//
+// The sequence is ordinary under at-least-once delivery: the event is evaluated and opens an episode, a check-in closes it, and then
+// the batch is redelivered after a nack or a lost ack. Keyed on openness, the closed row would no longer match and the replay would
+// record the same outage a second time, which is exactly what the requirement forbids.
+func TestOpenHealthEpisode_ARedeliveryAfterTheEpisodeClosedIsStillTheSameOccurrence(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	e := selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", 100)
+	opened, err := s.OpenHealthEpisode(t.Context(), e)
+	require.NoError(t, err)
+	require.True(t, opened)
+
+	require.NoError(t, s.UpsertHostHealth(t.Context(), "host-a", "healthy", nil, 900))
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), closed)
+
+	opened, err = s.OpenHealthEpisode(t.Context(), e)
+	require.NoError(t, err)
+	assert.False(t, opened, "the outage is already recorded; a replay must not resurrect it as a second one")
+	assert.Len(t, allEpisodes(t, db, "host-a"), 1)
+	assert.Empty(t, openEpisodes(t, db, "host-a"), "and must not reopen a host that has recovered")
 }
 
 // TestOpenHealthEpisode_SeparatesHostsComponentsAndKinds: the uniqueness is per (host, component, kind), so two hosts with the same
@@ -161,8 +196,11 @@ func TestCloseHealthEpisodes_ClosesOnRecoveryAndAllowsTheNextOne(t *testing.T) {
 	assert.Equal(t, int64(900), *all[0].ResolvedAtNs)
 	assert.Equal(t, int64(800), *all[0].ResolvedAtNs-all[0].OpenedAtNs, "the interval is the answer the record exists to give")
 
-	// A second outage on the same component later is a separate episode, not a reopening of the first.
-	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 1000))
+	// A second outage on the same component later is a separate episode, not a reopening of the first. It is a separate OCCURRENCE,
+	// carrying its own event, which is exactly how the agent reports it: the event fires at the edge where a repair budget is spent,
+	// so a later exhaustion is a later event.
+	opened, err := s.OpenHealthEpisode(t.Context(),
+		selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-second-outage", 1000))
 	require.NoError(t, err)
 	assert.True(t, opened)
 	assert.Len(t, allEpisodes(t, db, "host-a"), 2, "two outages separated by a recovery are two records")
@@ -257,7 +295,7 @@ func TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes(t *testin
 	// Re-asserting one of them still does not open a third: the subject narrows the key, it does not remove the deduplication.
 	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", "dns_proxy", 200))
 	require.NoError(t, err)
-	assert.False(t, opened)
+	assert.False(t, opened, "the same provider's event redelivered is the same occurrence")
 	assert.Len(t, openEpisodes(t, db, "host-a"), 2)
 }
 

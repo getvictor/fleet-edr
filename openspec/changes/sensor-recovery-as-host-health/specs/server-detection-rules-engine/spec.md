@@ -51,7 +51,9 @@ The finding SHALL report which failure shape was reached, because they implicate
 
 The rule SHALL NOT wait or re-evaluate before deciding. Unlike the stop finding, whose meaning depends on what happens next, its input reports a settled outcome.
 
-Repeated evaluation of one exhaustion SHALL collapse to a single episode, while a separate exhaustion after the first has closed SHALL open its own.
+Repeated evaluation of one exhaustion SHALL collapse to a single episode, whether or not that episode has closed in between, while a separate exhaustion SHALL open its own.
+
+An operator's mode setting for this rule SHALL be honoured as it is for any other rule: a rule an operator disabled records nothing. The rule is absent from the tunable catalog, but the settings API does not validate a rule id against the registered set, so such a setting can exist and ignoring it would silently override a deliberate choice.
 
 A provider an operator has deliberately disabled SHALL NOT produce a finding. The agent does not attempt to repair a provider reported as a supported opt-out, so no record exists for it to evaluate.
 

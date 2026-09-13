@@ -167,6 +167,13 @@ func (r *SensorRecoveryFailed) evalEvent(_ context.Context, evt api.Event, _ api
 	if p.Provider == "" {
 		return nil, nil
 	}
+	// A value too long to store is refused here rather than at the write. The recorder reports a failed insert as a persistence
+	// error, which nacks the whole batch and has it retried forever, so one malformed report would stall every event behind it.
+	// These names are our own agent's registered constants, so exceeding the width means a malformed or hostile report, and
+	// declining it costs that one report. Same posture as the empty-provider check above.
+	if len(p.Provider) > endpointapi.MaxHealthSubjectLen || len(p.Component) > endpointapi.MaxHealthComponentLen {
+		return nil, nil
+	}
 
 	// The same three facts the description states in prose, as fields. The finding is recorded as a health episode rather than as
 	// an alert (issue #778), and the surface that reads an episode filters and groups on the provider and the outcome rather than

@@ -111,6 +111,8 @@ func TestEngine_HealthFindingIsRecordedNotAlerted(t *testing.T) {
 	assert.Equal(t, api.SeverityCritical, got.Severity, "the move to health must not quietly downgrade how urgent it is")
 	assert.Equal(t, "EDR sensor could not be restored", got.Title)
 	assert.Equal(t, "content_filter", got.Subject, "two providers under one extension must not collide on one episode")
+	assert.Equal(t, "e1", got.SourceEventID,
+		"the occurrence is the episode's identity, so a redelivery of this event collapses onto the record it already made")
 	assert.Equal(t, int64(4_242), got.OpenedAtNs,
 		"the episode opens on the HOST's clock, from the event: server time would measure queue backlog as part of the outage")
 
@@ -223,4 +225,45 @@ type findingRule struct {
 func (r *findingRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
 	r.calls++
 	return []api.Finding{r.finding}, nil
+}
+
+// TestEngine_HealthRuleHonoursAnOperatorsMode: a health signal obeys a mode an operator set, like any other rule.
+//
+// An earlier cut routed on kind BEFORE the mode was acted on, reasoning that no setting could name a rule absent from the tunable
+// catalog. UpsertRuleSetting does not validate its rule id against the registered set, so such a setting can exist, and ignoring it
+// silently overrode a deliberate choice. Disabled records nothing; the nil store proves it did not become an alert either.
+func TestEngine_HealthRuleHonoursAnOperatorsMode(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []rulesapi.DetectionRuleMode{rulesapi.DetectionRuleModeDisabled, rulesapi.DetectionRuleModeMonitor} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			rec := &recordingRecorder{opened: true}
+			rule := &healthRule{stubRule: stubRule{id: "sensor_recovery_failed"}, finding: healthFinding()}
+			e := New(nil, nil)
+			e.SetHealthEpisodeRecorder(rec)
+			e.SetModeResolver(overridingResolver{mode: mode})
+			e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+			require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
+			assert.Empty(t, rec.episodes, "a rule an operator suppressed records nothing")
+		})
+	}
+}
+
+// TestEngine_HealthFindingCitingNoEventIsDropped: the occurrence is the identity, so a finding that cites no event cannot be
+// recorded without losing the property that a redelivery collapses onto one record.
+func TestEngine_HealthFindingCitingNoEventIsDropped(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRecorder{opened: true}
+	finding := healthFinding()
+	finding.EventIDs = nil
+	rule := &healthRule{stubRule: stubRule{id: "sensor_recovery_failed"}, finding: finding}
+	e := New(nil, nil)
+	e.SetHealthEpisodeRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+	assert.NotPanics(t, func() {
+		require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
+	})
+	assert.Empty(t, rec.episodes, "an episode with no occurrence could be recorded twice by one redelivery")
 }

@@ -527,6 +527,12 @@ func TestEscalationNamesWhichFailureShapeItWas(t *testing.T) {
 			assert.Equal(t, "content_filter", got.Provider)
 			assert.Equal(t, tc.wantOutcome, got.Outcome)
 			assert.Equal(t, 3, got.Attempts, "the attempt count is carried so the finding can say the repair was really tried")
+			// Asserted HERE rather than only in the emitter's tests, which supply a component directly and so cannot notice this
+			// one going missing. The server closes a health episode by matching the component, so an escalation that stopped
+			// reporting it would leave every episode from a current agent unattributed and permanently open, with every test in
+			// both packages still green.
+			assert.Equal(t, "network_extension", got.Component,
+				"the escalation must name the component it was configured for; the server closes the episode against it")
 		})
 	}
 }

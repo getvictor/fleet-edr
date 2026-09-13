@@ -13,39 +13,42 @@
 -- a JSON document (for self_heal_failed: the provider, the outcome, and the attempt count), so a reader gets them as fields instead
 -- of parsing them back out of prose.
 --
--- subject is WHICH thing inside the component is at fault, and it is part of the open-episode key. One component can own several
--- independently failing parts: network_extension owns both content_filter and dns_proxy, and the self-heal controller reports each
--- separately, so a key of (host, component, kind) alone would let the second provider's failure collide with the first and be
--- discarded, losing its provider, outcome, and attempt count. It is the empty string for a fault that concerns the component as a
--- whole, which still keys correctly because the empty string is a value like any other here (unlike NULL, which would make every
--- such row distinct and defeat the deduplication).
+-- subject is WHICH thing inside the component is at fault (for a capture-provider failure, the provider). It is data an operator
+-- reads and filters on, not part of the identity: the identity is the occurrence below.
 --
--- open_episode exists to make "at most one OPEN episode per host, component, subject and kind" a schema guarantee rather than a
--- read-then-write in application code, which under concurrent ingest across replicas is a race that would record one outage as several. It is
--- a generated column that is 1 while resolved_at_ns IS NULL and NULL once the episode closes, combined with the unique key below:
--- MySQL treats NULLs in a unique index as distinct, so any number of CLOSED episodes may share a key while at most one open one can
--- exist. That makes re-asserting a fault an INSERT that collides and is ignored, and it makes it impossible for a bug elsewhere to
--- open a second concurrent episode for one outage.
+-- source_event_id is the occurrence identity, and (host_id, source_event_id) is what deduplicates. It is the same identity the alert
+-- this replaced used, for the same reason: the producer emits ONE event per outage (the agent's self-heal escalates health level
+-- state on every later report but fires the event only at the edge where its repair budget is spent), so the only repetition the
+-- server sees is REDELIVERY of that one event. Event delivery is at-least-once, so a batch can be evaluated, acked poorly, and
+-- evaluated again.
+--
+-- An earlier cut of this keyed "at most one OPEN episode per host, component, subject and kind" through a generated column instead.
+-- That was built for a repetition that does not happen, and it broke on the one that does: once the episode closed, the key no
+-- longer matched, so a redelivered event opened a second episode for an outage that was already recorded and resolved. Keying on the
+-- occurrence handles both shapes, needs no generated column, and lets a genuinely later outage open its own episode because it
+-- carries its own event.
 --
 -- No foreign key to any host table, matching host_health above: the endpoint context owns this table, and cross-context FKs are
 -- deliberately avoided here.
 CREATE TABLE IF NOT EXISTS host_health_episodes (
-	id            BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
-	host_id       VARCHAR(255) NOT NULL,
-	component     VARCHAR(64)  NOT NULL,
-	subject       VARCHAR(128) NOT NULL DEFAULT '',
-	kind          VARCHAR(64)  NOT NULL,
-	severity      VARCHAR(16)  NOT NULL,
-	title         VARCHAR(255) NOT NULL,
-	description   TEXT         NULL,
-	detail        JSON         NULL,
-	opened_at_ns  BIGINT       NOT NULL,
-	resolved_at_ns BIGINT      NULL,
-	created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	open_episode  TINYINT GENERATED ALWAYS AS (CASE WHEN resolved_at_ns IS NULL THEN 1 ELSE NULL END) VIRTUAL,
-	UNIQUE KEY uniq_host_health_open (host_id, component, subject, kind, open_episode),
+	id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+	host_id         VARCHAR(255) NOT NULL,
+	component       VARCHAR(64)  NOT NULL,
+	subject         VARCHAR(128) NOT NULL DEFAULT '',
+	kind            VARCHAR(64)  NOT NULL,
+	source_event_id VARCHAR(255) NOT NULL,
+	severity        VARCHAR(16)  NOT NULL,
+	title           VARCHAR(255) NOT NULL,
+	description     TEXT         NULL,
+	detail          JSON         NULL,
+	opened_at_ns    BIGINT       NOT NULL,
+	resolved_at_ns  BIGINT       NULL,
+	created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE KEY uniq_host_health_occurrence (host_id, source_event_id),
 	INDEX idx_host_health_episodes_host (host_id, opened_at_ns),
-	INDEX idx_host_health_episodes_open (open_episode, opened_at_ns)
+	-- The open-episodes read ("which hosts need attention now") and the per-component close both scan on these.
+	INDEX idx_host_health_episodes_open (resolved_at_ns, opened_at_ns),
+	INDEX idx_host_health_episodes_component (host_id, component, resolved_at_ns)
 );
 -- +goose StatementEnd
 
