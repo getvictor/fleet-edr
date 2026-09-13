@@ -22,3 +22,19 @@ For each monitored extension the agent SHALL report reason `never_connected` whi
 - **WHEN** the receiver emits its reboot-required signal
 - **THEN** the `network_extension` component reports status `unhealthy` with reason `reboot_required` and a message saying to restart the Mac
 - **AND** it reports its connected state again once a session is established
+
+### Requirement: The agent maintains a per-component health registry
+
+The agent SHALL maintain a health registry mapping each monitored component to a current condition carrying a status, a machine-readable reason, a human-readable message, and the timestamp the condition last changed. The registry SHALL be updated from the agent's existing per-service XPC connectivity state and its connect and disconnect transitions. The last-transition timestamp of a component SHALL advance only when that component's status or reason actually changes, so that the timestamp denotes the start of the current condition: a new reason at the same status, such as `never_connected` becoming `reboot_required`, is a new condition. A change to the status or reason SHALL be reported without waiting for the next periodic post.
+
+#### Scenario: A connected extension is healthy
+
+- **GIVEN** the endpoint-security extension XPC session is established
+- **WHEN** the registry is read
+- **THEN** the `endpoint_security_extension` component reports status `healthy` with reason `activated`
+
+#### Scenario: The last-transition timestamp is stable across unchanged reads
+
+- **GIVEN** a component whose status and reason have not changed since they were last set
+- **WHEN** the registry is updated again with the same status and reason
+- **THEN** the component's last-transition timestamp is unchanged
