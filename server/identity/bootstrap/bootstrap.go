@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -295,7 +296,8 @@ func newSSOApplyFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.
 	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string,
 ) error {
 	return func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string) error {
-		tx, err := db.BeginTxx(ctx, nil)
+		// REPEATABLE READ explicitly, whatever the server's default: the OIDC version check relies on its gap lock (see UpsertInput).
+		tx, err := db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
 		}

@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"bytes"
+	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
@@ -412,4 +414,56 @@ func TestNewOIDCJITPolicyFn(t *testing.T) {
 		_, err := fn(t.Context())
 		require.Error(t, err)
 	})
+}
+
+// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/a-stale-update-is-refused
+//
+// Two first saves both based on version 0 race on the row neither found: one is saved and the other is refused as a version conflict,
+// never overwriting the first. The second transaction takes the version check's lock first, so the first one's insert has to wait on
+// it and the two usually deadlock, which is the path the conflict mapping exists for; whichever order the database resolves them in,
+// exactly one wins.
+func TestSSOConfigUpsert_ConcurrentFirstSavesBasedOnVersionZero(t *testing.T) {
+	t.Parallel()
+	db, store := newSSOStore(t, sealerKeyA)
+	ctx := t.Context()
+	save := func(issuer string) ssoconfig.UpsertInput {
+		return ssoconfig.UpsertInput{
+			Issuer: issuer, ClientID: "cid", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+			ExpectedVersion: new(int64(0)),
+		}
+	}
+	repeatableRead := &sql.TxOptions{Isolation: sql.LevelRepeatableRead}
+	first, err := db.BeginTxx(ctx, repeatableRead)
+	require.NoError(t, err)
+	defer func() { _ = first.Rollback() }()
+	second, err := db.BeginTxx(ctx, repeatableRead)
+	require.NoError(t, err)
+	defer func() { _ = second.Rollback() }()
+
+	var version int64
+	require.ErrorIs(t, second.GetContext(ctx, &version, `SELECT config_version FROM oidc_config WHERE id = 1 FOR UPDATE`), sql.ErrNoRows)
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- store.UpsertTx(ctx, first, save("https://first.example.com")) }()
+	assert.Eventually(t, func() bool {
+		var waiting int
+		_ = db.GetContext(ctx, &waiting,
+			`SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state = 'LOCK WAIT' AND trx_query LIKE '%oidc_config%'`)
+		return waiting > 0
+	}, 5*time.Second, 20*time.Millisecond, "the first save's insert waits on the second transaction's lock")
+
+	winner := "https://second.example.com"
+	if secondErr := store.UpsertTx(ctx, second, save(winner)); secondErr == nil {
+		require.NoError(t, second.Commit())
+		require.ErrorIs(t, <-firstErr, ssoconfig.ErrVersionConflict)
+	} else {
+		require.ErrorIs(t, secondErr, ssoconfig.ErrVersionConflict)
+		require.NoError(t, second.Rollback())
+		require.NoError(t, <-firstErr)
+		require.NoError(t, first.Commit())
+		winner = "https://first.example.com"
+	}
+	cfg, err := store.Get(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, winner, cfg.Issuer, "the save that lost did not overwrite the one that won")
+	assert.Equal(t, int64(1), cfg.Version)
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/identity/api"
@@ -102,7 +103,8 @@ type UpsertInput struct {
 	GroupsClaim string
 	GroupRoles  []GroupRole
 	// ExpectedVersion, when set, refuses the write with ErrVersionConflict unless the stored config_version equals it (0 when nothing is
-	// stored yet). It is checked under a row lock, so it holds against a concurrent writer only when ext is a transaction.
+	// stored yet). It is checked under a row lock, so it holds against a concurrent writer only when ext is a REPEATABLE READ
+	// transaction, whose gap lock also makes two first saves conflict.
 	ExpectedVersion *int64
 	UpdatedBy       string
 }
@@ -214,6 +216,35 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 
 // UpsertTx is Upsert against a caller-supplied executor (*sqlx.Tx or the Store's *sqlx.DB), so the write can join a transaction that
 // also updates other tables atomically (e.g. the SSO admin update that writes oidc_config and app_config together).
+const (
+	upsertRotatingClientKey = `
+		INSERT INTO oidc_config
+			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles, config_version, updated_by)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+		ON DUPLICATE KEY UPDATE
+			issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
+			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
+			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
+			config_version = config_version + 1, updated_by = VALUES(updated_by)`
+	upsertKeepingClientKey = `
+		INSERT INTO oidc_config
+			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles, config_version, updated_by)
+		VALUES (1, ?, ?, NULL, ?, ?, ?, ?, ?, 1, ?)
+		ON DUPLICATE KEY UPDATE
+			issuer = VALUES(issuer), client_id = VALUES(client_id),
+			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
+			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
+			config_version = config_version + 1, updated_by = VALUES(updated_by)`
+)
+
+// mysqlErrDeadlock is the error a version-checked first save that lost its race ends with: the deadlock the two inserts' gap locks make.
+const mysqlErrDeadlock = 1213
+
+func lostFirstSave(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDeadlock
+}
+
 func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInput) error {
 	scopes := strings.Join(in.Scopes, ",")
 	// An unset updater records the system principal (env-seed / background write), matching the column's NOT NULL DEFAULT 'sys' and its
@@ -233,41 +264,26 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 		}
 	}
 	groupRoles := encodeGroupRoles(in.GroupRoles)
+	// The two statements differ only in whether they write the sealed client secret column.
 
+	var err error
 	if in.NewSecret != nil {
-		sealed, err := s.sealer.Seal([]byte(*in.NewSecret))
-		if err != nil {
-			return err
+		sealed, sealErr := s.sealer.Seal([]byte(*in.NewSecret))
+		if sealErr != nil {
+			return sealErr
 		}
-		_, err = ext.ExecContext(ctx, `
-			INSERT INTO oidc_config
-				(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles,
-				 config_version, updated_by)
-			VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-			ON DUPLICATE KEY UPDATE
-				issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
-				scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
-				groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
-				config_version = config_version + 1, updated_by = VALUES(updated_by)`,
+		_, err = ext.ExecContext(ctx, upsertRotatingClientKey,
 			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
-		if err != nil {
-			return fmt.Errorf("ssoconfig: upsert with secret: %w", err)
-		}
-		return nil
+	} else {
+		// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
+		_, err = ext.ExecContext(ctx, upsertKeepingClientKey,
+			in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
 	}
-
-	// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
-	_, err := ext.ExecContext(ctx, `
-		INSERT INTO oidc_config
-			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, groups_claim, group_roles,
-			 config_version, updated_by)
-		VALUES (1, ?, ?, NULL, ?, ?, ?, ?, ?, 1, ?)
-		ON DUPLICATE KEY UPDATE
-			issuer = VALUES(issuer), client_id = VALUES(client_id),
-			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
-			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
-			config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
+	// Two version-checked first saves race on the row neither found. In a REPEATABLE READ transaction each holds the gap lock its FOR
+	// UPDATE took, so one insert is rolled back as a deadlock: that save lost, and it is a conflict rather than an error.
+	if in.ExpectedVersion != nil && lostFirstSave(err) {
+		return ErrVersionConflict
+	}
 	if err != nil {
 		return fmt.Errorf("ssoconfig: upsert: %w", err)
 	}

@@ -148,5 +148,5 @@ The `payload.reason` column on a failure narrows the cause (`unknown_subject`, `
 
 - [`breakglass.md`](breakglass.md): the recovery path when SSO is unavailable.
 - [`install-server.md`](install-server.md): the rest of the `EDR_*` env vars the server reads at boot.
-- [`authz.md`](authz.md): the role matrix and the role JIT-provisioned OIDC users inherit (currently every new identity lands in `analyst`; admins promote from the Users page in Admin settings).
+- [`authz.md`](authz.md): the role matrix and the role a JIT-provisioned OIDC user gets: the default role (`analyst` unless changed), promoted from the Users page in Admin settings, or with group to role mapping the role their groups map to.
 - [`threat-model.md`](threat-model.md): the threat coverage the OIDC + reauth controls close.
