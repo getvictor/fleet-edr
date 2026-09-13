@@ -10,7 +10,7 @@ The exclusion guidance steers operators toward full absolute paths rather than s
 
 ## What changes
 
-- **The Value column has a maximum width.** The column is as wide as its longest value up to 24rem. A longer value wraps onto further lines inside the column rather than widening the table.
+- **The Value column has a maximum width.** A value is laid out as wide as it is up to 24rem, and the column adds the table's usual cell padding. A longer value wraps onto further lines inside the column rather than widening the table.
 - **The cap applies to the value, not the table cell.** A table cell ignores `max-width` in automatic layout, and letting the cell break anywhere shrinks the column far below the cap, wrapping a long glob over many lines while the table has room to spare. Capping the value block keeps the column at the cap and wraps only what exceeds it.
 
 ## Why this approach

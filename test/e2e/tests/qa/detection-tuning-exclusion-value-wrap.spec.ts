@@ -8,7 +8,7 @@ import { openDB } from "../../fixtures/db";
 //
 // The first fix capped the CELL with overflow-wrap: anywhere. That wrapped, and it was still wrong: a table cell ignores max-width in
 // automatic layout, and anywhere drops the column's min-content width to one character, so the column was squeezed to a few
-// characters and a 70-character glob ran over four lines while the table had room to spare. So the test pins both directions: the
+// characters and a long glob ran over four lines while the table had room to spare. So the test pins both directions: the
 // long value wraps, and it wraps AT the cap rather than well short of it.
 
 // A real value from a live deployment, long enough to exceed the cap on any viewport.
@@ -21,12 +21,17 @@ const CAP_REM = 24;
 // The row is written straight to the database rather than through the API, so the shared signed-in page only navigates and asserts,
 // which is the contract signedInAdminShared states. The exclusion list reads the table directly, so no config version bump is needed
 // for the row to render. A leftover from an interrupted run is cleared first, because a second copy of the value would make the
-// locator ambiguous. The delete matches the whole fixture row (a value under a `/Users/e2e` home, this spec's reason, and the system
-// principal as author), so it cannot reach a row an operator wrote on a long-lived dev database.
+// locator ambiguous. The delete matches every column the insert below sets, so the only row it can reach is an exact copy of this
+// fixture, never a row an operator or another spec wrote on a long-lived dev database.
 async function seedExclusion(): Promise<number> {
   const db = await openDB();
   try {
-    await db.query("DELETE FROM detection_exclusions WHERE value = ? AND reason = ? AND created_by = 'sys'", [LONG_VALUE, REASON]);
+    await db.query(
+      `DELETE FROM detection_exclusions
+       WHERE rule_id = 'suspicious_exec' AND match_type = 'parent_path_glob' AND value = ? AND host_group_id = 0
+         AND reason = ? AND enabled = 1 AND expires_at IS NULL AND created_by = 'sys'`,
+      [LONG_VALUE, REASON],
+    );
     const [result] = await db.query<ResultSetHeader>(
       `INSERT INTO detection_exclusions (rule_id, match_type, value, host_group_id, reason, enabled, created_by)
        VALUES ('suspicious_exec', 'parent_path_glob', ?, 0, ?, 1, 'sys')`,
