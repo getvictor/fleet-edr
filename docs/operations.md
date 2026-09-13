@@ -256,6 +256,7 @@ A match from a rule in monitor mode is kept as a **monitor record** for **7 days
 - **Deduplicated like alerts.** A rule matching the same process again adds no second record, so the records are fewer than the rule's Observed count, which counts every match.
 - **Promotion does not rewrite them.** Records already kept stay monitor records, and the rule's next match raises an alert.
 - **Independent of both other windows.** Alert retention never deletes a monitor record and this window never deletes an alert. Deletions are counted by `edr.retention.monitor_records.rows_deleted`.
+- **During a rolling upgrade to the release that introduced them**, a replica still on the previous version does not know about monitor records. Until it is replaced it lists them as alerts and accepts a status change on one, which also sends that alert's status-change webhook. Roll every replica promptly, and do not triage from the console mid-upgrade.
 
 ### Curbing event volume at the source
 

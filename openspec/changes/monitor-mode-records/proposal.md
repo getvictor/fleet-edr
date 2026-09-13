@@ -24,7 +24,7 @@ A monitor record is not an alert, and everything that makes something an alert s
 
 ## Rolling upgrade
 
-The migration adds the column with a default of `alert` and swaps the dedup key for one that includes it, in one statement, so there is no moment without a uniqueness guarantee. An older replica keeps writing alerts that land in the new key unchanged. It does not filter by disposition, so during the cutover an older replica's alert list can show monitor records the newer replicas wrote.
+The migration adds the column with a default of `alert` and swaps the dedup key for one that includes it, in one statement, so there is no moment without a uniqueness guarantee. An older replica keeps writing alerts that land in the new key unchanged. It does not filter reads by disposition, so until it is replaced an older replica lists monitor records the newer replicas wrote, and accepts a status change on one, which sends that record a status-change webhook. This is bounded to the rolling upgrade and documented for operators. Closing it would take either a release split (the column and its readers in one release, monitor writes in the next) or a gate that knows every replica has upgraded, which the server does not have.
 
 ## Out of scope
 

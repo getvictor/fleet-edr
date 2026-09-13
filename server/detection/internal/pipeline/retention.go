@@ -137,7 +137,8 @@ func (r *RetentionRunner) Loop(ctx context.Context) {
 
 // Run executes one retention pass: the alert prune, the monitor-record prune, then the process prune. It returns the number of PROCESS
 // records pruned, which is what its callers have always read; the other counts are reported through their own span attributes, metrics,
-// and log lines instead of being summed into a number that meant one thing for years. Event retention is ClickHouse-native TTL (ADR-0015), not part of this pass.
+// and log lines instead of being summed into a number that meant one thing for years. Event retention is ClickHouse-native TTL
+// (ADR-0015), not part of this pass.
 func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 	// Alerts BEFORE processes, so a process row an expired alert was holding is collected in this same pass rather than an hour later.
 	// The process prune skips any row an alert still references; running it first would see the expiring alert's reference and keep
@@ -215,8 +216,9 @@ func (r *RetentionRunner) alertWindows() []alertWindow {
 		},
 		{
 			disposition: api.AlertDispositionMonitor, days: r.monitorRecordRetentionDays,
-			daysAttr: attrMonitorRecordRetentionDays, deletedAttr: attrMonitorRecordRowsDeleted, cutoffAttr: "edr.retention.monitor_records.cutoff",
-			logMsg: "monitor record retention run",
+			daysAttr: attrMonitorRecordRetentionDays, deletedAttr: attrMonitorRecordRowsDeleted,
+			cutoffAttr: "edr.retention.monitor_records.cutoff",
+			logMsg:     "monitor record retention run",
 			record: func(ctx context.Context, n int64) {
 				if r.metrics != nil {
 					r.metrics.MonitorRecordRetentionRowsDeleted(ctx, n)

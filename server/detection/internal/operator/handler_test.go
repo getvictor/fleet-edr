@@ -553,17 +553,20 @@ func TestHandleListAlerts(t *testing.T) {
 	t.Run("disposition and rule_id reach the service filter", func(t *testing.T) {
 		t.Parallel()
 		cases := []struct {
+			name            string
 			query           string
 			wantDisposition api.AlertDisposition
 			wantRuleID      string
 		}{
-			{query: "", wantDisposition: ""},
-			{query: "?disposition=alert", wantDisposition: api.AlertDispositionAlert},
-			{query: "?disposition=monitor&rule_id=proc_creation_macos_curl", wantDisposition: api.AlertDispositionMonitor,
-				wantRuleID: "proc_creation_macos_curl"},
+			{name: "no disposition leaves the default to the store", query: "", wantDisposition: ""},
+			{name: "disposition alert", query: "?disposition=alert", wantDisposition: api.AlertDispositionAlert},
+			{
+				name: "disposition monitor with a rule", query: "?disposition=monitor&rule_id=proc_creation_macos_curl",
+				wantDisposition: api.AlertDispositionMonitor, wantRuleID: "proc_creation_macos_curl",
+			},
 		}
 		for _, tc := range cases {
-			t.Run("query "+tc.query, func(t *testing.T) {
+			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 				filters := make(chan api.AlertFilter, 1)
 				svc := fakeService{listAlerts: func(_ context.Context, f api.AlertFilter) ([]api.Alert, error) {

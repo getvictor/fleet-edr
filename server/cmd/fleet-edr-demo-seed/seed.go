@@ -309,14 +309,15 @@ func (s *seeder) seedUserIfConfigured(ctx context.Context) error {
 
 // alreadySeeded reports whether the headline detection alert already exists on a demo host, used to make the seeder idempotent
 // across restarts. The host scope keeps a real deployment's own credential_keychain_dump alert (a genuine detection, not demo data)
-// from convincing a mis-pointed seeder that the demo is already present.
+// from convincing a mis-pointed seeder that the demo is already present. Alerts only: a monitor record of the same rule (issue #994) is
+// not the headline alert the demo exists to show.
 func (s *seeder) alreadySeeded(ctx context.Context) (bool, error) {
 	inClause, hostArgs, err := demoHostScope()
 	if err != nil {
 		return false, err
 	}
 	var n int
-	query := `SELECT COUNT(*) FROM alerts WHERE rule_id = ? AND ` + inClause
+	query := `SELECT COUNT(*) FROM alerts WHERE disposition = 'alert' AND rule_id = ? AND ` + inClause
 	if err := s.db.QueryRowContext(ctx, query, append([]any{keychainRuleID}, hostArgs...)...).Scan(&n); err != nil {
 		return false, err
 	}
@@ -543,7 +544,9 @@ type demoCounts struct {
 }
 
 // counts reads the current process + alert tallies from the database, scoped by the caller's demo-host IN clause so pre-existing
-// rows on a real deployment (or leftovers from another tool sharing the DB) can never satisfy the verify predicate.
+// rows on a real deployment (or leftovers from another tool sharing the DB) can never satisfy the verify predicate. The alert tallies
+// count alerts only: the alerts table also holds monitor records (issue #994), and a rule matching in monitor mode has raised no alert
+// for verify to find.
 func (s *seeder) counts(ctx context.Context, inClause string, hostArgs []any) (demoCounts, error) {
 	var c demoCounts
 	if err := s.db.QueryRowContext(ctx,
@@ -551,14 +554,17 @@ func (s *seeder) counts(ctx context.Context, inClause string, hostArgs []any) (d
 		return c, fmt.Errorf("count processes: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE source = 'detection' AND `+inClause, hostArgs...).Scan(&c.detectionAlerts); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE disposition = 'alert' AND source = 'detection' AND `+inClause, hostArgs...).
+		Scan(&c.detectionAlerts); err != nil {
 		return c, fmt.Errorf("count detection alerts: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE source = 'application_control' AND `+inClause, hostArgs...).Scan(&c.appControlAlerts); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE disposition = 'alert' AND source = 'application_control' AND `+inClause, hostArgs...).
+		Scan(&c.appControlAlerts); err != nil {
 		return c, fmt.Errorf("count app-control alerts: %w", err)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT rule_id FROM alerts WHERE source = 'detection' AND `+inClause, hostArgs...)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT rule_id FROM alerts WHERE disposition = 'alert' AND source = 'detection' AND `+inClause, hostArgs...)
 	if err != nil {
 		return c, fmt.Errorf("list fired detection rules: %w", err)
 	}
