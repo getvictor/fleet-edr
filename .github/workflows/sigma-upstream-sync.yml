@@ -45,7 +45,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-matching-corpus-changes-nothing-and-closes-the-report
       - name: Compare with upstream and bring the corpus up to date
         id: sync
         env:
@@ -69,7 +68,6 @@ jobs:
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-rule-that-breaks-the-corpus-is-still-reported
       - name: Regenerate the rule docs and run the catalog tests
         id: tests
         if: steps.sync.outputs.changed == 'true'
@@ -82,6 +80,10 @@ jobs:
           # The generated rule reference and ATT&CK layer are checked against the catalog in CI, so they are regenerated with it.
           { go run ./tools/gen-rule-docs && go run ./tools/gen-attack-layer; } > "$out" 2>&1
           generated=$?
+          if [ "$generated" -ne 0 ]; then
+            # A generator that failed may have truncated its output already, so the branch keeps the committed files instead.
+            git checkout -- docs/detection-rules.md docs/attack-navigator-layer.json
+          fi
           go test ./server/rules/internal/catalog/ >> "$out" 2>&1
           tested=$?
           if [ "$generated" -ne 0 ] || [ "$tested" -ne 0 ]; then
@@ -90,7 +92,6 @@ jobs:
             echo "exit=0" >> "$GITHUB_OUTPUT"
           fi
 
-      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-pull-request-under-review-is-left-alone
       - name: Push the sync branch
         id: push
         if: steps.sync.outputs.changed == 'true'
@@ -117,8 +118,6 @@ jobs:
           git commit -m "Sync vendored Sigma rules with upstream"
           git -c "$header" push --force-with-lease="refs/heads/$SYNC_BRANCH:$seen" "$remote" "HEAD:refs/heads/$SYNC_BRANCH"
 
-      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-reach-a-review-branch-and-the-report
-      # spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-withdrawal-alone-is-reported-without-a-branch-change
       - name: Open, update or close the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -140,7 +139,7 @@ jobs:
           # The failure lines, or the end of the output when there are none, as for a build error or a panic (go test prints a bare FAIL
           # for those, so it is not matched). Written to a file and read whole, so a long match cannot end the step on a broken pipe.
           failures="$RUNNER_TEMP/failures.txt"
-          if [ "$CHANGED" = "true" ] && [ "$TEST_EXIT" = "1" ]; then
+          if [ "$TEST_EXIT" = "1" ]; then
             tests="$RUNNER_TEMP/tests.txt"
             grep -E '^\s*(--- FAIL|Error:|Messages:|panic:)' "$tests" > "$failures" || tail -n 30 "$tests" > "$failures"
           fi
@@ -156,19 +155,20 @@ jobs:
               echo "record why. This issue stays open until the corpus matches upstream."
             elif [ -n "$OPEN_PR" ]; then
               echo "A pull request from \`$SYNC_BRANCH\` is already open, $OPEN_PR, and this run left it alone. Changes upstream"
-              echo "made since it was opened reach the branch in the first run after it merges."
+              echo "made since it was opened reach the branch in the first run after it merges. The test result below is for this"
+              echo "run's snapshot, not the branch."
             else
               echo "[Open the pull request](https://github.com/$GITHUB_REPOSITORY/compare/main...$SYNC_BRANCH?expand=1) from"
               echo "\`$SYNC_BRANCH\`, which this run updated. Opening it yourself starts CI."
             fi
-            if [ "$CHANGED" = "true" ] && [ -z "$OPEN_PR" ]; then
+            if [ "$CHANGED" = "true" ]; then
               echo
               echo "## Catalog tests"
               echo
               if [ "$TEST_EXIT" = "0" ]; then
-                echo "The rule docs regenerate and \`go test ./server/rules/internal/catalog/\` passes on the branch."
+                echo "The rule docs regenerate and \`go test ./server/rules/internal/catalog/\` passes."
               else
-                echo "Regenerating the rule docs or \`go test ./server/rules/internal/catalog/\` fails on the branch. A test failure is"
+                echo "Regenerating the rule docs or \`go test ./server/rules/internal/catalog/\` fails. A test failure is"
                 echo "expected when a rule is added or removed: after reading the rule, update the pinned counts in"
                 echo "\`TestLoadImported_TheWholeUpstreamCorpus\` and add a positive regression fixture for a new runnable rule. A"
                 echo "generator failure means an upstream rule stops the corpus loading. The output:"
