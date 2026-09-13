@@ -230,7 +230,8 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
 }
 
 int xpc_bridge_send(int handle, const char *type, const uint8_t *data, size_t len) {
-    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS || type == NULL || type[0] == '\0' || data == NULL || len == 0) {
+    if (handle < 0 || handle >= XPC_BRIDGE_MAX_CONNECTIONS || type == NULL || type[0] == '\0' || data == NULL ||
+        len == 0) {
         return -1;
     }
 
