@@ -51,6 +51,30 @@ export interface HostHealth {
   // contradict the agent's report, and overall_status above already folds them in. Null when the server has nothing to add. These
   // carry last_transition_ns 0: absence has no observed transition instant, so the UI must not render an age for them.
   derived_components: ComponentHealth[] | null;
+  // episodes are the host's recorded sensor faults that needed a person (issue #778): open ones first, newest first, then the most
+  // recent resolved ones. Always an array. NOT folded into overall_status, which says whether the host is healthy now; while a fault
+  // is live its component already reports unhealthy, so the rollup already shows it, and an episode that can never close (recorded by
+  // an agent too old to name its component) would otherwise leave a recovered host looking broken forever.
+  episodes: HostHealthEpisode[];
+}
+
+// HostHealthEpisode is one recorded sensor fault: when it began on the host and, once it has, when it ended. Both instants are
+// host-observed, so resolved_at_ns minus opened_at_ns is the outage.
+export interface HostHealthEpisode {
+  id: number;
+  kind: string;
+  component: string;
+  // subject is the part of the component at fault (for a capture-provider failure, the provider). Absent when the fault concerns
+  // the component as a whole.
+  subject?: string;
+  severity: string;
+  title: string;
+  description?: string;
+  // detail is the fault's own fields, shaped by kind. For self_heal_failed: provider, outcome, attempts.
+  detail?: Record<string, unknown> | null;
+  opened_at_ns: number;
+  // Absent while the fault is still in effect.
+  resolved_at_ns?: number;
 }
 
 // Note: nanosecond timestamp fields (fork_time_ns, etc.) may lose precision

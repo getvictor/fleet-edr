@@ -118,6 +118,18 @@
   font-size: 0.9em;
 }
 
+// Recorded sensor faults, beneath the component conditions inside the same health section. A small top gap rather than a second
+// divider: they are part of the same "is this host's sensor OK" answer, one as it stands now and one as a record.
+.host-header__episodes {
+  margin-top: 0.6rem;
+}
+
+// A fault's timing, on its own line beneath the message. Tertiary like a component's age, but left-aligned and free to wrap, since a
+// resolved fault's "lasted ..., ended ..." is too long to sit at the trailing edge of a shared row without crushing the message.
+.host-header__episode-when {
+  color: var(--color-text-tertiary, #8b8fa2);
+}
+
 // Agent-health section at the top of the Details popover: the rollup pill plus, when present, one row per component condition.
 .host-header__health {
   margin-bottom: 0.6rem;

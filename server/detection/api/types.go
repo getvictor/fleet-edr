@@ -174,6 +174,32 @@ type HostHealth struct {
 	// db:"-" because this field is filled in after the query, not scanned from it: the derived conditions come from the event
 	// archive, not from the host_health row.
 	DerivedComponents []DerivedComponent `db:"-" json:"derived_components"`
+	// Episodes are the host's recorded sensor faults that needed a person (issue #778): every one still open, then the most recent
+	// resolved ones. db:"-" for the same reason as DerivedComponents: they come from a second query, not from the host_health row.
+	//
+	// Deliberately NOT folded into OverallStatus. The rollup answers "is this host healthy now", which is level state, and while a fault
+	// is live the component that reports it is already unhealthy, so the rollup already says so. Folding open episodes in would add
+	// nothing then and would be actively wrong later: an episode recorded by an agent too old to name its component can never be
+	// closed, so a host that had long since recovered would read as permanently unhealthy. The rollup is now; episodes are the record.
+	Episodes []HostHealthEpisode `db:"-" json:"episodes"`
+}
+
+// HostHealthEpisode is one recorded sensor fault as the host-health read reports it: a fault that needed a person, with when it
+// began on the host and, once it has, when it ended. The endpoint context writes these; detection reads them for the host page the
+// same way it reads that context's host_health row, as a shared table in one database keyed by host_id, and so keeps its own read
+// type rather than importing the writer's.
+type HostHealthEpisode struct {
+	ID          int64       `db:"id" json:"id"`
+	Kind        string      `db:"kind" json:"kind"`
+	Component   string      `db:"component" json:"component"`
+	Subject     string      `db:"subject" json:"subject,omitempty"`
+	Severity    string      `db:"severity" json:"severity"`
+	Title       string      `db:"title" json:"title"`
+	Description string      `db:"description" json:"description,omitempty"`
+	Detail      NullRawJSON `db:"detail" json:"detail,omitempty"`
+	OpenedAtNs  int64       `db:"opened_at_ns" json:"opened_at_ns"`
+	// ResolvedAtNs is nil while the fault is still in effect. Both instants are host-observed, so the difference is the outage.
+	ResolvedAtNs *int64 `db:"resolved_at_ns" json:"resolved_at_ns,omitempty"`
 }
 
 // Undeliverable is what the host-health derivation needs to know about one host's undelivered commands (issue #732).

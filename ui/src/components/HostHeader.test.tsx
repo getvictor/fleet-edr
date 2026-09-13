@@ -122,6 +122,7 @@ function healthFixture(overrides: Partial<HostHealth> = {}): HostHealth {
     reported_at_ns: Date.now() * NANOSECONDS_PER_MILLISECOND,
     components: [],
     derived_components: null,
+    episodes: [],
     ...overrides,
   };
 }
@@ -325,6 +326,113 @@ describe("HostHeader agent health", () => {
 
   // Agent-reported providers (issue #702) render beside the extension that owns them, so an operator sees which capture is
   // down rather than only that something under the network extension is.
+  // spec:web-ui/the-host-detail-surfaces-the-health-conditions/the-detail-lists-recorded-sensor-faults
+  //
+  // A recorded fault is listed with the part at fault, why the repair gave up, and when: an open one by how long ago it began, and a
+  // resolved one by how long it LASTED, which is the number the record exists to give. Both open and resolved are fed, in that order,
+  // to pin that an open fault is not buried under the resolved history.
+  it("lists recorded sensor faults, open ones by when they began and resolved ones by how long they lasted", async () => {
+    const detail = detailFixture();
+    const nowNs = Date.now() * NANOSECONDS_PER_MILLISECOND;
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        overall_status: "unhealthy",
+        episodes: [
+          {
+            id: 2,
+            kind: "self_heal_failed",
+            component: "network_extension",
+            subject: "dns_proxy",
+            severity: "critical",
+            title: "EDR sensor could not be restored",
+            detail: { provider: "dns_proxy", outcome: "enable_failed", attempts: 3 },
+            // Mid-bucket, for the epoch-rounding reason given on the capture-provider test below.
+            opened_at_ns: (Date.now() - 12 * MINUTE_MS - 30 * 1000) * NANOSECONDS_PER_MILLISECOND,
+          },
+          {
+            id: 1,
+            kind: "self_heal_failed",
+            component: "network_extension",
+            subject: "content_filter",
+            severity: "critical",
+            title: "EDR sensor could not be restored",
+            detail: { provider: "content_filter", outcome: "enable_ineffective", attempts: 5 },
+            opened_at_ns: nowNs - 3 * 3600 * 1000 * NANOSECONDS_PER_MILLISECOND,
+            resolved_at_ns: nowNs - (3 * 3600 - 2 * 3600 - 14 * 60) * 1000 * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText("Sensor faults")).toBeVisible();
+    // The part at fault is the provider, labelled the way the component rows label it.
+    expect(screen.getByText("DNS proxy")).toBeVisible();
+    expect(screen.getByText("Content filter")).toBeVisible();
+    // Why it gave up, in words, because the two outcomes point at different fixes.
+    expect(screen.getByText("EDR sensor could not be restored: the repair command kept failing")).toBeVisible();
+    expect(screen.getByText("EDR sensor could not be restored: repairs reported success but it stayed stopped")).toBeVisible();
+    // Open: when it began. Resolved: how long it lasted, and when it ended.
+    expect(screen.getByText("opened 12m ago")).toBeVisible();
+    expect(screen.getByText(/^lasted 2h 14m, ended /)).toBeVisible();
+
+    // Open before resolved.
+    const items = screen.getByText("Sensor faults").parentElement?.querySelectorAll("li") ?? [];
+    expect(items[0]?.textContent).toContain("DNS proxy");
+    expect(items[1]?.textContent).toContain("Content filter");
+  });
+
+  // A host with no recorded faults renders no section at all, keeping the popover's rule that a clean host shows no health chrome.
+  it("renders no sensor-fault section for a host with none recorded", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(healthFixture({ episodes: [] }));
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText(/Agent healthy/)).toBeVisible();
+    expect(screen.queryByText("Sensor faults")).toBeNull();
+  });
+
+  // spec:web-ui/the-host-detail-surfaces-the-health-conditions/a-recovered-host-keeps-its-fault-history-without-an-attention-marker
+  //
+  // A resolved fault on a host that is healthy NOW still appears. The component rows above have long since gone green; this list is the
+  // record that says the host was once blind, which is the whole reason it exists apart from them. It also must not raise the attention
+  // dot, which answers "does this host need someone now".
+  it("keeps a resolved fault on a host that has recovered, without flagging the host", async () => {
+    const detail = detailFixture();
+    const nowNs = Date.now() * NANOSECONDS_PER_MILLISECOND;
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        overall_status: "healthy",
+        episodes: [
+          {
+            id: 1,
+            kind: "self_heal_failed",
+            component: "network_extension",
+            subject: "content_filter",
+            severity: "critical",
+            title: "EDR sensor could not be restored",
+            opened_at_ns: nowNs - 2 * 3600 * 1000 * NANOSECONDS_PER_MILLISECOND,
+            resolved_at_ns: nowNs - 3600 * 1000 * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    const trigger = await screen.findByRole("button", { name: /Details/ });
+    fireEvent.click(trigger);
+    expect(await screen.findByText("Sensor faults")).toBeVisible();
+    expect(screen.getByText(/^lasted 1h, ended /)).toBeVisible();
+    expect(trigger).not.toHaveAttribute("title", "Agent needs attention");
+  });
+
   it("names each capture provider the agent reports", async () => {
     const detail = detailFixture();
     vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
