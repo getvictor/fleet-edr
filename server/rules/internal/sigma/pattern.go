@@ -7,7 +7,8 @@
 //     base64offset and cidr, which issue #760 originally listed, are used by ZERO macOS rules (7 and 21 corpus-wide), so they are
 //     deliberately absent rather than overlooked. windash (80 corpus-wide, Windows only) is the one to expect first when the
 //     catalog goes cross-platform.
-//   - Wildcards in plain values: 31 of the 69 macOS rules. These carry no modifier, so a census of modifiers alone misses them.
+//   - Wildcards in plain values: 31 of the 69 rules in SigmaHQ's rules/macos tree. These carry no modifier, so a census of modifiers
+//     alone misses them.
 //   - Aggregation and correlation: zero rules, corpus-wide. Not merely rare on macOS: absent everywhere, which is why this
 //     evaluator has no aggregation surface at all.
 //

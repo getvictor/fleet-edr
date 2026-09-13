@@ -1,0 +1,11 @@
+{
+  "events": [
+    {"event_id": "proc_creation_macos_pbpaste_execution-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":4910,"parent_pid":1}},
+    {"event_id": "proc_creation_macos_pbpaste_execution-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":4910,"ppid":1,"path":"/usr/bin/pbpaste","args":["pbpaste"],"uid":501,"gid":20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "proc_creation_macos_pbpaste_execution", "severity": "medium"}
+  ]
+}

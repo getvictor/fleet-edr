@@ -5,8 +5,8 @@
 // Event interface so its semantics can be tested against literal values; this one is the only place that knows what an exec payload
 // looks like.
 //
-// The field set is what the corpus actually reads, measured rather than assumed. Across the 69 macOS SigmaHQ rules there are
-// exactly five distinct detection fields: CommandLine (107 uses), Image (85), ParentImage (16 uses across 11 rules),
+// The field set is what the corpus actually reads, measured rather than assumed. Across the 69 rules in SigmaHQ's rules/macos tree
+// there are exactly five distinct detection fields: CommandLine (107 uses), Image (85), ParentImage (16 uses across 11 rules),
 // TargetFilename (5) and OriginalFileName (1). All five are supplied, and two of them not from the payload:
 //
 //   - ParentImage is supplied by the CALLER rather than read from the payload, which carries ppid but not the parent's path. The

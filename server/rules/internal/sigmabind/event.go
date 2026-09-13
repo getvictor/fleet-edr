@@ -106,9 +106,9 @@ const mutatingOpenMask = 0x400 | 0x8 | 0x200
 
 // NewExecEvent is NewEvent for an exec event whose parent process the caller has already resolved.
 //
-// ParentImage is a standard Sigma field and 11 of the 69 macOS corpus rules read it, but it is not in the payload: an exec event
-// carries ppid, not the parent's path. The graph knows it, and this package deliberately does not know the graph, so the caller
-// resolves it and passes it in. That keeps matching testable against literal values, and it keeps the lookup where the retry
+// ParentImage is a standard Sigma field and 11 of the 69 rules in SigmaHQ's rules/macos tree read it, but it is not in the payload:
+// an exec event carries ppid, not the parent's path. The graph knows it, and this package deliberately does not know the graph, so the
+// caller resolves it and passes it in. That keeps matching testable against literal values, and it keeps the lookup where the retry
 // semantics live: the pipeline materializes processes before it evaluates rules, and a parent that has not landed yet raises
 // ErrProcessNotYetMaterialized so the batch is retried rather than the finding lost.
 //

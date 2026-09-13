@@ -945,7 +945,7 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 // service that needs no malformed input at all.
 //
 // The numbers are far above real content and far below where it hurts, the same shape as the other limits here: the largest
-// vendored rule is a few kilobytes against a 64 KiB per-document cap, and the corpus is 69 rules against a 4096 cap.
+// vendored rule is a few kilobytes against a 64 KiB per-document cap, and the corpus is 71 rules against a 4096 cap.
 func boundCorpusSize(docs []rulecontentapi.Document) error {
 	if len(docs) > maxCorpusDocuments {
 		return fmt.Errorf("a corpus may hold at most %d documents, and this one has %d", maxCorpusDocuments, len(docs))
