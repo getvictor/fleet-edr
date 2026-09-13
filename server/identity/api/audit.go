@@ -3,7 +3,20 @@ package api
 import (
 	"context"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
+
+// TraceIDFromContext returns the active OTel trace id on ctx, as the lower-case 32-character hex an AuditEvent's TraceID holds, or
+// empty when no span is active. The one extractor for audit trace attribution: the recorder's fallback, the authorization chokepoint,
+// and writers that carry an event past the request that made it (an audit outbox) all use it, so their rows attribute a request alike.
+func TraceIDFromContext(ctx context.Context) string {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
+}
 
 // AuditAction is a stable wire-shape identifier for an operator action the audit trail records. Values are namespaced as
 // `<resource>.<verb>` and never repurposed once they ship in a release: downstream tooling (SIEM exporters, retention rules, alert

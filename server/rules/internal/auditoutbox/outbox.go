@@ -98,16 +98,6 @@ func Encode(e identityapi.AuditEvent) (Entry, error) {
 	return Entry{Kind: Kind, Payload: payload}, nil
 }
 
-// TraceID is the trace to carry on an event written into an outbox: the writer's, taken from its context, or empty without one.
-// The drain delivers under a context detached from any trace, so an event that does not carry its writer's trace records none.
-func TraceID(ctx context.Context) string {
-	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() {
-		return ""
-	}
-	return sc.TraceID().String()
-}
-
 // Decode is Encode's inverse.
 func Decode(payload []byte) (identityapi.AuditEvent, error) {
 	var stored auditEntryV1

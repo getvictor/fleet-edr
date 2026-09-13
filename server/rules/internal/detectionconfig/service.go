@@ -208,7 +208,7 @@ func auditEntry(
 		Action:     action,
 		TargetType: targetType,
 		TargetID:   targetID,
-		TraceID:    auditoutbox.TraceID(ctx),
+		TraceID:    identityapi.TraceIDFromContext(ctx),
 		Payload:    payload,
 	}
 	if actor != nil {

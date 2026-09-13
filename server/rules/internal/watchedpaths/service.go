@@ -144,7 +144,7 @@ func auditEntry(
 		Action:     identityapi.AuditDetectionConfigWatchedPathsUpdate,
 		TargetType: "watched_path_set",
 		TargetID:   strconv.FormatInt(set.Version, 10),
-		TraceID:    auditoutbox.TraceID(ctx),
+		TraceID:    identityapi.TraceIDFromContext(ctx),
 		Payload:    payload,
 	})
 }
