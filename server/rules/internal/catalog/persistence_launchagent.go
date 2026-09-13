@@ -24,7 +24,8 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
-// SupportedExclusionMatchTypes lists the match types this rule consults: the LaunchAgent plist writer path glob (issue #520).
+// SupportedExclusionMatchTypes lists the match types this rule consults: a path glob over the LaunchAgent plist path argument, as
+// typed on the launchctl command line (issue #520).
 func (r *PersistenceLaunchAgent) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 	return []api.ExclusionMatchType{api.ExclusionMatchPathGlob}
 }
