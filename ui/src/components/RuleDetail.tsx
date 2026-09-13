@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useLocation, useParams } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
 import { vettedHTTPURL } from "../urls";
 import { PermissionAction, useCan } from "../permissions-core";
 import { RuleSource } from "./RuleSource";
 import { ruleModeLabel } from "./ruleMode";
+import { isLocallyAuthored } from "./ruleOrigin";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
@@ -21,25 +22,51 @@ import "./RuleDetail.scss";
 // state pointing at the index, not a 404, so an old bookmark to a deleted
 // rule still navigates somewhere actionable.
 
+// How long a page arriving from a create keeps asking for the new rule, and how often. The server reloads stored rules every 30 seconds
+// (server/rules/bootstrap: DefaultCorpusRefreshInterval), so waiting a little longer than that covers a reload that had just run.
+const newRuleWaitMs = 40_000;
+const newRulePollMs = 2_000;
+
 export function RuleDetail() {
   const { ruleId } = useParams<{ ruleId: string }>();
   const [entries, setEntries] = useState<RuleDocEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const can = useCan();
+  // Set by the rule editor when it navigates here after a save, so the operator sees the write landed and why the rule is quiet.
+  const saved = (useLocation().state as { saved?: "created" | "updated" } | null)?.saved;
+  const [awaitingNewRule, setAwaitingNewRule] = useState(saved === "created");
 
   useEffect(() => {
     let cancelled = false;
-    fetchRuleDocs()
-      .then((rs) => {
-        if (!cancelled) setEntries(rs);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load rule docs");
-      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A rule just created is stored at once but served only after the server reloads its rules, which it does every 30 seconds. So
+    // arriving from a create, the page asks again until the rule appears or the reload interval has safely passed, rather than calling
+    // a rule the operator has just written unknown.
+    const deadline = Date.now() + newRuleWaitMs;
+    const load = () => {
+      fetchRuleDocs()
+        .then((rs) => {
+          if (cancelled) return;
+          // A failure on an earlier rule's load must not hide this one's, since the page is kept across rules.
+          setError(null);
+          setEntries(rs);
+          const found = rs.some((r) => r.id === ruleId);
+          if (saved === "created" && !found && Date.now() < deadline) {
+            timer = setTimeout(load, newRulePollMs);
+          } else {
+            setAwaitingNewRule(false);
+          }
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load rule docs");
+        });
+    };
+    load();
     return () => {
       cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
     };
-  }, []);
+  }, [ruleId, saved]);
 
   const entry = useMemo(() => entries?.find((e) => e.id === ruleId) ?? null, [entries, ruleId]);
 
@@ -50,6 +77,18 @@ export function RuleDetail() {
         subtitle={entry ? <code className="rule-detail__id">{entry.id}</code> : ruleId}
       />
 
+      {saved !== undefined && (
+        <div className="rule-detail__saved" role="status">
+          {saved === "created" ? "Rule created." : "Rule saved."} The server applies it when it next reloads its rules, within 30
+          seconds.
+          {saved === "created" && (
+            <>
+              {" "}It runs in monitor mode until you promote it in <Link to="/detection-config">Detection tuning</Link>.
+            </>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="form-error" role="alert">
           Error: {error}
@@ -57,16 +96,25 @@ export function RuleDetail() {
       )}
       {!error && entries === null && <EmptyState>Loading rule documentation...</EmptyState>}
 
-      {!error && entries !== null && !entry && (
+      {!error && entries !== null && !entry && awaitingNewRule && (
+        <EmptyState>
+          Waiting for the server to load <code>{ruleId}</code>...
+        </EmptyState>
+      )}
+      {!error && entries !== null && !entry && !awaitingNewRule && (
         <EmptyState>
           Unknown rule <code>{ruleId}</code>. <Link to="/coverage">Back to coverage</Link>.
         </EmptyState>
       )}
-
       {entry && <RuleBody entry={entry} />}
       {/* The source reads are gated on rule_content.read, so an operator without it is shown the documentation and nothing that
           would only fail. */}
-      {entry && can(PermissionAction.RuleContentRead) && <RuleSource ruleId={entry.id} />}
+      {entry && can(PermissionAction.RuleContentRead) && (
+        <RuleSource
+          ruleId={entry.id}
+          editable={can(PermissionAction.RuleContentWrite) && isLocallyAuthored(entry.origin)}
+        />
+      )}
     </>
   );
 }

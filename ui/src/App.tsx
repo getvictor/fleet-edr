@@ -10,6 +10,7 @@ import { DetectionConfig } from "./components/DetectionConfig/DetectionConfig";
 import { SearchPage } from "./components/Search/SearchPage";
 import { RuleDetail } from "./components/RuleDetail";
 import { RulesCatalog } from "./components/RulesCatalog";
+import { RuleEditor } from "./components/RuleEditor";
 import { MonitorRecords } from "./components/MonitorRecords";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { Webhooks } from "./components/Webhooks/Webhooks";
@@ -228,6 +229,22 @@ export function AuthedApp() {
             element={(
               <RequirePermission action={PermissionAction.RuleContentRead} surface="Rules">
                 <RulesCatalog />
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/rules/new"
+            element={(
+              <RequirePermission action={PermissionAction.RuleContentWrite} surface="New rule">
+                <RuleEditor />
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/rules/:ruleId/edit"
+            element={(
+              <RequirePermission action={PermissionAction.RuleContentWrite} surface="Edit rule">
+                <RuleEditor />
               </RequirePermission>
             )}
           />

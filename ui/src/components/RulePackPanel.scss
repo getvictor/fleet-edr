@@ -1,0 +1,27 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.rule-pack {
+  margin: 0 0 $pad-medium;
+  padding: $pad-medium;
+  border: 1px solid $ui-fleet-black-10;
+  border-radius: 4px;
+}
+
+.rule-pack__heading {
+  font-size: $small;
+  margin: 0 0 $pad-small;
+}
+
+.rule-pack__note,
+.rule-pack__result {
+  font-size: $x-small;
+  color: $ui-fleet-black-75;
+  margin: 0 0 $pad-small;
+}
+
+.rule-pack__changes {
+  font-size: $x-small;
+  margin: 0 0 $pad-small;
+}

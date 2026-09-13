@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { RulesCatalog } from "./RulesCatalog";
+import { PermissionsProvider } from "../permissions";
+import { PermissionAction } from "../permissions-core";
 import * as api from "../api";
 import type { RuleDocEntry } from "../api";
 
@@ -27,13 +29,21 @@ const rules: RuleDocEntry[] = [
   }),
 ];
 
-function renderCatalog() {
+function renderCatalog(permissions: string[] = [PermissionAction.RuleContentRead]) {
   return render(
-    <MemoryRouter>
-      <RulesCatalog />
-    </MemoryRouter>,
+    <PermissionsProvider permissions={permissions}>
+      <MemoryRouter>
+        <RulesCatalog />
+      </MemoryRouter>
+    </PermissionsProvider>,
   );
 }
+
+beforeEach(() => {
+  vi.spyOn(api, "getRulePackStatus").mockResolvedValue({
+    installed: "p", available: "p", previous: "", declined: "", current: true, can_roll_back: false, added: [], removed: [], changed: [],
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -90,6 +100,18 @@ describe("RulesCatalog", () => {
     expect(within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent)).toEqual(["Curl download"]);
     fireEvent.change(screen.getByLabelText("Search:"), { target: { value: "no such rule" } });
     expect(screen.getByText("No rules match.")).toBeVisible();
+  });
+
+  // spec:web-ui/rules-can-be-written-in-the-console/an-operator-deletes-a-rule-with-a-reason
+  it("offers New rule only to an operator who may write rules", async () => {
+    vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(rules);
+    const { unmount } = renderCatalog();
+    await screen.findByRole("table");
+    expect(screen.queryByRole("link", { name: "New rule" })).toBeNull();
+    unmount();
+
+    renderCatalog([PermissionAction.RuleContentRead, PermissionAction.RuleContentWrite]);
+    expect(await screen.findByRole("link", { name: "New rule" })).toHaveAttribute("href", "/rules/new");
   });
 
   it("reports a failed load rather than an empty catalogue", async () => {

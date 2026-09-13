@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PermissionsProvider } from "../permissions";
 import { PermissionAction } from "../permissions-core";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router";
 import { RuleDetail } from "./RuleDetail";
 import * as api from "../api";
 import type { RuleDocEntry } from "../api";
@@ -74,6 +74,28 @@ describe("RuleDetail loading and error states", () => {
     vi.mocked(api.fetchRuleDocs).mockRejectedValue("nope");
     renderAt("suspicious_exec");
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/failed to load rule docs/i));
+  });
+
+  // The page is kept across rules, so moving to another rule reloads it; a failure on the first must not hide the second.
+  it("clears an earlier failure once another rule loads", async () => {
+    vi.mocked(api.fetchRuleDocs).mockRejectedValueOnce(new Error("boom")).mockResolvedValue([makeEntry({ id: "other_rule" })]);
+    function Next() {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => { void navigate("/rules/other_rule"); }}>next</button>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/rules/suspicious_exec"]}>
+        <Next />
+        <Routes>
+          <Route path="/rules/:ruleId" element={<RuleDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+
+    fireEvent.click(screen.getByRole("button", { name: "next" }));
+    expect(await screen.findByText("Suspicious exec")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("renders the unknown-rule empty state with a back link when the id is not found", async () => {
@@ -336,6 +358,29 @@ describe("RuleDetail rule document", () => {
     expect(await screen.findByRole("heading", { name: "Rule document" })).toBeVisible();
   });
 
+  // Shipped rules are tuned in Detection tuning, not rewritten here, so only the deployment's own rule gets Edit and Delete.
+  it("offers edit only for the deployment's own rule, and only to an operator who may write", async () => {
+    vi.mocked(api.listRuleContentDocuments).mockResolvedValue([{ path: "authored/suspicious_exec.yml", bytes: 1 }]);
+    vi.spyOn(api, "getRuleContentDocument").mockResolvedValue("title: x\n");
+    const write = [PermissionAction.AlertRead, PermissionAction.RuleContentRead, PermissionAction.RuleContentWrite];
+
+    mockDocs([makeEntry({ origin: "Locally authored" })]);
+    const { unmount } = renderWithPermissions(write);
+    expect(await screen.findByRole("link", { name: "Edit" })).toBeVisible();
+    unmount();
+
+    mockDocs([makeEntry({ origin: "SigmaHQ, by Someone" })]);
+    const shipped = renderWithPermissions(write);
+    await screen.findByText("authored/suspicious_exec.yml");
+    expect(screen.queryByRole("link", { name: "Edit" })).toBeNull();
+    shipped.unmount();
+
+    mockDocs([makeEntry({ origin: "Locally authored" })]);
+    renderWithPermissions([PermissionAction.AlertRead, PermissionAction.RuleContentRead]);
+    await screen.findByText("authored/suspicious_exec.yml");
+    expect(screen.queryByRole("link", { name: "Edit" })).toBeNull();
+  });
+
   it("does not offer it without rule_content.read", async () => {
     mockDocs([makeEntry()]);
     renderWithPermissions([PermissionAction.AlertRead]);
@@ -343,5 +388,91 @@ describe("RuleDetail rule document", () => {
     expect(await screen.findByText("Suspicious exec")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Rule document" })).toBeNull();
     expect(api.listRuleContentDocuments).not.toHaveBeenCalled();
+  });
+});
+
+describe("RuleDetail after a save", () => {
+  function renderAfterSave(saved: "created" | "updated") {
+    return render(
+      <MemoryRouter initialEntries={[{ pathname: "/rules/suspicious_exec", state: { saved } }]}>
+        <Routes>
+          <Route path="/rules/:ruleId" element={<RuleDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // spec:web-ui/rules-can-be-written-in-the-console/a-new-rule-s-page-waits-for-the-server-to-load-it
+  // The server serves a stored rule only after its next reload, so the page just after a create waits rather than calling it unknown.
+  it("waits for a rule it has just created to be loaded, then shows it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.fetchRuleDocs).mockResolvedValueOnce([]).mockResolvedValue([makeEntry()]);
+    renderAfterSave("created");
+
+    expect(await screen.findByText(/Waiting for the server to load/)).toBeVisible();
+    expect(screen.queryByText(/Unknown rule/)).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Rule created. The server applies it when it next reloads its rules, within 30");
+    expect(screen.getByRole("status")).toHaveTextContent("It runs in monitor mode until you promote it in Detection tuning.");
+
+    // The notice leads the page, above whatever the body shows while it waits.
+    const waiting = screen.getByText(/Waiting for the server to load/);
+    expect(screen.getByRole("status").compareDocumentPosition(waiting) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(await screen.findByText("Suspicious exec")).toBeVisible();
+    expect(screen.queryByText(/Waiting for the server to load/)).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(api.fetchRuleDocs).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops asking once the page is left", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.fetchRuleDocs).mockResolvedValue([]);
+    const { unmount } = renderAfterSave("created");
+
+    await screen.findByText(/Waiting for the server to load/);
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(api.fetchRuleDocs).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting once a reload should have happened, and calls the rule unknown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.fetchRuleDocs).mockResolvedValue([]);
+    renderAfterSave("created");
+
+    await screen.findByText(/Waiting for the server to load/);
+    await act(() => vi.advanceTimersByTimeAsync(38_000));
+    expect(screen.getByText(/Waiting for the server to load/)).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(4_000));
+    expect(await screen.findByText(/Unknown rule/)).toBeVisible();
+    const calls = vi.mocked(api.fetchRuleDocs).mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(api.fetchRuleDocs).toHaveBeenCalledTimes(calls);
+  });
+
+  it("does not wait after an edit, whose rule is already loaded, and says nothing of monitor mode", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockDocs([]);
+    renderAfterSave("updated");
+
+    expect(await screen.findByText(/Unknown rule/)).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /^Rule saved\. The server applies it when it next reloads its rules, within 30 seconds\.$/,
+    );
+    expect(api.fetchRuleDocs).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a load failure rather than waiting", async () => {
+    vi.mocked(api.fetchRuleDocs).mockRejectedValue(new Error("boom"));
+    renderAfterSave("created");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Error: boom");
+    expect(screen.queryByText(/Waiting for the server to load/)).toBeNull();
   });
 });

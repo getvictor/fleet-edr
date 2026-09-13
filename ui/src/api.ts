@@ -659,10 +659,85 @@ const SUB_DELIMITER_ENCODINGS: ReadonlyMap<string, string> = new Map([
 // alone, and the API path guard refuses them, so those are percent-encoded too: the server accepts them in a directory name, and a
 // document it lists must be one this page can open.
 export async function getRuleContentDocument(path: string): Promise<string> {
+  return fetchText(ruleDocumentEndpoint(path));
+}
+
+function ruleDocumentEndpoint(path: string): string {
   const encodeSegment = (segment: string) =>
     encodeURIComponent(segment).replace(/[!'()*]/g, (c) => SUB_DELIMITER_ENCODINGS.get(c) ?? c);
-  const encoded = path.split("/").map(encodeSegment).join("/");
-  return fetchText(`/v1/rule-content/documents/${encoded}`);
+  return `/v1/rule-content/documents/${path.split("/").map(encodeSegment).join("/")}`;
+}
+
+// RuleContentApiError carries the typed `error` code a rule-content write returns, so a caller can tell a rule the loader refused
+// (rule_content.refused, whose message names what to fix) from the corpus changing underneath the write (rule_content.conflict).
+export class RuleContentApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "RuleContentApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export interface RuleContentCheckResult {
+  would_apply: boolean;
+  warnings: string[];
+  // Present only when would_apply is false: the loader's own reason, naming what to fix.
+  refusal?: string;
+}
+
+export interface RuleContentChangeResult {
+  path: string;
+  corpus_version: number;
+  warnings: string[];
+}
+
+// checkRuleContentDocument asks what storing a document would do, without storing it. A refusal is a successful answer (200 with
+// would_apply false), not an error, so the caller renders it as the rule's problem.
+export async function checkRuleContentDocument(path: string, content: string): Promise<RuleContentCheckResult> {
+  return ruleContentMutation("POST", "/v1/rule-content/documents:check", { path, content });
+}
+
+export async function putRuleContentDocument(path: string, content: string, reason: string): Promise<RuleContentChangeResult> {
+  return ruleContentMutation("PUT", ruleDocumentEndpoint(path), { content, reason });
+}
+
+export async function deleteRuleContentDocument(path: string, reason: string): Promise<RuleContentChangeResult> {
+  return ruleContentMutation("DELETE", ruleDocumentEndpoint(path), { reason });
+}
+
+export interface RulePackStatus {
+  installed: string;
+  available: string;
+  previous: string;
+  declined: string;
+  current: boolean;
+  can_roll_back: boolean;
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+export async function getRulePackStatus(): Promise<RulePackStatus> {
+  return fetchJSON<RulePackStatus>("/v1/rule-content/pack");
+}
+
+export interface RulePackRollbackResult {
+  restored: string;
+  version: number;
+  // Shipped rules the rollback did not restore, because a rule this deployment wrote now holds their identity.
+  withheld: string[];
+}
+
+export async function rollbackRulePack(reason: string): Promise<RulePackRollbackResult> {
+  return ruleContentMutation("POST", "/v1/rule-content/pack:rollback", { reason });
+}
+
+async function ruleContentMutation<T>(method: "POST" | "PUT" | "DELETE", path: string, body: unknown): Promise<T> {
+  return typedMutationEndpoint(method, path, body, (res) => res.json() as Promise<T>,
+    (code, message, status) => new RuleContentApiError(code, message, status));
 }
 
 // --- Application Control endpoints ---

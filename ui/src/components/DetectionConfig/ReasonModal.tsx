@@ -9,6 +9,8 @@ interface ReasonModalProps {
   readonly confirmVariant?: "primary" | "alert";
   readonly busy?: boolean;
   readonly error?: string | null;
+  // placeholder prompts for the reason. Defaults to the detection-tuning wording; other surfaces pass their own question.
+  readonly placeholder?: string;
   // onConfirm receives the trimmed reason; the parent runs the mutation and keeps this modal mounted (busy) until it settles.
   readonly onConfirm: (reason: string) => void;
   readonly onCancel: () => void;
@@ -26,6 +28,7 @@ export function ReasonModal({
   confirmVariant = "primary",
   busy = false,
   error = null,
+  placeholder = "Why are you reducing this rule's alerting?",
   onConfirm,
   onCancel,
 }: ReasonModalProps) {
@@ -67,7 +70,7 @@ export function ReasonModal({
           onChange={(e) => { setReason(e.target.value); }}
           disabled={busy}
           autoFocus
-          placeholder="Why are you reducing this rule's alerting?"
+          placeholder={placeholder}
         />
         <div className="dc-reason-modal__actions">
           <Button type="button" variant="text-link" onClick={onCancel} disabled={busy}>Cancel</Button>

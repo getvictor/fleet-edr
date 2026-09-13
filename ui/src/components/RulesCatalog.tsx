@@ -1,18 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
 import { Badge } from "./ui/Badge";
 import { severityBadgeVariant } from "./ui/severity";
 import { EmptyState, Table } from "./ui/Table";
 import { Input, Select } from "./ui/Input";
 import { PageHeader } from "./ui/PageHeader";
+import { PermissionAction, useCan } from "../permissions-core";
+import { RulePackPanel } from "./RulePackPanel";
 import { ruleModeLabel } from "./ruleMode";
+import { isLocallyAuthored } from "./ruleOrigin";
 import "./RulesCatalog.scss";
 
-// The origin the server reports for a rule written on this deployment (server/rules/api: LocalOrigin). The server records provenance
-// when a document is stored rather than inferring it from a path, and this value is how the rules API reports that record, so it is
-// what separates an operator's own rules from shipped ones.
-const localOrigin = "Locally authored";
 
 type OwnershipFilter = "all" | "shipped" | "yours";
 
@@ -30,7 +29,7 @@ type Ownership = "shipped" | "yours" | "unknown";
 // reporting one, and it is "unknown", not "shipped": counting it as shipped would hide an operator's own rule from the Yours filter.
 function ownership(rule: RuleDocEntry): Ownership {
   if (rule.origin === undefined) return "unknown";
-  return rule.origin === localOrigin ? "yours" : "shipped";
+  return isLocallyAuthored(rule.origin) ? "yours" : "shipped";
 }
 
 // RulesCatalog is the browsable list of every rule this deployment runs (issue #1001). Before it, the rule detail page was reachable
@@ -42,6 +41,10 @@ export function RulesCatalog() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [ownershipFilter, setOwnershipFilter] = useState<OwnershipFilter>("all");
+  const can = useCan();
+  const canWrite = can(PermissionAction.RuleContentWrite);
+  // Set by a rule page after a delete, so the operator lands somewhere that confirms it.
+  const deleted = (useLocation().state as { deleted?: string } | null)?.deleted;
 
   useEffect(() => {
     let cancelled = false;
@@ -85,12 +88,24 @@ export function RulesCatalog() {
         <option value="shipped">Shipped</option>
         <option value="yours">Yours</option>
       </Select>
+      {canWrite && (
+        <Link className="button button--primary" to="/rules/new">
+          New rule
+        </Link>
+      )}
     </div>
   );
 
   return (
     <>
       <PageHeader title="Rules" actions={filters} />
+      {deleted !== undefined && (
+        <p className="rules-catalog__summary" role="status">
+          Deleted <code>{deleted}</code>. The server stops evaluating it when it next reloads its rules, within 30 seconds, and it may be
+          listed here until then.
+        </p>
+      )}
+      <RulePackPanel canWrite={canWrite} />
       {error !== null && <EmptyState>Rules could not be loaded: {error}</EmptyState>}
       {error === null && rules === null && <EmptyState>Loading rules...</EmptyState>}
       {rules !== null && (
