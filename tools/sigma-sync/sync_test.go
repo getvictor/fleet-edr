@@ -114,10 +114,11 @@ func TestRun_ACorpusMatchingUpstreamChangesNothing(t *testing.T) {
 func TestRun_CopiesNewAndChangedRulesVerbatimAndKeepsWithdrawnOnes(t *testing.T) {
 	t.Parallel()
 	dir := vendor(t, map[string]string{
-		"process_creation/same.yml":    "title: same\n",
-		"process_creation/changed.yml": "title: old\n",
-		"process_creation/gone.yml":    "title: gone\n",
-		"process_creation/retired.yml": "title: retired\n",
+		"process_creation/same.yml":     "title: same\n",
+		"process_creation/changed.yml":  "title: old\n",
+		"process_creation/gone.yml":     "title: gone\n",
+		"process_creation/retired.yml":  "title: retired\n",
+		"process_creation/Archived.yml": "title: archived\n",
 	})
 	changed := "title: new\r\ndetection:  {}   \n" // odd whitespace and CRLF, which a verbatim copy must keep
 	src := fakeUpstream{files: map[string][]byte{
@@ -125,6 +126,7 @@ func TestRun_CopiesNewAndChangedRulesVerbatimAndKeepsWithdrawnOnes(t *testing.T)
 		"rules/macos/process_creation/changed.yml":                []byte(changed),
 		"rules-threat-hunting/macos/file/file_event/hunting.yml":  []byte("title: hunting"),
 		"deprecated/macos/retired.yml":                            []byte("title: retired\n"),
+		"deprecated/macos/archived.YML":                           []byte("title: archived\n"),
 		"rules-threat-hunting/windows/process_creation/other.yml": []byte("title: other\n"),
 	}}
 
@@ -138,10 +140,10 @@ func TestRun_CopiesNewAndChangedRulesVerbatimAndKeepsWithdrawnOnes(t *testing.T)
 	assert.Equal(t, changed, read(t, dir, "process_creation/changed.yml"))
 	assert.Equal(t, "title: hunting", read(t, dir, "file_event/hunting.yml"), "a rule tree beyond rules/ is vendored under its category")
 	assert.Equal(t, "title: gone\n", read(t, dir, "process_creation/gone.yml"), "a withdrawn rule is not deleted")
-	assert.Equal(t, fmt.Sprintf("%x  file_event/hunting.yml\n%x  process_creation/changed.yml\n%x  process_creation/gone.yml\n"+
-		"%x  process_creation/retired.yml\n%x  process_creation/same.yml\n",
-		sha256.Sum256([]byte("title: hunting")), sha256.Sum256([]byte(changed)), sha256.Sum256([]byte("title: gone\n")),
-		sha256.Sum256([]byte("title: retired\n")), sha256.Sum256([]byte("title: same\n"))),
+	assert.Equal(t, fmt.Sprintf("%x  file_event/hunting.yml\n%x  process_creation/Archived.yml\n%x  process_creation/changed.yml\n"+
+		"%x  process_creation/gone.yml\n%x  process_creation/retired.yml\n%x  process_creation/same.yml\n",
+		sha256.Sum256([]byte("title: hunting")), sha256.Sum256([]byte("title: archived\n")), sha256.Sum256([]byte(changed)),
+		sha256.Sum256([]byte("title: gone\n")), sha256.Sum256([]byte("title: retired\n")), sha256.Sum256([]byte("title: same\n"))),
 		read(t, dir, manifestName), "the manifest covers every vendored rule, withdrawn ones included")
 
 	text := read(t, filepath.Dir(reportPath), "report.md")
@@ -153,6 +155,8 @@ func TestRun_CopiesNewAndChangedRulesVerbatimAndKeepsWithdrawnOnes(t *testing.T)
 	assert.Contains(t, text, "## Withdrawn upstream")
 	assert.Contains(t, text, "`process_creation/gone.yml`: no longer among upstream's rules\n")
 	assert.Contains(t, text, "`process_creation/retired.yml`: no longer among upstream's rules, moved to `deprecated/macos/retired.yml`")
+	assert.Contains(t, text, "`process_creation/Archived.yml`: no longer among upstream's rules, moved to `deprecated/macos/archived.YML`",
+		"a deprecated copy is found by rule id, so a name differing only in case still names where it went")
 	assert.NotContains(t, text, "same.yml")
 }
 

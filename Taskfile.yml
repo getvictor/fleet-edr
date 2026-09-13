@@ -216,8 +216,8 @@ tasks:
     desc: |
       Fail if the vendored SigmaHQ macOS corpus (server/rules/internal/catalog/imported) differs from upstream: a new, changed or
       withdrawn rule in any SigmaHQ rule tree. Needs the network, which is why it is a task rather than a unit test. Bring the
-      corpus up to date with `go run ./tools/sigma-sync -apply`, which copies rules verbatim and regenerates the manifest but never
-      deletes a withdrawn rule or updates the pinned import counts.
+      corpus up to date with `go run ./tools/sigma-sync -apply`, which copies rules verbatim, moves a recategorised rule (removing its
+      old copy), and regenerates the manifest, but never deletes a withdrawn rule or updates the pinned import counts.
     cmds:
       - 'GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-$(gh auth token 2>/dev/null)}}" go run ./tools/sigma-sync'
 

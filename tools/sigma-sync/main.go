@@ -7,10 +7,12 @@
 // Usage:
 //
 //	go run ./tools/sigma-sync              # report differences; exits non-zero when there are any
-//	go run ./tools/sigma-sync -apply       # copy new and changed rules verbatim and regenerate the manifest
+//	go run ./tools/sigma-sync -apply       # copy new, changed and moved rules verbatim and regenerate the manifest
 //
-// -apply never deletes a vendored rule upstream has withdrawn, and never touches the pinned import and refusal counts in
-// TestLoadImported_TheWholeUpstreamCorpus: a new rule is meant to fail that test until a person reads it and updates the numbers.
+// A rule upstream moved to another category is written at its new path, and -apply removes the old vendored copy first, because the
+// loader refuses two files with one rule id. -apply never deletes a vendored rule upstream has withdrawn, and never touches the
+// pinned import and refusal counts in TestLoadImported_TheWholeUpstreamCorpus: a new rule is meant to fail that test until a person
+// reads it and updates the numbers.
 package main
 
 import (
@@ -30,7 +32,8 @@ func main() {
 	dir := flag.String("dir", "server/rules/internal/catalog/imported", "the vendored corpus")
 	repo := flag.String("repo", "SigmaHQ/sigma", "the upstream repository")
 	ref := flag.String("ref", "master", "the upstream branch or commit to compare with")
-	applyChanges := flag.Bool("apply", false, "copy new and changed rules and regenerate the manifest")
+	applyChanges := flag.Bool("apply", false,
+		"copy new and changed rules, move recategorised ones (removing the old copy), and regenerate the manifest")
 	reportPath := flag.String("report", "", "also write the Markdown report to this file")
 	flag.Parse()
 
