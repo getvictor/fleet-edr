@@ -352,7 +352,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 func (e *Engine) finishBatch(ctx context.Context, tally *batchTally, err error) (rulesapi.MonitorTally, error) {
 	if len(tally.records) > 0 {
 		if werr := e.monitorRecords.InsertMonitorRecords(ctx, tally.records); werr != nil {
-			err = errors.Join(err, fmt.Errorf("persist monitor records for %d findings: %w", len(tally.records), werr))
+			err = errors.Join(err, fmt.Errorf("persist monitor record batch (count=%d): %w", len(tally.records), werr))
 		}
 	}
 	return tally.snapshot(), err

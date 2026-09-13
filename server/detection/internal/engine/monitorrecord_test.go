@@ -111,7 +111,7 @@ func TestEngine_MonitorRecordFailureFailsTheBatch(t *testing.T) {
 
 	err := evaluateErr(e, t.Context(), monitorBatch())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "persist monitor records for 1 findings")
+	assert.Contains(t, err.Error(), "persist monitor record batch (count=1)")
 }
 
 // spec:server-detection-rules-engine/monitor-records-are-written-per-batch/a-batch-s-monitor-records-are-written-together

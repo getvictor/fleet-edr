@@ -2,7 +2,7 @@
 
 ### Requirement: Monitor records are written per batch
 
-The monitor records a batch of events produces SHALL be written together when the batch's evaluation ends, not one transaction per finding, with one event-archive read for all of their triggering events. Each record SHALL carry the same row, deduplication, event links and evidence it would carry if written alone, and SHALL enqueue no webhook delivery. The records SHALL be written whether the batch's evaluation succeeds or ends in an error, so a batch that is not processed again still keeps what it found. A failure to write them SHALL fail the batch without hiding the batch's own error.
+The monitor records a batch of events produces SHALL be written together when the batch's evaluation ends, not one transaction per finding. Their triggering events SHALL be read from the event archive in bounded chunks of records, not once per record, so neither the read nor the evidence held for it grows with the size of the batch. Each record SHALL carry the same row, deduplication, event links and evidence it would carry if written alone, and SHALL enqueue no webhook delivery. The records SHALL be written whether the batch's evaluation succeeds or ends in an error, so a batch that is not processed again still keeps what it found. A failure to write them SHALL fail the batch without hiding the batch's own error.
 
 #### Scenario: A batch's monitor records are written together
 

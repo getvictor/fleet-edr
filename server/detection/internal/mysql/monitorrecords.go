@@ -14,47 +14,50 @@ type MonitorRecord struct {
 	EventIDs []string
 }
 
-// monitorRecordsPerTransaction bounds how many monitor records one transaction writes, so a batch with many findings holds its row
-// locks for a bounded time. Each transaction is still one commit for many records, which is where the per-record path spent its time.
-const monitorRecordsPerTransaction = 100
+// monitorRecordsPerChunk bounds how many monitor records are written together: one archive read for their triggering events, then one
+// transaction. It bounds the archive query, the evidence held in memory, and how long the transaction holds its row locks, for a batch
+// with many findings. Each chunk is still one read and one commit for many records, which is where the per-record path spent its time.
+const monitorRecordsPerChunk = 100
 
-// InsertMonitorRecords keeps a batch's monitor records together (issue #1011): one archive read for the union of their triggering
-// events, then each chunk's rows, event links and evidence copies in one transaction.
+// InsertMonitorRecords keeps a batch's monitor records together (issue #1011): for each chunk of records, one archive read for the union
+// of their triggering events, then their rows, event links and evidence copies in one transaction.
 //
 // A record takes exactly what InsertAlert writes for it, as a monitor record: the same row and dedup key, the same links and evidence,
 // and no webhook delivery. A failure returns an error for the caller to retry the batch. Chunks committed before it stay, and the
 // dedup key makes the retry's write of them a no-op, which is what one InsertAlert per record already relied on.
 func (s *Store) InsertMonitorRecords(ctx context.Context, records []MonitorRecord) error {
 	prepared := make([]MonitorRecord, len(records))
-	var allEventIDs []string
 	for i, r := range records {
 		r.Alert.Disposition = api.AlertDispositionMonitor
 		a, err := normalizeAlert(r.Alert)
 		if err != nil {
 			return err
 		}
-		eventIDs := detectionslices.Deduplicate(r.EventIDs)
-		prepared[i] = MonitorRecord{Alert: a, EventIDs: eventIDs}
-		allEventIDs = append(allEventIDs, eventIDs...)
+		prepared[i] = MonitorRecord{Alert: a, EventIDs: detectionslices.Deduplicate(r.EventIDs)}
 	}
-	// Read before any transaction opens, for the reason InsertAlert gives: a slow archive must not hold row locks.
-	evidence, err := s.archive.EventsByIDs(ctx, detectionslices.Deduplicate(allEventIDs))
-	if err != nil {
-		return fmt.Errorf("read event payloads for monitor records: %w", err)
-	}
-	byID := make(map[string]api.Event, len(evidence))
-	for _, ev := range evidence {
-		byID[ev.EventID] = ev
-	}
-	for start := 0; start < len(prepared); start += monitorRecordsPerTransaction {
-		if err := s.insertMonitorRecordChunk(ctx, prepared[start:min(start+monitorRecordsPerTransaction, len(prepared))], byID); err != nil {
+	for start := 0; start < len(prepared); start += monitorRecordsPerChunk {
+		if err := s.insertMonitorRecordChunk(ctx, prepared[start:min(start+monitorRecordsPerChunk, len(prepared))]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) insertMonitorRecordChunk(ctx context.Context, chunk []MonitorRecord, evidence map[string]api.Event) error {
+func (s *Store) insertMonitorRecordChunk(ctx context.Context, chunk []MonitorRecord) error {
+	var eventIDs []string
+	for _, r := range chunk {
+		eventIDs = append(eventIDs, r.EventIDs...)
+	}
+	// Read before the transaction opens, for the reason InsertAlert gives: a slow archive must not hold row locks.
+	found, err := s.archive.EventsByIDs(ctx, detectionslices.Deduplicate(eventIDs))
+	if err != nil {
+		return fmt.Errorf("read event payloads for monitor records: %w", err)
+	}
+	evidence := make(map[string]api.Event, len(found))
+	for _, ev := range found {
+		evidence[ev.EventID] = ev
+	}
+
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx for monitor records: %w", err)

@@ -1,6 +1,7 @@
 package mysql_test
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"testing"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	"github.com/fleetdm/edr/server/detection/testkit"
+	"github.com/fleetdm/edr/server/testdb"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // monitorRecord is a process-less monitor record whose title repeats its dedup subject, so a test can find it in a listing.
@@ -89,17 +93,35 @@ func TestInsertMonitorRecords_ARetryDeduplicates(t *testing.T) {
 	assert.ElementsMatch(t, []string{"e1", "e2"}, links)
 }
 
-// More records than one transaction takes are all written.
-func TestInsertMonitorRecords_WritesMoreThanOneTransactionHolds(t *testing.T) {
+// recordingArchive records the size of each archive read, so a test can see how a batch's reads are bounded.
+type recordingArchive struct {
+	visibilityapi.EventArchive
+	readSizes []int
+}
+
+func (a *recordingArchive) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event, error) {
+	a.readSizes = append(a.readSizes, len(eventIDs))
+	return a.EventArchive.EventsByIDs(ctx, eventIDs)
+}
+
+// More records than one chunk takes are all written, and the archive is read once per chunk of records, for only that chunk's
+// events, so a batch with many findings neither sends one unbounded query nor holds every record's evidence at once.
+func TestInsertMonitorRecords_ReadsAndWritesInBoundedChunks(t *testing.T) {
 	t.Parallel()
-	s := newTestStore(t)
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	archive := &recordingArchive{EventArchive: testkit.NewMemArchive()}
+	s, err := mysql.New(db, archive, nil)
+	require.NoError(t, err)
 	const n = 250
 	records := make([]mysql.MonitorRecord, n)
 	for i := range records {
-		records[i] = monitorRecord("test:many-"+strconv.Itoa(i), "e-"+strconv.Itoa(i))
+		records[i] = monitorRecord("test:many-"+strconv.Itoa(i), "e-"+strconv.Itoa(i), "shared")
 	}
+
 	require.NoError(t, s.InsertMonitorRecords(t.Context(), records))
 	assert.Len(t, monitorRecordsByTitle(t, s), n)
+	assert.Equal(t, []int{101, 101, 51}, archive.readSizes, "one read per 100 records, of that chunk's distinct events")
 }
 
 // A record that cannot be deduplicated is refused before anything is written, as InsertAlert refuses it.
