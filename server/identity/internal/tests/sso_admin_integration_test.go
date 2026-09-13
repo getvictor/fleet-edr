@@ -204,8 +204,29 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 	assert.Equal(t, current.Version, unchanged.Version, "a refused update writes nothing")
 	assert.Equal(t, "groups", unchanged.GroupsClaim)
 	body["expected_version"] = current.Version
-	assert.Contains(t, put(t, body), fmt.Sprintf(`"version":%d`, current.Version+1), "an update based on the current version is saved")
+	saved := put(t, body)
+	assert.Contains(t, saved, fmt.Sprintf(`"version":%d`, current.Version+1), "an update based on the current version is saved")
 	delete(body, "expected_version")
+
+	// The external URL lives in the deployment settings, versioned apart from the OIDC configuration: a stale version of those is
+	// refused too, and writes nothing.
+	_, appVersion, err := appStore.Get(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, saved, fmt.Sprintf(`"app_config_version":%d`, appVersion),
+		"the update returns the deployment settings version it saved")
+	staleApp := maps.Clone(body)
+	staleApp["expected_app_config_version"] = appVersion - 1
+	staleApp["external_url"] = "https://stale.example.com"
+	raw, err = json.Marshal(staleApp)
+	require.NoError(t, err)
+	staleAppW := httptest.NewRecorder()
+	mux.ServeHTTP(staleAppW, adminActorCtx(
+		httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(raw))), uid))
+	require.Equal(t, http.StatusConflict, staleAppW.Code, "body: %s", staleAppW.Body.String())
+	appAfter, appVersionAfter, err := appStore.Get(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, appVersion, appVersionAfter)
+	assert.NotEqual(t, "https://stale.example.com", appAfter.ExternalURL)
 
 	// An empty claim with no mappings turns the mapping off: none are stored, and the read returns an empty list.
 	body["groups_claim"] = ""

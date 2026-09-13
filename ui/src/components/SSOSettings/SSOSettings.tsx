@@ -144,6 +144,7 @@ export function SSOSettings() {
         groups_claim: config.groups_claim,
         group_roles: config.group_roles,
         expected_version: config.version,
+        expected_app_config_version: config.app_config_version,
       });
       setConfig(updated);
       setForm(toForm(updated));

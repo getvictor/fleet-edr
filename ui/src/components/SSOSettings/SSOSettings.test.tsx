@@ -16,6 +16,7 @@ const baseConfig: api.SSOConfig = {
   group_roles: [],
   secret_set: true,
   version: 3,
+  app_config_version: 9,
 };
 
 afterEach(() => {
@@ -73,7 +74,7 @@ describe("SSOSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
     expect(upd.mock.calls[0][0]).toMatchObject({
-      groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }], expected_version: 3,
+      groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }], expected_version: 3, expected_app_config_version: 9,
     });
   });
 

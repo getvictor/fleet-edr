@@ -242,7 +242,10 @@ const mysqlErrDeadlock = 1213
 
 func lostFirstSave(err error) bool {
 	var mysqlErr *mysql.MySQLError
-	return errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDeadlock
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == mysqlErrDeadlock
 }
 
 func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInput) error {

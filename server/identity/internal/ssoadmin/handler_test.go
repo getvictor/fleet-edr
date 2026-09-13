@@ -536,6 +536,26 @@ func TestHandleUpdate_expectedVersion(t *testing.T) {
 	assert.Equal(t, int64(4), *ap.oidcIn.ExpectedVersion)
 	assert.Contains(t, w.Body.String(), `"version":5`)
 
+	t.Run("a stale deployment settings version is refused before the write", func(t *testing.T) {
+		t.Parallel()
+		ap := &captureApply{}
+		h := NewHandler(store, &fakeAppCfg{version: 7}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		stale := req
+		stale.ExpectedAppConfigVersion = new(int64(6))
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, putReq(t, stale))
+		require.Equal(t, http.StatusConflict, w.Code)
+		assert.Contains(t, w.Body.String(), "version_conflict")
+		assert.False(t, ap.called)
+
+		current := req
+		current.ExpectedAppConfigVersion = new(int64(7))
+		w = httptest.NewRecorder()
+		h.handleUpdate(w, putReq(t, current))
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Body.String(), `"app_config_version":7`)
+	})
+
 	conflict := &captureApply{err: ssoconfig.ErrVersionConflict}
 	audit := &captureAudit{}
 	h = NewHandler(store, &fakeAppCfg{}, conflict.fn, allowAuthZ{}, audit, okProbe, nil)

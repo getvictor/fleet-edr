@@ -1013,8 +1013,10 @@ export interface SSOConfig {
   groups_claim: string;
   group_roles: SSOGroupRole[];
   secret_set: boolean;
-  // version is the stored configuration's version, 0 before anything is stored; an update sends it back as expected_version.
+  // version and app_config_version are the versions of the OIDC configuration and of the deployment settings holding the external
+  // URL (0 before anything is stored); an update sends them back as expected_version and expected_app_config_version.
   version: number;
+  app_config_version: number;
 }
 
 // SSOGroupRole grants role to the members of the IdP group named group.
@@ -1039,6 +1041,7 @@ export interface SSOConfigUpdate {
   // expected_version is the version the settings were read at; the server refuses the update with 409 version_conflict when the
   // stored configuration has changed since.
   expected_version?: number;
+  expected_app_config_version?: number;
 }
 
 // SSOConfigApiError carries the typed `error` code the SSO settings handler writes on a 4xx (version_conflict, invalid_issuer, ...).
