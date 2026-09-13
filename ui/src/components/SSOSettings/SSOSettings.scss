@@ -96,6 +96,26 @@
     }
   }
 
+  &__mapping {
+    margin: 20px 0;
+  }
+
+  &__checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: $core-fleet-black;
+  }
+
+  &__mapping-add {
+    display: grid;
+    grid-template-columns: 2fr 1fr auto;
+    gap: 12px;
+    align-items: end;
+    margin-top: 16px;
+  }
+
   &__jit-role {
     margin-top: 20px;
     padding-top: 20px;

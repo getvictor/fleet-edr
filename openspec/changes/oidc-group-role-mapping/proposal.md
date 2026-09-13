@@ -11,7 +11,7 @@ Issue #136. Every SSO operator landed in the default role, and an administrator 
 
 - **Docs.** `docs/okta-setup.md` describes adding the groups claim in Okta and saving the mapping, and the changelog announces it.
 
-The console editor for the claim and mappings follows in a second change. Until then the mapping is set through `PUT /api/settings/sso`. Some providers send the groups claim only when a `groups` scope is requested; the scopes are already part of that request.
+- **The Single sign-on page edits the mapping.** A Group to role mapping card takes the groups claim, a checkbox that requests the `groups` scope (Okta sends the claim only then), and a list of groups with roles to add and remove. The page refuses a claim without mappings or mappings without a claim.
 
 ## Out of scope
 

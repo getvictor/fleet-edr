@@ -6,4 +6,4 @@
 - [x] Tests referencing the delta's scenarios; mutation-check them.
 - [x] Document the Okta groups claim and the mapping in `docs/okta-setup.md`, and add a changelog entry.
 - [x] QA a sign-in against dex with groups on the dev server.
-- [ ] Console editor for the claim and mappings (second change).
+- [x] Console editor for the claim, the groups scope, and the mappings on the Single sign-on page.

@@ -61,7 +61,7 @@ describe("SSOSettings", () => {
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
   });
 
-  it("sends back the loaded group mapping when saving", async () => {
+  it("sends back a loaded group mapping unchanged when saving", async () => {
     const mapped = { ...baseConfig, groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }] };
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(mapped);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(mapped);
@@ -73,6 +73,69 @@ describe("SSOSettings", () => {
     expect(upd.mock.calls[0][0]).toMatchObject({
       groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }],
     });
+  });
+
+  // spec:sso-configuration/the-single-sign-on-admin-settings-page/an-admin-maps-a-group-to-a-role-from-the-page
+  it("saves a group mapping and the groups scope entered on the page", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue({ ...baseConfig, scopes: ["openid", "email", "profile", "offline_access"] });
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+    expect(screen.getByRole("checkbox", { name: /Request the groups scope/ })).not.toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("Groups claim"), { target: { value: " groups " } });
+    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "edr-admins" } });
+    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "admin" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Request the groups scope/ }));
+    expect(screen.getByText("groups", { selector: ".sso-settings__chip" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
+    expect(upd.mock.calls[0][0]).toMatchObject({
+      scopes: ["openid", "email", "profile", "offline_access", "groups"],
+      groups_claim: "groups",
+      group_roles: [{ group: "edr-admins", role: "admin" }],
+    });
+  });
+
+  it("loads a stored mapping and removes the groups scope when unticked", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue({
+      ...baseConfig,
+      scopes: ["openid", "groups", "email"],
+      groups_claim: "groups",
+      group_roles: [{ group: "edr-auditors", role: "auditor" }],
+    });
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    expect(await screen.findByLabelText("Groups claim")).toHaveValue("groups");
+    expect(screen.getByText("edr-auditors")).toBeVisible();
+    const scope = screen.getByRole("checkbox", { name: /Request the groups scope/ });
+    expect(scope).toBeChecked();
+
+    fireEvent.click(scope);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
+    expect(upd.mock.calls[0][0].scopes).toEqual(["openid", "email"]);
+  });
+
+  // spec:sso-configuration/the-single-sign-on-admin-settings-page/an-incomplete-group-mapping-is-not-saved
+  it("refuses to save a group mapping without a claim, or a claim without a mapping", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "edr-admins" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Enter the groups claim, or remove the group mappings.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove edr-admins" }));
+    fireEvent.change(screen.getByLabelText("Groups claim"), { target: { value: "groups" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Add a group mapping, or clear the groups claim.")).toBeVisible();
+    expect(upd).not.toHaveBeenCalled();
   });
 
   it("includes client_secret on save when a new value is entered (rotate)", async () => {
