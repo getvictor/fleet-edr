@@ -61,14 +61,19 @@ type ReplaceResult struct {
 //
 // The stored set is authoritative once written, so a push that does not reach every host does not fail the change: the result counts
 // the hosts it missed, and so does the audit row.
-func (s *Service) Replace(ctx context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath) (ReplaceResult, error) {
+//
+// A non-nil expectedVersion is the version the caller's edit started from; the change is refused with ErrVersionConflict when the set
+// has moved on, so a stale edit cannot silently remove paths someone else added.
+func (s *Service) Replace(
+	ctx context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath, expectedVersion *int64,
+) (ReplaceResult, error) {
 	if strings.TrimSpace(reason) == "" {
 		return ReplaceResult{}, ErrReasonRequired
 	}
 	if err := api.ValidateWatchedPaths(paths); err != nil {
 		return ReplaceResult{}, err
 	}
-	previous, set, err := s.store.Replace(ctx, paths, actor.Principal.ID)
+	previous, set, err := s.store.Replace(ctx, paths, actor.Principal.ID, expectedVersion)
 	if err != nil {
 		return ReplaceResult{}, err
 	}

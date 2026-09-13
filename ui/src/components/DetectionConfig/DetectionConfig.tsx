@@ -23,6 +23,7 @@ import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
 import { ReasonModal } from "./ReasonModal";
+import { WatchedPaths } from "./WatchedPaths";
 import "./DetectionConfig.scss";
 
 // The canonical display order for exclusion match types, mirroring api.ExclusionMatchType server-side. The editor never offers all of
@@ -964,6 +965,11 @@ export function DetectionConfig() {
                 })}
               </tbody>
             </Table>
+          </section>
+
+          <section className="detection-config__section">
+            <h2 className="detection-config__heading">Watched file paths</h2>
+            <WatchedPaths canWrite={canWrite} />
           </section>
         </>
       )}

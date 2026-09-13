@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -26,25 +27,30 @@ type fakeWatchedPaths struct {
 	gotReason  string
 	gotPaths   []api.WatchedPath
 	gotActor   *identityapi.Actor
+	gotExpect  *int64
 }
 
 func (f *fakeWatchedPaths) Get(context.Context) (api.WatchedPathSet, error) { return f.set, f.getErr }
 
-func (f *fakeWatchedPaths) Replace(_ context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath) (
-	watchedpaths.ReplaceResult, error) {
-	f.gotActor, f.gotReason, f.gotPaths = actor, reason, paths
+func (f *fakeWatchedPaths) Replace(_ context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath,
+	expectedVersion *int64) (watchedpaths.ReplaceResult, error) {
+	f.gotActor, f.gotReason, f.gotPaths, f.gotExpect = actor, reason, paths, expectedVersion
 	if f.replaceErr != nil {
 		return watchedpaths.ReplaceResult{}, f.replaceErr
 	}
-	return watchedpaths.ReplaceResult{Set: api.WatchedPathSet{Version: 4, Paths: paths}, FanoutHosts: 3, FanoutFailed: 1}, nil
+	set := api.WatchedPathSet{Version: 4, Paths: paths, UpdatedBy: actor.Principal.ID}
+	return watchedpaths.ReplaceResult{Set: set, FanoutHosts: 3, FanoutFailed: 1}, nil
 }
 
 var _ watchedPathsService = (*watchedpaths.Service)(nil)
 
-func watchedPathsServer(t *testing.T, svc watchedPathsService, withActor bool) *httptest.Server {
+func watchedPathsServer(t *testing.T, svc watchedPathsService, withActor bool, opts ...func(*DetectionConfigHandler)) *httptest.Server {
 	t.Helper()
 	h := NewDetectionConfig(&fakeDCService{}, allowAllAuthZ{}, slog.Default())
 	h.SetWatchedPaths(svc)
+	for _, opt := range opts {
+		opt(h)
+	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	var handler http.Handler = mux
@@ -94,6 +100,11 @@ func TestWatchedPathsHandler_ReplaceMapsEachOutcome(t *testing.T) {
 			http.StatusBadRequest, "below a top-level directory",
 		},
 		{"store failure", errors.New("database unavailable"), http.StatusInternalServerError, "internal error"},
+		{
+			"changed since read",
+			fmt.Errorf("%w: it is at version 5, not 4", watchedpaths.ErrVersionConflict),
+			http.StatusConflict, "at version 5, not 4",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,6 +122,115 @@ func TestWatchedPathsHandler_ReplaceMapsEachOutcome(t *testing.T) {
 			assert.Equal(t, "usr_7", svc.gotActor.Principal.ID)
 		})
 	}
+}
+
+// spec:server-admin-surface/the-watched-path-set-names-who-last-changed-it/the-set-names-its-last-changer-by-label
+// The console names who last changed the set, so both the read and the replace resolve updated_by to its display label, and leave it
+// out when there is no one to name or the principal is gone.
+func TestWatchedPathsHandler_ResolvesWhoLastChangedTheSet(t *testing.T) {
+	t.Parallel()
+	labels := func(t *testing.T) func(*DetectionConfigHandler) {
+		t.Helper()
+		return func(h *DetectionConfigHandler) {
+			h.SetPrincipalLabelResolver(func(_ context.Context, id string) (string, error) {
+				switch id {
+				case "usr_7":
+					return "ops@fleetdm.com", nil
+				case "usr_9":
+					return "", identityapi.ErrUserNotFound
+				default:
+					t.Errorf("resolved an unexpected principal %q", id)
+					return "", errors.New("unexpected")
+				}
+			})
+		}
+	}
+	changedBy := func(id string) api.WatchedPathSet {
+		return api.WatchedPathSet{Version: 2, Paths: []api.WatchedPath{}, UpdatedBy: id}
+	}
+	cases := []struct {
+		name      string
+		method    string
+		set       api.WatchedPathSet
+		resolve   bool
+		wantLabel any
+	}{
+		{"read names the principal", http.MethodGet, changedBy("usr_7"), true, "ops@fleetdm.com"},
+		{"read of a deleted principal has no label", http.MethodGet, changedBy("usr_9"), true, nil},
+		{"read of the set no one changed resolves nothing", http.MethodGet, api.WatchedPathSet{Paths: []api.WatchedPath{}}, true, nil},
+		{"read without a resolver has no label", http.MethodGet, changedBy("usr_7"), false, nil},
+		{"replace names the operator who made it", http.MethodPut, api.WatchedPathSet{}, true, "ops@fleetdm.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var opts []func(*DetectionConfigHandler)
+			if tc.resolve {
+				opts = append(opts, labels(t))
+			}
+			srv := watchedPathsServer(t, &fakeWatchedPaths{set: tc.set}, true, opts...)
+			resp := dcDo(t, srv, tc.method, "/api/v1/detection-config/watched-paths", `{"paths":[],"reason":"r"}`)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			if tc.method == http.MethodPut {
+				body, _ = body["set"].(map[string]any)
+			}
+			assert.Equal(t, tc.wantLabel, body["updated_by_label"])
+		})
+	}
+}
+
+// The version a client's edit started from reaches the service as sent, and its absence reaches it as no condition at all.
+func TestWatchedPathsHandler_PassesTheExpectedVersionThrough(t *testing.T) {
+	t.Parallel()
+	startedFrom := int64(4)
+	cases := []struct {
+		name string
+		body string
+		want *int64
+	}{
+		{"named", `{"paths":[],"reason":"r","expected_version":4}`, &startedFrom},
+		{"omitted", `{"paths":[],"reason":"r"}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeWatchedPaths{}
+			resp := dcDo(t, watchedPathsServer(t, svc, true), http.MethodPut, "/api/v1/detection-config/watched-paths", tc.body)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tc.want, svc.gotExpect)
+		})
+	}
+}
+
+// The PUT body is the client's wire shape: every field, including a list that is present but empty and a version that is absent,
+// survives Marshal then Unmarshal.
+func TestReplaceWatchedPathsRequest_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		want := replaceWatchedPathsRequest{Reason: rapid.String().Draw(t, "reason")}
+		if rapid.Bool().Draw(t, "has_paths") {
+			paths := rapid.SliceOfN(rapid.Custom(func(t *rapid.T) api.WatchedPath {
+				return api.WatchedPath{
+					Path:  rapid.String().Draw(t, "path"),
+					Match: rapid.SampledFrom([]api.WatchedPathMatch{api.WatchedPathLiteral, api.WatchedPathPrefix}).Draw(t, "match"),
+				}
+			}), 0, 8).Draw(t, "paths")
+			want.Paths = &paths
+		}
+		if rapid.Bool().Draw(t, "has_expected_version") {
+			version := rapid.Int64().Draw(t, "expected_version")
+			want.ExpectedVersion = &version
+		}
+		b, err := json.Marshal(want)
+		require.NoError(t, err)
+		var got replaceWatchedPathsRequest
+		require.NoError(t, json.Unmarshal(b, &got))
+		assert.Equal(t, want, got)
+	})
 }
 
 func TestWatchedPathsHandler_GetFailureIs500(t *testing.T) {

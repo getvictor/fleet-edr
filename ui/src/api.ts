@@ -1494,6 +1494,58 @@ export async function deleteDetectionExclusion(id: number, reason: string): Prom
   );
 }
 
+// WatchedPath is one entry in the watched-path set: an absolute path, and whether it covers exactly that file (`literal`) or every
+// path starting with it (`prefix`).
+export interface WatchedPath {
+  path: string;
+  match: "literal" | "prefix";
+}
+
+// WatchedPathSet is the stored watched-path set. Version 0 is the set no operator has changed, which has no updated_* fields.
+// updated_by_label is the display label the server resolves from updated_by (the principal id), absent when it cannot be resolved.
+export interface WatchedPathSet {
+  version: number;
+  paths: WatchedPath[];
+  updated_at?: string;
+  updated_by?: string;
+  updated_by_label?: string;
+}
+
+// WatchedPaths is GET /api/v1/detection-config/watched-paths: the set hosts watch on top of the built-in paths, the built-in paths
+// themselves, and the most entries a set may hold.
+export interface WatchedPaths extends WatchedPathSet {
+  built_in: WatchedPath[];
+  max_paths: number;
+}
+
+// ReplaceWatchedPathsResult is the PUT response: the stored set and how far its push reached.
+export interface ReplaceWatchedPathsResult {
+  set: WatchedPathSet;
+  fanout_hosts: number;
+  fanout_failed: number;
+  fanout_skipped_reason?: string;
+}
+
+export async function getWatchedPaths(): Promise<WatchedPaths> {
+  return fetchJSON<WatchedPaths>("/v1/detection-config/watched-paths");
+}
+
+// replaceWatchedPaths replaces the whole set, provided it is still at expectedVersion, the version the edit started from. The server
+// refuses a set it would not watch with a DetectionConfigApiError whose message names the entry and why, and a set that has changed
+// since with the code detection_config.conflict.
+export async function replaceWatchedPaths(
+  paths: WatchedPath[],
+  reason: string,
+  expectedVersion: number,
+): Promise<ReplaceWatchedPathsResult> {
+  return detectionConfigMutationEndpoint(
+    "PUT",
+    "/v1/detection-config/watched-paths",
+    { paths, reason, expected_version: expectedVersion },
+    (res) => res.json() as Promise<ReplaceWatchedPathsResult>,
+  );
+}
+
 export async function upsertDetectionRuleSetting(
   req: UpsertDetectionRuleSettingRequest,
 ): Promise<DetectionRuleSetting> {

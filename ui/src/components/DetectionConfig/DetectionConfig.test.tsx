@@ -51,7 +51,7 @@ const makeSetting = (over: Partial<DetectionRuleSetting> = {}): DetectionRuleSet
   ...over,
 });
 
-// stubReads wires the three read endpoints the page loads on mount.
+// stubReads wires the read endpoints the page loads on mount.
 function stubReads(
   opts: {
     exclusions?: DetectionExclusion[];
@@ -73,6 +73,12 @@ function stubReads(
   vi.spyOn(api, "listDetectionRuleEvalStats").mockResolvedValue({
     stats: opts.evalStats ?? [],
     days: opts.evalStatsDays ?? 7,
+  });
+  vi.spyOn(api, "getWatchedPaths").mockResolvedValue({
+    version: 1,
+    paths: [{ path: "/Library/StartupItems/", match: "prefix" }],
+    built_in: [{ path: "/etc/sudoers", match: "literal" }],
+    max_paths: 32,
   });
 }
 
@@ -102,6 +108,22 @@ afterEach(() => {
 });
 
 describe("DetectionConfig", () => {
+  // The watched-path editor is a section of the detection tuning page, and it edits only for an operator who can write detection config.
+  // spec:web-ui/watched-file-paths-are-edited-in-detection-tuning/a-reader-cannot-change-the-set
+  it.each([
+    { name: "a writer", permissions: [PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite], editable: true },
+    { name: "a reader", permissions: [PermissionAction.DetectionConfigRead], editable: false },
+  ])("renders the watched file paths section for $name", async ({ permissions, editable }) => {
+    stubReads();
+    renderPage(permissions);
+
+    const heading = await screen.findByRole("heading", { name: "Watched file paths" });
+    const section = heading.closest("section");
+    expect(section).not.toBeNull();
+    expect(await within(section as HTMLElement).findByText("/Library/StartupItems/")).toBeVisible();
+    expect(within(section as HTMLElement).queryByRole("button", { name: "Remove /Library/StartupItems/" }) !== null).toBe(editable);
+  });
+
   // The mode + severity controls render for every rule straight from its fetchRuleDocs entry, with no rule-specific UI.
   // spec:web-ui/detection-configuration-admin-views/per-rule-mode-and-severity-controls-render-for-every-rule
   it("loads and renders exclusions plus the rule-modes table", async () => {

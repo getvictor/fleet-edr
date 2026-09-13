@@ -183,6 +183,55 @@ func TestWatchedPathsREST_RefusesARequestWithoutAList(t *testing.T) {
 	assert.Len(t, r.inserter.snapshot(), 1)
 }
 
+// spec:server-admin-surface/watched-path-replacements-guard-against-lost-updates/a-replacement-based-on-an-outdated-set-is-refused
+// A replacement naming the version its edit started from is refused once the set has moved on, so an operator saving a stale edit
+// cannot remove paths someone else added. Two edits of the same version race for the row lock, and exactly one of them lands.
+func TestWatchedPathsREST_RefusesAReplacementOfAnOutdatedSet(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	emond := rulesapi.WatchedPath{Path: "/etc/emond.d/rules/", Match: rulesapi.WatchedPathPrefix}
+	first := r.do(t, http.MethodPut, watchedPathsRoute,
+		map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "add", "expected_version": 0})
+	first.Body.Close()
+	require.Equal(t, http.StatusOK, first.StatusCode, "an edit of the current version is stored")
+
+	stale := r.do(t, http.MethodPut, watchedPathsRoute,
+		map[string]any{"paths": []rulesapi.WatchedPath{emond}, "reason": "edited version 0", "expected_version": 0})
+	defer stale.Body.Close()
+	assert.Equal(t, http.StatusConflict, stale.StatusCode)
+	var refusal struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.NewDecoder(stale.Body).Decode(&refusal))
+	assert.Equal(t, "detection_config.conflict", refusal.Error)
+	assert.Contains(t, refusal.Message, "at version 1, not 0")
+	stored := r.watchedPaths(t)
+	assert.Equal(t, int64(1), stored.Version)
+	assert.Equal(t, []rulesapi.WatchedPath{startupItems}, stored.Paths, "the refused edit stored nothing")
+	assert.Len(t, r.inserter.snapshot(), 1, "and queued nothing")
+	assert.Len(t, r.audit.snapshot(), 1, "and audited nothing")
+
+	statuses := make(chan int, 2)
+	var wg sync.WaitGroup
+	for _, path := range []rulesapi.WatchedPath{emond, {Path: "/Library/Other/", Match: rulesapi.WatchedPathPrefix}} {
+		wg.Go(func() {
+			resp := r.do(t, http.MethodPut, watchedPathsRoute,
+				map[string]any{"paths": []rulesapi.WatchedPath{path}, "reason": "race", "expected_version": 1})
+			resp.Body.Close()
+			statuses <- resp.StatusCode
+		})
+	}
+	wg.Wait()
+	close(statuses)
+	var got []int
+	for status := range statuses {
+		got = append(got, status)
+	}
+	assert.ElementsMatch(t, []int{http.StatusOK, http.StatusConflict}, got)
+	assert.Equal(t, int64(2), r.watchedPaths(t).Version)
+}
+
 // Concurrent replacements are ordered by the row lock: each takes the next version, audits the set it actually replaced, and gets a
 // later epoch than the version before it, which is what lets a host order the sets however their commands arrive.
 func TestWatchedPathsREST_OrdersConcurrentReplacements(t *testing.T) {

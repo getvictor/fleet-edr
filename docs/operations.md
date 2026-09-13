@@ -267,6 +267,15 @@ The ClickHouse TTL bounds how long events live; three levers reduce how many are
 - **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats cost no archive or queue row, but they do cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under the 6h stale-process TTL so a live snapshot row is always re-freshened before the TTL would force-exit it.
 - **Repetitive network/DNS telemetry is coalesced automatically** (agent-side, fixed `10s` window). Within each window the agent collapses repeated identical connection 5-tuples and repeated DNS lookups into one representative event plus a `coalesced_count`, preserving the earliest timestamp and (for DNS) the union of resolved addresses. The window is a fixed constant, deliberately well under the 30s DNS-to-connect beacon-correlation window so coalescing can never push a representative outside it.
 
+### Watching more file paths
+
+Every host records writes, renames, truncations and deletions of `/etc/sudoers` and files under `/etc/sudoers.d/`. To watch more, open **Detection tuning** and edit **Watched file paths** (needs `detection_config.write`). Add each path as either **This file** or **Everything under it** (a directory, ending in `/`), then **Save and push to hosts** with a reason for the audit log. The same set is available as `GET` and `PUT /api/v1/detection-config/watched-paths`.
+
+- **Keep prefixes narrow.** Every write under a watched directory is sent to the server. The server refuses a prefix at the top of the filesystem, such as `/Users/` or `/Library/`, and a set of more than 32 paths.
+- **Reaching hosts.** A saved set is queued for every enrolled host and applied within seconds by those online. A host that was offline for over an hour, or enrolled after the change, receives it within minutes of connecting. The save reports how many hosts it was queued for.
+- **The set replaces the previous one.** Removing a path stops watching it on each host as the new set arrives.
+- **Saves do not overwrite each other.** If someone else saves a change after you opened the page, your save is refused; load the latest set and make your change again.
+
 ## Process-tree freshness
 
 ESF is best-effort and exit events go missing under kernel back-pressure, sysext crashes, and agent restarts. Two reconcilers cooperate to keep the process tree from filling with forever-green ghost rows.
