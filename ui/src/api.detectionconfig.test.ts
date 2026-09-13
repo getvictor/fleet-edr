@@ -7,6 +7,8 @@ import {
   createDetectionExclusion,
   deleteDetectionExclusion,
   upsertDetectionRuleSetting,
+  getWatchedPaths,
+  replaceWatchedPaths,
   DetectionConfigApiError,
   attachCsrfHeader,
 } from "./api";
@@ -304,6 +306,36 @@ describe("detection-config API client", () => {
     const [target, init] = mock.mock.calls[0] as [URL, RequestInit];
     expect(target.toString()).toContain("/api/v1/detection-config/rule-settings");
     expect(init.method).toBe("PUT");
+  });
+
+  it("getWatchedPaths reads the watched-path set", async () => {
+    const set = { version: 2, paths: [{ path: "/Library/StartupItems/", match: "prefix" }], built_in: [], max_paths: 32 };
+    const mock = stubFetch(set);
+    await expect(getWatchedPaths()).resolves.toEqual(set);
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("/api/v1/detection-config/watched-paths");
+  });
+
+  it("replaceWatchedPaths PUTs the whole set and the reason with the CSRF header attached", async () => {
+    sessionStorage.setItem("edr_csrf_token", "csrf-123");
+    const paths = [{ path: "/Library/StartupItems/", match: "prefix" as const }];
+    const result = { set: { version: 3, paths }, fanout_hosts: 2, fanout_failed: 0 };
+    const mock = stubFetch(result);
+    await expect(replaceWatchedPaths(paths, "persistence")).resolves.toEqual(result);
+    const [target, init] = mock.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
+    expect(target.toString()).toContain("/api/v1/detection-config/watched-paths");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({ paths, reason: "persistence" });
+    const expectedCsrf: Record<string, string> = {};
+    attachCsrfHeader(expectedCsrf, "PUT");
+    expect(init.headers).toMatchObject(expectedCsrf);
+  });
+
+  it("replaceWatchedPaths surfaces the server's refusal as a typed error carrying its message", async () => {
+    stubFetch({ error: "detection_config.invalid_input", message: 'invalid watched paths: entry 0 ("/Users/"): too broad' }, 400);
+    const err = await replaceWatchedPaths([{ path: "/Users/", match: "prefix" }], "r").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DetectionConfigApiError);
+    expect(err).toMatchObject({ status: 400, message: 'invalid watched paths: entry 0 ("/Users/"): too broad' });
   });
 
   it("surfaces a typed error on a 4xx with the {error, message} shape", async () => {

@@ -1494,6 +1494,47 @@ export async function deleteDetectionExclusion(id: number, reason: string): Prom
   );
 }
 
+// WatchedPath is one entry in the watched-path set (issue #998): an absolute path, and whether it covers exactly that file (`literal`) or
+// every path starting with it (`prefix`).
+export interface WatchedPath {
+  path: string;
+  match: "literal" | "prefix";
+}
+
+// WatchedPaths is GET /api/v1/detection-config/watched-paths: the set hosts watch on top of the built-in paths, the built-in paths
+// themselves, and the most entries a set may hold. Version 0 is the set no operator has changed.
+export interface WatchedPaths {
+  version: number;
+  paths: WatchedPath[];
+  updated_at?: string;
+  updated_by?: string;
+  built_in: WatchedPath[];
+  max_paths: number;
+}
+
+// ReplaceWatchedPathsResult is the PUT response: the stored set and how far its push reached.
+export interface ReplaceWatchedPathsResult {
+  set: { version: number; paths: WatchedPath[]; updated_at?: string; updated_by?: string };
+  fanout_hosts: number;
+  fanout_failed: number;
+  fanout_skipped_reason?: string;
+}
+
+export async function getWatchedPaths(): Promise<WatchedPaths> {
+  return fetchJSON<WatchedPaths>("/v1/detection-config/watched-paths");
+}
+
+// replaceWatchedPaths replaces the whole set. The server refuses a set it would not watch with a DetectionConfigApiError whose message
+// names the entry and why.
+export async function replaceWatchedPaths(paths: WatchedPath[], reason: string): Promise<ReplaceWatchedPathsResult> {
+  return detectionConfigMutationEndpoint(
+    "PUT",
+    "/v1/detection-config/watched-paths",
+    { paths, reason },
+    (res) => res.json() as Promise<ReplaceWatchedPathsResult>,
+  );
+}
+
 export async function upsertDetectionRuleSetting(
   req: UpsertDetectionRuleSettingRequest,
 ): Promise<DetectionRuleSetting> {
