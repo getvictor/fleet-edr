@@ -64,6 +64,8 @@ func hostIDFor(t *testing.T, db *sqlx.DB, uuid string) string {
 	return id
 }
 
+// spec:server-host-status/the-server-records-host-health-episodes/an-episode-closes-when-the-component-recovers
+//
 // TestStatusCheckIn_ClosesTheEpisodeOfARecoveredComponent is the lifecycle end to end. The store tests prove the close works; this
 // proves the check-in is wired to perform it, which is the part that silently would not happen if the call were dropped.
 func TestStatusCheckIn_ClosesTheEpisodeOfARecoveredComponent(t *testing.T) {
@@ -131,6 +133,8 @@ func TestStatusCheckIn_LeavesAnUnrecoveredComponentOpen(t *testing.T) {
 	}
 }
 
+// spec:server-host-status/the-server-records-host-health-episodes/recovery-with-no-open-episode-is-not-an-error
+//
 // TestStatusCheckIn_HealthyHostWithNoEpisodeIsUnaffected: the ordinary check-in, which is nearly all of them. It must pass through
 // the new close step without error and without inventing a record.
 func TestStatusCheckIn_HealthyHostWithNoEpisodeIsUnaffected(t *testing.T) {

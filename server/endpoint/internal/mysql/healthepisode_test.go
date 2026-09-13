@@ -49,6 +49,8 @@ func allEpisodes(t *testing.T, db *sqlx.DB, hostID string) []api.HealthEpisode {
 	return out
 }
 
+// spec:server-host-status/the-server-records-host-health-episodes/a-fault-that-needs-a-person-opens-an-episode
+//
 // TestOpenHealthEpisode_RecordsTheFaultsOwnFields: the point of an episode over the level state that reports the same fault is that
 // it keeps the machine-readable detail, so an operational surface can filter and group on the provider and the outcome instead of
 // reading a sentence.
@@ -73,6 +75,8 @@ func TestOpenHealthEpisode_RecordsTheFaultsOwnFields(t *testing.T) {
 	assert.Equal(t, api.SelfHealFailedDetail{Provider: "content_filter", Outcome: "enable_ineffective", Attempts: 5}, detail)
 }
 
+// spec:server-host-status/the-server-records-host-health-episodes/a-re-asserted-fault-does-not-open-a-second-episode
+//
 // TestOpenHealthEpisode_ReAssertingAFaultDoesNotOpenASecond is the property the whole schema shape exists for. The fault is level
 // state on the agent and is re-reported for as long as it lasts, so a recorder that opened a row per report would describe one
 // outage as hundreds and make the duration meaningless.
@@ -119,6 +123,8 @@ func TestOpenHealthEpisode_SeparatesHostsComponentsAndKinds(t *testing.T) {
 	assert.Len(t, openEpisodes(t, db, "host-b"), 1)
 }
 
+// spec:server-host-status/the-server-records-host-health-episodes/an-episode-closes-when-the-component-recovers
+//
 // TestCloseHealthEpisodes_ClosesOnRecoveryAndAllowsTheNextOne covers the lifecycle the record exists to capture: an outage ends
 // when the component reports healthy, and a LATER outage on the same component is its own episode rather than being swallowed by
 // the closed one.
@@ -169,6 +175,8 @@ func TestCloseHealthEpisodes_OnlyClosesTheComponentsReportedHealthy(t *testing.T
 		"a component that did not report healthy keeps its episode open, because nobody told us that fault ended")
 }
 
+// spec:server-host-status/the-server-records-host-health-episodes/recovery-with-no-open-episode-is-not-an-error
+//
 // TestCloseHealthEpisodes_HealthyWithNothingOpenIsNotAnError: the overwhelmingly common check-in is a healthy host with no episode
 // to close, and it must be a cheap no-op rather than an error path.
 func TestCloseHealthEpisodes_HealthyWithNothingOpenIsNotAnError(t *testing.T) {

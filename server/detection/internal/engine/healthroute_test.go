@@ -84,6 +84,8 @@ func healthBatch() []api.Event {
 	return []api.Event{{EventID: "e1", HostID: "host-a", TimestampNs: 1, EventType: "exec", Platform: "darwin", Payload: []byte("{}")}}
 }
 
+// spec:server-detection-rules-engine/registered-rule-catalog/a-health-signal-is-recorded-as-an-episode-rather-than-an-alert
+//
 // TestEngine_HealthFindingIsRecordedNotAlerted is the routing contract of issue #778.
 //
 // The engine is built with a NIL store, and that is the load-bearing half of the assertion rather than a convenience. Persisting an
@@ -114,6 +116,8 @@ func TestEngine_HealthFindingIsRecordedNotAlerted(t *testing.T) {
 	assert.Equal(t, endpointapi.SelfHealFailedDetail{Provider: "content_filter", Outcome: "enable_ineffective", Attempts: 5}, detail)
 }
 
+// spec:server-detection-rules-engine/registered-rule-catalog/a-projection-is-still-an-alert
+//
 // TestEngine_ProjectionFindingStillTakesTheAlertPath shows the engine routes on the declared KIND and not on "is a non-detection".
 // application_control_block is a projection and its findings belong in the queue an analyst works, so it must NOT be diverted.
 //
