@@ -117,20 +117,23 @@ func (s *Store) CountActive(ctx context.Context) (int, error) {
 }
 
 // ActiveHostIDs returns the host_id of every currently-active (non-revoked) enrollment. Used to fan out policy updates to the set of
-// hosts that still have a valid token; returning just the id column keeps the payload small when the caller is already going to look
-// up the full row by id.
+// hosts that still have a valid token. It projects ActiveEnrollments, so a push and the watched-path catch-up agree on which
+// enrollments are active.
 func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
-	var ids []string
-	if err := s.db.SelectContext(ctx, &ids, `
-		SELECT host_id FROM enrollments WHERE revoked_at IS NULL ORDER BY host_id
-	`); err != nil {
-		return nil, fmt.Errorf("list active host ids: %w", err)
+	rows, err := s.ActiveEnrollments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.HostID
 	}
 	return ids, nil
 }
 
-// ActiveEnrollments returns each active (non-revoked) enrollment's host_id and enrolled_at, and nothing else: the watched-path
-// catch-up reads it every few minutes, so it reads only the rows and columns that question needs.
+// ActiveEnrollments returns each active (non-revoked) enrollment's host_id and enrolled_at, in host_id order, and nothing else: the
+// watched-path catch-up reads it every few minutes, so it reads only the columns that question needs. host_id is the primary key, so
+// the table holds one row per host and the read is bounded by the number of hosts ever enrolled.
 func (s *Store) ActiveEnrollments(ctx context.Context) ([]ActiveEnrollment, error) {
 	var rows []ActiveEnrollment
 	if err := s.db.SelectContext(ctx, &rows, `

@@ -6,8 +6,9 @@
 -- not filtered, and leaves each host's whole history to scan for the type. (host_id, command_type, id) makes MAX(id) for a host and type
 -- the last entry of an index range.
 --
--- A secondary-index add, built online, so it ships single-step under ADR-0009. No down section, per the same ADR.
+-- A secondary-index add, built online, so it ships single-step under ADR-0009. The algorithm and lock are stated so MySQL refuses the
+-- statement rather than falling back to a plan that blocks command inserts while it builds. No down section, per the same ADR.
 
 -- +goose StatementBegin
-CREATE INDEX idx_commands_host_type_id ON commands (host_id, command_type, id);
+CREATE INDEX idx_commands_host_type_id ON commands (host_id, command_type, id) ALGORITHM=INPLACE LOCK=NONE;
 -- +goose StatementEnd

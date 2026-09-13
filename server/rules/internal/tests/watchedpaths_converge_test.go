@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -124,6 +125,50 @@ func TestWatchedPathsConverge_ResendsAfterExpiryAndReenrollment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, queued)
 	assert.ElementsMatch(t, []string{"host-a", "host-b"}, history.takeQueued())
+}
+
+// A sweep that cannot read the enrollments or the command history queues nothing and reports why, so the loop logs it and retries.
+func TestWatchedPathsConverge_SurfacesAFailedRead(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	put := r.do(t, http.MethodPut, watchedPathsRoute, map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "r"})
+	put.Body.Close()
+	require.Equal(t, http.StatusOK, put.StatusCode)
+	readFailed := errors.New("read failed")
+	enrolled := func(context.Context) ([]rulesapi.WatchedPathEnrollment, error) {
+		return []rulesapi.WatchedPathEnrollment{{HostID: "late-host", EnrolledAt: time.Now().Add(-time.Hour)}}, nil
+	}
+
+	cases := []struct {
+		name        string
+		enrollments rulesapi.WatchedPathEnrollmentLister
+		latest      rulesapi.WatchedPathCommandLister
+	}{
+		{
+			name:        "enrollments",
+			enrollments: func(context.Context) ([]rulesapi.WatchedPathEnrollment, error) { return nil, readFailed },
+			latest:      (&fakeCommandHistory{latest: map[string]rulesapi.WatchedPathCommand{}}).list,
+		},
+		{
+			name:        "command history",
+			enrollments: enrolled,
+			latest: func(context.Context, string, []string) (map[string]rulesapi.WatchedPathCommand, error) {
+				return nil, readFailed
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			history := &fakeCommandHistory{latest: map[string]rulesapi.WatchedPathCommand{}}
+			converger := watchedpaths.NewConverger(watchedpaths.NewStore(r.db), history.insert, tc.enrollments, tc.latest, slog.Default())
+
+			queued, err := converger.Converge(t.Context())
+			require.ErrorIs(t, err, readFailed)
+			assert.Zero(t, queued)
+			assert.Empty(t, history.takeQueued())
+		})
+	}
 }
 
 // The catch-up is wired into the rules context's background loops: with the enrollments and command history supplied, running the

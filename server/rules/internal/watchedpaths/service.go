@@ -77,6 +77,14 @@ func (s *Service) Replace(ctx context.Context, actor *identityapi.Actor, reason 
 	return result, nil
 }
 
+// commandPayload is the set_watched_paths payload for a stored set. The push and the catch-up both build it here, so a host that is
+// caught up gets exactly what the push sent. The set must have been changed at least once, so it carries its update time. Marshalling
+// a struct of strings and integers cannot fail.
+func commandPayload(set api.WatchedPathSet) []byte {
+	payload, _ := json.Marshal(api.SetWatchedPathsPayload{Version: set.Version, Epoch: set.UpdatedAt.UnixMicro(), Paths: set.Paths})
+	return payload
+}
+
 // fanout queues the set for every enrolled host in one batched insert and reports how many hosts it tried, how many it missed, and
 // why it reached none when that was a failure.
 func (s *Service) fanout(ctx context.Context, set api.WatchedPathSet) ReplaceResult {
@@ -90,9 +98,7 @@ func (s *Service) fanout(ctx context.Context, set api.WatchedPathSet) ReplaceRes
 	if len(hostIDs) == 0 {
 		return result
 	}
-	// A replaced set always carries its update time, which Replace just wrote. Marshalling a struct of strings and integers cannot
-	// fail.
-	payload, _ := json.Marshal(api.SetWatchedPathsPayload{Version: set.Version, Epoch: set.UpdatedAt.UnixMicro(), Paths: set.Paths})
+	payload := commandPayload(set)
 	hostIDs = slices.Clone(hostIDs)
 	slices.Sort(hostIDs)
 	inserted, err := s.commands(ctx, hostIDs, api.CommandTypeSetWatchedPaths, payload)

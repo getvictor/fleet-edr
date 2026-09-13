@@ -160,6 +160,13 @@ func TestEnrollVerifyListRevoke(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{testHardwareUUID}, active)
 
+	enrollments, err := ep.Service().ActiveEnrollments(ctx)
+	require.NoError(t, err)
+	require.Len(t, enrollments, 1)
+	assert.Equal(t, testHardwareUUID, enrollments[0].HostID)
+	assert.True(t, res.EnrolledAt.Equal(enrollments[0].EnrolledAt),
+		"the enrollment time is the one Enroll returned, read back from the row: %v != %v", res.EnrolledAt, enrollments[0].EnrolledAt)
+
 	require.NoError(t, ep.Service().Revoke(ctx, testHardwareUUID, "qa cleanup", "operator@example.com"))
 
 	// Revocation is enforced via the per-replica snapshot (a server refreshes it on a ticker bounded by
@@ -179,6 +186,10 @@ func TestEnrollVerifyListRevoke(t *testing.T) {
 	count, err = ep.Service().CountActive(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, count)
+
+	enrollments, err = ep.Service().ActiveEnrollments(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, enrollments, "a revoked enrollment is not active")
 }
 
 // TestEnroll_BadSecretMaps401 covers the secret-mismatch branch through

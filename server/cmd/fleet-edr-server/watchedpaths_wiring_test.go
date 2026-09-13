@@ -60,6 +60,7 @@ func TestLatestCommandsFromResponse_CarriesTheFieldsTheCatchUpReads(t *testing.T
 	stub := &latestOfTypeStub{latest: map[string]responseapi.Command{
 		"host-a": {ID: 7, HostID: "host-a", Payload: json.RawMessage(`{"version":2}`), Status: responseapi.StatusFailed,
 			CreatedAt: created, CompletedAt: &completed},
+		"host-b": {ID: 8, HostID: "host-b", Payload: json.RawMessage(`{"version":2}`), Status: responseapi.StatusPending, CreatedAt: created},
 	}}
 
 	got, err := latestCommandsFromResponse(stub)(t.Context(), rulesapi.CommandTypeSetWatchedPaths, []string{"host-a", "host-b"})
@@ -67,6 +68,7 @@ func TestLatestCommandsFromResponse_CarriesTheFieldsTheCatchUpReads(t *testing.T
 	assert.Equal(t, rulesapi.CommandTypeSetWatchedPaths, stub.gotType)
 	assert.Equal(t, []string{"host-a", "host-b"}, stub.gotHosts)
 	assert.Equal(t, map[string]rulesapi.WatchedPathCommand{
-		"host-a": {Payload: []byte(`{"version":2}`), Status: "failed", CreatedAt: created, CompletedAt: &completed},
+		"host-a": {Payload: []byte(`{"version":2}`), Status: "failed", CreatedAt: created, CompletedAt: completed},
+		"host-b": {Payload: []byte(`{"version":2}`), Status: "pending", CreatedAt: created},
 	}, got)
 }

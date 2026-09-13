@@ -20,10 +20,10 @@ func TestNeedsSet(t *testing.T) {
 		b, _ := json.Marshal(api.SetWatchedPathsPayload{Version: version, Epoch: updated.UnixMicro(), Paths: []api.WatchedPath{}})
 		return b
 	}
-	queued := func(version int64, status string, created time.Time, completed *time.Time) api.WatchedPathCommand {
+	queued := func(version int64, status string, created, completed time.Time) api.WatchedPathCommand {
 		return api.WatchedPathCommand{Payload: payload(version), Status: status, CreatedAt: created, CompletedAt: completed}
 	}
-	at := func(d time.Duration) *time.Time { t := now.Add(d); return &t }
+	at := now.Add
 	hourAgo := now.Add(-time.Hour)
 
 	cases := []struct {
@@ -42,9 +42,11 @@ func TestNeedsSet(t *testing.T) {
 		{"expired undelivered", queued(4, "expired", hourAgo, at(-time.Minute)), true},
 		{"cancelled", queued(4, "cancelled", hourAgo, at(-time.Minute)), true},
 		{"failed long enough ago to retry", queued(4, "failed", now.Add(-8*time.Hour), at(-7*time.Hour)), true},
+		{"failed exactly six hours ago", queued(4, "failed", now.Add(-7*time.Hour), at(-failedRetryAfter)), true},
+		{"failed just under six hours ago", queued(4, "failed", now.Add(-7*time.Hour), at(-failedRetryAfter+time.Second)), false},
 		{"failed recently", queued(4, "failed", hourAgo, at(-time.Hour)), false},
-		{"pending", queued(4, "pending", hourAgo, nil), false},
-		{"acked", queued(4, "acked", hourAgo, nil), false},
+		{"pending", queued(4, "pending", hourAgo, time.Time{}), false},
+		{"acked", queued(4, "acked", hourAgo, time.Time{}), false},
 		{"completed", queued(4, "completed", hourAgo, at(-time.Hour)), false},
 	}
 	for _, tc := range cases {

@@ -287,8 +287,8 @@ func (s *Store) ExpirePendingOlderThan(ctx context.Context, hostID string, cutof
 }
 
 // LatestOfType returns, per host in hostIDs, the most recently queued command of commandType: the one with the highest id, which is
-// the order commands are inserted in. Hosts with no such command are absent. Chunked like ListPendingForHosts, and each chunk seeks on
-// idx_commands_host_status's leading host_id.
+// the order commands are inserted in. Hosts with no such command are absent. Chunked like ListPendingForHosts, and each host's latest id is
+// the last entry of its range in idx_commands_host_type_id (host_id, command_type, id).
 func (s *Store) LatestOfType(ctx context.Context, commandType string, hostIDs []string) (map[string]api.Command, error) {
 	out := make(map[string]api.Command, len(hostIDs))
 	for start := 0; start < len(hostIDs); start += listPendingChunkSize {

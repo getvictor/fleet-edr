@@ -459,6 +459,22 @@ func TestUndeliverableByHost(t *testing.T) {
 	assert.NotContains(t, got, "host-quiet", "a host with nothing expired is absent, not present with a zero")
 }
 
+func TestLatestOfType_ThroughTheService(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	_, err := r.Service().Insert(ctx, "host-a", "set_watched_paths", json.RawMessage(`{"version":1}`))
+	require.NoError(t, err)
+	newest, err := r.Service().Insert(ctx, "host-a", "set_watched_paths", json.RawMessage(`{"version":2}`))
+	require.NoError(t, err)
+
+	got, err := r.Service().LatestOfType(ctx, "set_watched_paths", []string{"host-a", "host-b"})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "host-b has no command of the type")
+	assert.Equal(t, newest, got["host-a"].ID)
+}
+
 // TestBootstrap_MissingDB surfaces the required-field error.
 func TestBootstrap_MissingDB(t *testing.T) {
 	t.Parallel()

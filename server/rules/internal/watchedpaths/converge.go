@@ -96,8 +96,7 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	slices.Sort(stale)
-	payload, _ := json.Marshal(api.SetWatchedPathsPayload{Version: set.Version, Epoch: set.UpdatedAt.UnixMicro(), Paths: set.Paths})
-	inserted, err := c.commands(ctx, stale, api.CommandTypeSetWatchedPaths, payload)
+	inserted, err := c.commands(ctx, stale, api.CommandTypeSetWatchedPaths, commandPayload(set))
 	c.logger.InfoContext(ctx, "watchedpaths: queued the set for hosts that did not have it",
 		"version", set.Version, "hosts", len(stale), "queued", inserted)
 	return inserted, err
@@ -125,7 +124,7 @@ func needsSet(cmd api.WatchedPathCommand, e api.WatchedPathEnrollment, set api.W
 		return true
 	case "failed":
 		// now is this replica's clock and completed_at the database's; skew of seconds is immaterial against a six-hour window.
-		return cmd.CompletedAt == nil || now.Sub(*cmd.CompletedAt) >= failedRetryAfter
+		return now.Sub(cmd.CompletedAt) >= failedRetryAfter
 	default:
 		// Pending, acked or completed: on its way or delivered. A host that is offline keeps its command pending until it reconnects,
 		// when the control stream delivers it or the poll ages it out (and the next sweep queues a fresh copy), so an offline host is

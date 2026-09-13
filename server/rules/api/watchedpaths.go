@@ -73,10 +73,11 @@ type WatchedPathEnrollmentLister func(ctx context.Context) ([]WatchedPathEnrollm
 
 // WatchedPathCommand is what the watched-path catch-up needs to know about a host's latest set_watched_paths command.
 type WatchedPathCommand struct {
-	Payload     []byte
-	Status      string
-	CreatedAt   time.Time
-	CompletedAt *time.Time
+	Payload   []byte
+	Status    string
+	CreatedAt time.Time
+	// CompletedAt is when the command reached a terminal status, and zero while it has not.
+	CompletedAt time.Time
 }
 
 // WatchedPathCommandLister returns, per host, its most recently queued command of a type. cmd/main adapts the response context's
