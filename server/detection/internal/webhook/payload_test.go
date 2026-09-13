@@ -164,3 +164,55 @@ func TestBuild_carriesRuleAttribution(t *testing.T) {
 		assert.NotContains(t, string(body), "\"origin\"", "omitempty keeps an uncredited alert off the wire entirely")
 	})
 }
+
+// TestBuildHealthEpisode_roundTrip is the envelope round trip for the health subject, which the alert property above cannot reach:
+// its generator only builds alert envelopes. The health body is a new wire shape with three things that serialize awkwardly, and the
+// generator draws both sides of each. Subject and Description are `omitempty`, so the empty draw exercises their ABSENCE from the
+// document. Detail is a RawMessage, drawn as absent, as JSON null, and as nested objects and arrays, because a RawMessage re-encodes
+// verbatim and a receiver-visible change there would not show up as a field mismatch. OpenedAt is a time, drawn at nanosecond
+// precision so a truncation in either direction breaks the equality.
+//
+// spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/the-envelope-round-trips
+func TestBuildHealthEpisode_roundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		opened := time.Unix(rapid.Int64Range(0, 4_102_444_800).Draw(rt, "sec"), rapid.Int64Range(0, 999_999_999).Draw(rt, "nsec")).UTC()
+		detail := rapid.SampledFrom([]string{
+			"",
+			"null",
+			`{"provider":"content_filter","outcome":"enable_ineffective","attempts":5}`,
+			`{"nested":{"list":[1,2,{"x":"y"}],"empty":{}},"unicode":"ünïcodé","escaped":"a\"b\\c"}`,
+		}).Draw(rt, "detail")
+		env := BuildHealthEpisode(HealthBuildParams{
+			EventID:        rapid.String().Draw(rt, "eventID"),
+			Attempt:        rapid.IntRange(0, 10).Draw(rt, "attempt"),
+			HostID:         rapid.String().Draw(rt, "hostID"),
+			ConsoleBaseURL: rapid.SampledFrom([]string{"", "https://a.example.com", "https://a.example.com/"}).Draw(rt, "base"),
+			Episode: HealthEpisodeBody{
+				ID:          rapid.Int64().Draw(rt, "id"),
+				Kind:        rapid.SampledFrom([]string{"self_heal_failed", "a_kind_this_build_does_not_know"}).Draw(rt, "kind"),
+				Component:   rapid.String().Draw(rt, "component"),
+				Subject:     rapid.SampledFrom([]string{"", "content_filter", "dns_proxy"}).Draw(rt, "subject"),
+				Severity:    rapid.SampledFrom([]string{"low", "medium", "high", "critical"}).Draw(rt, "sev"),
+				Title:       rapid.String().Draw(rt, "title"),
+				Description: rapid.SampledFrom([]string{"", "automatic recovery gave up"}).Draw(rt, "desc"),
+				Detail:      json.RawMessage(detail),
+				OpenedAt:    opened,
+			},
+		})
+
+		first, err := json.Marshal(env)
+		require.NoError(rt, err)
+		var decoded Envelope
+		require.NoError(rt, json.Unmarshal(first, &decoded))
+		second, err := json.Marshal(decoded)
+		require.NoError(rt, err)
+		assert.JSONEq(rt, string(first), string(second))
+
+		// The properties a receiver relies on, which a round trip alone would not state.
+		assert.Nil(rt, decoded.Alert, "a health delivery must carry no alert body")
+		require.NotNil(rt, decoded.HealthEpisode)
+		assert.True(rt, decoded.OccurredAt.Equal(opened), "occurred_at is the host-observed opening, not the enqueue time")
+		assert.Equal(rt, EventHealthEpisodeOpened, decoded.EventType)
+	})
+}

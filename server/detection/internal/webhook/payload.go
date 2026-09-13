@@ -4,6 +4,8 @@
 package webhook
 
 import (
+	"encoding/json"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,20 +25,43 @@ const (
 	// EventTest is the event type of an operator-initiated test delivery. It is never enqueued from an alert; only the test-send path
 	// emits it, so a receiver can recognize and ignore a connectivity probe.
 	EventTest EventType = "webhook.test"
+	// EventHealthEpisodeOpened is a host health episode opening: a fault in this product's own sensor that needs a person, such as a
+	// capture provider its automatic repair could not restore (issue #778). It carries a health_episode body and no alert body.
+	EventHealthEpisodeOpened EventType = "host.health_episode_opened"
 )
 
 // Envelope is the versioned JSON body POSTed to a destination. It is built once at enqueue and stored verbatim in the outbox, so the
 // signature is computed over stable bytes and the payload reflects the alert at the instant the event fired rather than at send time.
+//
+// An envelope has exactly one subject. Alert is set for alert events and HealthEpisode for host health events, and each is omitted
+// when it is not the subject. Alert stays in its original position and is a pointer only so a health event can leave it out: an
+// alert envelope serializes to the same bytes it always did, which golden_test.go pins, so an existing receiver sees no change.
 type Envelope struct {
-	SchemaVersion   string       `json:"schema_version"`
-	EventID         string       `json:"event_id"`
-	EventType       EventType    `json:"event_type"`
-	OccurredAt      time.Time    `json:"occurred_at"`
-	DeliveryAttempt int          `json:"delivery_attempt"`
-	Alert           AlertBody    `json:"alert"`
-	Host            HostBody     `json:"host"`
-	Process         *ProcessBody `json:"process,omitempty"`
-	Links           Links        `json:"links"`
+	SchemaVersion   string             `json:"schema_version"`
+	EventID         string             `json:"event_id"`
+	EventType       EventType          `json:"event_type"`
+	OccurredAt      time.Time          `json:"occurred_at"`
+	DeliveryAttempt int                `json:"delivery_attempt"`
+	Alert           *AlertBody         `json:"alert,omitempty"`
+	HealthEpisode   *HealthEpisodeBody `json:"health_episode,omitempty"`
+	Host            HostBody           `json:"host"`
+	Process         *ProcessBody       `json:"process,omitempty"`
+	Links           Links              `json:"links"`
+}
+
+// HealthEpisodeBody is the host health episode a health event describes. Detail is the fault's own machine-readable fields exactly as
+// recorded, so a receiver branching on kind gets the provider, outcome, and attempt count as values instead of parsing a sentence.
+// OpenedAt is when the fault began as observed ON THE HOST, not when this delivery was enqueued.
+type HealthEpisodeBody struct {
+	ID          int64           `json:"id"`
+	Kind        string          `json:"kind"`
+	Component   string          `json:"component"`
+	Subject     string          `json:"subject,omitempty"`
+	Severity    string          `json:"severity"`
+	Title       string          `json:"title"`
+	Description string          `json:"description,omitempty"`
+	Detail      json.RawMessage `json:"detail,omitempty"`
+	OpenedAt    time.Time       `json:"opened_at"`
 }
 
 // AlertBody is the alert projection carried in the envelope. PreviousStatus is populated only for status-change events.
@@ -98,7 +123,7 @@ func Build(p BuildParams) Envelope {
 		EventType:       p.EventType,
 		OccurredAt:      p.OccurredAt,
 		DeliveryAttempt: p.Attempt,
-		Alert: AlertBody{
+		Alert: &AlertBody{
 			ID:             p.Alert.ID,
 			Status:         string(p.Alert.Status),
 			PreviousStatus: p.PreviousStatus,
@@ -127,10 +152,55 @@ func Build(p BuildParams) Envelope {
 	return e
 }
 
+// HealthBuildParams are the inputs for one health-episode delivery envelope.
+type HealthBuildParams struct {
+	EventID        string
+	Attempt        int
+	HostID         string
+	Episode        HealthEpisodeBody
+	ConsoleBaseURL string
+}
+
+// BuildHealthEpisode assembles the envelope for a host health episode opening. Like Build it performs no I/O, so the same inputs
+// always produce the same bytes and the signature is stable across delivery attempts.
+//
+// OccurredAt is the episode's own opening instant rather than the enqueue time, for the reason the episode carries a host-observed
+// clock at all: a receiver computing how long a host has been blind should measure from when it went blind, not from when a queue
+// got round to telling them.
+func BuildHealthEpisode(p HealthBuildParams) Envelope {
+	episode := p.Episode
+	// Copied rather than aliased, so a later mutation of the caller's detail buffer cannot reach into an envelope already built.
+	if len(episode.Detail) > 0 {
+		episode.Detail = append(json.RawMessage(nil), episode.Detail...)
+	}
+	return Envelope{
+		SchemaVersion:   SchemaVersion,
+		EventID:         p.EventID,
+		EventType:       EventHealthEpisodeOpened,
+		OccurredAt:      episode.OpenedAt,
+		DeliveryAttempt: p.Attempt,
+		HealthEpisode:   &episode,
+		Host:            HostBody{ID: p.HostID},
+		Links:           Links{Console: hostConsoleLink(p.ConsoleBaseURL, p.HostID)},
+	}
+}
+
+// hostConsoleLink is the operator-facing host URL, the destination a health event pivots to: the fault is about the host's sensor,
+// not about any one alert on it.
+func hostConsoleLink(base, hostID string) string {
+	return joinConsoleBase(base, "/ui/hosts/"+url.PathEscape(hostID))
+}
+
 // consoleLink derives the operator-facing alert URL from the deployment external URL. It trims a trailing slash so the path is not
 // doubled, and returns just the path when no base URL is configured so the receiver still gets a usable relative link.
 func consoleLink(base string, alertID int64) string {
-	path := "/ui/alerts?id=" + strconv.FormatInt(alertID, 10)
+	return joinConsoleBase(base, "/ui/alerts?id="+strconv.FormatInt(alertID, 10))
+}
+
+// joinConsoleBase prefixes path with the deployment base URL, trimming a trailing slash so the path is not doubled, and returns the bare
+// path when no base is configured so the receiver still gets a usable relative link. Shared by both link kinds so they cannot drift in
+// how a base URL is normalized.
+func joinConsoleBase(base, path string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(base), "/")
 	if trimmed == "" {
 		return path

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
@@ -44,19 +45,42 @@ func (r *projectionRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.G
 	return []api.Finding{r.finding}, nil
 }
 
-// recordingRecorder captures what the engine asked to be recorded, and can fail on demand.
+// recordingRecorder captures what the engine asked to be recorded, and can fail on demand. It hands back a fixed episode id, the way
+// the real store returns the existing row's id on a redelivery.
 type recordingRecorder struct {
 	episodes []endpointapi.HealthEpisode
 	opened   bool
+	id       int64
 	err      error
 }
 
-func (r *recordingRecorder) OpenHealthEpisode(_ context.Context, e endpointapi.HealthEpisode) (bool, error) {
+func (r *recordingRecorder) OpenHealthEpisode(_ context.Context, e endpointapi.HealthEpisode) (int64, bool, error) {
 	if r.err != nil {
-		return false, r.err
+		return 0, false, r.err
 	}
 	r.episodes = append(r.episodes, e)
-	return r.opened, nil
+	id := r.id
+	if id == 0 {
+		id = 77
+	}
+	return id, r.opened, nil
+}
+
+// recordingNotifier captures the deliveries the engine enqueued, and can fail the first N calls to model a failure between the
+// episode write and the outbox write.
+type recordingNotifier struct {
+	deliveries []mysql.HealthEpisodeDelivery
+	failFirst  int
+	calls      int
+}
+
+func (n *recordingNotifier) EnqueueHealthEpisodeOpened(_ context.Context, d mysql.HealthEpisodeDelivery) (int64, error) {
+	n.calls++
+	if n.calls <= n.failFirst {
+		return 0, errors.New("outbox unavailable")
+	}
+	n.deliveries = append(n.deliveries, d)
+	return 1, nil
 }
 
 func healthFinding() api.Finding {
@@ -266,4 +290,75 @@ func TestEngine_HealthFindingCitingNoEventIsDropped(t *testing.T) {
 		require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
 	})
 	assert.Empty(t, rec.episodes, "an episode with no occurrence could be recorded twice by one redelivery")
+}
+
+// spec:alert-webhook-delivery/host-health-episodes-are-delivered/a-lost-enqueue-is-recovered-on-reprocessing-without-a-duplicate
+//
+// TestEngine_ALostHealthNotificationIsRecoveredOnRedelivery is the property that makes a cross-context dual write safe.
+//
+// The episode (endpoint) and its delivery (detection's outbox) cannot share a transaction, so the engine writes them in order and a
+// failure between the two nacks the batch. The redelivery then finds the episode ALREADY recorded, so the recorder reports
+// opened=false. The notification survives only if the engine enqueues on that duplicate too. An engine that enqueued solely on a
+// fresh open would drop it here for good, which is the case the retry exists for.
+func TestEngine_ALostHealthNotificationIsRecoveredOnRedelivery(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRecorder{opened: true, id: 501}
+	notifier := &recordingNotifier{failFirst: 1}
+	rule := &healthRule{stubRule: stubRule{id: "sensor_recovery_failed"}, finding: healthFinding()}
+	e := New(nil, nil)
+	e.SetHealthEpisodeRecorder(rec)
+	e.setHealthNotifier(notifier)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+	// First delivery: the episode records, the enqueue fails, and the batch must fail so the event comes back.
+	require.Error(t, evaluateErr(e, context.Background(), healthBatch()),
+		"a failed enqueue must fail the batch, or nothing redelivers the event and the notification is simply gone")
+	require.Empty(t, notifier.deliveries)
+
+	// Redelivery: the episode is now already recorded.
+	rec.opened = false
+	require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
+
+	require.Len(t, notifier.deliveries, 1, "the redelivery must enqueue the notification the first attempt lost")
+	got := notifier.deliveries[0]
+	assert.Equal(t, int64(501), got.EpisodeID, "keyed on the recorded episode, which is what makes the outbox collapse a repeat")
+	assert.Equal(t, int64(501), got.Episode.ID)
+	assert.Equal(t, "host-a", got.HostID)
+	assert.Equal(t, api.SeverityCritical, got.Episode.Severity, "severity is what the destination's minimum filters on")
+	assert.Equal(t, "content_filter", got.Episode.Subject)
+	assert.Equal(t, int64(4_242), got.Episode.OpenedAt.UnixNano(), "the host's clock, not the enqueue time")
+}
+
+// TestEngine_ARedeliveryNotifiesAgainAndLetsTheOutboxCollapseIt: on an ordinary redelivery nothing failed the first time, and the
+// engine still enqueues. That is intended, not waste: the engine cannot tell "the enqueue failed last time" from "it succeeded", and
+// the outbox's idempotency key is what collapses the repeat. The store test proves the collapse; this proves the engine does not
+// short-circuit around it.
+func TestEngine_ARedeliveryNotifiesAgainAndLetsTheOutboxCollapseIt(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRecorder{opened: false, id: 502}
+	notifier := &recordingNotifier{}
+	rule := &healthRule{stubRule: stubRule{id: "sensor_recovery_failed"}, finding: healthFinding()}
+	e := New(nil, nil)
+	e.SetHealthEpisodeRecorder(rec)
+	e.setHealthNotifier(notifier)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+	require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
+	assert.Len(t, notifier.deliveries, 1, "a duplicate episode is still offered to the outbox, which is what dedups it")
+}
+
+// TestEngine_ASuppressedHealthRuleNotifiesNobody: a rule an operator disabled records nothing, so it must not notify either. A delivery
+// about an episode that was never written would point a receiver at a record that does not exist.
+func TestEngine_ASuppressedHealthRuleNotifiesNobody(t *testing.T) {
+	t.Parallel()
+	notifier := &recordingNotifier{}
+	rule := &healthRule{stubRule: stubRule{id: "sensor_recovery_failed"}, finding: healthFinding()}
+	e := New(nil, nil)
+	e.SetHealthEpisodeRecorder(&recordingRecorder{opened: true})
+	e.setHealthNotifier(notifier)
+	e.SetModeResolver(overridingResolver{mode: rulesapi.DetectionRuleModeDisabled})
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+	require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
+	assert.Empty(t, notifier.deliveries)
 }

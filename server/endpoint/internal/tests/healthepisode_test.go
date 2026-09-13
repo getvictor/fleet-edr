@@ -24,15 +24,17 @@ func openSelfHealEpisode(t *testing.T, ep *bootstrap.Endpoint, hostID, component
 	t.Helper()
 	detail, err := json.Marshal(api.SelfHealFailedDetail{Provider: "content_filter", Outcome: "enable_failed", Attempts: 3})
 	require.NoError(t, err)
-	opened, err := ep.HealthEpisodeRecorder().OpenHealthEpisode(t.Context(), api.HealthEpisode{
-		HostID:      hostID,
-		Component:   component,
-		Kind:        api.KindSelfHealFailed,
-		Severity:    "critical",
-		Title:       "EDR sensor could not be restored",
-		Description: "automatic recovery gave up on content_filter",
-		Detail:      detail,
-		OpenedAtNs:  1_000,
+	_, opened, err := ep.HealthEpisodeRecorder().OpenHealthEpisode(t.Context(), api.HealthEpisode{
+		HostID:        hostID,
+		Component:     component,
+		Subject:       "content_filter",
+		SourceEventID: "evt-" + hostID + "-" + component,
+		Kind:          api.KindSelfHealFailed,
+		Severity:      "critical",
+		Title:         "EDR sensor could not be restored",
+		Description:   "automatic recovery gave up on content_filter",
+		Detail:        detail,
+		OpenedAtNs:    1_000,
 	})
 	require.NoError(t, err)
 	require.True(t, opened)

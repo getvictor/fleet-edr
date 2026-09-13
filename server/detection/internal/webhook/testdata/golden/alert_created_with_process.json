@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "event_id": "11111111-1111-4111-8111-111111111111",
+  "event_type": "alert.created",
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "delivery_attempt": 1,
+  "alert": {
+    "id": 42,
+    "status": "open",
+    "severity": "high",
+    "source": "detection",
+    "title": "Suspicious exec chain",
+    "description": "a shell spawned curl",
+    "rule_id": "suspicious_exec",
+    "origin": "SigmaHQ, by someone",
+    "techniques": [
+      "T1059",
+      "T1105"
+    ],
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z"
+  },
+  "host": {
+    "id": "host-a"
+  },
+  "process": {
+    "pid": 4242
+  },
+  "links": {
+    "console": "https://edr.example.com/ui/alerts?id=42"
+  }
+}

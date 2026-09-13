@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "event_id": "44444444-4444-4444-8444-444444444444",
+  "event_type": "host.health_episode_opened",
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "delivery_attempt": 1,
+  "health_episode": {
+    "id": 3,
+    "kind": "self_heal_failed",
+    "component": "network_extension",
+    "subject": "content_filter",
+    "severity": "critical",
+    "title": "EDR sensor could not be restored",
+    "description": "automatic recovery gave up on content_filter",
+    "detail": {
+      "provider": "content_filter",
+      "outcome": "enable_ineffective",
+      "attempts": 5
+    },
+    "opened_at": "2026-01-01T00:00:00Z"
+  },
+  "host": {
+    "id": "host-h"
+  },
+  "links": {
+    "console": "https://edr.example.com/ui/hosts/host-h"
+  }
+}

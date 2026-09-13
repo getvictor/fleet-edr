@@ -30,23 +30,29 @@ var _ api.HealthEpisodeRecorder = (*Store)(nil)
 // and reported as a successfully recorded episode.
 //
 // The returned flag is what a caller logs on: a redelivery is routine and must stay silent.
-func (s *Store) OpenHealthEpisode(ctx context.Context, e api.HealthEpisode) (bool, error) {
+func (s *Store) OpenHealthEpisode(ctx context.Context, e api.HealthEpisode) (int64, bool, error) {
+	// LAST_INSERT_ID(id) on the duplicate path is what makes the existing row's id come back from a statement that inserted nothing.
+	// Without it a redelivery would report id 0, and a caller keying follow-on work on the episode could not redo that work.
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO host_health_episodes
 			(host_id, component, subject, kind, source_event_id, severity, title, description, detail, opened_at_ns)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE id = id
+		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
 	`, e.HostID, e.Component, e.Subject, e.Kind, e.SourceEventID, e.Severity, e.Title, e.Description, e.Detail, e.OpenedAtNs)
 	if err != nil {
-		return false, fmt.Errorf("open host health episode: %w", err)
+		return 0, false, fmt.Errorf("open host health episode: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, false, fmt.Errorf("open host health episode id: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("open host health episode rows affected: %w", err)
+		return 0, false, fmt.Errorf("open host health episode rows affected: %w", err)
 	}
 	// 1 for a fresh insert, 0 for the no-op update that absorbed a redelivery. MySQL reports 2 only when the update CHANGES a row,
-	// which `id = id` never does.
-	return n == 1, nil
+	// and LAST_INSERT_ID(id) sets the value to itself, so it never does.
+	return id, n == 1, nil
 }
 
 // CloseHealthEpisodes closes hostID's open episodes for the components in recovered, stamping each with the instant that component

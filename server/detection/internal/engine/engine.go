@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	detectionslices "github.com/fleetdm/edr/server/detection/internal/slices"
+	"github.com/fleetdm/edr/server/detection/internal/webhook"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
@@ -120,6 +122,16 @@ type Engine struct {
 	// nothing rather than put an operational fault back in the queue an analyst works: the whole point of the move is that the
 	// signal makes no claim about an adversary, and that is not less true because a dependency is missing.
 	healthRecorder endpointapi.HealthEpisodeRecorder
+	// healthNotifier enqueues the webhook deliveries for a recorded health episode (issue #778). Defaulted to the store by New when
+	// there is one, and injectable so a test can observe the enqueue without a database. Nil records the episode and notifies nobody.
+	healthNotifier healthNotifier
+}
+
+// healthNotifier is the one outbox write the health route needs. An interface rather than the concrete store because the health
+// routing tests run the engine with a nil store on purpose: reaching alert persistence dereferences it, so a finding that took the
+// alert path panics, and that panic is what proves it did not. Calling the store directly here would make every health test panic too.
+type healthNotifier interface {
+	EnqueueHealthEpisodeOpened(ctx context.Context, d mysql.HealthEpisodeDelivery) (int64, error)
 }
 
 // New creates a detection engine backed by the given store.
@@ -134,6 +146,9 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	// Seeded rather than left nil so Evaluate needs no nil check on the hot path and a batch arriving before the first load
 	// simply matches nothing.
 	e.active.Store(newRuleSet(nil))
+	if s != nil {
+		e.healthNotifier = s
+	}
 	return e
 }
 
@@ -152,6 +167,10 @@ func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver =
 // SetHealthEpisodeRecorder wires where health-signal findings are recorded. Optional: an engine without one drops them, which is
 // the honest behaviour (see the field's comment) rather than falling back to an alert row.
 func (e *Engine) SetHealthEpisodeRecorder(r endpointapi.HealthEpisodeRecorder) { e.healthRecorder = r }
+
+// setHealthNotifier replaces the webhook enqueue for health episodes. Unexported: production takes the store New installed, and only a
+// test in this package needs to observe the enqueue or make it fail.
+func (e *Engine) setHealthNotifier(n healthNotifier) { e.healthNotifier = n }
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r rulesapi.Rule) {
@@ -777,7 +796,7 @@ func (e *Engine) recordHealthEpisode(ctx context.Context, ruleID string, f api.F
 			"rule", ruleID, "host", f.HostID)
 		return routeHealthDropped, nil
 	}
-	opened, err := e.healthRecorder.OpenHealthEpisode(ctx, endpointapi.HealthEpisode{
+	episode := endpointapi.HealthEpisode{
 		HostID:    f.HostID,
 		Component: f.Health.Component,
 		Subject:   f.Health.Subject,
@@ -792,9 +811,18 @@ func (e *Engine) recordHealthEpisode(ctx context.Context, ruleID string, f api.F
 		// transition instant, so taking this one from the server would measure queue backlog as part of the outage and, on a
 		// backlogged queue, could stamp an opening later than the recovery that ends it.
 		OpenedAtNs: f.Health.OccurredAtNs,
-	})
+	}
+	id, opened, err := e.healthRecorder.OpenHealthEpisode(ctx, episode)
 	if err != nil {
 		return 0, fmt.Errorf("record health episode for rule %s: %w", ruleID, err)
+	}
+	// Notify on BOTH outcomes, not only when this call opened the episode. The episode and its delivery are written by different
+	// contexts and cannot share a transaction, so a failure between them nacks the batch and the event is redelivered. On that
+	// redelivery the episode is already recorded and reports opened=false; enqueuing only on a fresh open would lose the notification
+	// permanently in exactly the case the redelivery exists to recover. The enqueue is idempotent per episode and destination, so
+	// running it again on an ordinary redelivery delivers nothing twice.
+	if err := e.notifyHealthEpisode(ctx, ruleID, id, episode); err != nil {
+		return 0, err
 	}
 	// Logged only when a record is actually created. A redelivered batch re-evaluates the same event, so logging every call would
 	// repeat one outage's line on every replay, which is noise an operator reads as more outages than there were.
@@ -805,6 +833,33 @@ func (e *Engine) recordHealthEpisode(ctx context.Context, ruleID string, f api.F
 		"rule", ruleID, "host", f.HostID, "component", f.Health.Component, "subject", f.Health.Subject,
 		"kind", f.Health.Kind, "severity", f.Severity)
 	return routeHealthOpened, nil
+}
+
+// notifyHealthEpisode enqueues the webhook deliveries for a recorded episode. A failure is returned rather than logged, so the batch is
+// nacked and redelivered: the episode is already durable, and the redelivery is what gives the notification a second chance.
+func (e *Engine) notifyHealthEpisode(ctx context.Context, ruleID string, id int64, ep endpointapi.HealthEpisode) error {
+	if e.healthNotifier == nil {
+		return nil
+	}
+	_, err := e.healthNotifier.EnqueueHealthEpisodeOpened(ctx, mysql.HealthEpisodeDelivery{
+		EpisodeID: id,
+		HostID:    ep.HostID,
+		Episode: webhook.HealthEpisodeBody{
+			ID:          id,
+			Kind:        ep.Kind,
+			Component:   ep.Component,
+			Subject:     ep.Subject,
+			Severity:    ep.Severity,
+			Title:       ep.Title,
+			Description: ep.Description,
+			Detail:      json.RawMessage(ep.Detail),
+			OpenedAt:    time.Unix(0, ep.OpenedAtNs).UTC(),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("enqueue health episode webhook for rule %s: %w", ruleID, err)
+	}
+	return nil
 }
 
 // persistFinding inserts a single finding as an alert, stamping it

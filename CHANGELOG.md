@@ -4,9 +4,13 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Upgrade notes (action required)
+
+- **Subscribe webhook destinations to sensor health faults.** A host whose sensor cannot be restored no longer raises an alert, so a destination that learned about it through alert deliveries stops hearing about it until you tick **Sensor health fault** for it in Settings, Webhooks.
+
 ### Changed
 
-- **A sensor that could not repair itself is now host health, not an alert.** When this product's own automatic repair of a stopped capture provider gives up, the host stops capturing until someone re-activates the extension. That is an operational fault in our software rather than an attack, so it no longer appears in the alert queue. It is recorded against the host instead, as an episode that opens when the repair gives up and closes when the component reports healthy again, so the record says how long the host went uncaptured rather than only that something was once wrong. Alerts of this kind already raised are left as they are. Action required: until the health surface ships later in this release, this condition no longer triggers your alert webhook.
+- **A sensor that could not repair itself is now host health, not an alert.** When this product's own automatic repair of a stopped capture provider gives up, the host stops capturing until someone re-activates the extension. That is a fault in our software rather than an attack, so it leaves the alert queue. It is recorded against the host instead, opening when the repair gives up and closing when the sensor reports healthy again, so the record shows how long the host went uncaptured. It can be delivered to webhook destinations as its own event, carrying the fault in place of an alert; alert deliveries are unchanged. Alerts of this kind already raised are left as they are.
 
 ### Fixed
 

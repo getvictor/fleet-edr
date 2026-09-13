@@ -117,3 +117,74 @@ func (s *Store) enqueueStatusChangeDeliveries(ctx context.Context, tx *sqlx.Tx, 
 		eventType: api.WebhookEventAlertStatusChanged, alert: full, prevStatus: prevStatus, dedupKey: dedupKey, occurredAt: full.UpdatedAt,
 	})
 }
+
+// HealthEpisodeDelivery is what enqueuing a host health episode's delivery needs: the episode as recorded, and its host. The episode is
+// owned by the endpoint context, so the detection engine hands its fields across rather than this store reading that context's table.
+type HealthEpisodeDelivery struct {
+	EpisodeID int64
+	HostID    string
+	Episode   webhook.HealthEpisodeBody
+}
+
+// healthEpisodeOpenedDedupKey is the idempotency key for an episode's opening delivery. Constant because an episode opens exactly
+// once: its identity is the occurrence that reported it, so there is no second opening edge for a different key to distinguish.
+const healthEpisodeOpenedDedupKey = "opened"
+
+// EnqueueHealthEpisodeOpened fans a host health episode opening out to every enabled destination subscribed to the event whose minimum
+// severity the episode meets (issue #778), and reports how many deliveries it newly enqueued.
+//
+// It runs in a transaction of its own, not the episode's. The episode is written by the endpoint context and cannot share one with this
+// outbox, so the two writes are ordered instead: the engine records the episode first and enqueues second, and a failure in between
+// returns an error that has the triggering event redelivered.
+//
+// That only converges because this call is idempotent per episode and destination AND the engine calls it again on the redelivery,
+// even though the episode is by then already recorded. The (health_episode_id, destination_id, dedup_key) key collapses the repeat,
+// so the retry recovers a notification lost to the failure without delivering it twice. A caller that enqueued only when an episode
+// had just been opened would lose the notification permanently in exactly the case the redelivery exists for.
+func (s *Store) EnqueueHealthEpisodeOpened(ctx context.Context, d HealthEpisodeDelivery) (int64, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin health episode webhook enqueue: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	ids, err := matchingWebhookDestinations(ctx, tx, api.WebhookEventHealthEpisodeOpened, d.Episode.Severity)
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	var enqueued int64
+	for _, destID := range ids {
+		pubID := uuid.New().String()
+		payload, err := json.Marshal(webhook.BuildHealthEpisode(webhook.HealthBuildParams{
+			EventID:        pubID,
+			Attempt:        1,
+			HostID:         d.HostID,
+			Episode:        d.Episode,
+			ConsoleBaseURL: s.webhookConsoleBaseURL,
+		}))
+		if err != nil {
+			return 0, fmt.Errorf("marshal health episode webhook payload: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO webhook_delivery (public_id, health_episode_id, destination_id, event_type, dedup_key, payload, next_attempt_at)
+			VALUES (?, ?, ?, ?, ?, ?, NOW(6))
+			ON DUPLICATE KEY UPDATE public_id = public_id`,
+			pubID, d.EpisodeID, destID, api.WebhookEventHealthEpisodeOpened, healthEpisodeOpenedDedupKey, payload)
+		if err != nil {
+			return 0, fmt.Errorf("insert health episode webhook delivery: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("health episode webhook delivery rows affected: %w", err)
+		}
+		enqueued += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit health episode webhook enqueue: %w", err)
+	}
+	return enqueued, nil
+}

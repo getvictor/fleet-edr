@@ -903,7 +903,8 @@ export async function testSSOConnection(issuer: string): Promise<{ ok: boolean; 
 // --- Outbound alert webhooks (issue #496) ---------------------------------------
 
 // WebhookDestination is the read shape from GET /api/settings/webhooks. The signing secret is NEVER returned: secret_set only reports
-// whether one is stored. event_types is the subscribed set ("alert.created" and/or "alert.status_changed").
+// whether one is stored. event_types is the subscribed set: any of "alert.created", "alert.status_changed", and
+// "host.health_episode_opened".
 export interface WebhookDestination {
   id: number;
   name: string;
