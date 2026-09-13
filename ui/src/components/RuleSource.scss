@@ -17,6 +17,12 @@
   margin: 0 0 $pad-small;
 }
 
+.rule-source__actions {
+  display: flex;
+  gap: $pad-small;
+  margin: 0 0 $pad-small;
+}
+
 .rule-source__content {
   font-size: $xx-small;
   background: $ui-off-white;

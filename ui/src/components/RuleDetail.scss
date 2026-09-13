@@ -138,3 +138,13 @@
     }
   }
 }
+
+// The confirmation the rule editor leaves after a save.
+.rule-detail__saved {
+  font-size: $x-small;
+  padding: $pad-small;
+  margin-bottom: $pad-medium;
+  border: 1px solid $ui-fleet-black-10;
+  border-radius: 4px;
+  background: $ui-off-white;
+}

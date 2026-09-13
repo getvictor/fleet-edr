@@ -1,5 +1,16 @@
-import { useEffect, useState } from "react";
-import { getRuleContentDocument, listRuleContentDocuments, ruleDocumentStem } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router";
+import {
+  deleteRuleContentDocument,
+  getRuleContentDocument,
+  listRuleContentDocuments,
+  ReauthRequiredError,
+  ruleDocumentStem,
+} from "../api";
+import { useReauthRetry } from "../hooks/useReauthRetry";
+import { ReasonModal } from "./DetectionConfig/ReasonModal";
+import { ReauthModal } from "./ReauthModal";
+import { Button } from "./ui/Button";
 import "./RuleSource.scss";
 
 type SourceState =
@@ -12,9 +23,34 @@ type SourceState =
 // x-engine block, and reading one as written is how an operator sees exactly what it matches. A rule built into the server is not loaded
 // from that corpus, and says so rather than showing an empty panel.
 //
-// The owning page renders this only for an operator with rule_content.read, since both reads here are gated on it.
-export function RuleSource({ ruleId }: { readonly ruleId: string }) {
+// The owning page renders this only for an operator with rule_content.read, since both reads here are gated on it. `editable` adds Edit
+// and Delete, which the owning page grants only for a rule this deployment wrote and an operator with rule_content.write: shipped rules
+// are tuned in Detection tuning rather than rewritten here, where the next install of shipped content would meet the edit.
+export function RuleSource({ ruleId, editable = false }: { readonly ruleId: string; readonly editable?: boolean }) {
   const [state, setState] = useState<SourceState>({ kind: "loading" });
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const documentPath = state.kind === "document" ? state.path : "";
+  const remove = useCallback(async (reason: string) => deleteRuleContentDocument(documentPath, reason), [documentPath]);
+  const { call: callDelete, modal: reauthModal } = useReauthRetry(remove);
+
+  const onConfirmDelete = (reason: string) => {
+    setDeleting(true);
+    setDeleteError(null);
+    callDelete(reason)
+      .then(() => { void navigate("/rules", { state: { deleted: ruleId } }); })
+      .catch((err: unknown) => {
+        if (err instanceof ReauthRequiredError) {
+          setDeleteOpen(false);
+          return;
+        }
+        // Kept in the modal, beside the action that failed, so the reason just typed is not lost.
+        setDeleteError(err instanceof Error ? `Not deleted: ${err.message}` : "Not deleted.");
+      })
+      .finally(() => { setDeleting(false); });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -52,9 +88,33 @@ export function RuleSource({ ruleId }: { readonly ruleId: string }) {
           <p className="rule-source__note">
             <code>{state.path}</code>
           </p>
+          {editable && (
+            <div className="rule-source__actions">
+              <Link className="button button--inverse button--small" to={`/rules/${encodeURIComponent(ruleId)}/edit`}>
+                Edit
+              </Link>
+              <Button size="small" variant="alert" onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
+                Delete
+              </Button>
+            </div>
+          )}
           <pre className="rule-source__content">{state.content}</pre>
         </>
       )}
+      {deleteOpen && (
+        <ReasonModal
+          title={`Delete ${ruleId}`}
+          description="The rule stops being evaluated when the server next reloads its rules, within 30 seconds. Alerts it already raised are kept."
+          confirmLabel="Delete"
+          confirmVariant="alert"
+          placeholder="Why is this rule being deleted?"
+          busy={deleting}
+          error={deleteError}
+          onConfirm={onConfirmDelete}
+          onCancel={() => { setDeleteOpen(false); }}
+        />
+      )}
+      <ReauthModal {...reauthModal} />
     </section>
   );
 }

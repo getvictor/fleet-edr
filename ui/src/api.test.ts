@@ -15,6 +15,11 @@ import {
   getRuleContentDocument,
   listRuleContentDocuments,
   ruleDocumentStem,
+  checkRuleContentDocument,
+  putRuleContentDocument,
+  deleteRuleContentDocument,
+  rollbackRulePack,
+  RuleContentApiError,
 } from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
@@ -421,5 +426,48 @@ describe("rule content documents", () => {
     expect(ruleDocumentStem("authored/keychain_extra.yml")).toBe("keychain_extra");
     expect(ruleDocumentStem("keychain_extra.yaml")).toBe("keychain_extra");
     expect(ruleDocumentStem("nested/dir/rule")).toBe("rule");
+  });
+});
+
+describe("rule content writes", () => {
+  it("checks a document by path and content, reporting a refusal as a result", async () => {
+    const fetchMock = stubFetch({ would_apply: false, warnings: [], refusal: "bad rule" });
+    await expect(checkRuleContentDocument("authored/x.yml", "title: x")).resolves.toEqual({ would_apply: false, warnings: [], refusal: "bad rule" });
+    const [target, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(target.pathname).toBe("/api/v1/rule-content/documents:check");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ path: "authored/x.yml", content: "title: x" });
+  });
+
+  it("puts and deletes a document with its reason", async () => {
+    let fetchMock = stubFetch({ path: "authored/x.yml", corpus_version: 2, warnings: [] });
+    await putRuleContentDocument("authored/x.yml", "title: x", "why");
+    let [target, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(target.pathname).toBe("/api/v1/rule-content/documents/authored/x.yml");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({ content: "title: x", reason: "why" });
+
+    fetchMock = stubFetch({ path: "authored/x.yml", corpus_version: 3, warnings: [] });
+    await deleteRuleContentDocument("authored/x.yml", "gone");
+    [target, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(target.pathname).toBe("/api/v1/rule-content/documents/authored/x.yml");
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(init.body as string)).toEqual({ reason: "gone" });
+  });
+
+  it("rolls back with a reason", async () => {
+    const fetchMock = stubFetch({ restored: "p1", version: 5, withheld: [] });
+    await rollbackRulePack("noisy");
+    const [target, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(target.pathname).toBe("/api/v1/rule-content/pack:rollback");
+    expect(JSON.parse(init.body as string)).toEqual({ reason: "noisy" });
+  });
+
+  // The typed code is what lets the editor tell a refused rule from a write that raced another change.
+  it("raises a typed error carrying the server's code and message", async () => {
+    stubFetch({ error: "rule_content.refused", message: "detection: missing condition" }, 422);
+    const err = await putRuleContentDocument("authored/x.yml", "title: x", "why").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RuleContentApiError);
+    expect(err).toMatchObject({ code: "rule_content.refused", status: 422, message: "detection: missing condition" });
   });
 });

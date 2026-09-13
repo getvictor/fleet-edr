@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { RuleSource } from "./RuleSource";
 import * as api from "../api";
+
+// RuleSource navigates after a delete, so it renders inside a router.
+function render(ui: ReactElement) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -31,6 +38,34 @@ describe("RuleSource", () => {
 
     expect(await screen.findByText(/built into the server/)).toBeVisible();
     expect(get).not.toHaveBeenCalled();
+  });
+
+  // spec:web-ui/rules-can-be-written-in-the-console/an-operator-deletes-a-rule-with-a-reason
+  it("deletes the deployment's own rule with a reason", async () => {
+    HTMLDialogElement.prototype.showModal = function showModal() { this.open = true; };
+    vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([{ path: "authored/keychain_extra.yml", bytes: 42 }]);
+    vi.spyOn(api, "getRuleContentDocument").mockResolvedValue("title: Keychain extra\n");
+    const remove = vi.spyOn(api, "deleteRuleContentDocument").mockResolvedValue({
+      path: "authored/keychain_extra.yml", corpus_version: 4, warnings: [],
+    });
+    render(<RuleSource ruleId="keychain_extra" editable />);
+
+    expect(await screen.findByRole("link", { name: "Edit" })).toHaveAttribute("href", "/rules/keychain_extra/edit");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "superseded" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => { expect(remove).toHaveBeenCalledWith("authored/keychain_extra.yml", "superseded"); });
+  });
+
+  it("offers no edit or delete when not editable", async () => {
+    vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([{ path: "imported/curl.yml", bytes: 42 }]);
+    vi.spyOn(api, "getRuleContentDocument").mockResolvedValue("title: Curl\n");
+    render(<RuleSource ruleId="curl" />);
+
+    await screen.findByText("imported/curl.yml");
+    expect(screen.queryByRole("link", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   it("reports a failed read", async () => {

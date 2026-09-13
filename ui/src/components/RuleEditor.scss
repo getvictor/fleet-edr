@@ -1,0 +1,60 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.rule-editor {
+  display: flex;
+  flex-direction: column;
+  gap: $pad-small;
+  max-width: 60rem;
+}
+
+.rule-editor__notice,
+.rule-editor__hint {
+  margin: 0;
+  font-size: $x-small;
+  color: $ui-fleet-black-75;
+}
+
+.rule-editor__label {
+  font-size: $x-small;
+  font-weight: $bold;
+  margin-top: $pad-small;
+}
+
+.rule-editor__content {
+  font-family: monospace;
+  font-size: $xx-small;
+  padding: $pad-small;
+  border: 1px solid $ui-fleet-black-10;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.rule-editor__verdict {
+  font-size: $x-small;
+  padding: $pad-small;
+  border-radius: 4px;
+}
+
+.rule-editor__verdict--ok {
+  background: $ui-off-white;
+  border: 1px solid $ui-fleet-black-10;
+}
+
+.rule-editor__verdict--refused {
+  border: 1px solid $core-vibrant-red;
+  color: $core-vibrant-red;
+}
+
+.rule-editor__warnings {
+  margin: 0;
+  font-size: $x-small;
+}
+
+.rule-editor__actions {
+  display: flex;
+  gap: $pad-medium;
+  align-items: center;
+  justify-content: flex-end;
+}
