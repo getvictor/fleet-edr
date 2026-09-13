@@ -116,6 +116,31 @@ func TestStore_AHeldEntryWaitsForItsSealOrItsHold(t *testing.T) {
 	assert.False(t, sealed, "an entry already delivered cannot be sealed")
 }
 
+// A seal in flight holds its row, and a drain skips the row rather than reading the payload the seal is replacing, so an entry is
+// delivered either as first written (once a seal can no longer change it) or as sealed, never the first while a seal succeeds.
+func TestStore_ADrainSkipsAnEntryWhoseSealIsInFlight(t *testing.T) {
+	t.Parallel()
+	s, db := openOutbox(t)
+	var id int64
+	inTx(t, db, func(tx *sqlx.Tx) {
+		var err error
+		id, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
+		require.NoError(t, err)
+	})
+
+	sealing, err := db.BeginTxx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = sealing.Rollback() }()
+	sealed := entryFor(t, "with counts")
+	_, err = sealing.ExecContext(t.Context(), `UPDATE detection_config_audit_outbox SET payload = ?, held_until = NULL WHERE id = ?`,
+		string(sealed.Payload), id)
+	require.NoError(t, err)
+
+	assert.Empty(t, pendingTargets(t, s), "the row being sealed is skipped, not read as first written")
+	require.NoError(t, sealing.Commit())
+	assert.Equal(t, []string{"with counts"}, pendingTargets(t, s), "and the next pass delivers it sealed")
+}
+
 // Once a held entry's hold has passed, a drain may already have read it as first written, so sealing it is refused and it is
 // delivered unchanged: a seal cannot report counts added to a row a drain is recording without them.
 func TestStore_AnEntryPastItsHoldCannotBeSealed(t *testing.T) {
