@@ -49,6 +49,20 @@
   color: $ui-fleet-black-50;
 }
 
+// An exclusion value is usually a path or glob with no spaces, so it offers no break opportunity and would set the Value column's
+// minimum width, widening the whole table.
+//
+// The cap sits on the value, not the cell. A table cell ignores max-width in automatic layout, and a cell with overflow-wrap:
+// anywhere has a one-character min-content width, so the layout squeezed the column to a few characters and wrapped a 70-character
+// glob over four lines while the table had room to spare (measured in Chrome at 206px). A block with max-width clamps the width
+// the column is sized from instead: the column is as wide as its longest value up to the cap, and break-word wraps only what
+// exceeds it.
+.detection-config__exclusion-value code {
+  display: block;
+  max-width: 24rem;
+  overflow-wrap: break-word;
+}
+
 // The catalog declares severities lowercase ("medium"); present them capitalized so the column reads as a label, not a raw value.
 .detection-config__default-severity {
   text-transform: capitalize;

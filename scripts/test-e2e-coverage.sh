@@ -271,15 +271,16 @@ echo "$END_GROUP"
 
 # --- phase 6: UI presentation regressions --------------------------------
 # Layout regressions found by a browser pass over the v0.5 surfaces: a header rendering in the wrong case, a value that read as
-# part of its own explanation, a component row whose shape depended on its label's length. All three are computed-style
-# assertions, so they cannot live in vitest: jsdom applies no user-agent stylesheet, and the value it would report is not the one
-# a user gets.
+# part of its own explanation, a component row whose shape depended on its label's length, an exclusion value that widened its
+# table. All four are computed-style or layout assertions, so they cannot live in vitest: jsdom applies no user-agent stylesheet and
+# does no layout, and the value it would report is not the one a user gets.
 #
-# The three share ONE break-glass ceremony, via the worker-scoped signedInAdminShared fixture, because they only navigate and
-# assert. That matters here: /admin/break-glass/setup allows 5 submissions per minute globally and a single sign-in spends two of
-# them (gateSetupRequest is shared by the begin and finish handlers), so three per-test ceremonies need six and the third fails
-# with a 429 that presents as a sign-in timeout. Measured: three specs per-test fail 2 of 3 together and pass individually; on the
-# shared fixture all three pass together in under a second.
+# The four share ONE break-glass ceremony, via the worker-scoped signedInAdminShared fixture, because they only navigate and
+# assert on it; the exclusion-value spec seeds its row through the database rather than through the shared page. That matters
+# here: /admin/break-glass/setup allows 5 submissions per minute globally and a single sign-in spends two of them
+# (gateSetupRequest is shared by the begin and finish handlers), so four per-test ceremonies would need eight, and the third
+# already fails with a 429 that presents as a sign-in timeout. Measured when the phase held three specs: per-test, 2 of 3 failed
+# together and each passed individually; on the shared fixture all three passed together in under a second.
 #
 # Grouped as their own phase for legibility rather than necessity, since two submissions would also fit inside phase 2.
 echo "::group::Phase 6: UI presentation regressions + the detection-config fixture guarantee"
@@ -289,6 +290,7 @@ seed_oidc 1
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
     tests/qa/detection-tuning-cost-column.spec.ts \
+    tests/qa/detection-tuning-exclusion-value-wrap.spec.ts \
     tests/qa/rule-detail-mode-row.spec.ts \
     tests/qa/host-health-components.spec.ts \
     tests/qa/detection-config-fixture.spec.ts \
