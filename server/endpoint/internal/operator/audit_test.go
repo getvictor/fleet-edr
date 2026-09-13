@@ -268,3 +268,7 @@ func TestHandler_Rotate_NotFound(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+func (f fakeRevokeService) ActiveEnrollments(context.Context) ([]api.ActiveEnrollment, error) {
+	panic("not used")
+}

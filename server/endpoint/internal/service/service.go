@@ -347,6 +347,18 @@ func (s *service) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	return s.store.ActiveHostIDs(ctx)
 }
 
+func (s *service) ActiveEnrollments(ctx context.Context) ([]api.ActiveEnrollment, error) {
+	rows, err := s.store.ActiveEnrollments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.ActiveEnrollment, len(rows))
+	for i, r := range rows {
+		out[i] = api.ActiveEnrollment{HostID: r.HostID, EnrolledAt: r.EnrolledAt}
+	}
+	return out, nil
+}
+
 // toAPIEnrollment is a struct-to-struct copy. Field shapes match exactly today (the api.Enrollment was lifted from the mysql row), so
 // this is a pure relocation, but the conversion stays explicit so a future field drift between the storage layer and the public api
 // surface forces a review here rather than slipping through.

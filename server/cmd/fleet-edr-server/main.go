@@ -673,19 +673,17 @@ func openRules(
 	return rulesCtx, nil
 }
 
-// activeEnrollmentsFromEndpoint projects the endpoint context's enrollment list down to the active hosts and when each last enrolled,
-// the shape the watched-path catch-up reads. In cmd/main for the same reason as hostListerFromDetection: the projection is wiring.
+// activeEnrollmentsFromEndpoint adapts the endpoint context's active enrollments to the shape the watched-path catch-up reads. In
+// cmd/main for the same reason as hostListerFromDetection: the projection is wiring.
 func activeEnrollmentsFromEndpoint(svc endpointapi.Service) rulesapi.WatchedPathEnrollmentLister {
 	return func(ctx context.Context) ([]rulesapi.WatchedPathEnrollment, error) {
-		all, err := svc.List(ctx)
+		active, err := svc.ActiveEnrollments(ctx)
 		if err != nil {
 			return nil, err
 		}
-		out := make([]rulesapi.WatchedPathEnrollment, 0, len(all))
-		for _, e := range all {
-			if e.RevokedAt == nil {
-				out = append(out, rulesapi.WatchedPathEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt})
-			}
+		out := make([]rulesapi.WatchedPathEnrollment, len(active))
+		for i, e := range active {
+			out[i] = rulesapi.WatchedPathEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt}
 		}
 		return out, nil
 	}

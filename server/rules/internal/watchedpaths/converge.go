@@ -109,18 +109,22 @@ func needsSet(cmd api.WatchedPathCommand, e api.WatchedPathEnrollment, set api.W
 	if cmd.Payload == nil {
 		return true
 	}
+	// The same version with a different epoch is a different set, as after a database restore that sent versions backwards.
 	var queued api.SetWatchedPathsPayload
-	if json.Unmarshal(cmd.Payload, &queued) != nil || queued.Version != set.Version {
+	if json.Unmarshal(cmd.Payload, &queued) != nil || queued.Version != set.Version || queued.Epoch != set.UpdatedAt.UnixMicro() {
 		return true
 	}
-	// Queued before the host last enrolled: a reinstall in between removed the extension's copy.
-	if cmd.CreatedAt.Before(e.EnrolledAt) {
+	// Queued before, or at, the host's latest enrollment: a reinstall in between removed the extension's copy. Both times are on the
+	// database clock (commands.created_at and enrollments.enrolled_at), so skew between replicas and the database cannot reorder them;
+	// a tie counts as before, since a duplicate copy is harmless and a missing one is not.
+	if !cmd.CreatedAt.After(e.EnrolledAt) {
 		return true
 	}
 	switch cmd.Status {
 	case "expired", "cancelled":
 		return true
 	case "failed":
+		// now is this replica's clock and completed_at the database's; skew of seconds is immaterial against a six-hour window.
 		return cmd.CompletedAt == nil || now.Sub(*cmd.CompletedAt) >= failedRetryAfter
 	default:
 		// Pending, acked or completed: on its way or delivered. A host that is offline keeps its command pending until it reconnects,

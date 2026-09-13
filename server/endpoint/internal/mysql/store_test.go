@@ -197,3 +197,31 @@ func TestRevoke_IdempotentAndUnknown(t *testing.T) {
 
 	assert.ErrorIs(t, s.Revoke(ctx, "00000000-0000-0000-0000-000000000000", "x", "y"), sql.ErrNoRows)
 }
+
+// ActiveEnrollments reads only non-revoked enrollments, with the time each last enrolled. That time is on the database clock, the clock
+// commands.created_at uses, which the watched-path catch-up compares it against (issue #998).
+func TestActiveEnrollments(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+	ctx := t.Context()
+	register(t, s, "11111111-1111-4111-8111-111111111111")
+	register(t, s, "22222222-2222-4222-8222-222222222222")
+	require.NoError(t, s.Revoke(ctx, "22222222-2222-4222-8222-222222222222", "retired", "op"))
+
+	got, err := s.ActiveEnrollments(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "11111111-1111-4111-8111-111111111111", got[0].HostID)
+
+	var dbNow time.Time
+	require.NoError(t, db.GetContext(ctx, &dbNow, `SELECT NOW(6)`))
+	assert.WithinDuration(t, dbNow, got[0].EnrolledAt, 5*time.Second)
+
+	// A re-enrollment moves the time forward.
+	before := got[0].EnrolledAt
+	time.Sleep(2 * time.Millisecond)
+	register(t, s, "11111111-1111-4111-8111-111111111111")
+	got, err = s.ActiveEnrollments(ctx)
+	require.NoError(t, err)
+	assert.True(t, got[0].EnrolledAt.After(before), "re-enrolling must advance enrolled_at")
+}

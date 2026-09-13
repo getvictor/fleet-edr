@@ -50,6 +50,9 @@ type Service interface {
 	// Used by the policy fan-out path.
 	ActiveHostIDs(ctx context.Context) ([]string, error)
 
+	// ActiveEnrollments returns each non-revoked host_id with the time it last enrolled, on the database clock, in stable order.
+	ActiveEnrollments(ctx context.Context) ([]ActiveEnrollment, error)
+
 	// RotateToken cycles a host's credentials by bumping its token_epoch, invalidating every signed token minted at the prior epoch once
 	// the revocation snapshot picks up the change. There is no opaque token to rotate and no command to push: the agent recovers by
 	// re-enrolling when its refresh (carrying the now-stale epoch) 401s. actor + reason are the operator-supplied attribution carried

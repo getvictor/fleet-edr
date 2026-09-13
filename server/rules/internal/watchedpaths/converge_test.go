@@ -13,10 +13,11 @@ import (
 func TestNeedsSet(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
-	set := api.WatchedPathSet{Version: 4}
+	updated := now.Add(-2 * time.Hour)
+	set := api.WatchedPathSet{Version: 4, UpdatedAt: &updated}
 	enrolled := api.WatchedPathEnrollment{HostID: "h", EnrolledAt: now.Add(-24 * time.Hour)}
 	payload := func(version int64) []byte {
-		b, _ := json.Marshal(api.SetWatchedPathsPayload{Version: version, Paths: []api.WatchedPath{}})
+		b, _ := json.Marshal(api.SetWatchedPathsPayload{Version: version, Epoch: updated.UnixMicro(), Paths: []api.WatchedPath{}})
 		return b
 	}
 	queued := func(version int64, status string, created time.Time, completed *time.Time) api.WatchedPathCommand {
@@ -32,6 +33,10 @@ func TestNeedsSet(t *testing.T) {
 	}{
 		{"never sent one", api.WatchedPathCommand{}, true},
 		{"sent an older version", queued(3, "completed", hourAgo, at(-time.Hour)), true},
+		{"same version, different epoch", api.WatchedPathCommand{
+			Payload: []byte(`{"version":4,"epoch":1,"paths":[]}`), Status: "completed", CreatedAt: hourAgo,
+		}, true},
+		{"queued at the same instant the host enrolled", queued(4, "completed", enrolled.EnrolledAt, at(-time.Hour)), true},
 		{"payload it cannot read", api.WatchedPathCommand{Payload: []byte(`{`), Status: "completed", CreatedAt: hourAgo}, true},
 		{"queued before the host last enrolled", queued(4, "completed", now.Add(-48*time.Hour), at(-47*time.Hour)), true},
 		{"expired undelivered", queued(4, "expired", hourAgo, at(-time.Minute)), true},

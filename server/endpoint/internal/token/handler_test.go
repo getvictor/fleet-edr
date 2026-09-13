@@ -72,3 +72,7 @@ func TestNew_NilService_Panics(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { New(nil, nil) })
 }
+
+func (f fakeRefreshService) ActiveEnrollments(context.Context) ([]api.ActiveEnrollment, error) {
+	panic("not used")
+}

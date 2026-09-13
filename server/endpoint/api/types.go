@@ -23,6 +23,12 @@ type Enrollment struct {
 	RevokedBy    *string    `db:"revoked_by" json:"revoked_by,omitempty"`
 }
 
+// ActiveEnrollment is an active (non-revoked) enrollment's host and the time it last enrolled, on the database clock.
+type ActiveEnrollment struct {
+	HostID     string
+	EnrolledAt time.Time
+}
+
 // EnrollRequest is the wire payload the agent POSTs at /api/enroll. Field names + JSON tags preserved exactly across the
 // modular-monolith migration; the agent contract is byte-identical with main.
 type EnrollRequest struct {

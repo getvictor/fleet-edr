@@ -14,13 +14,13 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
-// enrollmentListStub answers only List; every other endpoint method is outside the adapter under test.
-type enrollmentListStub struct {
+// activeEnrollmentsStub answers only ActiveEnrollments; every other endpoint method is outside the adapter under test.
+type activeEnrollmentsStub struct {
 	endpointapi.Service
-	enrollments []endpointapi.Enrollment
+	enrollments []endpointapi.ActiveEnrollment
 }
 
-func (s enrollmentListStub) List(context.Context) ([]endpointapi.Enrollment, error) {
+func (s activeEnrollmentsStub) ActiveEnrollments(context.Context) ([]endpointapi.ActiveEnrollment, error) {
 	return s.enrollments, nil
 }
 
@@ -37,19 +37,20 @@ func (s *latestOfTypeStub) LatestOfType(_ context.Context, commandType string, h
 	return s.latest, nil
 }
 
-// The catch-up is fed active enrollments only: a revoked host has no valid token and must not be sent the set.
-func TestActiveEnrollmentsFromEndpoint_DropsRevokedEnrollments(t *testing.T) {
+func TestActiveEnrollmentsFromEndpoint_CarriesHostAndEnrollmentTime(t *testing.T) {
 	t.Parallel()
 	enrolledAt := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
-	revokedAt := enrolledAt.Add(time.Hour)
-	list := activeEnrollmentsFromEndpoint(enrollmentListStub{enrollments: []endpointapi.Enrollment{
-		{HostID: "active", EnrolledAt: enrolledAt},
-		{HostID: "revoked", EnrolledAt: enrolledAt, RevokedAt: &revokedAt},
+	list := activeEnrollmentsFromEndpoint(activeEnrollmentsStub{enrollments: []endpointapi.ActiveEnrollment{
+		{HostID: "host-a", EnrolledAt: enrolledAt},
+		{HostID: "host-b", EnrolledAt: enrolledAt.Add(time.Hour)},
 	}})
 
 	got, err := list(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, []rulesapi.WatchedPathEnrollment{{HostID: "active", EnrolledAt: enrolledAt}}, got)
+	assert.Equal(t, []rulesapi.WatchedPathEnrollment{
+		{HostID: "host-a", EnrolledAt: enrolledAt},
+		{HostID: "host-b", EnrolledAt: enrolledAt.Add(time.Hour)},
+	}, got)
 }
 
 func TestLatestCommandsFromResponse_CarriesTheFieldsTheCatchUpReads(t *testing.T) {
