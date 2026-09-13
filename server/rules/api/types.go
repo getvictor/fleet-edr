@@ -28,9 +28,13 @@ type (
 	Process = detectionapi.Process
 	// TimeRange is the [start, end] window every graph query takes.
 	TimeRange = detectionapi.TimeRange
-	// Finding is a per-rule positive output. Detection persists these
-	// as alerts via mysql.Store.InsertAlert.
+	// Finding is a per-rule positive output. Detection persists these as alerts via mysql.Store.InsertAlert, except for a finding
+	// from a rule that declares itself a health signal, which is recorded as a host health episode instead (issue #778).
 	Finding = detectionapi.Finding
+	// HealthDetail is the machine-readable half of a health-signal finding: the component at fault and the fault's own fields.
+	// Set only by a rule whose NonDetectionKind is NonDetectionHealth.
+	HealthDetail = detectionapi.HealthDetail
+
 	// RiskModifier is one conditional escalation on a Finding: the risk a condition adds, and the techniques it implies. A rule
 	// with a conditional severity declares one instead of reporting a finished severity, so an operator's per-rule setting
 	// re-ranks the rule rather than erasing what the rule observed (issue #753).

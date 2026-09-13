@@ -229,6 +229,18 @@ func (s *service) recordRotationAudit(ctx context.Context, hostID, actor, reason
 	}
 }
 
+// healthyComponents returns the types of the components reporting healthy, which are the ones whose open episodes this snapshot
+// resolves. Degraded and unhealthy are still faults; unknown means no state is known, which is not evidence of recovery either.
+func healthyComponents(components api.Components) []string {
+	var out []string
+	for _, c := range components {
+		if c.Status == api.HealthHealthy {
+			out = append(out, c.Type)
+		}
+	}
+	return out
+}
+
 // RecordStatus validates the snapshot's component statuses at the boundary, computes the server-side rollup, and upserts the latest
 // per-host health row. Validation is the one closed-set check: a component status outside HealthStatus is rejected wholesale (nothing is
 // stored) so a malformed agent cannot poison the rollup; unknown type/reason strings pass through untouched so a future signal needs no
@@ -254,6 +266,20 @@ func (s *service) RecordStatus(ctx context.Context, hostID string, report api.St
 	}
 	if err := s.store.UpsertHostHealth(ctx, hostID, string(overall), components, reportedAtNs); err != nil {
 		return fmt.Errorf("record host status: %w", err)
+	}
+	// A component reporting healthy closes any episode open against it (issue #778). This check-in is the only moment the server
+	// learns that a fault which needed a person is over, and the episode's whole purpose is the interval, so the end has to be
+	// stamped where it is observed. Only components explicitly reporting healthy count: see CloseHealthEpisodes for why a component
+	// that merely stops being reported must NOT close one.
+	//
+	// Failure here does not fail the check-in. The snapshot is already stored and is the authoritative current state; a missed close
+	// leaves an episode open until the next check-in, which is a stale record rather than a lost one, and rejecting the report would
+	// instead cost the fresh health of every component on the host.
+	if recovered := healthyComponents(report.Components); len(recovered) > 0 {
+		if _, err := s.store.CloseHealthEpisodes(ctx, hostID, recovered, reportedAtNs); err != nil {
+			s.logger.WarnContext(ctx, "could not close host health episodes for recovered components",
+				attrkeys.HostID, hostID, "components", recovered, "err", err)
+		}
 	}
 	// Inventory rides the same snapshot (issue #579): when present it refreshes the enrollment row's identity fields, so a hostname
 	// rename or OS/agent upgrade reaches the console within one check-in interval instead of waiting for a forced re-enroll. Absent

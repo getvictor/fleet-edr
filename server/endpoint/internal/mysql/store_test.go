@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -21,9 +22,17 @@ const testUUID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 // package so the testdb -> endpoint/bootstrap -> endpoint/internal/mysql cycle doesn't bite.
 func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
+	s, _ := newTestStoreWithDB(t)
+	return s
+}
+
+// newTestStoreWithDB is newTestStore plus the handle, for a test that needs to read back what was STORED rather than what a write
+// method returned. Beside newTestStore rather than in the test that needs it, so the two cannot drift in how they build the schema.
+func newTestStoreWithDB(t *testing.T) (*mysql.Store, *sqlx.DB) {
+	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	return mysql.NewStore(db)
+	return mysql.NewStore(db), db
 }
 
 func register(t *testing.T, s *mysql.Store, hostID string) {

@@ -406,6 +406,10 @@ func openContexts(
 	if endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel)); err != nil {
 		return
 	}
+	// A health-signal rule's findings are recorded as host health episodes rather than as alerts (issue #778). Wired after the
+	// endpoint context exists, unlike the rules-context setters above, because the recorder is the endpoint's: it owns host health,
+	// and the engine only states the fault it observed.
+	detectionCtx.SetHealthEpisodeRecorder(endpointCtx.HealthEpisodeRecorder())
 	// The observability context owns the runtime trace-sampler settings (issue #374); it consumes identity's chokepoint + audit
 	// recorder for its admin endpoint. Built + migrated under the same lock as the others.
 	observabilityCtx, err = openObservability(ctx, logger, db, identityCtx)

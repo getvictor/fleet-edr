@@ -64,7 +64,7 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 				// host went uncaptured for however long it took them to notice. The alert is the durable account, the
 				// same argument that justified recording the stop itself.
 				OnEscalation: func(e selfheal.Escalation) {
-					if err := sensorevent.EmitRecoveryFailed(ctx, emitter, e.Provider, e.Outcome, e.Attempts); err != nil {
+					if err := sensorevent.EmitRecoveryFailed(ctx, emitter, e.Provider, e.Component, e.Outcome, e.Attempts); err != nil {
 						// Best effort by design: the health state is already published and the agent must keep
 						// running. Logged at WARN so a queue that is rejecting writes is visible.
 						d.logger.WarnContext(ctx, "could not record that automatic capture recovery gave up",

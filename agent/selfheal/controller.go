@@ -40,10 +40,16 @@ type HealthSink interface {
 //
 // Outcome carries WHICH of the two failure shapes was reached rather than a bare "it failed", because they point a
 // responder at different things and the controller is the only place that can tell them apart (see remediate).
+//
+// Component names the registered health component the provider belongs to. The controller is configured with it already (it is
+// what escalate marks unhealthy), and it is reported here because nothing downstream can recover it: a provider is rendered into
+// the health snapshot from its parent's liveness report and disappears when the parent stops reporting it, so the provider name
+// alone does not identify anything a later snapshot can be matched against.
 type Escalation struct {
-	Provider string
-	Attempts int
-	Outcome  string
+	Provider  string
+	Component string
+	Attempts  int
+	Outcome   string
 }
 
 // The two shapes an exhausted budget can end in.
@@ -298,7 +304,7 @@ func (c *Controller) remediate(ctx context.Context, provider string, attempt int
 		// The EDGE, and the only place this fires. escalate() above runs again on every later report to re-assert health,
 		// which is safe for level state and would be an event storm for anything append-only (issue #691).
 		if c.onEscalation != nil {
-			c.onEscalation(Escalation{Provider: provider, Attempts: attempt, Outcome: outcome})
+			c.onEscalation(Escalation{Provider: provider, Component: c.component, Attempts: attempt, Outcome: outcome})
 		}
 	}
 }

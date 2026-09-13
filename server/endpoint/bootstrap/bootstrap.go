@@ -71,7 +71,10 @@ type Endpoint struct {
 	hostTokenMW func(http.Handler) http.Handler
 	snapshot    *revocation.Snapshot
 	db          *sqlx.DB
-	logger      *slog.Logger
+	// store is held so this context can expose narrow write surfaces another context depends on (HealthEpisodeRecorder), without
+	// handing out the whole store.
+	store  *mysql.Store
+	logger *slog.Logger
 }
 
 // New wires the endpoint context. Does NOT apply the schema (call ApplySchema for that). Returns an error if Deps is missing required
@@ -113,7 +116,8 @@ func New(deps Deps) (*Endpoint, error) {
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
 	return &Endpoint{
-		svc: svc,
+		svc:   svc,
+		store: store,
 		enrollH: enroll.New(svc, enroll.Options{
 			RatePerMinute: deps.EnrollRatePerMinute,
 			Logger:        logger,
@@ -162,6 +166,11 @@ func (e *Endpoint) TokenRefreshHandler() http.Handler { return e.tokenH }
 // StatusHandler returns the POST /api/status agent-health check-in handler. cmd/main mounts it inside the host-token-protected mux so it
 // shares the same authentication as the other agent routes; the handler reads the host_id the middleware pinned.
 func (e *Endpoint) StatusHandler() http.Handler { return e.statusH }
+
+// HealthEpisodeRecorder exposes where a component fault that needs a person is recorded (issue #778). The detection engine holds
+// it: the engine is what evaluates the agent's report and decides the finding is a health signal rather than a detection, while
+// host health is this context's to own, so the engine states the fact and this context decides what storing it means.
+func (e *Endpoint) HealthEpisodeRecorder() api.HealthEpisodeRecorder { return e.store }
 
 // RevocationSnapshot returns the per-replica revocation snapshot so cmd/main can trigger an initial synchronous load before serving and
 // run the background refresh loop. Per ADR-0010 it is a perf cache, safe to lose.

@@ -1,0 +1,68 @@
+package api
+
+import (
+	"context"
+
+	"github.com/fleetdm/edr/server/sqlhelpers"
+)
+
+// NullRawJSON is the shared JSON-or-NULL column type, aliased here so this context's callers do not import sqlhelpers directly.
+// Matches how detection/api exposes the same type.
+type NullRawJSON = sqlhelpers.NullRawJSON
+
+// HealthEpisodeKind names a class of component fault that an episode records. Open-vocabulary for the same reason the status
+// snapshot's component types and reasons are: a new health signal should be a producer-side change, not a schema migration.
+type HealthEpisodeKind = string
+
+// KindSelfHealFailed is the first kind: this product's automatic repair of a stopped capture provider exhausted its attempts, so
+// the host stays uncaptured until a person acts. It is deliberately spelled the same as the agent's own health reason for the
+// condition, so the record and the level state that reports it read as one thing.
+const KindSelfHealFailed HealthEpisodeKind = "self_heal_failed"
+
+// HealthEpisode is a component fault that needed a person, recorded as an interval rather than as level state.
+//
+// It exists because the two questions an operator asks have different shapes. "Is this host capturing right now" is level state
+// and lives in the status snapshot, which is overwritten the moment the answer changes. "Was this host ever not capturing, and for
+// how long" cannot be answered from level state at all: once someone fixes the host by hand it reads healthy, and nothing says it
+// was ever broken. An episode is the second answer. It opens when the fault is reported and closes when the component reports
+// healthy again, so the interval between is the outage.
+//
+// Detail carries the fault's own machine-readable fields (for KindSelfHealFailed: the provider, the outcome, and the attempt
+// count) rather than leaving a reader to parse them back out of Description. The shape is per-kind by design, which is why it is
+// a JSON document here and not a set of columns: a second kind should not require a migration to record what it knows.
+type HealthEpisode struct {
+	ID           int64             `db:"id" json:"id"`
+	HostID       string            `db:"host_id" json:"host_id"`
+	Component    string            `db:"component" json:"component"`
+	Kind         HealthEpisodeKind `db:"kind" json:"kind"`
+	Severity     string            `db:"severity" json:"severity"`
+	Title        string            `db:"title" json:"title"`
+	Description  string            `db:"description" json:"description,omitempty"`
+	Detail       NullRawJSON       `db:"detail" json:"detail,omitempty"`
+	OpenedAtNs   int64             `db:"opened_at_ns" json:"opened_at_ns"`
+	ResolvedAtNs *int64            `db:"resolved_at_ns" json:"resolved_at_ns,omitempty"`
+}
+
+// Open reports whether the fault is still in effect. An open episode is a host that needs attention now; a closed one is history
+// with a measurable duration.
+func (e HealthEpisode) Open() bool { return e.ResolvedAtNs == nil }
+
+// SelfHealFailedDetail is the Detail shape for KindSelfHealFailed. The three fields are what make the fault actionable: which
+// provider to restore, which failure shape was reached (the repair command failing implicates the host application or the
+// configuration daemon, while repairs reporting success on a provider that stays stopped means re-enabling is not what the fault
+// needs), and that the repair was genuinely attempted rather than skipped.
+type SelfHealFailedDetail struct {
+	Provider string `json:"provider"`
+	Outcome  string `json:"outcome"`
+	Attempts int    `json:"attempts"`
+}
+
+// HealthEpisodeRecorder is the write surface another bounded context depends on to record a fault it observed. The detection
+// engine holds one: it evaluates the agent's report and decides that the finding is a health signal rather than a detection, but
+// host health is the endpoint context's to own, so the engine states the fact and this context decides what storing it means.
+//
+// OpenHealthEpisode is idempotent for as long as the episode it opens stays open. A fault is level state on the agent, re-asserted
+// on every check-in for as long as it persists, so a recorder that opened a row per report would describe one outage as hundreds.
+type HealthEpisodeRecorder interface {
+	OpenHealthEpisode(ctx context.Context, e HealthEpisode) (opened bool, err error)
+}

@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **A sensor that could not repair itself is now host health, not an alert.** When this product's own automatic repair of a stopped capture provider gives up, the host stops capturing until someone re-activates the extension. That is an operational fault in our software rather than an attack, so it no longer appears in the alert queue. It is recorded against the host instead, as an episode that opens when the repair gives up and closes when the component reports healthy again, so the record says how long the host went uncaptured rather than only that something was once wrong. Alerts of this kind already raised are left as they are. Action required: until the health surface ships later in this release, this condition no longer triggers your alert webhook.
+
 ### Fixed
 
 - **A renamed remote-access tool is detected by its signature.** A shipped rule that catches MeshAgent renamed to hide it could not run, because it reads the name the binary was compiled as and nothing supplied that. macOS keeps that name in the code signature, which a rename cannot change, so it is now read from there. One more of the shipped rule set runs: 67 of 69, up from 66.
