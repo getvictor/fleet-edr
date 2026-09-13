@@ -24,3 +24,9 @@ Bringing the corpus up to date SHALL copy new, changed and moved rules byte-for-
 - **GIVEN** a vendored rule upstream no longer carries among its rules, one of them moved to upstream's deprecated tree
 - **WHEN** the corpus is brought up to date
 - **THEN** each is reported as withdrawn, the moved one with where it went, and neither is deleted
+
+#### Scenario: A rule moved upstream is moved, not kept twice
+
+- **GIVEN** a vendored rule upstream now keeps in another category, or under a name differing only in case
+- **WHEN** the corpus is brought up to date
+- **THEN** the rule is written at its new path and its old copy is removed, so one rule id has one file

@@ -195,6 +195,8 @@ func TestCompare_RefusesTwoUpstreamRulesForOneRuleID(t *testing.T) {
 	}
 }
 
+// spec:server-detection-rules-engine/the-vendored-corpus-is-compared-with-upstream/a-rule-moved-upstream-is-moved-not-kept-twice
+//
 // A rule upstream moved to another category is the same rule id, so it is moved rather than kept twice, which the loader would refuse.
 // A move that also changes the rule, or only the case of its name, is still a move.
 func TestRun_MovesARuleUpstreamRecategorised(t *testing.T) {
