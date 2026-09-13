@@ -98,6 +98,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          remote="https://github.com/$GITHUB_REPOSITORY.git"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          header="http.https://github.com/.extraheader=AUTHORIZATION: basic $auth"
+          # The branch as it is before the open pull request check below. The push replaces only that, so a pull request opened and
+          # pushed to after this read makes this run fail rather than erase the reviewer's commit.
+          seen="$(git -c "$header" ls-remote "$remote" "refs/heads/$SYNC_BRANCH" | cut -f1)"
           # A pull request already open from the branch is a person's review in progress, possibly with their commits on it, so it
           # is left alone. Upstream changes made since reach the branch in the first run after it merges.
           open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --state open --json url --jq '.[0].url // ""')"
@@ -105,12 +111,6 @@ jobs:
             echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          remote="https://github.com/$GITHUB_REPOSITORY.git"
-          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          header="http.https://github.com/.extraheader=AUTHORIZATION: basic $auth"
-          # The branch as it was when no pull request was open. The push replaces only that, so a push to the branch in the meantime
-          # makes this run fail rather than erase it.
-          seen="$(git -c "$header" ls-remote "$remote" "refs/heads/$SYNC_BRANCH" | cut -f1)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$SYNC_BRANCH"

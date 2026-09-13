@@ -54,12 +54,13 @@ type runner struct {
 	env  map[string]string
 }
 
-// ghStub records each call in gh.log and answers the two list queries from FAKE_ISSUE and FAKE_PR.
+// ghStub records each call in gh.log and answers the two list queries from FAKE_ISSUE and FAKE_PR. ON_PR_LIST, when set, is run as
+// the pull request query is answered, to stage something happening on GitHub in that moment.
 const ghStub = `#!/usr/bin/env bash
 echo "gh $*" >> "$RUNNER_TEMP/gh.log"
 case "$1 $2" in
   "issue list") printf '%s' "${FAKE_ISSUE:-}" ;;
-  "pr list") printf '%s' "${FAKE_PR:-}" ;;
+  "pr list") if [ -n "${ON_PR_LIST:-}" ]; then bash -c "$ON_PR_LIST" >&2; fi; printf '%s' "${FAKE_PR:-}" ;;
 esac
 `
 
@@ -207,23 +208,56 @@ func TestWorkflow_APullRequestUnderReviewIsLeftAlone(t *testing.T) {
 //
 // With no pull request open, the push step commits the corpus and generated docs to the sync branch, creating it or replacing the
 // job's previous commit on it.
-func TestWorkflow_PushesTheSyncBranch(t *testing.T) {
+func TestWorkflow_PushesTheSyncBranch(t *testing.T) { //nolint:tparallel // its subtests run in order on shared repositories
 	t.Parallel()
 	remote, work := syncRepos(t)
-	for i, rule := range []string{"title: first\n", "title: second\n"} {
-		require.NoError(t, os.WriteFile(filepath.Join(work, "server/rules/internal/catalog/imported/rule.yml"), []byte(rule), 0o600))
-		r := newRunner(t, work)
-		out, err := r.run("push")
-		require.NoError(t, err, "run %d: %s", i, out)
-		assert.Equal(t, rule, gitOut(t, remote, "show", "sigma-sync/upstream:server/rules/internal/catalog/imported/rule.yml"))
-		subject := gitOut(t, remote, "log", "-1", "--format=%s", "sigma-sync/upstream")
-		assert.Equal(t, "Sync vendored Sigma rules with upstream", strings.TrimSpace(subject))
-		assert.Equal(t, "2", strings.TrimSpace(gitOut(t, remote, "rev-list", "--count", "sigma-sync/upstream")),
-			"one sync commit on main, replacing the previous run's")
-		// A fresh checkout each run, as on the runner: back on main without the local sync branch.
-		gitRun(t, work, "switch", "-q", "main")
-		gitRun(t, work, "branch", "-q", "-D", "sigma-sync/upstream")
+	// Sequential steps on one repository pair: the second run replaces what the first pushed.
+	steps := []struct {
+		name string
+		rule string
+	}{
+		{"the first run creates the branch", "title: first\n"},
+		{"a later run replaces the previous run's commit", "title: second\n"},
 	}
+	// Subtests in order, not parallel: each builds on the repository state the one before left.
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) { //nolint:paralleltest // sequential on shared repositories, see above
+			rule := step.rule
+			require.NoError(t, os.WriteFile(filepath.Join(work, "server/rules/internal/catalog/imported/rule.yml"), []byte(rule), 0o600))
+			r := newRunner(t, work)
+			out, err := r.run("push")
+			require.NoError(t, err, out)
+			assert.Equal(t, rule, gitOut(t, remote, "show", "sigma-sync/upstream:server/rules/internal/catalog/imported/rule.yml"))
+			subject := gitOut(t, remote, "log", "-1", "--format=%s", "sigma-sync/upstream")
+			assert.Equal(t, "Sync vendored Sigma rules with upstream", strings.TrimSpace(subject))
+			assert.Equal(t, "2", strings.TrimSpace(gitOut(t, remote, "rev-list", "--count", "sigma-sync/upstream")),
+				"one sync commit on main, replacing the previous run's")
+			// A fresh checkout each run, as on the runner: back on main without the local sync branch.
+			gitRun(t, work, "switch", "-q", "main")
+			gitRun(t, work, "branch", "-q", "-D", "sigma-sync/upstream")
+		})
+	}
+}
+
+// A reviewer who opens a pull request and pushes to the branch while the step is checking for one is not overwritten: the step's
+// lease is on the branch as it was before the check, so its push is refused.
+func TestWorkflow_APushDuringTheCheckIsNotOverwritten(t *testing.T) {
+	t.Parallel()
+	remote, work := syncRepos(t)
+	// A previous run's branch, which a reviewer then pushes to while the step asks GitHub for open pull requests.
+	gitRun(t, work, "push", "-q", remote, "main:refs/heads/sigma-sync/upstream")
+	reviewer := filepath.Join(t.TempDir(), "reviewer")
+	gitRun(t, filepath.Dir(reviewer), "clone", "-q", "-b", "sigma-sync/upstream", remote, reviewer)
+	require.NoError(t, os.WriteFile(filepath.Join(reviewer, "docs/detection-rules.md"), []byte("# Updated by a reviewer\n"), 0o600))
+	gitRun(t, reviewer, "-c", "user.name=r", "-c", "user.email=r@example.com", "commit", "-q", "--no-verify", "-am", "reviewer")
+	reviewed := strings.TrimSpace(gitOut(t, reviewer, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "server/rules/internal/catalog/imported/rule.yml"), []byte("title: new\n"), 0o600))
+	r := newRunner(t, work)
+	r.env["ON_PR_LIST"] = "git -C " + reviewer + " push -q origin HEAD:refs/heads/sigma-sync/upstream"
+	out, err := r.run("push")
+	require.Error(t, err, "the push must be refused: %s", out)
+	assert.Equal(t, reviewed, strings.TrimSpace(gitOut(t, remote, "rev-parse", "sigma-sync/upstream")), "the reviewer's commit stays")
 }
 
 // spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/a-rule-that-breaks-the-corpus-is-still-reported
