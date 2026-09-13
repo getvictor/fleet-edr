@@ -83,14 +83,21 @@ const (
 // expectedAssertion is the subset of expected.yaml the runner consumes.
 // The full schema is documented in test/efficacy/README.md.
 type expectedAssertion struct {
-	ScenarioID    string `json:"scenario_id"`
-	Mitre         string `json:"mitre,omitempty"`
-	WithinSeconds int    `json:"within_seconds"`
-	Rules         []struct {
-		RuleID   string `json:"rule_id"`
-		Severity string `json:"severity"`
-		Expect   string `json:"expect"`
-	} `json:"rules"`
+	ScenarioID    string         `json:"scenario_id"`
+	Mitre         string         `json:"mitre,omitempty"`
+	WithinSeconds int            `json:"within_seconds"`
+	Rules         []expectedRule `json:"rules"`
+}
+
+// expectedRule is one rule a scenario must trip, and what it must record when it does.
+type expectedRule struct {
+	RuleID   string `json:"rule_id"`
+	Severity string `json:"severity"`
+	Expect   string `json:"expect"`
+	// Kind is the health episode kind a health_episode rule must record, and is required for one. An episode does not carry the rule
+	// that recorded it, so without the kind the harness could only ask "did this host record any fault", and a scenario whose own rule
+	// regressed would pass on an unrelated fault the same host happened to report.
+	Kind string `json:"kind"`
 }
 
 // scenarioEntry pairs the loaded fakeagent.Scenario with its expected
@@ -297,16 +304,16 @@ func runAttack(t *testing.T, stack *integration.Stack, entry scenarioEntry) resu
 	// catalog rule) would otherwise have N-1 silently-ignored assertions.
 	res.Passed = true
 	for _, expected := range entry.Expected.Rules {
-		ok, err := waitForAlert(ctx, stack, hostID, expected.RuleID, expected.Severity, deadline)
+		ok, err := waitForExpected(ctx, stack, hostID, expected, deadline)
 		if err != nil {
-			t.Errorf("waitForAlert(%s): %v", expected.RuleID, err)
+			t.Errorf("wait for %s (%s): %v", expected.RuleID, expectOrAlert(expected.Expect), err)
 			res.Reason = err.Error()
 			res.Passed = false
 			return res
 		}
 		if !ok {
-			t.Errorf("expected rule %s did not fire on host %s within %s",
-				expected.RuleID, hostID, deadline)
+			t.Errorf("expected rule %s did not record a %s on host %s within %s",
+				expected.RuleID, expectOrAlert(expected.Expect), hostID, deadline)
 			res.Reason = "rule did not fire within SLA: " + expected.RuleID
 			res.Passed = false
 			return res
@@ -429,6 +436,93 @@ func runNoise(t *testing.T, stack *integration.Stack, entry scenarioEntry) resul
 		entry.Name, len(alerts), strings.Join(ruleIDs, ", "))
 	res.Reason = fmt.Sprintf("unexpected alerts: %s", strings.Join(ruleIDs, ", "))
 	return res
+}
+
+// Values of an expected.yaml rule's `expect` field. It went unread until issue #778, when the first rule began recording something
+// other than an alert: every earlier scenario's `expect: alert` was decorative, and a scenario for a health signal needs the harness
+// to look somewhere else.
+const (
+	expectAlert         = "alert"
+	expectHealthEpisode = "health_episode"
+)
+
+// expectOrAlert names what a rule is expected to record, treating an absent field as an alert so every existing scenario keeps its
+// meaning without being edited.
+func expectOrAlert(expect string) string {
+	if expect == "" {
+		return expectAlert
+	}
+	return expect
+}
+
+// waitForExpected polls for whatever the rule is expected to record. An unrecognised value is an error rather than a silent default:
+// a typo in expected.yaml falling back to "alert" would look for the wrong record and report a real health signal as undetected.
+func waitForExpected(
+	ctx context.Context, stack *integration.Stack, hostID string, expected expectedRule, deadline time.Duration,
+) (bool, error) {
+	switch expectOrAlert(expected.Expect) {
+	case expectAlert:
+		return waitForAlert(ctx, stack, hostID, expected.RuleID, expected.Severity, deadline)
+	case expectHealthEpisode:
+		// Both are required rather than wildcards. An empty value matching anything would let a typo in expected.yaml pass a scenario
+		// whose rule recorded the wrong kind of fault, or the right fault at the wrong severity.
+		if expected.Kind == "" || expected.Severity == "" {
+			return false, fmt.Errorf("expected.yaml: rule %s expects a %s and must name both its kind and its severity",
+				expected.RuleID, expectHealthEpisode)
+		}
+		return waitForHealthEpisode(ctx, stack, hostID, expected, deadline)
+	default:
+		return false, fmt.Errorf("expected.yaml: unknown expect %q for rule %s (want %q or %q)",
+			expected.Expect, expected.RuleID, expectAlert, expectHealthEpisode)
+	}
+}
+
+// waitForHealthEpisode polls for a host health episode of the expected kind on hostID. A health signal is recorded against the host
+// rather than as an alert, so ListAlerts would never see it. Read from the table directly because the harness has the database and no
+// operator session, and what it asserts is that the system recorded the fault, not how a page renders it.
+//
+// It also asserts no alert was raised for the rule, which is the other half of the contract: a regression that recorded the episode AND
+// kept the alert would otherwise pass here. That check waits out noiseSettle after the episode appears rather than looking once, because
+// the two writes are separate statements and an alert committed a moment after the episode would slip past an immediate look.
+func waitForHealthEpisode(
+	ctx context.Context, stack *integration.Stack, hostID string, expected expectedRule, deadline time.Duration,
+) (bool, error) {
+	ruleID := expected.RuleID
+	stop := time.Now().Add(deadline)
+	for time.Now().Before(stop) {
+		var n int
+		err := stack.DB.GetContext(ctx, &n,
+			`SELECT COUNT(*) FROM host_health_episodes WHERE host_id = ? AND kind = ? AND severity = ?`,
+			hostID, expected.Kind, expected.Severity)
+		if err != nil {
+			return false, err
+		}
+		if n > 0 {
+			// The episode is there; now the half that makes it a health signal rather than a detection with an extra record.
+			select {
+			case <-time.After(noiseSettle):
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
+			alerts, err := stack.DetectionService().ListAlerts(ctx, detectionapi.AlertFilter{HostID: hostID, Limit: 50})
+			if err != nil {
+				return false, err
+			}
+			for _, a := range alerts {
+				if a.RuleID == ruleID {
+					return false, fmt.Errorf("rule %s recorded a health episode but also raised alert %d; a health signal must not alert",
+						ruleID, a.ID)
+				}
+			}
+			return true, nil
+		}
+		select {
+		case <-time.After(pollInterval):
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return false, nil
 }
 
 // waitForAlert polls the detection service's ListAlerts for an alert with

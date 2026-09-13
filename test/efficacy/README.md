@@ -38,6 +38,8 @@ A run is one `go test -tags integration ./test/efficacy/...` invocation. Single 
 
 For noise scenarios `rules:` is `[]` -- the runner asserts no alerts fire on the host at all.
 
+`expect` defaults to `alert`. A rule that records a host health episode instead sets `expect: health_episode` and names the episode `kind` (for example `kind: self_heal_failed`) and `severity`. Both are required: an episode does not record which rule opened it, and neither field matches anything when left empty. The runner then also fails the scenario if the rule raised an alert.
+
 ## Adding a new technique scenario
 
 1. Pick the MITRE technique ID (e.g. `T1027.005` for "Indicator Removal from Tools"). Create `corpus/T1027.005-<slug>/`.

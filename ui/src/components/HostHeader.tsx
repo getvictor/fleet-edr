@@ -2,12 +2,12 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import "./HostHeader.scss";
 import { getHostDetail, getHostHealth } from "../api";
-import type { HostDetail, HostHealth } from "../types";
+import type { HostDetail, HostHealth, HostHealthEpisode } from "../types";
 import { PageHeader } from "./ui/PageHeader";
 import { CopyButton } from "./ui/CopyButton";
 import { HealthBadge } from "./ui/HealthBadge";
 import { useDismiss } from "./ui/useDismiss";
-import { formatRelativeNs, isOnline } from "../time";
+import { formatElapsedNs, formatRelativeNs, isOnline } from "../time";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 
 interface HostHeaderProps {
@@ -98,6 +98,75 @@ function metaRow(detail: HostDetail, online: boolean): ReactNode {
   return <span className="host-header__meta">{segments}</span>;
 }
 
+// labelFor looks up an open-vocabulary wire value in a label table, returning undefined for anything the table does not itself define.
+//
+// The own-property check is the point. A plain object also answers for its inherited keys, and these values come from the agent: a
+// subject of "__proto__" indexed straight into COMPONENT_LABELS yields Object.prototype, which React refuses to render, so a malformed or
+// compromised sensor report would throw the moment an operator opened the host's Details. An outcome of "toString" would likewise return
+// a function instead of falling back. Only a key the table was written with is a label.
+function labelFor(table: Readonly<Record<string, string>>, key: string): string | undefined {
+  // eslint-disable-next-line security/detect-object-injection -- guarded by the own-property check on the line itself
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+// OUTCOME_LABELS phrase a self_heal_failed episode's outcome for an operator. The two shapes point at different fixes, so they are
+// spelled out rather than shown as their wire names. An outcome this build does not recognise renders nothing rather than the raw
+// value, since the title and description already say the repair gave up.
+const OUTCOME_LABELS: Record<string, string> = {
+  enable_failed: "the repair command kept failing",
+  enable_ineffective: "repairs reported success but it stayed stopped",
+};
+
+// episodeDetailString reads one string field from an episode's per-kind detail, or "" when it is absent or not a string. The detail's
+// shape belongs to the episode kind, so nothing here assumes a field exists.
+function episodeDetailString(episode: HostHealthEpisode, field: string): string {
+  // eslint-disable-next-line security/detect-object-injection -- a fixed field name from this file, not user input
+  const value = episode.detail?.[field];
+  return typeof value === "string" ? value : "";
+}
+
+// HostHealthEpisodes lists the host's recorded sensor faults (issue #778): the ones still open, then recent resolved ones with how
+// long each lasted. It renders nothing for a host with no recorded faults, keeping to the popover's rule that a clean host shows no
+// health chrome.
+//
+// Kept apart from the component list above it on purpose. Those rows say what is true NOW and are overwritten as it changes; these are
+// the durable record, and a resolved fault still belongs here after its component has long since recovered.
+function HostHealthEpisodes({ episodes }: { readonly episodes: readonly HostHealthEpisode[] }) {
+  if (episodes.length === 0) return null;
+  return (
+    <div className="host-header__episodes">
+      <span className="host-header__details-label">Sensor faults</span>
+      <ul className="host-header__health-list">
+        {episodes.map((e) => {
+          const open = e.resolved_at_ns === undefined;
+          // `||`, not `??`: an empty subject means "the component as a whole", the same as an absent one, and must fall back too.
+          const partKey = e.subject || e.component;
+          const part = labelFor(COMPONENT_LABELS, partKey) ?? partKey;
+          const outcome = labelFor(OUTCOME_LABELS, episodeDetailString(e, "outcome")) ?? "";
+          return (
+            <li key={e.id} className="host-header__health-item">
+              <div className="host-header__health-item-head">
+                <HealthBadge status={open ? "unhealthy" : "healthy"} />
+                <span className="host-header__health-component">{part}</span>
+              </div>
+              {/* The message and the timing are separate lines, not one row as the component conditions use. A component's age is a
+                  short "46m ago", but a resolved fault's timing ("lasted 2h 14m, ended 46m ago") is long and does not wrap, so on one
+                  row it squeezed the message into a column a word or two wide, and faults with different timings rendered in
+                  different shapes at the same width. */}
+              <span className="host-header__health-message">{outcome ? `${e.title}: ${outcome}` : e.title}</span>
+              <span className="host-header__episode-when">
+                {e.resolved_at_ns === undefined
+                  ? `opened ${formatRelativeNs(e.opened_at_ns)}`
+                  : `lasted ${formatElapsedNs(e.resolved_at_ns - e.opened_at_ns)}, ended ${formatRelativeNs(e.resolved_at_ns)}`}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 // HostDetailsPopover is the click-open reference panel for the host's secondary facts (issue #579 simplification). It keeps the raw id,
 // its copy control, agent version, source IP, event count, exact last-seen, enrollment date, and the agent-health conditions out of the
 // always-visible header. The trigger carries an attention dot only when agent health needs attention, so a clean host shows no health
@@ -164,7 +233,7 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
                           components in one panel rendered in two different shapes at the same width. */}
                       <div className="host-header__health-item-head">
                         <HealthBadge status={c.status} />
-                        <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
+                        <span className="host-header__health-component">{labelFor(COMPONENT_LABELS, c.type) ?? c.type}</span>
                       </div>
                       {/* Server-derived conditions carry no transition instant (see HostHealth.derived_components); rendering one
                           would date a possibly days-old fault to the moment the page loaded. */}
@@ -180,6 +249,7 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
                   ))}
                 </ul>
               )}
+              <HostHealthEpisodes episodes={health.episodes} />
             </div>
           )}
           <dl className="host-header__details-list">

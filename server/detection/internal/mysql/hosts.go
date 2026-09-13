@@ -196,22 +196,81 @@ func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, 
 // Components, matching how ListHosts COALESCEs the missing row, so the detail view renders "unknown" rather than 404ing a real host
 // that simply has not checked in health yet.
 func (s *Store) HostHealth(ctx context.Context, hostID string) (api.HostHealth, error) {
+	// Episodes are read whether or not the host has a health snapshot. An episode is written from the event stream, a snapshot from the
+	// status check-in, and the two are independent: a host can have a recorded sensor fault and no snapshot at all, and returning early
+	// on the missing snapshot would hide exactly the record the operator came to the page to find.
+	episodes, err := s.hostHealthEpisodes(ctx, hostID)
+	if err != nil {
+		return api.HostHealth{}, err
+	}
 	var h api.HostHealth
-	err := s.db.GetContext(ctx, &h, `
+	err = s.db.GetContext(ctx, &h, `
 		SELECT overall_status, reported_at_ns, components
 		FROM host_health
 		WHERE host_id = ?`, hostID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No snapshot means no claim to contradict, so the derived check is skipped entirely rather than run against an unknown
 		// rollup: Derive would reject it anyway, and not asking spares the archive a query per never-checked-in host.
-		return api.HostHealth{OverallStatus: api.HostHealthUnknown}, nil
+		return api.HostHealth{OverallStatus: api.HostHealthUnknown, Episodes: episodes}, nil
 	}
 	if err != nil {
 		return api.HostHealth{}, fmt.Errorf("query host health: %w", err)
 	}
 	h.DerivedComponents = s.derivedFor(ctx, hostID, telemetryhealth.ParseClaims(h.Components))
 	h.OverallStatus = telemetryhealth.Rollup(h.OverallStatus, h.DerivedComponents)
+	h.Episodes = episodes
 	return h, nil
+}
+
+// hostEpisodeReadLimit bounds each half of the episode read. Both halves need it. Resolved episodes accumulate one per outage for the
+// life of the host, and OPEN ones can accumulate too: an episode recorded by an agent too old to name its component has nothing to
+// close it, so a host that repeatedly failed on such an agent holds one open episode per outage indefinitely. The host page renders
+// these in a popover, so the newest are what an operator needs and a long tail is noise.
+const hostEpisodeReadLimit = 20
+
+// hostHealthEpisodes returns hostID's open episodes, newest first, followed by its most recently resolved ones. Open first because an
+// open episode is a host that needs someone now, and a list ordered purely by time would bury a fault from yesterday under this
+// morning's resolved blip.
+//
+// ONE statement, not a query per half, because the halves must agree about which episodes are open. Two statements run in two read
+// views, so a status check-in closing an episode between them returns it in both: once as open, once as resolved, with the same id. The
+// popover keys its rows on that id, so the fault would render twice. A single UNION ALL reads both halves from one snapshot, where an
+// episode is open or resolved and never both.
+//
+// Each half keeps its own ORDER BY and LIMIT inside parentheses, so the bound applies per half. The outer ORDER BY is required rather
+// than decorative: UNION ALL does not promise to preserve the order of its parts.
+//
+// Always a non-nil slice, so the wire carries [] rather than null for a host with no recorded faults and a client can iterate it
+// without a guard.
+func (s *Store) hostHealthEpisodes(ctx context.Context, hostID string) ([]api.HostHealthEpisode, error) {
+	const cols = `id, kind, component, subject, severity, title, COALESCE(description, '') AS description, detail, opened_at_ns,
+		resolved_at_ns`
+	type episodeRow struct {
+		api.HostHealthEpisode
+		// halfRank orders the open half before the resolved half; halfSortNs is each half's own recency.
+		HalfRank   int   `db:"half_rank"`
+		HalfSortNs int64 `db:"half_sort_ns"`
+	}
+	var rows []episodeRow
+	if err := s.db.SelectContext(ctx, &rows, `
+		(SELECT `+cols+`, 0 AS half_rank, opened_at_ns AS half_sort_ns
+		 FROM host_health_episodes
+		 WHERE host_id = ? AND resolved_at_ns IS NULL
+		 ORDER BY opened_at_ns DESC LIMIT ?)
+		UNION ALL
+		(SELECT `+cols+`, 1 AS half_rank, resolved_at_ns AS half_sort_ns
+		 FROM host_health_episodes
+		 WHERE host_id = ? AND resolved_at_ns IS NOT NULL
+		 ORDER BY resolved_at_ns DESC LIMIT ?)
+		ORDER BY half_rank, half_sort_ns DESC`,
+		hostID, hostEpisodeReadLimit, hostID, hostEpisodeReadLimit); err != nil {
+		return nil, fmt.Errorf("query host health episodes: %w", err)
+	}
+	episodes := make([]api.HostHealthEpisode, 0, len(rows))
+	for _, r := range rows {
+		episodes = append(episodes, r.HostHealthEpisode)
+	}
+	return episodes, nil
 }
 
 // histogramTargetBuckets bounds how many bars a window produces: the bucket size is the window divided by this, floored to whole

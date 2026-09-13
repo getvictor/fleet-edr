@@ -285,6 +285,11 @@ func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
 		HostTokenSigningKey: signingKey, // any fixed >=32-byte key; the cross-context tests only need enroll/verify to round-trip
 	})
 	require.NoError(t, err, "open endpoint")
+	// Mirrors cmd/main (issue #778): a health-signal rule's findings are recorded as host health episodes, and the engine deliberately
+	// DROPS them when no recorder is wired rather than falling back to an alert. Leaving this out made the stack diverge from production
+	// silently: every cross-context test of the health path, the efficacy harness included, would see nothing and could not tell that
+	// apart from the rule not firing.
+	detectionCtx.SetHealthEpisodeRecorder(endpointCtx.HealthEpisodeRecorder())
 
 	mux := buildMux(detectionCtx, endpointCtx, identityCtx, rulesCtx, responseCtx, logger)
 

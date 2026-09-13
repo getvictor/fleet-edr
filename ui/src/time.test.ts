@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { formatRelativeISO, formatRelativeNs } from "./time";
+import { formatElapsedNs, formatRelativeISO, formatRelativeNs } from "./time";
 import {
   MILLISECONDS_PER_DAY,
   MILLISECONDS_PER_HOUR,
@@ -81,4 +81,30 @@ describe("formatRelativeISO", () => {
     expect(formatRelativeISO("not-a-date")).toBe("");
     expect(formatRelativeISO("")).toBe("");
   });
+});
+
+// formatElapsedNs takes a SPAN, not an epoch instant, so these values are small and exact: the MAX_SAFE_INTEGER rounding that forces the
+// mid-bucket offsets above does not apply. Boundary cases are therefore asserted exactly, which is where a two-unit formatter goes wrong.
+describe("formatElapsedNs", () => {
+  const seconds = (n: number) => n * MILLISECONDS_PER_SECOND * NANOSECONDS_PER_MILLISECOND;
+  const cases: { name: string; spanNs: number; want: string }[] = [
+    { name: "an instantaneous episode", spanNs: 0, want: "0s" },
+    { name: "a negative span, which the server never records", spanNs: -seconds(5), want: "0s" },
+    { name: "under a minute", spanNs: seconds(36), want: "36s" },
+    { name: "exactly a minute", spanNs: seconds(60), want: "1m" },
+    { name: "minutes only, seconds dropped", spanNs: seconds(5 * 60 + 20), want: "5m" },
+    { name: "exactly an hour, no zero minutes shown", spanNs: seconds(3600), want: "1h" },
+    { name: "hours and minutes", spanNs: seconds(2 * 3600 + 14 * 60), want: "2h 14m" },
+    { name: "exactly a day, no zero hours shown", spanNs: seconds(86_400), want: "1d" },
+    // The motivating incident's 37.8 hours.
+    { name: "the 37.8-hour providerless episode", spanNs: seconds(37.8 * 3600), want: "1d 13h" },
+    // What subtracting two epoch-nanosecond instants actually produces: a few hundred nanoseconds short of the true span, because
+    // both exceed Number.MAX_SAFE_INTEGER. Flooring rendered this exact 2h 14m as "2h 13m".
+    { name: "a span a hair short of a whole minute boundary", spanNs: seconds(2 * 3600 + 14 * 60) - 256, want: "2h 14m" },
+  ];
+  for (const c of cases) {
+    it(`renders ${c.name}`, () => {
+      expect(formatElapsedNs(c.spanNs)).toBe(c.want);
+    });
+  }
 });

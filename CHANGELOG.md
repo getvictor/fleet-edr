@@ -10,7 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
-- **A sensor that could not repair itself is now host health, not an alert.** When this product's own automatic repair of a stopped capture provider gives up, the host stops capturing until someone re-activates the extension. That is a fault in our software rather than an attack, so it leaves the alert queue. It is recorded against the host instead, opening when the repair gives up and closing when the sensor reports healthy again, so the record shows how long the host went uncaptured. It can be delivered to webhook destinations as its own event, carrying the fault in place of an alert; alert deliveries are unchanged. Alerts of this kind already raised are left as they are.
+- **A sensor that could not repair itself is now host health, not an alert.** When this product's own automatic repair of a stopped capture provider gives up, the host stops capturing until someone re-activates the extension. That is a fault in our software rather than an attack, so it leaves the alert queue. It is recorded against the host instead, opening when the repair gives up and closing when the sensor reports healthy again, and listed under the host's **Details**, so you can see how long the host went uncaptured. It can be delivered to webhook destinations as its own event, carrying the fault in place of an alert; alert deliveries are unchanged. Alerts of this kind already raised are left as they are.
 
 ### Fixed
 
