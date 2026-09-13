@@ -15,7 +15,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/detection/api"
+	detectionmysql "github.com/fleetdm/edr/server/detection/internal/mysql"
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -309,14 +312,7 @@ func TestAlertRetention_ARefireDuringThePruneCompletesCleanly(t *testing.T) {
 		pruned <- runErr
 	}()
 
-	require.Eventually(t, func() bool {
-		var waiting int
-		err := f.db.GetContext(ctx, &waiting, `
-			SELECT COUNT(*) FROM performance_schema.data_lock_waits w
-			JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
-			WHERE l.OBJECT_SCHEMA = DATABASE()`)
-		return err == nil && waiting > 0
-	}, 10*time.Second, 20*time.Millisecond, "the prune must reach a lock the re-fire holds before the re-fire links its evidence")
+	waitForLockWait(t, f.db, "the prune must reach a lock the re-fire holds before the re-fire links its evidence")
 
 	_, linkErr := refire.ExecContext(ctx, `INSERT IGNORE INTO alert_events (alert_id, event_id) VALUES (?, 'evt-refire')`, expired)
 	commitErr := refire.Commit()
@@ -389,4 +385,98 @@ func TestAlertRetention_AFailedBatchLeavesTheAlertWhole(t *testing.T) {
 			assert.Zero(t, rec.alertRowsDeleted, "and nothing is counted as deleted")
 		})
 	}
+}
+
+// waitForLockWait blocks until some statement in this test's own database is waiting on a row lock, which is how the staged
+// concurrency tests below know the other side has reached the point they need it at, rather than guessing with a sleep.
+func waitForLockWait(t *testing.T, db *sqlx.DB, msg string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := db.GetContext(t.Context(), &waiting, `
+			SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+			JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+			WHERE l.OBJECT_SCHEMA = DATABASE()`)
+		return err == nil && waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, msg)
+}
+
+// spec:server-detection-rules-engine/alerts-expire-on-their-own-window/triage-during-a-prune-keeps-the-alert-or-reports-it-gone
+//
+// TestAlertRetention_TriageRacingThePrune stages both orders of an analyst changing an alert's status while retention expires it. Each
+// side is the real code for the half under test, and the other side is its statements held open on a second connection, so the
+// interleaving is fixed rather than timed.
+func TestAlertRetention_TriageRacingThePrune(t *testing.T) {
+	t.Parallel()
+	const day = 24 * time.Hour
+
+	t.Run("the prune takes the alert first, and triage reports it gone", func(t *testing.T) {
+		t.Parallel()
+		f := newAlertFixture(t)
+		ctx := t.Context()
+		store, err := detectionmysql.New(f.db, detectiontestkit.NewMemArchive(), nil)
+		require.NoError(t, err)
+		expired := f.alert(181*day, 0, 2)
+
+		// The prune's batch for this one alert, held before commit.
+		prune, err := f.db.BeginTxx(ctx, nil)
+		require.NoError(t, err)
+		defer func() { _ = prune.Rollback() }()
+		var locked []int64
+		require.NoError(t, prune.SelectContext(ctx, &locked, `SELECT id FROM alerts WHERE id = ? FOR UPDATE`, expired))
+		_, err = prune.ExecContext(ctx, `DELETE FROM alert_events WHERE alert_id = ?`, expired)
+		require.NoError(t, err)
+		_, err = prune.ExecContext(ctx, `DELETE FROM alerts WHERE id = ?`, expired)
+		require.NoError(t, err)
+
+		triaged := make(chan error, 1)
+		go func() { triaged <- store.UpdateAlertStatus(ctx, expired, api.AlertStatusAcknowledged, "") }()
+		waitForLockWait(t, f.db, "triage must be waiting on the alert the prune holds")
+		require.NoError(t, prune.Commit())
+
+		select {
+		case err := <-triaged:
+			// Not-found is what the API turns into a 404. Anything else here surfaced to the analyst as an internal error.
+			require.ErrorIs(t, err, api.ErrAlertNotFound, "triage on an alert the prune deleted must report it gone, got %v", err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("triage did not finish")
+		}
+	})
+
+	t.Run("triage takes the alert first, and the prune keeps it", func(t *testing.T) {
+		t.Parallel()
+		f := newAlertFixture(t)
+		ctx := t.Context()
+		expired := f.alert(181*day, 0, 2)
+
+		// UpdateAlertStatus's statements, held before commit. The UPDATE refreshes updated_at to the wall clock, which is long after the
+		// fixed retention clock's cutoff: acknowledging the alert is exactly the triage activity that puts it back inside the window.
+		triage, err := f.db.BeginTxx(ctx, nil)
+		require.NoError(t, err)
+		defer func() { _ = triage.Rollback() }()
+		var status string
+		require.NoError(t, triage.GetContext(ctx, &status, `SELECT status FROM alerts WHERE id = ? FOR UPDATE`, expired))
+		_, err = triage.ExecContext(ctx, `UPDATE alerts SET status = 'acknowledged' WHERE id = ?`, expired)
+		require.NoError(t, err)
+
+		pruned := make(chan error, 1)
+		go func() {
+			_, runErr := pipeline.NewRetention(f.db, pipeline.RetentionOptions{
+				AlertRetentionDays: 180,
+				Now:                func() time.Time { return retentionNow },
+			}).Run(ctx)
+			pruned <- runErr
+		}()
+		waitForLockWait(t, f.db, "the prune must be waiting on the alert triage holds")
+		require.NoError(t, triage.Commit())
+
+		select {
+		case err := <-pruned:
+			require.NoError(t, err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("the retention pass did not finish")
+		}
+		assert.True(t, f.exists("alerts", expired), "an alert acknowledged before the prune read it is inside the window again, and kept")
+		assert.Equal(t, 2, f.eventLinks(expired), "with its evidence")
+	})
 }

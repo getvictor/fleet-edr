@@ -10,7 +10,7 @@ The alert window SHALL be configured independently of the retention window for d
 
 An alert's age SHALL be measured from its last triage activity, not from when it was raised. An alert an analyst acknowledged or reopened within the window is part of an investigation in progress and SHALL be kept, whenever it was first raised. A finding re-firing against an existing alert is not triage activity, so a standing condition that nobody triages still ages out, and a later re-fire raises a new alert rather than being lost. Neither is a write the system makes for its own bookkeeping, such as crediting an alert to the author of the rule that raised it: such a write SHALL NOT restart the alert's retention clock.
 
-Deleting an alert SHALL remove its links to the events that triggered it, and SHALL do so atomically with the alert: a pass that fails part way SHALL leave every alert it did not delete with all of its evidence. A finding re-firing against an alert while that alert is being deleted SHALL complete without error, either before the deletion, in which case its evidence is deleted with the alert, or after it, in which case it raises a new alert. Neither the detection write nor the retention pass may be the casualty of the other.
+Deleting an alert SHALL remove its links to the events that triggered it, and SHALL do so atomically with the alert: a pass that fails part way SHALL leave every alert it did not delete with all of its evidence. A finding re-firing against an alert while that alert is being deleted SHALL complete without error, either before the deletion, in which case its evidence is deleted with the alert, or after it, in which case it raises a new alert. Neither the detection write nor the retention pass may be the casualty of the other. The same holds for an analyst changing the alert's status while it is being deleted: if the change lands first it is triage activity and the alert SHALL be kept, and if the deletion lands first the change SHALL report that the alert no longer exists rather than failing with an internal error.
 
 An expired alert SHALL release the process record it referenced to the ordinary process prune, so a long-lived deployment does not keep process records alive solely for alerts no one can see any more. An alert inside its window SHALL continue to pin its process record, so the pivot from every visible alert keeps working.
 
@@ -67,3 +67,10 @@ An expired alert SHALL release the process record it referenced to the ordinary 
 - **WHEN** the server starts
 - **THEN** it refuses to start, naming the setting and the maximum
 - **AND** a window at the maximum is accepted
+
+#### Scenario: Triage during a prune keeps the alert or reports it gone
+
+- **GIVEN** an alert past the alert window
+- **WHEN** an analyst changes its status while a retention pass is deleting it
+- **THEN** if the status change lands first, the alert is kept with its evidence
+- **AND** if the deletion lands first, the status change reports that the alert was not found
