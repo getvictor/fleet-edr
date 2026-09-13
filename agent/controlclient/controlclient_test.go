@@ -107,6 +107,10 @@ func (r *recordingSender) SendApplicationControl(payload []byte) error {
 	return nil
 }
 
+func (r *recordingSender) SendWatchedPaths(payload []byte) error {
+	return r.SendApplicationControl(payload)
+}
+
 func (r *recordingSender) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -154,11 +158,11 @@ func startClientWithClock(
 	var authFailCount int
 	var mu sync.Mutex
 	client := controlclient.New(controlclient.Config{
-		Client:                   control.NewControlChannelClient(cc),
-		HostID:                   "host-a",
-		TokenFn:                  func() string { return "tok" },
-		ApplicationControlSender: sender,
-		Ledger:                   ledger,
+		Client:          control.NewControlChannelClient(cc),
+		HostID:          "host-a",
+		TokenFn:         func() string { return "tok" },
+		ExtensionSender: sender,
+		Ledger:          ledger,
 		OnAuthFail: func(context.Context) {
 			mu.Lock()
 			authFailCount++
@@ -407,12 +411,12 @@ func TestControlClientReconnectsOnSendFailure(t *testing.T) {
 		sendErr: status.Error(codes.Unavailable, "broken send"),
 	}
 	client := controlclient.New(controlclient.Config{
-		Client:                   stub,
-		HostID:                   "host-a",
-		TokenFn:                  func() string { return "tok" },
-		ApplicationControlSender: &recordingSender{},
-		InitialBackoff:           5 * time.Millisecond,
-		MaxBackoff:               20 * time.Millisecond,
+		Client:          stub,
+		HostID:          "host-a",
+		TokenFn:         func() string { return "tok" },
+		ExtensionSender: &recordingSender{},
+		InitialBackoff:  5 * time.Millisecond,
+		MaxBackoff:      20 * time.Millisecond,
 	})
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)

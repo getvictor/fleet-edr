@@ -200,6 +200,13 @@ func (s *Sensor) Ping(_ time.Duration) error {
 // SendApplicationControl is unsupported on the driverless sensor.
 func (s *Sensor) SendApplicationControl(_ []byte) error { return ErrUnsupported }
 
+// ErrWatchedPathsUnsupported is returned by SendWatchedPaths: the watched-path set configures the macOS Endpoint Security file-tamper
+// client, which has no counterpart on the driverless sensor.
+var ErrWatchedPathsUnsupported = errors.New("wintel: watched file paths are not supported on the driverless Windows sensor")
+
+// SendWatchedPaths is unsupported on the driverless sensor.
+func (s *Sensor) SendWatchedPaths(_ []byte) error { return ErrWatchedPathsUnsupported }
+
 // Disconnect tears the sensor down and waits for the ProcessTrace goroutine to exit, so a subsequent Connect never overlaps a
 // still-draining session. Order is load-bearing: CloseTrace is what actually unblocks a blocked ProcessTrace (it returns
 // ERROR_CTX_CLOSE_PENDING and tells ProcessTrace to drain its buffers and return), so Close MUST run before the wait. Waiting first

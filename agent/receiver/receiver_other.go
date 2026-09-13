@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// ErrUnsupported is returned by Connect, SendApplicationControl, and Ping
+// ErrUnsupported is returned by Connect, SendApplicationControl, SendWatchedPaths, and Ping
 // on every non-darwin platform. The agent's production receiver wraps a
 // macOS XPC Mach service; outside macOS there is no peer to talk to, so
 // the stub fails closed rather than appearing to succeed.
@@ -53,6 +53,9 @@ func (r *Receiver) Connect() error { return ErrUnsupported }
 // platforms. The signature mirrors the darwin method so commander code
 // compiles without a build tag.
 func (r *Receiver) SendApplicationControl(payload []byte) error { return ErrUnsupported }
+
+// SendWatchedPaths always returns ErrUnsupported on non-darwin platforms, for the same reason as SendApplicationControl.
+func (r *Receiver) SendWatchedPaths(payload []byte) error { return ErrUnsupported }
 
 // Ping always returns ErrUnsupported on non-darwin platforms. The
 // timeout argument is accepted but unused; preserving the signature lets

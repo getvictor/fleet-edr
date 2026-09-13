@@ -104,21 +104,28 @@ func (r *Receiver) Connect() error {
 	return nil
 }
 
-// SendApplicationControl delivers an `application_control.update` XPC message
-// to the peer. Returns an error if the connection is not established or the
-// send call rejected the payload. The send is asynchronous; a nil error means
-// the message was handed off to XPC, not that the peer has acknowledged it -
-// an ack is not part of the current wire protocol.
+// SendApplicationControl delivers an `application_control.update` XPC message to the peer.
 //
-// We hold r.mu across the C bridge call so a concurrent Disconnect() cannot
-// tear the slot down while C is still using the handle. Without the extended
-// lock, the small integer handle could be reused by another Receiver's
-// Connect between our snapshot and the xpc_bridge_send_application_control
-// call, and we'd end up sending this host's payload on a different peer's
-// connection.
+// Returns an error if the connection is not established or the send call rejected the payload. The send is asynchronous; a nil error
+// means the message was handed off to XPC, not that the peer has acknowledged it: an ack is not part of the current wire protocol.
 func (r *Receiver) SendApplicationControl(payload []byte) error {
+	return r.send("application_control.update", payload)
+}
+
+// SendWatchedPaths delivers a `watched_paths.update` XPC message carrying the file-tamper client's watched-path set, with the same
+// connection requirements and asynchronous semantics as SendApplicationControl.
+func (r *Receiver) SendWatchedPaths(payload []byte) error {
+	return r.send("watched_paths.update", payload)
+}
+
+// send delivers one typed message to the peer.
+//
+// We hold r.mu across the C bridge call so a concurrent Disconnect() cannot tear the slot down while C is still using the handle.
+// Without the extended lock, the small integer handle could be reused by another Receiver's Connect between our snapshot and the
+// xpc_bridge_send call, and we'd end up sending this host's payload on a different peer's connection.
+func (r *Receiver) send(msgType string, payload []byte) error {
 	if len(payload) == 0 {
-		return errors.New("empty application_control payload")
+		return fmt.Errorf("empty %s payload", msgType)
 	}
 
 	r.mu.Lock()
@@ -127,9 +134,11 @@ func (r *Receiver) SendApplicationControl(payload []byte) error {
 	if !r.connected || r.handle < 0 {
 		return errors.New("receiver not connected")
 	}
-	rc := int(C.xpc_bridge_send_application_control(C.int(r.handle), (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
+	cType := C.CString(msgType)
+	defer C.free(unsafe.Pointer(cType))
+	rc := int(C.xpc_bridge_send(C.int(r.handle), cType, (*C.uint8_t)(unsafe.Pointer(&payload[0])), C.size_t(len(payload))))
 	if rc != 0 {
-		return fmt.Errorf("xpc_bridge_send_application_control returned %d", rc)
+		return fmt.Errorf("xpc_bridge_send %s returned %d", msgType, rc)
 	}
 	return nil
 }

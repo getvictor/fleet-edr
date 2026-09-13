@@ -102,6 +102,10 @@ let package = Package(
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
+                // WatchedPaths.swift is the file-tamper client's watched set (#998): decoding a pushed set, combining it with the
+                // built-in sudoers paths, and the mute/unmute difference between two sets. Pure Foundation, so it is unit-testable;
+                // FileTamperSubscriber applies the result.
+                "extension/WatchedPaths.swift",
                 "networkextension/DNSParser.swift",
                 // DNSProxyHealth.swift is the DNS proxy's forwarding-health REPORTER: a sliding-window failure
                 // accumulator that says degraded/recovered once per change and decides nothing (issue #673). Pure
