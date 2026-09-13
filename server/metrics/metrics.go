@@ -60,20 +60,21 @@ type GaugeSource interface {
 // Recorder is the write surface instrumentation code uses. Every method is safe to call from any goroutine and safe on a nil receiver
 // (methods short-circuit) so call sites don't need defensive `if r != nil` blocks.
 type Recorder struct {
-	eventsIngested                  metric.Int64Counter
-	heartbeatsDropped               metric.Int64Counter
-	alertsCreated                   metric.Int64Counter
-	monitorMatches                  metric.Int64Counter
-	processRetentionRowsDeleted     metric.Int64Counter
-	alertRetentionRowsDeleted       metric.Int64Counter
-	queueRowsPruned                 metric.Int64Counter
-	processesReconciled             metric.Int64Counter
-	queueDropped                    metric.Int64Counter
-	detectionMaterializationRetries metric.Int64Counter
-	eventsSetAside                  metric.Int64Counter
-	ruleEvalSkipped                 metric.Int64Counter
-	httpRequestDuration             metric.Float64Histogram
-	ruleEvaluationDuration          metric.Float64Histogram
+	eventsIngested                    metric.Int64Counter
+	heartbeatsDropped                 metric.Int64Counter
+	alertsCreated                     metric.Int64Counter
+	monitorMatches                    metric.Int64Counter
+	processRetentionRowsDeleted       metric.Int64Counter
+	alertRetentionRowsDeleted         metric.Int64Counter
+	monitorRecordRetentionRowsDeleted metric.Int64Counter
+	queueRowsPruned                   metric.Int64Counter
+	processesReconciled               metric.Int64Counter
+	queueDropped                      metric.Int64Counter
+	detectionMaterializationRetries   metric.Int64Counter
+	eventsSetAside                    metric.Int64Counter
+	ruleEvalSkipped                   metric.Int64Counter
+	httpRequestDuration               metric.Float64Histogram
+	ruleEvaluationDuration            metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
 	enrolledGauge metric.Int64ObservableGauge
@@ -145,6 +146,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.alertRetentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.alerts.rows_deleted",
 		metric.WithDescription("Total alerts deleted by the retention job since server start, past the alert retention window."),
+		metric.WithUnit("{row}"),
+	)
+	r.monitorRecordRetentionRowsDeleted, _ = meter.Int64Counter(
+		"edr.retention.monitor_records.rows_deleted",
+		metric.WithDescription("Total monitor records deleted by the retention job since server start, past their own retention window."),
 		metric.WithUnit("{row}"),
 	)
 	r.queueRowsPruned, _ = meter.Int64Counter(
@@ -371,6 +377,14 @@ func (r *Recorder) AlertRetentionRowsDeleted(ctx context.Context, n int64) {
 		return
 	}
 	r.alertRetentionRowsDeleted.Add(ctx, n)
+}
+
+// MonitorRecordRetentionRowsDeleted satisfies api.MetricsRecorder. Counts monitor records pruned past their own window (issue #994).
+func (r *Recorder) MonitorRecordRetentionRowsDeleted(ctx context.Context, n int64) {
+	if r == nil || r.monitorRecordRetentionRowsDeleted == nil || n <= 0 {
+		return
+	}
+	r.monitorRecordRetentionRowsDeleted.Add(ctx, n)
 }
 
 // QueueRowsPruned satisfies api.MetricsRecorder. Counts acked rows the queue-prune sweep removed from the event work queue, so a

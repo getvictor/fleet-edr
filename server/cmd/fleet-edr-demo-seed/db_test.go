@@ -53,9 +53,22 @@ func insertForkOnlyProcess(t *testing.T, db *sqlx.DB, hostID string, pid int) {
 
 func insertAlert(t *testing.T, db *sqlx.DB, hostID, ruleID, source, severity string) {
 	t.Helper()
+	insertRow(t, db, hostID, ruleID, source, severity, "alert")
+}
+
+// insertMonitorRecord writes a monitor record (issue #994): a rule's match in monitor mode, stored in the alerts table without being an
+// alert. The subject is distinct from the alert fixture's so the two can coexist for one rule, as they do after a promotion.
+func insertMonitorRecord(t *testing.T, db *sqlx.DB, hostID, ruleID, source string) {
+	t.Helper()
+	insertRow(t, db, hostID, ruleID, source, "high", "monitor")
+}
+
+func insertRow(t *testing.T, db *sqlx.DB, hostID, ruleID, source, severity, disposition string) {
+	t.Helper()
 	_, err := db.ExecContext(t.Context(),
-		`INSERT INTO alerts (host_id, rule_id, source, severity, title, description) VALUES (?, ?, ?, ?, ?, '')`,
-		hostID, ruleID, source, severity, ruleID)
+		`INSERT INTO alerts (host_id, rule_id, source, severity, title, description, disposition, subject)
+		 VALUES (?, ?, ?, ?, ?, '', ?, ?)`,
+		hostID, ruleID, source, severity, ruleID, disposition, disposition)
 	require.NoError(t, err)
 }
 
@@ -114,6 +127,10 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 	insertProcess(t, db, demoHost, 100)
 	insertAlert(t, db, demoHost, "sudoers_tamper", "detection", "high")
 	insertAlert(t, db, demoHost, "demo_blocklist_binary", "application_control", "high")
+	// Monitor records on the demo host, for a rule with no alert and for each source: none may count, or a rule left in monitor mode
+	// would satisfy verify's per-rule predicate without the demo showing the alert it expects.
+	insertMonitorRecord(t, db, demoHost, "credential_access_monitored", "detection")
+	insertMonitorRecord(t, db, demoHost, "demo_blocklist_binary", "application_control")
 
 	c, err = s.counts(ctx, inClause, hostArgs)
 	require.NoError(t, err)
@@ -126,6 +143,11 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 	seeded, err = s.alreadySeeded(ctx)
 	require.NoError(t, err)
 	assert.False(t, seeded, "a real deployment's own keychain alert must not read as demo-already-seeded")
+
+	insertMonitorRecord(t, db, demoHost, keychainRuleID, "detection")
+	seeded, err = s.alreadySeeded(ctx)
+	require.NoError(t, err)
+	assert.False(t, seeded, "a monitor record of the headline rule is not the headline alert")
 
 	insertAlert(t, db, demoHost, keychainRuleID, "detection", "high")
 	seeded, err = s.alreadySeeded(ctx)

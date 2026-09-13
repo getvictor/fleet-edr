@@ -101,13 +101,14 @@ func (c *capturingRecorder) RuleEvaluationDuration(context.Context, string, time
 func (c *capturingRecorder) EventsSetAside(_ context.Context, hostID string, n int64) {
 	c.setAside = append(c.setAside, setAsideCall{hostID: hostID, n: n})
 }
-func (c *capturingRecorder) EventsHeartbeatDropped(context.Context, string, int) {}
-func (c *capturingRecorder) AlertCreated(context.Context, string, string)        {}
-func (c *capturingRecorder) MonitorMatched(context.Context, string, string, int) {}
-func (c *capturingRecorder) ProcessesTTLReconciled(context.Context, int64)       {}
-func (c *capturingRecorder) ProcessRetentionRowsDeleted(context.Context, int64)  {}
-func (c *capturingRecorder) AlertRetentionRowsDeleted(context.Context, int64)    {}
-func (c *capturingRecorder) QueueRowsPruned(_ context.Context, n int64)          { c.queuePruned += n }
+func (c *capturingRecorder) EventsHeartbeatDropped(context.Context, string, int)      {}
+func (c *capturingRecorder) AlertCreated(context.Context, string, string)             {}
+func (c *capturingRecorder) MonitorMatched(context.Context, string, string, int)      {}
+func (c *capturingRecorder) ProcessesTTLReconciled(context.Context, int64)            {}
+func (c *capturingRecorder) ProcessRetentionRowsDeleted(context.Context, int64)       {}
+func (c *capturingRecorder) AlertRetentionRowsDeleted(context.Context, int64)         {}
+func (c *capturingRecorder) MonitorRecordRetentionRowsDeleted(context.Context, int64) {}
+func (c *capturingRecorder) QueueRowsPruned(_ context.Context, n int64)               { c.queuePruned += n }
 func (c *capturingRecorder) DetectionMaterializationRetry(context.Context) {
 	c.materializationRetries++
 }

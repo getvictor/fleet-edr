@@ -42,7 +42,10 @@ const (
 	// and six times the derived-data window: an alert is the investigation and compliance artifact, not a row the server can rebuild.
 	// Roughly what the market keeps for alerts against a shorter window for raw telemetry.
 	defaultAlertRetentionDays = 180
-	// maxRetentionDays caps both retention windows at a hundred years. Every consumer turns a window into a time.Duration of that many
+	// defaultMonitorRecordRetentionDays is how long a monitor record is kept (issue #994). Seven days because that is the window the
+	// Observed column counts over and the window a promote decision is made over; a record older than that no longer informs one.
+	defaultMonitorRecordRetentionDays = 7
+	// maxRetentionDays caps every retention window at a hundred years. Every consumer turns a window into a time.Duration of that many
 	// days, and a Duration counts nanoseconds in an int64, so past about 106,751 days the conversion wraps negative. A wrapped window puts
 	// the cutoff in the FUTURE and the next pass deletes every row older than that, which is to say everything: the opposite of what an
 	// operator asking for a very long window meant. Refused at boot instead, with room to spare below the wrap.
@@ -120,6 +123,11 @@ type Config struct {
 	// timestamp, so a standing condition nobody triages still ages out, and its next re-fire raises a fresh alert. 0 disables. Default
 	// 180.
 	AlertRetentionDays int
+
+	// MonitorRecordRetentionDays is how long a monitor record is kept (issue #994): a match from a rule in monitor mode, stored so an
+	// operator can read it before promoting the rule. Its own knob, independent of both windows above, and short by default because the
+	// records exist for a decision made over a week and outnumber alerts several times over. 0 disables. Default 7.
+	MonitorRecordRetentionDays int
 
 	// Detection-rule false-positive allowlists and the disabled-rule list moved out of boot-time env to the DB-backed
 	// detection-config surface (issue #459): per-host exclusions + per-rule mode, edited via the admin API/UI and audited.
@@ -201,13 +209,14 @@ func (c Config) ExternalTLS() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:         ":8088",
-		LogLevel:           "info",
-		LogFormat:          "json",
-		EnrollRatePerMin:   defaultEnrollRatePerMin,
-		RetentionDays:      defaultRetentionDays,
-		AlertRetentionDays: defaultAlertRetentionDays,
-		ShutdownDrain:      defaultShutdownDrain,
+		ListenAddr:                 ":8088",
+		LogLevel:                   "info",
+		LogFormat:                  "json",
+		EnrollRatePerMin:           defaultEnrollRatePerMin,
+		RetentionDays:              defaultRetentionDays,
+		AlertRetentionDays:         defaultAlertRetentionDays,
+		MonitorRecordRetentionDays: defaultMonitorRecordRetentionDays,
+		ShutdownDrain:              defaultShutdownDrain,
 	}
 }
 
@@ -335,7 +344,12 @@ func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
 	envparse.NonNegativeInt(getenv, "EDR_ALERT_RETENTION_DAYS", &c.AlertRetentionDays, errs)
-	for key, days := range map[string]int{"EDR_RETENTION_DAYS": c.RetentionDays, "EDR_ALERT_RETENTION_DAYS": c.AlertRetentionDays} {
+	envparse.NonNegativeInt(getenv, "EDR_MONITOR_RETENTION_DAYS", &c.MonitorRecordRetentionDays, errs)
+	for key, days := range map[string]int{
+		"EDR_RETENTION_DAYS":         c.RetentionDays,
+		"EDR_ALERT_RETENTION_DAYS":   c.AlertRetentionDays,
+		"EDR_MONITOR_RETENTION_DAYS": c.MonitorRecordRetentionDays,
+	} {
 		if days > maxRetentionDays {
 			*errs = append(*errs, fmt.Errorf("%s=%d exceeds the maximum of %d days; use 0 to disable pruning instead", key, days, maxRetentionDays))
 		}

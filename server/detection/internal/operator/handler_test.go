@@ -547,6 +547,55 @@ func TestHandleListAlerts(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, "[]\n", string(body))
 	})
+
+	// The handler passes disposition through as given and leaves the empty default to the store, which applies it for every caller
+	// rather than only this one (issue #994). What it must not do is drop the parameter or read it into the wrong field.
+	t.Run("disposition and rule_id reach the service filter", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name            string
+			query           string
+			wantDisposition api.AlertDisposition
+			wantRuleID      string
+		}{
+			{name: "no disposition leaves the default to the store", query: "", wantDisposition: ""},
+			{name: "disposition alert", query: "?disposition=alert", wantDisposition: api.AlertDispositionAlert},
+			{
+				name: "disposition monitor with a rule", query: "?disposition=monitor&rule_id=proc_creation_macos_curl",
+				wantDisposition: api.AlertDispositionMonitor, wantRuleID: "proc_creation_macos_curl",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				filters := make(chan api.AlertFilter, 1)
+				svc := fakeService{listAlerts: func(_ context.Context, f api.AlertFilter) ([]api.Alert, error) {
+					filters <- f
+					return nil, nil
+				}}
+				srv := newOperatorServer(t, svc, allowAllAuthZ{})
+				resp := doGet(t, srv, "/api/alerts"+tc.query)
+				defer resp.Body.Close()
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				got := <-filters
+				assert.Equal(t, tc.wantDisposition, got.Disposition)
+				assert.Equal(t, tc.wantRuleID, got.RuleID)
+			})
+		}
+	})
+
+	// spec:server-rest-api/filterable-alerts-list/an-unknown-disposition-is-rejected
+	//
+	// An unrecognised disposition must not quietly select nothing: a client that typos it would read the empty list as "this rule has no
+	// monitor records", which is exactly the wrong conclusion to promote on.
+	t.Run("unknown disposition returns 400 without reaching the service", func(t *testing.T) {
+		t.Parallel()
+		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/alerts?disposition=everything")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Equal(t, errInvalidDisposition, readErrorEnvelope(t, resp))
+	})
 }
 
 func TestHandleGetAlert(t *testing.T) {
@@ -606,6 +655,24 @@ func TestHandleGetAlert(t *testing.T) {
 		ids, ok := parsed["event_ids"].([]any)
 		require.True(t, ok, "event_ids MUST be a JSON array")
 		assert.Len(t, ids, 2)
+	})
+
+	// spec:server-rest-api/alert-detail-with-linked-event-ids/the-detail-of-a-monitor-record-reports-its-disposition
+	//
+	// The detail endpoint serves monitor records too (issue #994), and the disposition is how a client knows not to offer triage on one.
+	t.Run("a monitor record's detail reports its disposition", func(t *testing.T) {
+		t.Parallel()
+		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
+			return api.Alert{HostID: "host-a", RuleID: "r", Disposition: api.AlertDispositionMonitor}, []string{"evt-1"}, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/alerts/42")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var parsed map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+		assert.Equal(t, "monitor", parsed["disposition"])
+		assert.Equal(t, []any{"evt-1"}, parsed["event_ids"])
 	})
 
 	// spec:server-detection-rules-engine/alert-evidence-is-self-contained/evidence-survives-event-archive-expiry

@@ -20,10 +20,15 @@ import (
 const alertEventsBatchSize = 500
 
 // InsertAlert creates an alert and links it to the given event IDs.
-// If a duplicate alert exists (same source, host_id, rule_id,
-// subject), the existing row is matched and its ID is returned
+// If a duplicate alert exists (same source, disposition, host_id,
+// rule_id, subject), the existing row is matched and its ID is returned
 // without raising a driver error. Returns the alert ID and whether
 // it was newly created.
+//
+// A.Disposition selects an alert (the default when empty) or a monitor
+// record (issue #994). Both take the same path so a monitor record
+// carries the same evidence, but only a fresh ALERT enqueues webhook
+// deliveries: a monitor record is not something anyone is notified of.
 //
 // Callers SHOULD set a.Source; a blank Source defaults to
 // AlertSourceDetection so existing catalog-rule call sites that
@@ -37,6 +42,9 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	// empty string with Error 1265 (Data truncated).
 	if a.Source == "" {
 		a.Source = api.AlertSourceDetection
+	}
+	if a.Disposition == "" {
+		a.Disposition = api.AlertDispositionAlert
 	}
 	// Subject is the dedup identity. A blank Subject (every process-backed caller, e.g. catalog rules that only set
 	// ProcessID, and application-control) defaults to the process_id string, preserving the historical
@@ -79,10 +87,10 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	// rowsAffected == 1; this holds because no DSN enables clientFoundRows (which would make a match report 1 as "found").
 	// Keeps the single-statement, race-safe dedup the insert-and-catch path gave us across replicas (ADR-0010), span-free.
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, origin, process_id, subject, techniques)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)
+		INSERT INTO alerts (host_id, rule_id, source, disposition, severity, title, description, origin, process_id, subject, techniques)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)
 		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = updated_at`,
-		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.Origin, a.ProcessID, a.Subject, a.Techniques,
+		a.HostID, a.RuleID, a.Source, a.Disposition, a.Severity, a.Title, a.Description, a.Origin, a.ProcessID, a.Subject, a.Techniques,
 	)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert alert: %w", err)
@@ -107,9 +115,10 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 		return 0, false, err
 	}
 
-	// Only a fresh alert enqueues webhook deliveries; a re-fired dedup (created == false) must not re-notify. The enqueue runs in
-	// this same transaction so a queued delivery is durable with the alert and never queued if the insert rolls back (issue #496).
-	if created {
+	// Only a fresh alert enqueues webhook deliveries; a re-fired dedup (created == false) must not re-notify, and a monitor record is not
+	// an alert at all (issue #994). The enqueue runs in this same transaction so a queued delivery is durable with the alert and never
+	// queued if the insert rolls back (issue #496).
+	if created && a.Disposition == api.AlertDispositionAlert {
 		if err := s.enqueueNewAlertDeliveries(ctx, tx, a, alertID); err != nil {
 			return 0, false, err
 		}
@@ -182,33 +191,8 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 		limit = 100
 	}
 
-	query := `SELECT id, host_id, rule_id, source, severity, title, description, origin, COALESCE(process_id, 0) AS process_id,
-	          techniques, status, created_at, updated_at, resolved_at, updated_by
-	          FROM alerts WHERE 1=1`
-	var args []any
-
-	if f.HostID != "" {
-		query += " AND host_id = ?"
-		args = append(args, f.HostID)
-	}
-	if f.Status != "" {
-		query += " AND status = ?"
-		args = append(args, string(f.Status))
-	}
-	if f.Severity != "" {
-		query += " AND severity = ?"
-		args = append(args, f.Severity)
-	}
-	if f.Source != "" {
-		query += " AND source = ?"
-		args = append(args, f.Source)
-	}
-	if f.ProcessID != 0 {
-		query += " AND process_id = ?"
-		args = append(args, f.ProcessID)
-	}
-
-	query += " ORDER BY created_at DESC LIMIT ?"
+	where, args := alertFilterWhere(f)
+	query := "SELECT " + alertEnvelopeCols + " FROM alerts WHERE " + where + " ORDER BY created_at DESC LIMIT ?"
 	args = append(args, limit)
 
 	var alerts []api.Alert
@@ -218,14 +202,46 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 	return alerts, nil
 }
 
+// alertFilterWhere renders f as a WHERE clause and its args, shared by ListAlerts and CountAlerts so the two cannot describe different
+// result sets.
+//
+// Disposition is always constrained, never optional: an empty filter selects alerts. Every caller that predates monitor records, the
+// console's queue, the efficacy harness, and any integration reading the list, means alerts when it says nothing, and would otherwise
+// start receiving monitor records that outnumber alerts several times over (issue #994).
+func alertFilterWhere(f api.AlertFilter) (string, []any) {
+	disposition := f.Disposition
+	if disposition == "" {
+		disposition = api.AlertDispositionAlert
+	}
+	clauses := []string{"disposition = ?"}
+	args := []any{string(disposition)}
+	for _, c := range []struct {
+		column string
+		value  string
+	}{
+		{"host_id", f.HostID},
+		{"status", string(f.Status)},
+		{"severity", f.Severity},
+		{"source", f.Source},
+		{"rule_id", f.RuleID},
+	} {
+		if c.value != "" {
+			clauses = append(clauses, c.column+" = ?")
+			args = append(args, c.value)
+		}
+	}
+	if f.ProcessID != 0 {
+		clauses = append(clauses, "process_id = ?")
+		args = append(args, f.ProcessID)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
 // GetAlert returns a single alert by ID. Returns api.ErrAlertNotFound
 // when the row doesn't exist.
 func (s *Store) GetAlert(ctx context.Context, id int64) (api.Alert, error) {
 	var a api.Alert
-	err := s.db.GetContext(ctx, &a,
-		`SELECT id, host_id, rule_id, source, severity, title, description, origin, COALESCE(process_id, 0) AS process_id,
-		        techniques, status, created_at, updated_at, resolved_at, updated_by
-		 FROM alerts WHERE id = ?`, id)
+	err := s.db.GetContext(ctx, &a, "SELECT "+alertEnvelopeCols+" FROM alerts WHERE id = ?", id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return api.Alert{}, api.ErrAlertNotFound
 	}
@@ -331,32 +347,9 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 // CountAlerts returns the total number of alerts matching the filter (ignoring limit). Filter set MUST stay in lockstep with
 // ListAlerts so pagination metadata describes the same result set.
 func (s *Store) CountAlerts(ctx context.Context, f api.AlertFilter) (int64, error) {
-	query := "SELECT COUNT(*) FROM alerts WHERE 1=1"
-	var args []any
-
-	if f.HostID != "" {
-		query += " AND host_id = ?"
-		args = append(args, f.HostID)
-	}
-	if f.Status != "" {
-		query += " AND status = ?"
-		args = append(args, string(f.Status))
-	}
-	if f.Severity != "" {
-		query += " AND severity = ?"
-		args = append(args, f.Severity)
-	}
-	if f.Source != "" {
-		query += " AND source = ?"
-		args = append(args, f.Source)
-	}
-	if f.ProcessID != 0 {
-		query += " AND process_id = ?"
-		args = append(args, f.ProcessID)
-	}
-
+	where, args := alertFilterWhere(f)
 	var count int64
-	if err := s.db.GetContext(ctx, &count, query, args...); err != nil {
+	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM alerts WHERE "+where, args...); err != nil {
 		return 0, fmt.Errorf("count alerts: %w", err)
 	}
 	return count, nil

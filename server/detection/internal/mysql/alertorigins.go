@@ -18,7 +18,7 @@ import (
 // displaying no credit at all. That is the Detection Rule License obligation unmet for exactly those rows.
 //
 // #824 measured the affected population at ZERO across both dev lanes and did not build this, which was the right trade then: the
-// set is empty in practice because vendored rules ship in monitor mode (#764), monitor resolution returns before persistence, and
+// set is empty in practice because vendored rules ship in monitor mode (#764), monitor resolution then returned before persistence, and
 // promotion only became possible in #814. It is not empty by CONSTRUCTION though, and #814 is now shipping, so the population
 // stops being hypothetical with the release that first puts promotion in an operator's hands.
 //
@@ -81,9 +81,10 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 	// batches cost N scans rather than one. Resuming from the last id turns that back into a single forward pass whose locks are
 	// still bounded per statement.
 	//
-	// alerts carries no index this predicate can use. There is none on origin, and rule_id sits THIRD in the dedup key behind
-	// source and host_id, so `origin = '' AND rule_id IN (...)` cannot be satisfied by a lookup however it is written. Walking the
-	// primary key is what makes the scan happen once.
+	// alerts carries no index this predicate can use. There is none on origin, and rule_id leads no index: it sits behind source,
+	// disposition, and host_id in the dedup key, and behind disposition in (disposition, rule_id, created_at), so
+	// `origin = '' AND rule_id IN (...)` cannot be satisfied by a lookup however it is written. Walking the primary key is what
+	// makes the scan happen once.
 	//
 	// So this reads the table once, and once is the most it may cost: the caller records durable completion afterwards and skips
 	// the pass entirely on every later boot (#872), which is what keeps a leader lock from being mistaken for "once ever". It

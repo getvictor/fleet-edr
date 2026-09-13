@@ -13,10 +13,10 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/webhook"
 )
 
-// alertEnvelopeCols is the alert projection the delivery payload is built from. It mirrors GetAlert's column list (COALESCE keeps a
+// alertEnvelopeCols is the full alert projection, read by GetAlert, ListAlerts, and the delivery payload builder alike (COALESCE keeps a
 // process-less alert's NULL process_id scanning into the int64 field as 0).
-const alertEnvelopeCols = `id, host_id, rule_id, source, severity, title, description, origin, COALESCE(process_id, 0) AS process_id,
-	techniques, status, created_at, updated_at, resolved_at, updated_by`
+const alertEnvelopeCols = `id, host_id, rule_id, source, disposition, severity, title, description, origin,
+	COALESCE(process_id, 0) AS process_id, techniques, status, created_at, updated_at, resolved_at, updated_by`
 
 // loadAlertTx reads the full alert row inside the caller's transaction so the delivery payload reflects the DB-populated fields
 // (status, timestamps) rather than the partially-filled struct handed to InsertAlert.

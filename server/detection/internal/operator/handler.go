@@ -29,6 +29,7 @@ const (
 	errInvalidPIDVersion  = "invalid_pidversion"
 	errInvalidAlertID     = "invalid_alert_id"
 	errInvalidStatus      = "invalid_status"
+	errInvalidDisposition = "invalid_disposition"
 	errInvalidStatusTrans = "invalid_status_transition"
 	errInvalidUser        = "invalid_user"
 	errInvalidCursor      = "invalid_cursor"
@@ -230,13 +231,24 @@ func (h *Handler) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
 		return
 	}
+	// Validated rather than passed through like the other filters: an unrecognised disposition cannot quietly select nothing, because a
+	// client that typos it would read an empty list as "no monitor records" (issue #994). Empty is valid and means alerts.
+	disposition := api.AlertDisposition(r.URL.Query().Get("disposition"))
+	switch disposition {
+	case "", api.AlertDispositionAlert, api.AlertDispositionMonitor:
+	default:
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidDisposition)
+		return
+	}
 	f := api.AlertFilter{
-		HostID:    r.URL.Query().Get("host_id"),
-		Status:    api.AlertStatus(r.URL.Query().Get("status")),
-		Severity:  r.URL.Query().Get("severity"),
-		Source:    r.URL.Query().Get("source"),
-		ProcessID: httpserver.ParseInt64Param(r, "process_id", 0),
-		Limit:     httpserver.ParseIntParam(r, "limit", 100),
+		HostID:      r.URL.Query().Get("host_id"),
+		Status:      api.AlertStatus(r.URL.Query().Get("status")),
+		Severity:    r.URL.Query().Get("severity"),
+		Source:      r.URL.Query().Get("source"),
+		RuleID:      r.URL.Query().Get("rule_id"),
+		Disposition: disposition,
+		ProcessID:   httpserver.ParseInt64Param(r, "process_id", 0),
+		Limit:       httpserver.ParseIntParam(r, "limit", 100),
 	}
 
 	alerts, err := h.svc.ListAlerts(ctx, f)
