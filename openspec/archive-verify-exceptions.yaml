@@ -470,13 +470,15 @@
 - requirement: server-detection-rules-engine/alert-dedup-key-depends-on-source
   covered_by: server-detection-rules-engine/alert-dedup-by-subject
   reason: >-
-    Superseded. The archived key for application control, (source, host_id, rule_id) with no process, existed so a would-block
-    alert and the block that follows it would collapse into one row, which is Detect mode (#929) and was never built. What shipped
-    is the canonical requirement's subject semantics: application_control_block findings are process-backed and take the process id
-    as their subject (catalog/application_control_block.go), exactly as catalog rules do. The store enforces that as uk_alerts_dedup
-    over five columns, (source, disposition, host_id, rule_id, subject): disposition is the column added beyond the requirement's
-    tuple, keeping a monitor record and an alert of the same finding apart. The catalog-rule half of the archived text is the canonical requirement's own
-    first scenario.
+    Superseded. Of the five archived scenarios, the two about would-block events (a would-block followed by a block updating the
+    existing alert, and repeated would-block events collapsing into one) are Detect mode (#929), never built; the archived
+    application-control key (source, host_id, rule_id), with no process, existed for them. The other three hold under the canonical
+    key (source, host id, rule id, subject). A catalog rule re-firing on the same process reuses its row, the canonical
+    requirement's first scenario. A different process on the same host is a different subject, so a distinct alert. A catalog rule
+    id colliding with an application-control rule id on one process stays distinct, because source is in the key.
+    application_control_block findings are process-backed and take their process id as the subject
+    (catalog/application_control_block.go). The store's uk_alerts_dedup adds disposition to that tuple, (source, disposition,
+    host_id, rule_id, subject), so a monitor record and an alert of the same finding stay apart.
 
 - requirement: server-detection-rules-engine/alerts-list-filters-by-source-and-subtype
   covered_by: server-rest-api/filterable-alerts-list
