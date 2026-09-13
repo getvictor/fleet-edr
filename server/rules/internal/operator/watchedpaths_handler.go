@@ -59,6 +59,7 @@ func (h *DetectionConfigHandler) handleGetWatchedPaths(w http.ResponseWriter, r 
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 		return
 	}
+	h.resolveUpdatedByLabel(ctx, &set)
 	writeJSON(ctx, h.logger, w, http.StatusOK, watchedPathsResponse{
 		WatchedPathSet: set, BuiltIn: api.BuiltInWatchedPaths, MaxPaths: api.MaxWatchedPaths,
 	})
@@ -92,6 +93,16 @@ func (h *DetectionConfigHandler) handleReplaceWatchedPaths(w http.ResponseWriter
 		h.logger.ErrorContext(ctx, "detectionconfig replace watched paths", "err", err)
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 	default:
+		h.resolveUpdatedByLabel(ctx, &result.Set)
 		writeJSON(ctx, h.logger, w, http.StatusOK, result)
 	}
+}
+
+// resolveUpdatedByLabel fills the set's UpdatedByLabel from its UpdatedBy, so the console can say who last changed the set by name.
+// The set no operator has changed has no UpdatedBy and gets no label.
+func (h *DetectionConfigHandler) resolveUpdatedByLabel(ctx context.Context, set *api.WatchedPathSet) {
+	if h.principalLabel == nil || set.UpdatedBy == "" {
+		return
+	}
+	set.UpdatedByLabel = h.resolveLabel(ctx, set.UpdatedBy)
 }

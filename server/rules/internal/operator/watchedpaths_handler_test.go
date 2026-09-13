@@ -36,15 +36,19 @@ func (f *fakeWatchedPaths) Replace(_ context.Context, actor *identityapi.Actor, 
 	if f.replaceErr != nil {
 		return watchedpaths.ReplaceResult{}, f.replaceErr
 	}
-	return watchedpaths.ReplaceResult{Set: api.WatchedPathSet{Version: 4, Paths: paths}, FanoutHosts: 3, FanoutFailed: 1}, nil
+	set := api.WatchedPathSet{Version: 4, Paths: paths, UpdatedBy: actor.Principal.ID}
+	return watchedpaths.ReplaceResult{Set: set, FanoutHosts: 3, FanoutFailed: 1}, nil
 }
 
 var _ watchedPathsService = (*watchedpaths.Service)(nil)
 
-func watchedPathsServer(t *testing.T, svc watchedPathsService, withActor bool) *httptest.Server {
+func watchedPathsServer(t *testing.T, svc watchedPathsService, withActor bool, opts ...func(*DetectionConfigHandler)) *httptest.Server {
 	t.Helper()
 	h := NewDetectionConfig(&fakeDCService{}, allowAllAuthZ{}, slog.Default())
 	h.SetWatchedPaths(svc)
+	for _, opt := range opts {
+		opt(h)
+	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	var handler http.Handler = mux
@@ -109,6 +113,63 @@ func TestWatchedPathsHandler_ReplaceMapsEachOutcome(t *testing.T) {
 			assert.Equal(t, "watch startup items", svc.gotReason)
 			assert.Equal(t, []api.WatchedPath{{Path: "/Library/StartupItems/", Match: "prefix"}}, svc.gotPaths)
 			assert.Equal(t, "usr_7", svc.gotActor.Principal.ID)
+		})
+	}
+}
+
+// The console names who last changed the set, so both the read and the replace resolve updated_by to its display label, and leave it
+// out when there is no one to name or the principal is gone.
+func TestWatchedPathsHandler_ResolvesWhoLastChangedTheSet(t *testing.T) {
+	t.Parallel()
+	labels := func(t *testing.T) func(*DetectionConfigHandler) {
+		t.Helper()
+		return func(h *DetectionConfigHandler) {
+			h.SetPrincipalLabelResolver(func(_ context.Context, id string) (string, error) {
+				switch id {
+				case "usr_7":
+					return "ops@fleetdm.com", nil
+				case "usr_9":
+					return "", identityapi.ErrUserNotFound
+				default:
+					t.Errorf("resolved an unexpected principal %q", id)
+					return "", errors.New("unexpected")
+				}
+			})
+		}
+	}
+	changedBy := func(id string) api.WatchedPathSet {
+		return api.WatchedPathSet{Version: 2, Paths: []api.WatchedPath{}, UpdatedBy: id}
+	}
+	cases := []struct {
+		name      string
+		method    string
+		set       api.WatchedPathSet
+		resolve   bool
+		wantLabel any
+	}{
+		{"read names the principal", http.MethodGet, changedBy("usr_7"), true, "ops@fleetdm.com"},
+		{"read of a deleted principal has no label", http.MethodGet, changedBy("usr_9"), true, nil},
+		{"read of the set no one changed resolves nothing", http.MethodGet, api.WatchedPathSet{Paths: []api.WatchedPath{}}, true, nil},
+		{"read without a resolver has no label", http.MethodGet, changedBy("usr_7"), false, nil},
+		{"replace names the operator who made it", http.MethodPut, api.WatchedPathSet{}, true, "ops@fleetdm.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var opts []func(*DetectionConfigHandler)
+			if tc.resolve {
+				opts = append(opts, labels(t))
+			}
+			srv := watchedPathsServer(t, &fakeWatchedPaths{set: tc.set}, true, opts...)
+			resp := dcDo(t, srv, tc.method, "/api/v1/detection-config/watched-paths", `{"paths":[],"reason":"r"}`)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			if tc.method == http.MethodPut {
+				body, _ = body["set"].(map[string]any)
+			}
+			assert.Equal(t, tc.wantLabel, body["updated_by_label"])
 		})
 	}
 }

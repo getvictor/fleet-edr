@@ -4,7 +4,7 @@ import {
   replaceWatchedPaths,
   type ReplaceWatchedPathsResult,
   type WatchedPath,
-  type WatchedPaths as WatchedPathSet,
+  type WatchedPaths as WatchedPathsResponse,
 } from "../../api";
 import { formatRelativeISO } from "../../time";
 import { Button } from "../ui/Button";
@@ -31,7 +31,7 @@ function sameEntries(a: readonly WatchedPath[], b: readonly WatchedPath[]): bool
 // operator builds a draft of the whole set and saves it with a reason; the server validates, stores and pushes it. The server is the
 // one validator, and its refusal names the entry and why, so it is shown as written rather than re-derived here.
 export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
-  const [stored, setStored] = useState<WatchedPathSet | null>(null);
+  const [stored, setStored] = useState<WatchedPathsResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState<WatchedPath[]>([]);
   const [newPath, setNewPath] = useState("");
@@ -78,7 +78,8 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
     setSaving(true);
     replaceWatchedPaths(draft, reason)
       .then((result) => {
-        setStored({ ...stored, ...result.set });
+        // Every set field comes from the response, so a label the server could not resolve does not leave the previous saver's name.
+        setStored({ built_in: stored.built_in, max_paths: stored.max_paths, ...result.set });
         setSaved(result);
       })
       .catch((err: unknown) => {
@@ -138,7 +139,8 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
       )}
       <p className="detection-config__note">
         {draft.length} of {stored.max_paths} paths.
-        {stored.updated_at !== undefined && ` Last saved ${formatRelativeISO(stored.updated_at)} by ${stored.updated_by ?? "unknown"}.`}
+        {stored.updated_at !== undefined &&
+          ` Last saved ${formatRelativeISO(stored.updated_at)} by ${stored.updated_by_label ?? stored.updated_by ?? ""}.`}
       </p>
 
       {canWrite && (

@@ -2,28 +2,29 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { WatchedPaths } from "./WatchedPaths";
 import * as api from "../../api";
-import type { ReplaceWatchedPathsResult, WatchedPath, WatchedPaths as WatchedPathSet } from "../../api";
+import type { ReplaceWatchedPathsResult, WatchedPath, WatchedPaths as WatchedPathsResponse } from "../../api";
 
 const BUILT_IN: WatchedPath[] = [
   { path: "/etc/sudoers", match: "literal" },
   { path: "/etc/sudoers.d/", match: "prefix" },
 ];
 
-const makeSet = (over: Partial<WatchedPathSet> = {}): WatchedPathSet => ({
+const makeSet = (over: Partial<WatchedPathsResponse> = {}): WatchedPathsResponse => ({
   version: 2,
   paths: [
     { path: "/Library/StartupItems/", match: "prefix" },
     { path: "/Users/alice/.ssh/authorized_keys", match: "literal" },
   ],
   updated_at: "2026-09-13T12:00:00Z",
-  updated_by: "Alice Admin",
+  updated_by: "usr_1",
+  updated_by_label: "alice@example.com",
   built_in: BUILT_IN,
   max_paths: 32,
   ...over,
 });
 
 const makeResult = (paths: WatchedPath[], over: Partial<ReplaceWatchedPathsResult> = {}): ReplaceWatchedPathsResult => ({
-  set: { version: 3, paths, updated_at: "2026-09-13T12:05:00Z", updated_by: "Alice Admin" },
+  set: { version: 3, paths, updated_at: "2026-09-13T12:05:00Z", updated_by: "usr_2", updated_by_label: "bob@example.com" },
   fanout_hosts: 3,
   fanout_failed: 0,
   ...over,
@@ -43,7 +44,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderLoaded(set: WatchedPathSet = makeSet(), canWrite = true) {
+async function renderLoaded(set: WatchedPathsResponse = makeSet(), canWrite = true) {
   vi.spyOn(api, "getWatchedPaths").mockResolvedValue(set);
   render(<WatchedPaths canWrite={canWrite} />);
   await screen.findByText(/paths\./);
@@ -78,7 +79,7 @@ describe("WatchedPaths", () => {
       expect.stringContaining("/Users/alice/.ssh/authorized_keysThis file"),
     ]);
     expect(screen.getByText(/on top of the ones it always watches: \/etc\/sudoers, \/etc\/sudoers\.d\//)).toBeVisible();
-    expect(screen.getByText(/2 of 32 paths\. Last saved .* by Alice Admin\./)).toBeVisible();
+    expect(screen.getByText(/2 of 32 paths\. Last saved .* by alice@example\.com\./)).toBeVisible();
     expect(screen.getByRole("button", { name: "Save and push to hosts" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Discard changes" })).toBeDisabled();
   });
@@ -126,6 +127,7 @@ describe("WatchedPaths", () => {
     );
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: "Save and push to hosts" })).toBeDisabled();
+    expect(screen.getByText(/Last saved .* by bob@example\.com\./)).toBeVisible();
   });
 
   it("reports a push that reached every host, in the singular for one host", async () => {
@@ -137,6 +139,21 @@ describe("WatchedPaths", () => {
     await saveWithReason("key no longer used");
 
     expect(await screen.findByRole("status")).toHaveTextContent("Saved as version 3. Queued for 1 of 1 enrolled host.");
+  });
+
+  it("names the saver by principal id when the server could not resolve a label, not by the previous saver's name", async () => {
+    await renderLoaded();
+    const saved: WatchedPath[] = [{ path: "/Library/StartupItems/", match: "prefix" }];
+    vi.spyOn(api, "replaceWatchedPaths").mockResolvedValue({
+      set: { version: 3, paths: saved, updated_at: "2026-09-13T12:05:00Z", updated_by: "svc_4" },
+      fanout_hosts: 1,
+      fanout_failed: 0,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove /Users/alice/.ssh/authorized_keys" }));
+    await saveWithReason("key no longer used");
+
+    expect(await screen.findByText(/Last saved .* by svc_4\./)).toBeVisible();
   });
 
   // spec:web-ui/watched-file-paths-are-edited-in-detection-tuning/a-push-that-reached-no-host-is-called-out

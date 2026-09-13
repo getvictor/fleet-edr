@@ -126,21 +126,27 @@ func (h *DetectionConfigHandler) resolveCreatedByLabels(ctx context.Context, exc
 		}
 		label, seen := cache[id]
 		if !seen {
-			resolved, err := h.principalLabel(ctx, id)
-			if err != nil {
-				// A deleted principal (a user or a service account) is the expected fallback case: the UI shows the raw principal id.
-				// Warning on it would spam the log on every list render per missing author, so only genuinely unexpected failures
-				// (e.g. DB connectivity) get a WARN.
-				if !errors.Is(err, identityapi.ErrUserNotFound) && !errors.Is(err, identityapi.ErrServiceAccountNotFound) {
-					h.logger.WarnContext(ctx, "detectionconfig: resolve created_by label", "principal_id", id, "err", err)
-				}
-				resolved = ""
-			}
-			label = resolved
+			label = h.resolveLabel(ctx, id)
 			cache[id] = label
 		}
 		exclusions[i].CreatedByLabel = label
 	}
+}
+
+// resolveLabel resolves one principal id to its display label, or "" when it cannot be resolved. The caller has checked that a
+// resolver is wired and that id is not empty.
+func (h *DetectionConfigHandler) resolveLabel(ctx context.Context, id string) string {
+	label, err := h.principalLabel(ctx, id)
+	if err != nil {
+		// A deleted principal (a user or a service account) is the expected fallback case: the UI shows the raw principal id. Warning
+		// on it would spam the log on every render per missing author, so only genuinely unexpected failures (e.g. DB connectivity)
+		// get a WARN.
+		if !errors.Is(err, identityapi.ErrUserNotFound) && !errors.Is(err, identityapi.ErrServiceAccountNotFound) {
+			h.logger.WarnContext(ctx, "detectionconfig: resolve principal label", "principal_id", id, "err", err)
+		}
+		return ""
+	}
+	return label
 }
 
 // RegisterRoutes wires the detection-config admin routes:

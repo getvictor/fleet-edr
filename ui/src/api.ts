@@ -1501,20 +1501,26 @@ export interface WatchedPath {
   match: "literal" | "prefix";
 }
 
-// WatchedPaths is GET /api/v1/detection-config/watched-paths: the set hosts watch on top of the built-in paths, the built-in paths
-// themselves, and the most entries a set may hold. Version 0 is the set no operator has changed.
-export interface WatchedPaths {
+// WatchedPathSet is the stored watched-path set. Version 0 is the set no operator has changed, which has no updated_* fields.
+// updated_by_label is the display label the server resolves from updated_by (the principal id), absent when it cannot be resolved.
+export interface WatchedPathSet {
   version: number;
   paths: WatchedPath[];
   updated_at?: string;
   updated_by?: string;
+  updated_by_label?: string;
+}
+
+// WatchedPaths is GET /api/v1/detection-config/watched-paths: the set hosts watch on top of the built-in paths, the built-in paths
+// themselves, and the most entries a set may hold.
+export interface WatchedPaths extends WatchedPathSet {
   built_in: WatchedPath[];
   max_paths: number;
 }
 
 // ReplaceWatchedPathsResult is the PUT response: the stored set and how far its push reached.
 export interface ReplaceWatchedPathsResult {
-  set: { version: number; paths: WatchedPath[]; updated_at?: string; updated_by?: string };
+  set: WatchedPathSet;
   fanout_hosts: number;
   fanout_failed: number;
   fanout_skipped_reason?: string;
