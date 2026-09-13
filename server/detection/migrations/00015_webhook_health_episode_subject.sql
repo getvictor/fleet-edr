@@ -35,20 +35,11 @@ ALTER TABLE webhook_destination
 		NOT NULL DEFAULT 'alert.created';
 -- +goose StatementEnd
 
--- +goose Down
--- +goose StatementBegin
--- A destination subscribed ONLY to the health event would be left with an empty set, which the column's NOT NULL still accepts but no
--- delivery would ever match; health rows cannot survive the alert_id NOT NULL restore at all. Both are removed first, so the down
--- migration succeeds instead of failing halfway on data it did not anticipate.
-DELETE FROM webhook_delivery WHERE health_episode_id IS NOT NULL;
-UPDATE webhook_destination
-	SET event_types = TRIM(BOTH ',' FROM REPLACE(CONCAT(',', event_types, ','), ',host.health_episode_opened,', ','))
-	WHERE FIND_IN_SET('host.health_episode_opened', event_types);
-ALTER TABLE webhook_destination
-	MODIFY COLUMN event_types SET('alert.created', 'alert.status_changed') NOT NULL DEFAULT 'alert.created';
-ALTER TABLE webhook_delivery
-	DROP CHECK chk_webhook_delivery_one_subject,
-	DROP INDEX uk_webhook_delivery_health_event,
-	DROP COLUMN health_episode_id,
-	MODIFY COLUMN alert_id BIGINT NOT NULL;
--- +goose StatementEnd
+-- No down section, deliberately, per ADR-0009 (forward-only; the rollback path is restore-from-backup). Note this comment cannot
+-- quote goose's annotation marker: goose parses any comment line carrying it as an annotation and refuses the file.
+--
+-- Worth saying because most migrations in this tree carry one anyway, and this one briefly did. It needed four statements (remove
+-- health rows, strip the new member from every subscription, restore the SET, restore alert_id NOT NULL) and had them in a single
+-- goose statement block. Goose sends a block as one SQL statement, and the server's MySQL DSN does not enable multiStatements, so that
+-- down migration would have failed on its first line. Nothing caught it because nothing runs down migrations: the runner exposes Up
+-- only. An untested rollback that fails partway is worse than none, which is the ADR's reason for having none.
