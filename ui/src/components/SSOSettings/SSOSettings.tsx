@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
-import { getSSOConfig, updateSSOConfig, testSSOConnection, type SSOConfig } from "../../api";
+import { getSSOConfig, updateSSOConfig, testSSOConnection, type SSOConfig, type SSOGroupRole } from "../../api";
 import { isHTTPURL } from "../../urls";
 import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
 import { Badge } from "../ui/Badge";
+import { GroupRoleMapping } from "./GroupRoleMapping";
 import "./SSOSettings.scss";
 
 // The redirect URI is derived from the external URL and shown read-only; the operator
 // registers exactly this value at the IdP. Mirrors the server's RedirectURLFor.
 const CALLBACK_PATH = "/api/auth/callback";
+
+const DEFAULT_SCOPES = ["openid", "email", "profile"];
+const GROUPS_SCOPE = "groups";
 
 function deriveRedirect(externalURL: string): string {
   const raw = externalURL.trim();
@@ -44,6 +48,14 @@ interface FormState {
   externalURL: string;
   secret: string;
   defaultRole: string;
+  groupsClaim: string;
+  groupRoles: SSOGroupRole[];
+  requestGroupsScope: boolean;
+}
+
+// storedScopes is the stored scope list, or the server's default set when none is stored.
+function storedScopes(cfg: SSOConfig): string[] {
+  return cfg.scopes && cfg.scopes.length > 0 ? cfg.scopes : DEFAULT_SCOPES;
 }
 
 function toForm(cfg: SSOConfig): FormState {
@@ -53,7 +65,18 @@ function toForm(cfg: SSOConfig): FormState {
     externalURL: cfg.external_url,
     secret: "",
     defaultRole: cfg.default_role || "analyst",
+    groupsClaim: cfg.groups_claim,
+    groupRoles: cfg.group_roles,
+    requestGroupsScope: storedScopes(cfg).includes(GROUPS_SCOPE),
   };
+}
+
+// groupMappingError is the reason a claim and mappings cannot be saved together, or null. It mirrors the server's validation so the
+// operator sees the problem before a round trip; the server stays the validator.
+function groupMappingError(claim: string, groupRoles: readonly SSOGroupRole[]): string | null {
+  if (claim.trim() === "" && groupRoles.length > 0) return "Enter the groups claim, or remove the group mappings.";
+  if (claim.trim() !== "" && groupRoles.length === 0) return "Add a group mapping, or clear the groups claim.";
+  return null;
 }
 
 type TestResult = { ok: boolean; reason?: string } | null;
@@ -94,7 +117,9 @@ export function SSOSettings() {
   if (error) return <div className="sso-settings__status sso-settings__status--error">Error: {error}</div>;
   if (!form || !config) return <div className="sso-settings__status">No configuration available.</div>;
 
-  const scopes = config.scopes && config.scopes.length > 0 ? config.scopes : ["openid", "email", "profile"];
+  // The groups scope follows its checkbox; every other stored scope is kept as it is.
+  const otherScopes = storedScopes(config).filter((s) => s !== GROUPS_SCOPE);
+  const scopes = form.requestGroupsScope ? [...otherScopes, GROUPS_SCOPE] : otherScopes;
   const redirectURL = deriveRedirect(form.externalURL);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -110,7 +135,7 @@ export function SSOSettings() {
     if (f.clientID.trim() === "") return "Client ID is required.";
     if (!isHTTPURL(f.externalURL)) return "External URL must be a valid http(s) URL.";
     if (hasQueryOrFragment(f.externalURL)) return "External URL must not contain a query string or fragment.";
-    return null;
+    return groupMappingError(f.groupsClaim, f.groupRoles);
   }
 
   async function handleSave() {
@@ -138,10 +163,8 @@ export function SSOSettings() {
         // an admin disable JIT and pre-provision operators is not built yet, so there is no UI to turn this off.
         jit_enabled: true,
         default_role: form.defaultRole,
-        // The update replaces the whole configuration, like every field on this page, and the page does not edit the group mapping,
-        // so it sends back the mapping it loaded rather than clearing it.
-        groups_claim: config.groups_claim,
-        group_roles: config.group_roles,
+        groups_claim: form.groupsClaim.trim(),
+        group_roles: form.groupRoles,
       });
       setConfig(updated);
       setForm(toForm(updated));
@@ -319,9 +342,6 @@ export function SSOSettings() {
                 </span>
               ))}
             </div>
-            <p className="sso-settings__help">
-              Group to role mapping, and any scope your provider needs to send the groups claim, are set through the SSO settings API.
-            </p>
           </div>
         </div>
       </Card>
@@ -347,6 +367,21 @@ export function SSOSettings() {
           <p className="sso-settings__help">The default role is never admin.</p>
         </div>
       </Card>
+
+      <GroupRoleMapping
+        claim={form.groupsClaim}
+        groupRoles={form.groupRoles}
+        requestGroupsScope={form.requestGroupsScope}
+        onClaimChange={(claim) => {
+          update("groupsClaim", claim);
+        }}
+        onGroupRolesChange={(groupRoles) => {
+          update("groupRoles", groupRoles);
+        }}
+        onRequestGroupsScopeChange={(request) => {
+          update("requestGroupsScope", request);
+        }}
+      />
 
       <div className="sso-settings__callout" role="note">
         <strong>Break-glass account stays available.</strong> If the provider is unreachable, the break-glass admin can still sign in via
