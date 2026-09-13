@@ -26,6 +26,7 @@ const (
 	errCodeDCInvalidInput = "detection_config.invalid_input"
 	errCodeDCInvalidID    = "detection_config.invalid_id"
 	errCodeDCNotFound     = "detection_config.not_found"
+	errCodeDCConflict     = "detection_config.conflict"
 	errCodeDCInternal     = "internal"
 
 	// msgDCInternal is the body message for every 500 the handler emits; extracted so the literal isn't duplicated (Sonar go:S1192).

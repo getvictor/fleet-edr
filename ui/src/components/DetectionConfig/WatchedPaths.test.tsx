@@ -120,7 +120,7 @@ describe("WatchedPaths", () => {
     await saveWithReason("watch authorization plugins");
 
     await waitFor(() => {
-      expect(replace).toHaveBeenCalledWith(saved, "watch authorization plugins");
+      expect(replace).toHaveBeenCalledWith(saved, "watch authorization plugins", 2);
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Saved as version 3. Queued for 2 of 3 enrolled hosts; the rest receive it within minutes.",
@@ -165,7 +165,7 @@ describe("WatchedPaths", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove /Users/alice/.ssh/authorized_keys" }));
     await saveWithReason("clear the set");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Saved, but not sent: the enrolled hosts could not be listed.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Saved as version 3, but not sent: the enrolled hosts could not be listed.");
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -188,6 +188,66 @@ describe("WatchedPaths", () => {
 
     // Editing the draft again clears the stale refusal.
     fireEvent.click(screen.getByRole("button", { name: "Remove /Users/" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // spec:web-ui/watched-file-paths-are-edited-in-detection-tuning/a-save-of-an-outdated-set-is-refused
+  it("refuses a save made after someone else changed the set, keeps the draft, and loads the latest set on request", async () => {
+    await renderLoaded();
+    vi.spyOn(api, "replaceWatchedPaths").mockRejectedValue(
+      new api.DetectionConfigApiError("detection_config.conflict", "the watched paths were changed since they were read", 409),
+    );
+    const latest = makeSet({ version: 3, paths: [{ path: "/etc/emond.d/", match: "prefix" }], updated_by_label: "bob@example.com" });
+    // The same spy the initial load went through, so its count is reset to count only the reload.
+    const load = vi.spyOn(api, "getWatchedPaths").mockResolvedValue(latest);
+    load.mockClear();
+
+    addPath("/Library/Extra/", "prefix");
+    await saveWithReason("stale edit");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Not saved: someone changed the watched paths after this page loaded them. Load the latest set to see their change",
+    );
+    expect(rows()).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load the latest set (discards your changes)" }));
+
+    await waitFor(() => {
+      expect(rows()).toEqual([expect.stringContaining("/etc/emond.d/")]);
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/1 of 32 paths\. Last saved .* by bob@example\.com\./)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save and push to hosts" })).toBeDisabled();
+  });
+
+  it("says so when the latest set cannot be loaded after a refused save", async () => {
+    await renderLoaded();
+    vi.spyOn(api, "replaceWatchedPaths").mockRejectedValue(new api.DetectionConfigApiError("detection_config.conflict", "changed", 409));
+    vi.spyOn(api, "getWatchedPaths").mockRejectedValue(new Error("network down"));
+
+    addPath("/Library/Extra/", "prefix");
+    await saveWithReason("stale edit");
+    fireEvent.click(await screen.findByRole("button", { name: "Load the latest set (discards your changes)" }));
+
+    expect(await screen.findByText("The latest set could not be loaded: network down")).toBeVisible();
+    expect(rows()).toHaveLength(3);
+  });
+
+  it("clears a failed save's message when a retry of the same draft succeeds", async () => {
+    await renderLoaded();
+    const saved: WatchedPath[] = [...makeSet().paths, { path: "/Library/Extra/", match: "prefix" }];
+    vi.spyOn(api, "replaceWatchedPaths")
+      .mockRejectedValueOnce(new Error("503 service unavailable"))
+      .mockResolvedValueOnce(makeResult(saved));
+
+    addPath("/Library/Extra/", "prefix");
+    await saveWithReason("first try");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not saved: 503 service unavailable");
+
+    await saveWithReason("second try");
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved as version 3.");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -263,6 +323,8 @@ describe("WatchedPaths", () => {
       expect(screen.getByRole("button", { name: "Remove /Library/Extra/" })).toBeDisabled();
     });
     expect(screen.getByRole("button", { name: "Discard changes" })).toBeDisabled();
+    expect(screen.getByLabelText("Path")).toBeDisabled();
+    expect(screen.getByLabelText("Covers")).toBeDisabled();
     settle(makeResult(makeSet().paths));
     expect(await screen.findByRole("status")).toBeVisible();
   });

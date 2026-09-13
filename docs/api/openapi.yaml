@@ -992,6 +992,11 @@ paths:
         cannot be queued for some hosts does not fail the change; the response
         counts them.
 
+        `expected_version`, when sent, is the version the edit started from. If
+        the set has been changed since, the replacement is refused with 409 and
+        nothing is stored or queued, so a stale edit cannot remove paths someone
+        else added. Omit it to replace whatever is stored.
+
         The set is refused, and nothing stored or queued, when it has more than
         `max_paths` entries, encodes to more than 8 KiB, or has any entry whose
         path is not absolute, has an empty, `.` or `..` segment, is longer than
@@ -1018,6 +1023,10 @@ paths:
                     $ref: "#/components/schemas/WatchedPath"
                 reason:
                   type: string
+                expected_version:
+                  type: integer
+                  format: int64
+                  description: The version this edit started from; the replacement is refused if the set is at another version.
       responses:
         "200":
           description: Set replaced
@@ -1049,6 +1058,12 @@ paths:
                 $ref: "#/components/schemas/DetectionConfigError"
         "403":
           description: Caller lacks detection_config.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "409":
+          description: The set is no longer at `expected_version`; the message names the current version.
           content:
             application/json:
               schema:
@@ -2466,6 +2481,7 @@ components:
             - detection_config.invalid_input
             - detection_config.invalid_id
             - detection_config.not_found
+            - detection_config.conflict
             - internal
         message:
           type: string

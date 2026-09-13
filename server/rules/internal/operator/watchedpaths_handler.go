@@ -13,7 +13,8 @@ import (
 // watchedPathsService is the watched-path surface the detection-config handler consumes; *watchedpaths.Service satisfies it.
 type watchedPathsService interface {
 	Get(ctx context.Context) (api.WatchedPathSet, error)
-	Replace(ctx context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath) (watchedpaths.ReplaceResult, error)
+	Replace(ctx context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath, expectedVersion *int64) (
+		watchedpaths.ReplaceResult, error)
 }
 
 // watchedPathsResponse is the GET body: the stored set, the paths every host watches regardless of it, and the size bound, so a client
@@ -27,9 +28,13 @@ type watchedPathsResponse struct {
 // replaceWatchedPathsRequest is the PUT body. Paths is a pointer so a request without it is refused rather than read as an empty set:
 // a client that misspells the field would otherwise remove every path an operator had added. Clearing the set is an explicit
 // empty list.
+//
+// ExpectedVersion, when present, is the version the client's edit started from, and the replacement is refused with 409 when the set
+// has changed since. Optional, so a script that means to overwrite whatever is stored still can.
 type replaceWatchedPathsRequest struct {
-	Paths  *[]api.WatchedPath `json:"paths"`
-	Reason string             `json:"reason"`
+	Paths           *[]api.WatchedPath `json:"paths"`
+	Reason          string             `json:"reason"`
+	ExpectedVersion *int64             `json:"expected_version"`
 }
 
 // watchedPathsBodyLimit caps the PUT body. It is sized from the largest set the API accepts rather than shared with the other
@@ -83,8 +88,10 @@ func (h *DetectionConfigHandler) handleReplaceWatchedPaths(w http.ResponseWriter
 	if !ok {
 		return
 	}
-	result, err := h.watchedPaths.Replace(ctx, actor, req.Reason, *req.Paths)
+	result, err := h.watchedPaths.Replace(ctx, actor, req.Reason, *req.Paths, req.ExpectedVersion)
 	switch {
+	case errors.Is(err, watchedpaths.ErrVersionConflict):
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusConflict, errCodeDCConflict, err.Error())
 	case errors.Is(err, watchedpaths.ErrReasonRequired):
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput, msgDCReasonRequired)
 	case errors.Is(err, api.ErrInvalidWatchedPaths):

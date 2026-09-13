@@ -274,6 +274,7 @@ Every host records writes, renames, truncations and deletions of `/etc/sudoers` 
 - **Keep prefixes narrow.** Every write under a watched directory is sent to the server. The server refuses a prefix at the top of the filesystem, such as `/Users/` or `/Library/`, and a set of more than 32 paths.
 - **Reaching hosts.** A saved set is queued for every enrolled host and applied within seconds by those online. A host that was offline for over an hour, or enrolled after the change, receives it within minutes of connecting. The save reports how many hosts it was queued for.
 - **The set replaces the previous one.** Removing a path stops watching it on each host as the new set arrives.
+- **Saves do not overwrite each other.** If someone else saves a change after you opened the page, your save is refused; load the latest set and make your change again.
 
 ## Process-tree freshness
 

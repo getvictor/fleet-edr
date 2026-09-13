@@ -26,13 +26,14 @@ type fakeWatchedPaths struct {
 	gotReason  string
 	gotPaths   []api.WatchedPath
 	gotActor   *identityapi.Actor
+	gotExpect  *int64
 }
 
 func (f *fakeWatchedPaths) Get(context.Context) (api.WatchedPathSet, error) { return f.set, f.getErr }
 
-func (f *fakeWatchedPaths) Replace(_ context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath) (
-	watchedpaths.ReplaceResult, error) {
-	f.gotActor, f.gotReason, f.gotPaths = actor, reason, paths
+func (f *fakeWatchedPaths) Replace(_ context.Context, actor *identityapi.Actor, reason string, paths []api.WatchedPath,
+	expectedVersion *int64) (watchedpaths.ReplaceResult, error) {
+	f.gotActor, f.gotReason, f.gotPaths, f.gotExpect = actor, reason, paths, expectedVersion
 	if f.replaceErr != nil {
 		return watchedpaths.ReplaceResult{}, f.replaceErr
 	}
@@ -98,6 +99,11 @@ func TestWatchedPathsHandler_ReplaceMapsEachOutcome(t *testing.T) {
 			http.StatusBadRequest, "below a top-level directory",
 		},
 		{"store failure", errors.New("database unavailable"), http.StatusInternalServerError, "internal error"},
+		{
+			"changed since read",
+			fmt.Errorf("%w: it is at version 5, not 4", watchedpaths.ErrVersionConflict),
+			http.StatusConflict, "at version 5, not 4",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,6 +123,7 @@ func TestWatchedPathsHandler_ReplaceMapsEachOutcome(t *testing.T) {
 	}
 }
 
+// spec:server-admin-surface/the-watched-path-set-names-who-last-changed-it/the-set-names-its-last-changer-by-label
 // The console names who last changed the set, so both the read and the replace resolve updated_by to its display label, and leave it
 // out when there is no one to name or the principal is gone.
 func TestWatchedPathsHandler_ResolvesWhoLastChangedTheSet(t *testing.T) {
@@ -170,6 +177,30 @@ func TestWatchedPathsHandler_ResolvesWhoLastChangedTheSet(t *testing.T) {
 				body, _ = body["set"].(map[string]any)
 			}
 			assert.Equal(t, tc.wantLabel, body["updated_by_label"])
+		})
+	}
+}
+
+// The version a client's edit started from reaches the service as sent, and its absence reaches it as no condition at all.
+func TestWatchedPathsHandler_PassesTheExpectedVersionThrough(t *testing.T) {
+	t.Parallel()
+	startedFrom := int64(4)
+	cases := []struct {
+		name string
+		body string
+		want *int64
+	}{
+		{"named", `{"paths":[],"reason":"r","expected_version":4}`, &startedFrom},
+		{"omitted", `{"paths":[],"reason":"r"}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeWatchedPaths{}
+			resp := dcDo(t, watchedPathsServer(t, svc, true), http.MethodPut, "/api/v1/detection-config/watched-paths", tc.body)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tc.want, svc.gotExpect)
 		})
 	}
 }

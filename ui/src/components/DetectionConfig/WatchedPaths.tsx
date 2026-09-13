@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  DetectionConfigApiError,
   getWatchedPaths,
   replaceWatchedPaths,
   type ReplaceWatchedPathsResult,
@@ -39,6 +40,8 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
   const [reasonOpen, setReasonOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // conflict is set when a save was refused because someone else changed the set since it was loaded.
+  const [conflict, setConflict] = useState(false);
   const [saved, setSaved] = useState<ReplaceWatchedPathsResult | null>(null);
 
   useEffect(() => {
@@ -57,6 +60,20 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
     };
   }, []);
 
+  // loadLatest replaces the stored set and the draft with what the server holds now, after a save was refused as out of date.
+  const loadLatest = () => {
+    getWatchedPaths()
+      .then((set) => {
+        setStored(set);
+        setDraft(set.paths);
+        setSaveError(null);
+        setConflict(false);
+      })
+      .catch((err: unknown) => {
+        setSaveError(`The latest set could not be loaded: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  };
+
   if (loadError !== null) {
     return <EmptyState>Watched paths could not be loaded: {loadError}</EmptyState>;
   }
@@ -69,20 +86,34 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
   const canAdd =
     trimmed !== "" && draft.length < stored.max_paths && !draft.some((p) => entryKey(p) === entryKey({ path: trimmed, match: newMatch }));
 
-  const editDraft = (next: WatchedPath[]) => {
-    setDraft(next);
+  const clearOutcome = () => {
     setSaved(null);
     setSaveError(null);
+    setConflict(false);
+  };
+  const editDraft = (next: WatchedPath[]) => {
+    setDraft(next);
+    clearOutcome();
   };
   const confirmSave = (reason: string) => {
     setSaving(true);
-    replaceWatchedPaths(draft, reason)
+    clearOutcome();
+    // The version the draft started from rides along, so a save made after someone else changed the set is refused rather than
+    // silently removing what they added.
+    replaceWatchedPaths(draft, reason, stored.version)
       .then((result) => {
         // Every set field comes from the response, so a label the server could not resolve does not leave the previous saver's name.
         setStored({ built_in: stored.built_in, max_paths: stored.max_paths, ...result.set });
         setSaved(result);
       })
       .catch((err: unknown) => {
+        if (err instanceof DetectionConfigApiError && err.code === "detection_config.conflict") {
+          setConflict(true);
+          setSaveError(
+            "Not saved: someone changed the watched paths after this page loaded them. Load the latest set to see their change, then make yours again.",
+          );
+          return;
+        }
         setSaveError(`Not saved: ${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => {
@@ -150,6 +181,7 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
               label="Path"
               id="dc-watched-path"
               value={newPath}
+              disabled={saving}
               placeholder="/Library/StartupItems/"
               onChange={(e) => {
                 setNewPath(e.target.value);
@@ -161,6 +193,7 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
             id="dc-watched-match"
             inline={false}
             value={newMatch}
+            disabled={saving}
             onChange={(e) => {
               setNewMatch(e.target.value === "literal" ? "literal" : "prefix");
             }}
@@ -202,6 +235,11 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
       {saveError !== null && (
         <div className="detection-config__error" role="alert">
           {saveError}
+          {conflict && (
+            <Button variant="text-link" onClick={loadLatest}>
+              Load the latest set (discards your changes)
+            </Button>
+          )}
         </div>
       )}
       {saved !== null && <SavedNotice result={saved} />}
@@ -228,7 +266,8 @@ function SavedNotice({ result }: { readonly result: ReplaceWatchedPathsResult })
   if (result.fanout_skipped_reason !== undefined) {
     return (
       <div className="detection-config__error" role="alert">
-        Saved, but not sent: the enrolled hosts could not be listed. Hosts receive the set within minutes once they can be.
+        Saved as version {result.set.version}, but not sent: the enrolled hosts could not be listed. Hosts receive the set within minutes
+        once they can be.
       </div>
     );
   }

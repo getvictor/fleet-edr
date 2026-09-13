@@ -316,16 +316,16 @@ describe("detection-config API client", () => {
     expect(target.toString()).toContain("/api/v1/detection-config/watched-paths");
   });
 
-  it("replaceWatchedPaths PUTs the whole set and the reason with the CSRF header attached", async () => {
+  it("replaceWatchedPaths PUTs the whole set, the reason and the version the edit started from, with the CSRF header attached", async () => {
     sessionStorage.setItem("edr_csrf_token", "csrf-123");
     const paths = [{ path: "/Library/StartupItems/", match: "prefix" as const }];
     const result = { set: { version: 3, paths }, fanout_hosts: 2, fanout_failed: 0 };
     const mock = stubFetch(result);
-    await expect(replaceWatchedPaths(paths, "persistence")).resolves.toEqual(result);
+    await expect(replaceWatchedPaths(paths, "persistence", 2)).resolves.toEqual(result);
     const [target, init] = mock.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
     expect(target.toString()).toContain("/api/v1/detection-config/watched-paths");
     expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body as string)).toEqual({ paths, reason: "persistence" });
+    expect(JSON.parse(init.body as string)).toEqual({ paths, reason: "persistence", expected_version: 2 });
     const expectedCsrf: Record<string, string> = {};
     attachCsrfHeader(expectedCsrf, "PUT");
     expect(init.headers).toMatchObject(expectedCsrf);
@@ -333,7 +333,7 @@ describe("detection-config API client", () => {
 
   it("replaceWatchedPaths surfaces the server's refusal as a typed error carrying its message", async () => {
     stubFetch({ error: "detection_config.invalid_input", message: 'invalid watched paths: entry 0 ("/Users/"): too broad' }, 400);
-    const err = await replaceWatchedPaths([{ path: "/Users/", match: "prefix" }], "r").catch((e: unknown) => e);
+    const err = await replaceWatchedPaths([{ path: "/Users/", match: "prefix" }], "r", 0).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DetectionConfigApiError);
     expect(err).toMatchObject({ status: 400, message: 'invalid watched paths: entry 0 ("/Users/"): too broad' });
   });

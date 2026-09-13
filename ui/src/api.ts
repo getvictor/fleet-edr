@@ -1530,13 +1530,18 @@ export async function getWatchedPaths(): Promise<WatchedPaths> {
   return fetchJSON<WatchedPaths>("/v1/detection-config/watched-paths");
 }
 
-// replaceWatchedPaths replaces the whole set. The server refuses a set it would not watch with a DetectionConfigApiError whose message
-// names the entry and why.
-export async function replaceWatchedPaths(paths: WatchedPath[], reason: string): Promise<ReplaceWatchedPathsResult> {
+// replaceWatchedPaths replaces the whole set, provided it is still at expectedVersion, the version the edit started from. The server
+// refuses a set it would not watch with a DetectionConfigApiError whose message names the entry and why, and a set that has changed
+// since with the code detection_config.conflict.
+export async function replaceWatchedPaths(
+  paths: WatchedPath[],
+  reason: string,
+  expectedVersion: number,
+): Promise<ReplaceWatchedPathsResult> {
   return detectionConfigMutationEndpoint(
     "PUT",
     "/v1/detection-config/watched-paths",
-    { paths, reason },
+    { paths, reason, expected_version: expectedVersion },
     (res) => res.json() as Promise<ReplaceWatchedPathsResult>,
   );
 }

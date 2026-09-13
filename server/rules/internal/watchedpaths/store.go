@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -25,6 +26,9 @@ func NewStore(db *sqlx.DB) *Store {
 	}
 	return &Store{db: db}
 }
+
+// ErrVersionConflict is returned for a conditional replacement of a set that has changed since the caller read it.
+var ErrVersionConflict = errors.New("the watched paths were changed since they were read")
 
 const selectSet = `SELECT version, paths, updated_at, updated_by FROM watched_path_set WHERE id = 1`
 
@@ -63,7 +67,13 @@ func (s *Store) Get(ctx context.Context) (api.WatchedPathSet, error) {
 // later than the one before. That last property is load-bearing. A host orders sets by version or by update time (the epoch), so a
 // later version stamped with an earlier time, which reading the clock before taking the lock could produce, would let an out-of-order
 // delivery put the older set back. The time comes from the database for the same reason: one clock orders every replica's writes.
-func (s *Store) Replace(ctx context.Context, paths []api.WatchedPath, actor string) (previous, next api.WatchedPathSet, err error) {
+//
+// A non-nil expectedVersion makes the replacement conditional: when the stored set is at any other version, which means someone changed
+// it since the caller read it, Replace stores nothing and returns ErrVersionConflict. Compared under the same lock, so two operators
+// saving edits of the same version cannot both succeed.
+func (s *Store) Replace(
+	ctx context.Context, paths []api.WatchedPath, actor string, expectedVersion *int64,
+) (previous, next api.WatchedPathSet, err error) {
 	encoded, err := json.Marshal(paths)
 	if err != nil {
 		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("encode watched paths: %w", err)
@@ -76,6 +86,10 @@ func (s *Store) Replace(ctx context.Context, paths []api.WatchedPath, actor stri
 	var before setRow
 	if err := sqlx.GetContext(ctx, tx, &before, selectSet+` FOR UPDATE`); err != nil {
 		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("lock watched path set: %w", err)
+	}
+	if expectedVersion != nil && before.Version != *expectedVersion {
+		return api.WatchedPathSet{}, api.WatchedPathSet{}, fmt.Errorf("%w: it is at version %d, not %d",
+			ErrVersionConflict, before.Version, *expectedVersion)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE watched_path_set
 		SET version = version + 1, paths = ?, updated_by = ?,
