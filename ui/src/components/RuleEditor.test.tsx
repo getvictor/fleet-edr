@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
 import { RuleEditor } from "./RuleEditor";
 import * as api from "../api";
 
@@ -184,7 +184,14 @@ describe("RuleEditor, existing rule", () => {
     expect(read).not.toHaveBeenCalled();
     shipped.unmount();
 
+    // A shipped rule built into the server has no stored document, and gets the same answer rather than "no stored document".
+    vi.mocked(api.listRuleContentDocuments).mockResolvedValue([]);
+    const builtIn = renderEditor("/rules/suspicious_exec/edit");
+    expect(await screen.findByText(/ships with the product/)).toBeVisible();
+    builtIn.unmount();
+
     // A rule the server has not reported an origin for, one it refused or has not loaded yet, is still editable.
+    vi.mocked(api.listRuleContentDocuments).mockResolvedValue([{ path: "imported/suspicious_exec.yml", bytes: 20 }]);
     vi.mocked(api.fetchRuleDocs).mockResolvedValue([]);
     renderEditor("/rules/suspicious_exec/edit");
     await waitFor(() => { expect(content().value).toBe("title: Suspicious exec\n"); });
@@ -199,6 +206,37 @@ describe("RuleEditor, existing rule", () => {
     renderEditor("/rules/keychain_extra/edit");
 
     await waitFor(() => { expect(content().value).toBe("title: Keychain extra\n"); });
+  });
+
+  // The route stays mounted when only the rule changes, and nothing from the first rule's draft may carry over to the second.
+  it("starts a fresh draft when moving to another rule's editor", async () => {
+    vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([
+      { path: "authored/first_rule.yml", bytes: 1 },
+      { path: "authored/second_rule.yml", bytes: 1 },
+    ]);
+    vi.spyOn(api, "getRuleContentDocument").mockImplementation((path) => Promise.resolve(`title: ${path}\n`));
+    vi.spyOn(api, "checkRuleContentDocument").mockResolvedValue({ would_apply: true, warnings: [] });
+    function Next() {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => { void navigate("/rules/second_rule/edit"); }}>next rule</button>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/rules/first_rule/edit"]}>
+        <Next />
+        <Routes>
+          <Route path="/rules/:ruleId/edit" element={<RuleEditor />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => { expect(content().value).toBe("title: authored/first_rule.yml\n"); });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    await waitFor(() => { expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(); });
+
+    fireEvent.click(screen.getByRole("button", { name: "next rule" }));
+
+    await waitFor(() => { expect(content().value).toBe("title: authored/second_rule.yml\n"); });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByText(passingCheck)).toBeNull();
   });
 
   it("says when the rule has no stored document to edit", async () => {

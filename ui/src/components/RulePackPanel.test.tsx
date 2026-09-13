@@ -57,7 +57,9 @@ describe("RulePackPanel", () => {
     fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "new pack is noisy" } });
     fireEvent.click(screen.getByRole("button", { name: "Roll back" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Rolled back to the previous shipped rules.");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Rolled back to the previous shipped rules. The server applies them when it next reloads its rules, within 30 seconds.",
+    );
     expect(screen.getByRole("status")).toHaveTextContent("keychain_dump");
     expect(rollback).toHaveBeenCalledWith("new pack is noisy");
   });

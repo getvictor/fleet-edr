@@ -59,6 +59,12 @@ type LoadState =
 // shown in the loader's words too.
 export function RuleEditor() {
   const { ruleId } = useParams<{ ruleId: string }>();
+  // Keyed by the rule so moving to another rule's editor, which keeps this route mounted, starts from a fresh draft: a check or a
+  // loaded document belongs to the rule it was made for.
+  return <RuleEditorPage key={ruleId ?? ""} ruleId={ruleId} />;
+}
+
+function RuleEditorPage({ ruleId }: { readonly ruleId: string | undefined }) {
   const isNew = ruleId === undefined;
   const navigate = useNavigate();
 
@@ -79,9 +85,10 @@ export function RuleEditor() {
     let cancelled = false;
     (async () => {
       const [rules, documents] = await Promise.all([fetchRuleDocs(), listRuleContentDocuments()]);
+      // Origin first: a shipped rule built into the server has no stored document, and is still one to tune rather than edit.
+      if (isShipped(rules.find((r) => r.id === ruleId)?.origin)) return { kind: "shipped" } as const;
       const match = documents.find((d) => ruleDocumentStem(d.path) === ruleId);
       if (match === undefined) return { kind: "missing" } as const;
-      if (isShipped(rules.find((r) => r.id === ruleId)?.origin)) return { kind: "shipped" } as const;
       const text = await getRuleContentDocument(match.path);
       return { kind: "ready", path: match.path, text } as const;
     })()

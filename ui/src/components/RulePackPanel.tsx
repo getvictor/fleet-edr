@@ -83,7 +83,7 @@ export function RulePackPanel({ canWrite }: { readonly canWrite: boolean }) {
       )}
       {result !== null && (
         <div className="rule-pack__result" role="status">
-          Rolled back to the previous shipped rules.
+          Rolled back to the previous shipped rules. The server applies them when it next reloads its rules, within 30 seconds.
           {result.withheld.length > 0 && (
             <>
               {" "}Not restored, because a rule you wrote now uses the identifier:{" "}
