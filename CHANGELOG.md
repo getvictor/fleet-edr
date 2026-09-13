@@ -24,7 +24,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
-- **A Mac that needs a restart after an agent upgrade says so.** When the upgraded network extension cannot start until the Mac restarts, the host's agent health now reports that a restart finishes the upgrade, instead of reporting the network extension as not activated.
+- **A Mac that needs a restart after an agent upgrade says so.** When the agent cannot reach the upgraded network extension because the previous version stays registered until the Mac restarts, the host's agent health now reports that a restart finishes the upgrade, instead of reporting the network extension as not activated.
 - **A renamed remote-access tool is detected by its signature.** A shipped rule that catches MeshAgent renamed to hide it could not run, because it reads the name the binary was compiled as and nothing supplied that. macOS keeps that name in the code signature, which a rename cannot change, so it is now read from there. One more of the shipped rule set runs: 67 of 69, up from 66.
 - **An application-control alert links to the policy that blocked.** Its title was plain text, so an analyst who saw `Application blocked: /usr/bin/curl` had no way to reach the rule that denied it. Detection alerts already linked to their rule documentation; these carry a policy rule rather than a catalog rule, so they now link to the policy that owns it.
 - **A long exclusion value no longer widens the exclusion table.** A path or glob longer than the Value column now wraps inside it, so the Reason, Expires and Created by columns stay on screen.

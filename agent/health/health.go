@@ -343,7 +343,7 @@ func (r *Registry) transition(compType string, mutate func(*componentState)) {
 }
 
 // set updates the mutable fields of a component state in place. lastTransitionNs is stamped by transition, not here, so the stamp only
-// advances on a real status change.
+// advances on a real change of status or reason.
 func (s *componentState) set(status Status, reason, message string) {
 	s.status = status
 	s.reason = reason
