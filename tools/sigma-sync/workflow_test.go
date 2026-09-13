@@ -203,6 +203,8 @@ func TestWorkflow_APullRequestUnderReviewIsLeftAlone(t *testing.T) {
 		"the test result is reported even when the branch is left alone")
 }
 
+// spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-reach-a-review-branch-and-the-report
+//
 // With no pull request open, the push step commits the corpus and generated docs to the sync branch, creating it or replacing the
 // job's previous commit on it.
 func TestWorkflow_PushesTheSyncBranch(t *testing.T) {
