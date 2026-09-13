@@ -16,6 +16,7 @@ export const NAV_LINKS: NavLink[] = [
   { to: "/hosts", label: "Hosts", action: PermissionAction.HostRead },
   { to: "/search", label: "Search", action: PermissionAction.ProcessRead },
   { to: "/app-control", label: "Application control", action: PermissionAction.AppControlRead },
+  { to: "/rules", label: "Rules", action: PermissionAction.RuleContentRead },
   { to: "/coverage", label: "Coverage" },
 ];
 

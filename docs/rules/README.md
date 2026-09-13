@@ -22,6 +22,10 @@ A value only one rule matches against is that rule's parameter, under `x-engine.
 
 Some values stay in Go on purpose. A parameter that bounds **retrieval** rather than the decision (the ingest and clock-skew pads, the ancestor-walk and descendant caps, the DNS port) is not exposed, because widening it changes no finding and narrowing it causes silent false negatives: no setting improves detection, so the knob would be all downside.
 
+## Reading rules in the console
+
+Operators with `rule_content.read` have a **Rules** entry in the top navigation. It lists every rule the deployment runs with its severity, the mode it runs in (marked when an operator set it), and whether it shipped with the product or was written on this deployment. A rule's page shows the rule document it is loaded from, exactly as stored. Rules built into the server are not loaded from a stored document, and their page says so.
+
 ## Rule identifiers
 
 A rule's identifier is its **file stem**: `keychain_dump.yml` defines the rule `keychain_dump`. The identifier is not written inside the file, so renaming the file renames the rule, and everything keyed by it (per-rule mode and severity overrides, alert deduplication, exclusions) follows the new name rather than the old one.

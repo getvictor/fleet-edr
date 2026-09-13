@@ -218,6 +218,23 @@ function raiseUnauthorized(): never {
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetchChecked(path, init);
+  // DELETE /api/session returns 204 with no body; handle the empty-body case.
+  if (res.status === HTTP_STATUS_NO_CONTENT) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+// fetchText is fetchJSON for an endpoint whose body is the artifact itself rather than a JSON envelope, such as a rule document. It
+// goes through the same checks, so a session expiry, a reauth demand, or an authorization denial behaves exactly as it does on a JSON
+// read.
+async function fetchText(path: string): Promise<string> {
+  const res = await fetchChecked(path);
+  return res.text();
+}
+
+// fetchChecked is the one place every API read and write is sent and its status interpreted. Both body shapes above go through it so
+// the 401 redirect, the reauth challenge, and the authorization-refresh signal cannot drift apart between them.
+async function fetchChecked(path: string, init?: RequestInit): Promise<Response> {
   assertSafeAPIPath(path);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -265,9 +282,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
-  // DELETE /api/session returns 204 with no body; handle the empty-body case.
-  if (res.status === HTTP_STATUS_NO_CONTENT) return undefined as T;
-  return res.json() as Promise<T>;
+  return res;
 }
 
 // readReauthChallenge inspects a 403 response body for the
@@ -602,6 +617,52 @@ export interface RuleDocEntry {
 export async function fetchRuleDocs(): Promise<RuleDocEntry[]> {
   const body = await fetchJSON<{ rules: RuleDocEntry[] }>("/rules");
   return body.rules;
+}
+
+// --- Rule content endpoints ---
+//
+// The stored corpus of rule documents behind the catalogue (issue #1001), served under /api/v1/rule-content and gated on
+// rule_content.read. A document's rule identity is its file stem, so `authored/keychain_extra.yml` holds the rule `keychain_extra`.
+
+export interface RuleContentDocumentSummary {
+  path: string;
+  bytes: number;
+}
+
+export async function listRuleContentDocuments(): Promise<RuleContentDocumentSummary[]> {
+  const body = await fetchJSON<{ corpus_version: number; documents: RuleContentDocumentSummary[] | null }>("/v1/rule-content/documents");
+  // The server always sends an array, empty for an empty corpus. A missing one is a malformed response, and treating it as empty would
+  // report every stored rule as built into the server.
+  if (!Array.isArray(body.documents)) throw new Error("malformed rule-content document list");
+  return body.documents;
+}
+
+// ruleDocumentStem is the rule identity a document path defines: the file name without its extension. Mirrors the server's loader, which
+// is why a rule can be matched to its document without the list carrying rule identifiers.
+export function ruleDocumentStem(path: string): string {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+// SUB_DELIMITER_ENCODINGS percent-encodes the characters encodeURIComponent leaves unescaped.
+const SUB_DELIMITER_ENCODINGS: ReadonlyMap<string, string> = new Map([
+  ["!", "%21"],
+  ["'", "%27"],
+  ["(", "%28"],
+  [")", "%29"],
+  ["*", "%2A"],
+]);
+
+// getRuleContentDocument returns a rule document verbatim. Each path segment is encoded separately, because the slashes between them are
+// part of the route and must survive while anything else in a segment must not steer the request. encodeURIComponent leaves ! ' ( ) *
+// alone, and the API path guard refuses them, so those are percent-encoded too: the server accepts them in a directory name, and a
+// document it lists must be one this page can open.
+export async function getRuleContentDocument(path: string): Promise<string> {
+  const encodeSegment = (segment: string) =>
+    encodeURIComponent(segment).replace(/[!'()*]/g, (c) => SUB_DELIMITER_ENCODINGS.get(c) ?? c);
+  const encoded = path.split("/").map(encodeSegment).join("/");
+  return fetchText(`/v1/rule-content/documents/${encoded}`);
 }
 
 // --- Application Control endpoints ---

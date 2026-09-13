@@ -1,0 +1,29 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+@use "../styles/var/padding" as *;
+
+.rules-catalog__filters {
+  display: flex;
+  gap: $pad-medium;
+  align-items: center;
+}
+
+.rules-catalog__summary {
+  margin: 0 0 $pad-medium;
+  font-size: $x-small;
+  color: $ui-fleet-black-75;
+}
+
+.rules-catalog__id {
+  font-size: $xx-small;
+  color: $ui-fleet-black-50;
+}
+
+.rules-catalog__shipped {
+  font-size: $x-small;
+}
+
+.rules-catalog__origin {
+  font-size: $xx-small;
+  color: $ui-fleet-black-50;
+}

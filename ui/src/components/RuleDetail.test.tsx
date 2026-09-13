@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { PermissionsProvider } from "../permissions";
+import { PermissionAction } from "../permissions-core";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { RuleDetail } from "./RuleDetail";
 import * as api from "../api";
@@ -41,6 +43,8 @@ function renderAt(ruleId: string) {
 
 beforeEach(() => {
   vi.spyOn(api, "fetchRuleDocs");
+  // Every render asks for the rule's document when the operator may read one; an empty corpus keeps these tests off the network.
+  vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -309,3 +313,35 @@ describe("RuleDetail references", () => {
   });
 });
 
+// The rule's document is read through endpoints gated on rule_content.read, so the page shows it only to an operator who holds that
+// permission and never offers a panel that could only fail (issue #1001).
+describe("RuleDetail rule document", () => {
+  function renderWithPermissions(permissions: string[]) {
+    return render(
+      <PermissionsProvider permissions={permissions}>
+        <MemoryRouter initialEntries={["/rules/suspicious_exec"]}>
+          <Routes>
+            <Route path="/rules/:ruleId" element={<RuleDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </PermissionsProvider>,
+    );
+  }
+
+  // spec:web-ui/the-rule-catalogue-is-browsable/an-operator-reads-a-rule-as-written
+  it("offers the rule document to an operator who may read rule content", async () => {
+    mockDocs([makeEntry()]);
+    renderWithPermissions([PermissionAction.AlertRead, PermissionAction.RuleContentRead]);
+
+    expect(await screen.findByRole("heading", { name: "Rule document" })).toBeVisible();
+  });
+
+  it("does not offer it without rule_content.read", async () => {
+    mockDocs([makeEntry()]);
+    renderWithPermissions([PermissionAction.AlertRead]);
+
+    expect(await screen.findByText("Suspicious exec")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Rule document" })).toBeNull();
+    expect(api.listRuleContentDocuments).not.toHaveBeenCalled();
+  });
+});

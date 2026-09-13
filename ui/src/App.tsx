@@ -9,6 +9,7 @@ import { ApplicationControlRoutes } from "./components/ApplicationControl/Applic
 import { DetectionConfig } from "./components/DetectionConfig/DetectionConfig";
 import { SearchPage } from "./components/Search/SearchPage";
 import { RuleDetail } from "./components/RuleDetail";
+import { RulesCatalog } from "./components/RulesCatalog";
 import { MonitorRecords } from "./components/MonitorRecords";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { Webhooks } from "./components/Webhooks/Webhooks";
@@ -219,6 +220,14 @@ export function AuthedApp() {
             element={(
               <RequirePermission action={PermissionAction.ServiceAccountRead} surface="Service accounts">
                 <SettingsLayout><ServiceAccounts /></SettingsLayout>
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/rules"
+            element={(
+              <RequirePermission action={PermissionAction.RuleContentRead} surface="Rules">
+                <RulesCatalog />
               </RequirePermission>
             )}
           />
