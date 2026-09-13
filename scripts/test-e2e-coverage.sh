@@ -276,10 +276,11 @@ echo "$END_GROUP"
 # does no layout, and the value it would report is not the one a user gets.
 #
 # The four share ONE break-glass ceremony, via the worker-scoped signedInAdminShared fixture, because they only navigate and
-# assert on it; the exclusion-value spec seeds its row through the database, not through the shared page. That matters here: /admin/break-glass/setup allows 5 submissions per minute globally and a single sign-in spends two of
-# them (gateSetupRequest is shared by the begin and finish handlers), so three per-test ceremonies need six and the third fails
-# with a 429 that presents as a sign-in timeout. Measured: three specs per-test fail 2 of 3 together and pass individually; on the
-# shared fixture all three pass together in under a second.
+# assert on it; the exclusion-value spec seeds its row through the database rather than through the shared page. That matters
+# here: /admin/break-glass/setup allows 5 submissions per minute globally and a single sign-in spends two of them
+# (gateSetupRequest is shared by the begin and finish handlers), so four per-test ceremonies would need eight, and the third
+# already fails with a 429 that presents as a sign-in timeout. Measured when the phase held three specs: per-test, 2 of 3 failed
+# together and each passed individually; on the shared fixture all three passed together in under a second.
 #
 # Grouped as their own phase for legibility rather than necessity, since two submissions would also fit inside phase 2.
 echo "::group::Phase 6: UI presentation regressions + the detection-config fixture guarantee"
