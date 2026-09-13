@@ -31,16 +31,32 @@ const KindSelfHealFailed HealthEpisodeKind = "self_heal_failed"
 // count) rather than leaving a reader to parse them back out of Description. The shape is per-kind by design, which is why it is
 // a JSON document here and not a set of columns: a second kind should not require a migration to record what it knows.
 type HealthEpisode struct {
-	ID           int64             `db:"id" json:"id"`
-	HostID       string            `db:"host_id" json:"host_id"`
-	Component    string            `db:"component" json:"component"`
-	Kind         HealthEpisodeKind `db:"kind" json:"kind"`
-	Severity     string            `db:"severity" json:"severity"`
-	Title        string            `db:"title" json:"title"`
-	Description  string            `db:"description" json:"description,omitempty"`
-	Detail       NullRawJSON       `db:"detail" json:"detail,omitempty"`
-	OpenedAtNs   int64             `db:"opened_at_ns" json:"opened_at_ns"`
-	ResolvedAtNs *int64            `db:"resolved_at_ns" json:"resolved_at_ns,omitempty"`
+	ID        int64  `db:"id" json:"id"`
+	HostID    string `db:"host_id" json:"host_id"`
+	Component string `db:"component" json:"component"`
+	// Subject is WHICH thing inside the component is at fault, and it is part of the open-episode identity. One component can own
+	// several independently failing parts (network_extension owns both content_filter and dns_proxy), so without it the second
+	// part's failure would collide with the first's episode and its detail would be discarded. Empty for a fault that concerns the
+	// component as a whole.
+	Subject     string            `db:"subject" json:"subject,omitempty"`
+	Kind        HealthEpisodeKind `db:"kind" json:"kind"`
+	Severity    string            `db:"severity" json:"severity"`
+	Title       string            `db:"title" json:"title"`
+	Description string            `db:"description" json:"description,omitempty"`
+	Detail      NullRawJSON       `db:"detail" json:"detail,omitempty"`
+	// OpenedAtNs and ResolvedAtNs are both AGENT-observed instants, not server processing times. The interval between them is the
+	// whole value of the record, and mixing the two clocks would measure queue backlog and delivery delay as part of the outage, or
+	// on a skewed host produce a resolution before its own opening.
+	OpenedAtNs   int64  `db:"opened_at_ns" json:"opened_at_ns"`
+	ResolvedAtNs *int64 `db:"resolved_at_ns" json:"resolved_at_ns,omitempty"`
+}
+
+// RecoveredComponent is one component a status snapshot reports healthy, with the agent-observed instant it entered that state.
+// The instant is carried rather than the snapshot's report time so the episode's end is when the component actually recovered, not
+// when we happened to hear about it.
+type RecoveredComponent struct {
+	Type string
+	AtNs int64
 }
 
 // Open reports whether the fault is still in effect. An open episode is a host that needs attention now; a closed one is history

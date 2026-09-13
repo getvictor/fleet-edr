@@ -12,13 +12,20 @@ import (
 )
 
 func selfHealEpisode(hostID, component string, openedAtNs int64) api.HealthEpisode {
-	detail, err := json.Marshal(api.SelfHealFailedDetail{Provider: "content_filter", Outcome: "enable_ineffective", Attempts: 5})
+	return selfHealEpisodeFor(hostID, component, "content_filter", openedAtNs)
+}
+
+// selfHealEpisodeFor names the provider, which is the episode's subject: two providers under one extension are two outages and must
+// not collide on one open episode.
+func selfHealEpisodeFor(hostID, component, provider string, openedAtNs int64) api.HealthEpisode {
+	detail, err := json.Marshal(api.SelfHealFailedDetail{Provider: provider, Outcome: "enable_ineffective", Attempts: 5})
 	if err != nil {
 		panic(err)
 	}
 	return api.HealthEpisode{
 		HostID:      hostID,
 		Component:   component,
+		Subject:     provider,
 		Kind:        api.KindSelfHealFailed,
 		Severity:    "critical",
 		Title:       "EDR sensor could not be restored",
@@ -35,7 +42,7 @@ func openEpisodes(t *testing.T, db *sqlx.DB, hostID string) []api.HealthEpisode 
 	t.Helper()
 	var out []api.HealthEpisode
 	require.NoError(t, db.SelectContext(t.Context(), &out, `
-		SELECT id, host_id, component, kind, severity, title, description, detail, opened_at_ns, resolved_at_ns
+		SELECT id, host_id, component, subject, kind, severity, title, description, detail, opened_at_ns, resolved_at_ns
 		FROM host_health_episodes WHERE host_id = ? AND resolved_at_ns IS NULL ORDER BY id`, hostID))
 	return out
 }
@@ -44,13 +51,21 @@ func allEpisodes(t *testing.T, db *sqlx.DB, hostID string) []api.HealthEpisode {
 	t.Helper()
 	var out []api.HealthEpisode
 	require.NoError(t, db.SelectContext(t.Context(), &out, `
-		SELECT id, host_id, component, kind, severity, title, description, detail, opened_at_ns, resolved_at_ns
+		SELECT id, host_id, component, subject, kind, severity, title, description, detail, opened_at_ns, resolved_at_ns
 		FROM host_health_episodes WHERE host_id = ? ORDER BY id`, hostID))
 	return out
 }
 
 // spec:server-host-status/the-server-records-host-health-episodes/a-fault-that-needs-a-person-opens-an-episode
 //
+// recov is the recovered-component set a status snapshot reports, written as "this component was observed healthy at this instant".
+func recov(components ...api.RecoveredComponent) []api.RecoveredComponent { return components }
+
+// rc names one recovered component and when it was observed healthy on the host.
+func rc(compType string, atNs int64) api.RecoveredComponent {
+	return api.RecoveredComponent{Type: compType, AtNs: atNs}
+}
+
 // TestOpenHealthEpisode_RecordsTheFaultsOwnFields: the point of an episode over the level state that reports the same fault is that
 // it keeps the machine-readable detail, so an operational surface can filter and group on the provider and the outcome instead of
 // reading a sentence.
@@ -135,7 +150,7 @@ func TestCloseHealthEpisodes_ClosesOnRecoveryAndAllowsTheNextOne(t *testing.T) {
 	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
 	require.NoError(t, err)
 
-	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", []string{"network_extension"}, 900)
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), closed)
 	assert.Empty(t, openEpisodes(t, db, "host-a"), "a component reporting healthy ends its outage")
@@ -165,7 +180,7 @@ func TestCloseHealthEpisodes_OnlyClosesTheComponentsReportedHealthy(t *testing.T
 		require.NoError(t, err)
 	}
 
-	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", []string{"network_extension"}, 900)
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), closed)
 
@@ -183,7 +198,7 @@ func TestCloseHealthEpisodes_HealthyWithNothingOpenIsNotAnError(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", []string{"network_extension", "endpoint_security_extension"}, 900)
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900), rc("endpoint_security_extension", 900)), 900)
 	require.NoError(t, err)
 	assert.Zero(t, closed)
 
@@ -208,9 +223,146 @@ func TestCloseHealthEpisodes_DoesNotReachOtherHosts(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", []string{"network_extension"}, 900)
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), closed)
 	assert.Empty(t, openEpisodes(t, db, "host-a"))
 	assert.Len(t, openEpisodes(t, db, "host-b"), 1, "one host recovering says nothing about another")
+}
+
+// spec:server-host-status/the-server-records-host-health-episodes/two-parts-of-one-component-failing-are-two-episodes
+//
+// TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes is the collision the subject exists to prevent. One extension
+// owns both capture providers and the self-heal controller reports each independently, so keying the open episode on the component
+// alone would let the second provider's failure collide with the first's and be discarded, taking its provider, outcome and attempt
+// count with it. The host would then be recorded as having one provider down while two were.
+func TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	for _, provider := range []string{"content_filter", "dns_proxy"} {
+		opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", provider, 100))
+		require.NoError(t, err)
+		assert.True(t, opened, "each provider's failure is its own outage")
+	}
+
+	got := openEpisodes(t, db, "host-a")
+	require.Len(t, got, 2)
+	var subjects []string
+	for _, e := range got {
+		subjects = append(subjects, e.Subject)
+	}
+	assert.ElementsMatch(t, []string{"content_filter", "dns_proxy"}, subjects)
+
+	// Re-asserting one of them still does not open a third: the subject narrows the key, it does not remove the deduplication.
+	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", "dns_proxy", 200))
+	require.NoError(t, err)
+	assert.False(t, opened)
+	assert.Len(t, openEpisodes(t, db, "host-a"), 2)
+}
+
+// spec:server-host-status/the-server-records-host-health-episodes/an-episode-closes-when-the-component-recovers
+//
+// TestCloseHealthEpisodes_ComponentRecoveryClosesEveryProviderUnderIt: an operator restores the COMPONENT (they re-activate the
+// extension), not one provider inside it, so its recovery ends every fault reported under it. Closing only the matching subject
+// would leave the other provider's episode open forever on a host that is fine.
+func TestCloseHealthEpisodes_ComponentRecoveryClosesEveryProviderUnderIt(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	for _, provider := range []string{"content_filter", "dns_proxy"} {
+		_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", provider, 100))
+		require.NoError(t, err)
+	}
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), closed)
+	assert.Empty(t, openEpisodes(t, db, "host-a"))
+}
+
+// TestCloseHealthEpisodes_StampsTheComponentsOwnTransitionInstant: the interval is the record's whole value, so both ends come from
+// the agent's clock. The end is when the component was observed healthy ON THE HOST, not when its check-in reached us, which would
+// pad every outage by the delivery delay.
+func TestCloseHealthEpisodes_StampsTheComponentsOwnTransitionInstant(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	require.NoError(t, err)
+
+	// The component recovered at 500; the snapshot carrying that news arrived at 900.
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 500)), 900)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), closed)
+
+	all := allEpisodes(t, db, "host-a")
+	require.Len(t, all, 1)
+	require.NotNil(t, all[0].ResolvedAtNs)
+	assert.Equal(t, int64(500), *all[0].ResolvedAtNs, "the outage ended when the host says it ended, not when we heard about it")
+}
+
+// TestCloseHealthEpisodes_CannotEndBeforeItBegan: a host whose clock moved backwards between the two reports would otherwise
+// produce a negative outage, which is not a number any surface can render honestly.
+func TestCloseHealthEpisodes_CannotEndBeforeItBegan(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 1_000))
+	require.NoError(t, err)
+
+	// A transition instant BEFORE the episode opened: clock skew on the host.
+	_, err = s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 400)), 2_000)
+	require.NoError(t, err)
+
+	all := allEpisodes(t, db, "host-a")
+	require.Len(t, all, 1)
+	require.NotNil(t, all[0].ResolvedAtNs)
+	assert.GreaterOrEqual(t, *all[0].ResolvedAtNs, all[0].OpenedAtNs, "an episode may be instantaneous but never negative")
+}
+
+// TestCloseHealthEpisodes_IgnoresASnapshotThatLostTheOrderingRace: host_health is last-writer-wins on reported_at_ns, so a delayed
+// snapshot that arrives after a newer one did NOT update the stored component states. Acting on it here would resolve an episode
+// from a reading the current health row has already rejected, leaving the host recorded as recovered while it reports unhealthy.
+func TestCloseHealthEpisodes_IgnoresASnapshotThatLostTheOrderingRace(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	require.NoError(t, err)
+	// The current health row was written by a NEWER snapshot than the delayed one below.
+	require.NoError(t, s.UpsertHostHealth(t.Context(), "host-a", "unhealthy", nil, 5_000))
+
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
+	require.NoError(t, err)
+	assert.Zero(t, closed, "a snapshot too old to update current health is too old to resolve an outage")
+	assert.Len(t, openEpisodes(t, db, "host-a"), 1)
+
+	// The same report arriving as the newest one does close it.
+	require.NoError(t, s.UpsertHostHealth(t.Context(), "host-a", "healthy", nil, 9_000))
+	closed, err = s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 9_000)), 9_000)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), closed)
+}
+
+// spec:server-host-status/the-server-records-host-health-episodes/a-fault-whose-component-cannot-be-named-is-still-recorded
+//
+// TestOpenHealthEpisode_AFaultWithNoComponentIsRecordedAndStaysOpen: an agent too old to report which component owns the failed
+// provider still names a host that is not capturing, which is what an operator has to act on, so the report is recorded rather than
+// dropped. It simply has nothing to close it: no component recovery can be matched to an episode that names no component, and
+// inventing one to make the row resolvable would manufacture the recovery the record exists to report honestly.
+func TestOpenHealthEpisode_AFaultWithNoComponentIsRecordedAndStaysOpen(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+
+	e := selfHealEpisode("host-a", "", 100)
+	opened, err := s.OpenHealthEpisode(t.Context(), e)
+	require.NoError(t, err)
+	require.True(t, opened, "a report that names a host with no capture is worth recording even unattributed")
+
+	// Every component this host has recovers; the unattributed episode is not among them.
+	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a",
+		recov(rc("network_extension", 900), rc("endpoint_security_extension", 900)), 900)
+	require.NoError(t, err)
+	assert.Zero(t, closed)
+	require.Len(t, openEpisodes(t, db, "host-a"), 1, "nothing can close an episode that names no component")
 }

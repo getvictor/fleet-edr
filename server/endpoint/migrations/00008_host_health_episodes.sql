@@ -13,8 +13,15 @@
 -- a JSON document (for self_heal_failed: the provider, the outcome, and the attempt count), so a reader gets them as fields instead
 -- of parsing them back out of prose.
 --
--- open_episode exists to make "at most one OPEN episode per host, component and kind" a schema guarantee rather than a read-then-
--- write in application code, which under concurrent ingest across replicas is a race that would record one outage as several. It is
+-- subject is WHICH thing inside the component is at fault, and it is part of the open-episode key. One component can own several
+-- independently failing parts: network_extension owns both content_filter and dns_proxy, and the self-heal controller reports each
+-- separately, so a key of (host, component, kind) alone would let the second provider's failure collide with the first and be
+-- discarded, losing its provider, outcome, and attempt count. It is the empty string for a fault that concerns the component as a
+-- whole, which still keys correctly because the empty string is a value like any other here (unlike NULL, which would make every
+-- such row distinct and defeat the deduplication).
+--
+-- open_episode exists to make "at most one OPEN episode per host, component, subject and kind" a schema guarantee rather than a
+-- read-then-write in application code, which under concurrent ingest across replicas is a race that would record one outage as several. It is
 -- a generated column that is 1 while resolved_at_ns IS NULL and NULL once the episode closes, combined with the unique key below:
 -- MySQL treats NULLs in a unique index as distinct, so any number of CLOSED episodes may share a key while at most one open one can
 -- exist. That makes re-asserting a fault an INSERT that collides and is ignored, and it makes it impossible for a bug elsewhere to
@@ -26,6 +33,7 @@ CREATE TABLE IF NOT EXISTS host_health_episodes (
 	id            BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
 	host_id       VARCHAR(255) NOT NULL,
 	component     VARCHAR(64)  NOT NULL,
+	subject       VARCHAR(128) NOT NULL DEFAULT '',
 	kind          VARCHAR(64)  NOT NULL,
 	severity      VARCHAR(16)  NOT NULL,
 	title         VARCHAR(255) NOT NULL,
@@ -35,7 +43,7 @@ CREATE TABLE IF NOT EXISTS host_health_episodes (
 	resolved_at_ns BIGINT      NULL,
 	created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	open_episode  TINYINT GENERATED ALWAYS AS (CASE WHEN resolved_at_ns IS NULL THEN 1 ELSE NULL END) VIRTUAL,
-	UNIQUE KEY uniq_host_health_open (host_id, component, kind, open_episode),
+	UNIQUE KEY uniq_host_health_open (host_id, component, subject, kind, open_episode),
 	INDEX idx_host_health_episodes_host (host_id, opened_at_ns),
 	INDEX idx_host_health_episodes_open (open_episode, opened_at_ns)
 );

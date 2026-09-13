@@ -73,9 +73,11 @@ func healthFinding() api.Finding {
 		Subject:     "sensor_recovery_failed:content_filter:e1",
 		EventIDs:    []string{"e1"},
 		Health: &api.HealthDetail{
-			Kind:      endpointapi.KindSelfHealFailed,
-			Component: "network_extension",
-			Detail:    detail,
+			Kind:         endpointapi.KindSelfHealFailed,
+			Component:    "network_extension",
+			Subject:      "content_filter",
+			OccurredAtNs: 4_242,
+			Detail:       detail,
 		},
 	}
 }
@@ -108,7 +110,9 @@ func TestEngine_HealthFindingIsRecordedNotAlerted(t *testing.T) {
 	assert.Equal(t, endpointapi.KindSelfHealFailed, got.Kind)
 	assert.Equal(t, api.SeverityCritical, got.Severity, "the move to health must not quietly downgrade how urgent it is")
 	assert.Equal(t, "EDR sensor could not be restored", got.Title)
-	assert.Positive(t, got.OpenedAtNs, "the episode's whole purpose is an interval, so it must know when it began")
+	assert.Equal(t, "content_filter", got.Subject, "two providers under one extension must not collide on one episode")
+	assert.Equal(t, int64(4_242), got.OpenedAtNs,
+		"the episode opens on the HOST's clock, from the event: server time would measure queue backlog as part of the outage")
 
 	// The fields rather than the prose: the surface that reads an episode filters on them.
 	var detail endpointapi.SelfHealFailedDetail
@@ -168,4 +172,55 @@ func TestEngine_HealthRecorderFailureIsReturned(t *testing.T) {
 	err := evaluateErr(e, context.Background(), healthBatch())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sensor_recovery_failed", "the error must name the rule whose record was lost")
+}
+
+// TestEngine_RoutingFollowsTheDeclarationNotThePayload pins that the KIND the rule declares is what decides the destination.
+//
+// Both halves matter and they fail in opposite directions. A detection that sets the health field by mistake must still alert, or a
+// typo would quietly empty an analyst's queue. A health rule that forgets the detail must NOT fall through to an alert, because its
+// declaration is what says this makes no claim about an adversary; it is refused instead, since an episode with no kind could
+// neither be filed nor ever resolve.
+func TestEngine_RoutingFollowsTheDeclarationNotThePayload(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a detection that sets the health field still alerts", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingRecorder{opened: true}
+		// A plain stubRule declares no kind, so it is a detection whatever its finding carries.
+		rule := &findingRule{stubRule: stubRule{id: "some_detection"}, finding: healthFinding()}
+		e := New(nil, nil)
+		e.SetHealthEpisodeRecorder(rec)
+		e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+		assert.Panics(t, func() { _ = evaluateErr(e, context.Background(), healthBatch()) },
+			"a rule that declares nothing is a detection and must reach alert persistence")
+		assert.Empty(t, rec.episodes, "a finding does not become a health episode by carrying a health payload")
+	})
+
+	t.Run("a health rule that supplies no detail records nothing and does not alert", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingRecorder{opened: true}
+		finding := healthFinding()
+		finding.Health = nil
+		rule := &healthRule{stubRule: stubRule{id: "sensor_recovery_failed"}, finding: finding}
+		e := New(nil, nil)
+		e.SetHealthEpisodeRecorder(rec)
+		e.LoadActive(stubProvider{rules: []rulesapi.Rule{rule}})
+
+		assert.NotPanics(t, func() {
+			require.NoError(t, evaluateErr(e, context.Background(), healthBatch()))
+		}, "a health rule missing its detail must not fall back to the alert queue")
+		assert.Empty(t, rec.episodes, "and must not record an episode that could never be filed or resolved")
+	})
+}
+
+// findingRule returns one finding and declares no kind, so it is an ordinary detection.
+type findingRule struct {
+	stubRule
+	finding api.Finding
+}
+
+func (r *findingRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	r.calls++
+	return []api.Finding{r.finding}, nil
 }

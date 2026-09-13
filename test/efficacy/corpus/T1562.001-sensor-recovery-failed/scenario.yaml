@@ -1,4 +1,4 @@
-# spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/automatic-recovery-gives-up-and-raises-a-finding
+# spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/automatic-recovery-gives-up-and-opens-a-health-episode
 # T1562.001 Impair Defenses: Disable or Modify Tools.
 #
 # The sibling scenario in T1562.001-sensor-tamper covers capture being

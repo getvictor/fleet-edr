@@ -464,7 +464,9 @@ func ApplyModifiers(base string, modifiers []RiskModifier) string {
 }
 
 // Finding is a per-rule positive output, persisted by the engine
-// into the alerts table. Canonical definition; rules/api re-exports
+// into the alerts table, or recorded as a host health episode when the
+// rule that produced it declares itself a health signal (issue #778).
+// Canonical definition; rules/api re-exports
 // it as a type alias so catalog rule files implement
 // rulesapi.Rule.Evaluate without importing detection/api directly
 // (see arch-go.yml §api-purity for the alias rationale).
@@ -524,7 +526,15 @@ type Finding struct {
 type HealthDetail struct {
 	Kind      string
 	Component string
-	Detail    []byte
+	// Subject is which thing inside the component is at fault (for a capture-provider failure, the provider). It is part of the
+	// episode's open-episode identity, because one component can own several independently failing parts and without it the second
+	// one's failure would collide with the first's episode and its detail would be discarded.
+	Subject string
+	// OccurredAtNs is when the fault happened ON THE HOST, taken from the triggering event rather than from the server's clock. The
+	// episode's value is the interval it measures, and its other end is stamped from the agent's own transition instant, so opening
+	// it from server time would measure queue backlog and delivery delay as part of the outage.
+	OccurredAtNs int64
+	Detail       []byte
 }
 
 // RiskModifier is one conditional escalation: how much risk the condition adds, and the techniques observing it implies.

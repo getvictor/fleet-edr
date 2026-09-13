@@ -150,8 +150,9 @@ func (s *Service) Exportable(id string) (api.RuleMetadata, api.Rule, bool) {
 // ActiveRules returns the rule set in force. Reloaded from stored content while the server runs (issue #766), so a caller holding
 // the result holds one generation of it and a later reload does not change what it is looking at.
 //
-// This deliberately includes non-detections, unlike List: a projection or a health signal is registered, evaluated and persisted
-// exactly like any other rule, and only its presence on the operator-facing catalog surfaces differs.
+// This deliberately includes non-detections, unlike List: a projection or a health signal is registered and evaluated exactly like
+// any other rule. What differs is its presence on the operator-facing catalog surfaces and, for a health signal, that its findings
+// are recorded as host health episodes rather than as alerts (issue #778).
 func (s *Service) ActiveRules() []api.Rule {
 	return s.active.Load().rules
 }

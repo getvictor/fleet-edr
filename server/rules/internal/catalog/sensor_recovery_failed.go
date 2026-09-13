@@ -187,7 +187,12 @@ func (r *SensorRecoveryFailed) evalEvent(_ context.Context, evt api.Event, _ api
 		Health: &api.HealthDetail{
 			Kind:      endpointapi.KindSelfHealFailed,
 			Component: p.Component,
-			Detail:    detail,
+			// The provider is what distinguishes two simultaneous failures under one extension: content_filter and dns_proxy are
+			// reported independently, and without this the second would collide with the first's episode and be discarded.
+			Subject: p.Provider,
+			// The host's own clock, so the episode measures the outage rather than the delivery delay.
+			OccurredAtNs: evt.TimestampNs,
+			Detail:       detail,
 		},
 	}, nil
 }

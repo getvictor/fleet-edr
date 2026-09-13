@@ -229,13 +229,17 @@ func (s *service) recordRotationAudit(ctx context.Context, hostID, actor, reason
 	}
 }
 
-// healthyComponents returns the types of the components reporting healthy, which are the ones whose open episodes this snapshot
-// resolves. Degraded and unhealthy are still faults; unknown means no state is known, which is not evidence of recovery either.
-func healthyComponents(components api.Components) []string {
-	var out []string
+// healthyComponents returns the components reporting healthy, which are the ones whose open episodes this snapshot resolves.
+// Degraded and unhealthy are still faults; unknown means no state is known, which is not evidence of recovery either.
+//
+// LastTransitionNs rides along because it is WHEN the component became healthy, as observed on the host. The episode's end is
+// stamped from it rather than from the report's own time so the recorded outage is the one the host lived through, not one padded
+// by however long the check-in took to arrive.
+func healthyComponents(components api.Components) []api.RecoveredComponent {
+	var out []api.RecoveredComponent
 	for _, c := range components {
 		if c.Status == api.HealthHealthy {
-			out = append(out, c.Type)
+			out = append(out, api.RecoveredComponent{Type: c.Type, AtNs: c.LastTransitionNs})
 		}
 	}
 	return out
@@ -278,7 +282,7 @@ func (s *service) RecordStatus(ctx context.Context, hostID string, report api.St
 	if recovered := healthyComponents(report.Components); len(recovered) > 0 {
 		if _, err := s.store.CloseHealthEpisodes(ctx, hostID, recovered, reportedAtNs); err != nil {
 			s.logger.WarnContext(ctx, "could not close host health episodes for recovered components",
-				attrkeys.HostID, hostID, "components", recovered, "err", err)
+				attrkeys.HostID, hostID, "err", err)
 		}
 	}
 	// Inventory rides the same snapshot (issue #579): when present it refreshes the enrollment row's identity fields, so a hostname
