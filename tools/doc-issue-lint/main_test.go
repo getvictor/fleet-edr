@@ -219,7 +219,7 @@ func TestRun(t *testing.T) {
 }
 
 // runInDir runs the gate with dir as the repository root, so the fixture paths are repo-relative exactly as git ls-files gives them.
-func runInDir(t *testing.T, dir string, paths []string, lookup stateLookup, stderr *bytes.Buffer) int {
+func runInDir(t *testing.T, dir string, paths []string, lookup stateResolver, stderr *bytes.Buffer) int {
 	t.Helper()
 	return run(t.Context(), os.DirFS(dir), paths, newRefPatterns(defaultRepo), lookup, stderr)
 }

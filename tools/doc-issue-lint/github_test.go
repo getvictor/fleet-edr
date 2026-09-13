@@ -154,10 +154,13 @@ func TestGitHubLookupWithoutToken(t *testing.T) {
 	}
 }
 
-func TestResolveTokenPrefersEnvironment(t *testing.T) {
+func TestResolveToken(t *testing.T) {
 	t.Parallel()
 	got, err := resolveToken(t.Context(), "from-env")
 	if err != nil || got != "from-env" {
-		t.Fatalf("resolveToken = %q, %v; want the environment token without calling gh", got, err)
+		t.Fatalf("resolveToken = %q, %v; want the environment token", got, err)
+	}
+	if _, err := resolveToken(t.Context(), ""); err == nil {
+		t.Fatal("resolveToken with no token succeeded; want an error naming GITHUB_TOKEN")
 	}
 }

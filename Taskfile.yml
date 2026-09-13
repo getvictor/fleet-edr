@@ -623,7 +623,7 @@ tasks:
       current behavior instead. Needs GitHub API access (GITHUB_TOKEN, GH_TOKEN, or a logged-in gh CLI). CI gate is
       .github/workflows/md-lint.yml, which also runs it daily because closing an issue can fail docs no PR touched.
     cmds:
-      - git ls-files -z | go run ./tools/doc-issue-lint
+      - 'GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-$(gh auth token)}}" sh -c "git ls-files -z | go run ./tools/doc-issue-lint"'
 
   lint:go:
     desc: |

@@ -12,7 +12,7 @@
 //
 // With file arguments it lints those paths; with none it reads a NUL-delimited file list from stdin (the Taskfile and CI pipe
 // `git ls-files -z` into it, so untracked local drafts are never scanned). Paths outside the public scope are skipped either way.
-// Issue states come from the GitHub GraphQL API, authenticated by GITHUB_TOKEN, then GH_TOKEN, then `gh auth token`. A lookup
+// Issue states come from the GitHub GraphQL API, authenticated by GITHUB_TOKEN, then GH_TOKEN (`task lint:docs:issues` derives one from `gh auth token`). A lookup
 // failure exits non-zero: the gate never passes on data it could not fetch.
 //
 // Run via `task lint:docs:issues`; CI runs it in .github/workflows/md-lint.yml on every pull request and daily.
@@ -191,8 +191,8 @@ type item struct {
 	title string
 }
 
-// stateLookup resolves issue and pull request numbers. The GitHub implementation is in github.go; tests use a map.
-type stateLookup interface {
+// stateResolver resolves issue and pull request numbers. The GitHub implementation is in github.go; tests use a map.
+type stateResolver interface {
 	lookup(ctx context.Context, numbers []int) (map[int]item, error)
 }
 
@@ -228,7 +228,7 @@ func uniqueNumbers(refs []ref) []int {
 }
 
 // run lints paths, read from fsys (the repository root), and writes findings to stderr. It returns the process exit code.
-func run(ctx context.Context, fsys fs.FS, paths []string, patterns refPatterns, lookup stateLookup, stderr io.Writer) int {
+func run(ctx context.Context, fsys fs.FS, paths []string, patterns refPatterns, lookup stateResolver, stderr io.Writer) int {
 	var refs []ref
 	for _, p := range paths {
 		p = path.Clean(filepath.ToSlash(p))
@@ -302,7 +302,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	// Wiring boundary: the credential comes from the environment here and is passed down (issue #172). CI sets GITHUB_TOKEN; a
-	// developer shell may set GH_TOKEN; with neither, the lookup falls back to `gh auth token`.
+	// developer shell may set GH_TOKEN; with neither, the lookup fails and names the task that supplies one.
 	envToken := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) //nolint:forbidigo // wiring site, see above
 	if envToken == "" {
 		envToken = strings.TrimSpace(os.Getenv("GH_TOKEN")) //nolint:forbidigo // wiring site, see above

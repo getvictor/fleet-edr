@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,7 +26,7 @@ type githubLookup struct {
 	owner, name string
 	endpoint    string
 	client      *http.Client
-	// token returns the credential. A field so tests can supply one without the environment or the gh CLI.
+	// token returns the credential. A field so tests can supply one without the environment.
 	token func(ctx context.Context) (string, error)
 }
 
@@ -41,16 +40,14 @@ func newGitHubLookup(repo, envToken string) *githubLookup {
 	}
 }
 
-// resolveToken prefers the token from the environment, then the local gh CLI's stored credential.
-func resolveToken(ctx context.Context, envToken string) (string, error) {
-	if envToken != "" {
-		return envToken, nil
+// resolveToken returns the token from the environment. The tool deliberately does not shell out to the gh CLI for one: a PATH
+// lookup from Go is a binary-planting surface (Sonar go:S4036), and the Taskfile task already derives GITHUB_TOKEN from
+// `gh auth token` for a local run, so the fallback belongs in the shell that the developer controls.
+func resolveToken(_ context.Context, envToken string) (string, error) {
+	if envToken == "" {
+		return "", errors.New("no GITHUB_TOKEN or GH_TOKEN set (run `task lint:docs:issues`, which supplies one from `gh auth token`)")
 	}
-	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
-	if err != nil {
-		return "", fmt.Errorf("no GITHUB_TOKEN or GH_TOKEN set, and `gh auth token` failed: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
+	return envToken, nil
 }
 
 type graphQLResponse struct {
