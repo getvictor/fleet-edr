@@ -62,13 +62,57 @@ func TestHostHealth_EpisodesRoundTrip(t *testing.T) {
 			t.Fatalf("nil-ness of episodes must survive the wire: want nil=%t got nil=%t (wire %s)",
 				want.Episodes == nil, got.Episodes == nil, encoded)
 		}
-		if len(got.Episodes) != len(want.Episodes) {
-			t.Fatalf("length changed: want %d got %d (wire %s)", len(want.Episodes), len(got.Episodes), encoded)
-		}
-		for i := range want.Episodes {
-			assertEpisodeEqual(t, want.Episodes[i], got.Episodes[i], encoded)
+		// The whole value, not only the field this test is about, so a regression in a sibling field cannot pass a test that drew it.
+		if !reflect.DeepEqual(want, got) {
+			t.Fatalf("round trip changed the value:\n want %+v\n  got %+v\n wire %s", want, got, encoded)
 		}
 	})
+}
+
+// TestHostHealthEpisode_WireShape pins the literal JSON the console reads, which a round trip cannot: renaming a field on the struct
+// renames it on both sides of the trip and still passes. One open and one resolved episode cover every omitempty field in both states.
+func TestHostHealthEpisode_WireShape(t *testing.T) {
+	t.Parallel()
+	resolvedAt := int64(0) // a resolution at instant zero must still be emitted, which is why the field is a pointer
+	cases := []struct {
+		name    string
+		episode api.HostHealthEpisode
+		want    string
+	}{
+		{
+			name: "open, with every optional field empty",
+			episode: api.HostHealthEpisode{
+				ID: 7, Kind: "self_heal_failed", Component: "network_extension", Severity: "critical",
+				Title: "EDR sensor could not be restored", OpenedAtNs: 1000,
+			},
+			want: `{"id":7,"kind":"self_heal_failed","component":"network_extension","severity":"critical",` +
+				`"title":"EDR sensor could not be restored","opened_at_ns":1000}`,
+		},
+		{
+			name: "resolved, with every optional field set",
+			episode: api.HostHealthEpisode{
+				ID: 8, Kind: "self_heal_failed", Component: "network_extension", Subject: "dns_proxy", Severity: "critical",
+				Title: "EDR sensor could not be restored", Description: "the repair command kept failing",
+				Detail:     api.NullRawJSON(`{"provider":"dns_proxy","outcome":"enable_failed","attempts":3}`),
+				OpenedAtNs: 1000, ResolvedAtNs: &resolvedAt,
+			},
+			want: `{"id":8,"kind":"self_heal_failed","component":"network_extension","subject":"dns_proxy","severity":"critical",` +
+				`"title":"EDR sensor could not be restored","description":"the repair command kept failing",` +
+				`"detail":{"provider":"dns_proxy","outcome":"enable_failed","attempts":3},"opened_at_ns":1000,"resolved_at_ns":0}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := json.Marshal(tc.episode)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("wire shape changed:\n want %s\n  got %s", tc.want, got)
+			}
+		})
+	}
 }
 
 // assertEpisodeEqual compares with reflect.DeepEqual because the struct holds a pointer and a byte slice, neither of which == compares

@@ -464,8 +464,11 @@ func waitForExpected(
 	case expectAlert:
 		return waitForAlert(ctx, stack, hostID, expected.RuleID, expected.Severity, deadline)
 	case expectHealthEpisode:
-		if expected.Kind == "" {
-			return false, fmt.Errorf("expected.yaml: rule %s expects a %s but names no kind", expected.RuleID, expectHealthEpisode)
+		// Both are required rather than wildcards. An empty value matching anything would let a typo in expected.yaml pass a scenario
+		// whose rule recorded the wrong kind of fault, or the right fault at the wrong severity.
+		if expected.Kind == "" || expected.Severity == "" {
+			return false, fmt.Errorf("expected.yaml: rule %s expects a %s and must name both its kind and its severity",
+				expected.RuleID, expectHealthEpisode)
 		}
 		return waitForHealthEpisode(ctx, stack, hostID, expected, deadline)
 	default:
@@ -478,8 +481,9 @@ func waitForExpected(
 // rather than as an alert, so ListAlerts would never see it. Read from the table directly because the harness has the database and no
 // operator session, and what it asserts is that the system recorded the fault, not how a page renders it.
 //
-// It also asserts no alert was raised for the rule while it waits, which is the other half of the contract: a regression that recorded
-// the episode AND kept the alert would otherwise pass here.
+// It also asserts no alert was raised for the rule, which is the other half of the contract: a regression that recorded the episode AND
+// kept the alert would otherwise pass here. That check waits out noiseSettle after the episode appears rather than looking once, because
+// the two writes are separate statements and an alert committed a moment after the episode would slip past an immediate look.
 func waitForHealthEpisode(
 	ctx context.Context, stack *integration.Stack, hostID string, expected expectedRule, deadline time.Duration,
 ) (bool, error) {
@@ -488,13 +492,18 @@ func waitForHealthEpisode(
 	for time.Now().Before(stop) {
 		var n int
 		err := stack.DB.GetContext(ctx, &n,
-			`SELECT COUNT(*) FROM host_health_episodes WHERE host_id = ? AND kind = ? AND (? = '' OR severity = ?)`,
-			hostID, expected.Kind, expected.Severity, expected.Severity)
+			`SELECT COUNT(*) FROM host_health_episodes WHERE host_id = ? AND kind = ? AND severity = ?`,
+			hostID, expected.Kind, expected.Severity)
 		if err != nil {
 			return false, err
 		}
 		if n > 0 {
 			// The episode is there; now the half that makes it a health signal rather than a detection with an extra record.
+			select {
+			case <-time.After(noiseSettle):
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
 			alerts, err := stack.DetectionService().ListAlerts(ctx, detectionapi.AlertFilter{HostID: hostID, Limit: 50})
 			if err != nil {
 				return false, err
