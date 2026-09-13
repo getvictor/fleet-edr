@@ -232,7 +232,7 @@ If your host filesystem is ZFS / Btrfs / LVM-thin, volume snapshots are faster t
 Three common scenarios:
 
 1. **Keep the process graph longer for investigations.** Set a larger `EDR_RETENTION_DAYS`. Monitor `edr.retention.processes.rows_deleted` and DB disk usage for a week to confirm storage is sized right. (Raw event history is bounded by the ClickHouse TTL, not this knob; to change how long events are retained, adjust the archive TTL in `server/visibility/migrations-clickhouse/`.)
-2. **Disk is filling up, want to shrink the process-graph window.** Set a smaller `EDR_RETENTION_DAYS`. The next hourly run prunes completed process records older than the new cutoff. Expect one large deletion, then normal churn. (For raw-event disk, the ClickHouse TTL is the lever.)
+2. **Disk is filling up, want to shrink the process-graph window.** Set a smaller `EDR_RETENTION_DAYS`. The pass that runs when the server restarts prunes completed process records older than the new cutoff. Expect one large deletion, then normal churn. (For raw-event disk, the ClickHouse TTL is the lever.)
 3. **Want to keep the process graph forever for a forensic investigation.** Set `EDR_RETENTION_DAYS=0`. Process-record pruning is disabled. Re-enable once the investigation is complete to avoid unbounded growth.
 
 An alert's triggering-event evidence is copied into MySQL at alert-creation time (`alert_event_payloads`), so it survives the ClickHouse archive ageing those events out, for as long as the alert itself is kept.
@@ -243,10 +243,10 @@ Alerts are kept for **180 days after their last triage activity** by default, an
 
 - **Measured from last triage activity, not from when the alert was raised.** Acknowledging, resolving, or reopening an alert restarts its window, so an alert someone is working is never deleted because it was raised long ago. A detection re-firing against an existing alert does not restart it, so a standing condition nobody triages still ages out, and its next re-fire raises a new alert.
 - **Independent of `EDR_RETENTION_DAYS`.** Setting either to `0` does not affect the other. In particular, stopping process-record pruning for a forensic hold does not also stop alert pruning; set both if you mean both.
-- **Releases process records.** A process record referenced by an alert is kept for as long as that alert is. Once the alert is deleted, the record is pruned under `EDR_RETENTION_DAYS` like any other, in the same hourly pass.
+- **Releases process records.** A process record referenced by an alert is kept for as long as that alert is. Once the alert is deleted, the record is pruned under `EDR_RETENTION_DAYS` like any other, in the same pass.
 - **Deletions are counted** by `edr.retention.alerts.rows_deleted`, separate from the process counter.
 
-Lowering the window on a long-running deployment deletes every alert past the new cutoff on the next hourly run. Export anything you need to keep beyond it first.
+The first pass runs when the server starts, then hourly. Changing the setting takes a restart, so lowering the window deletes every alert past the new cutoff as soon as the server comes back up. Export anything you need to keep beyond it first.
 
 ### Curbing event volume at the source
 
