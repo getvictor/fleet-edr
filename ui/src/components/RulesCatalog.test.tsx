@@ -17,6 +17,8 @@ function rule(id: string, title: string, over: Partial<RuleDocEntry> = {}): Rule
 const rules: RuleDocEntry[] = [
   rule("suspicious_exec", "Suspicious exec chain", { origin: "Fleet EDR", mode: "alert", mode_source: "default" }),
   rule("keychain_extra", "Keychain extra", { origin: "Locally authored", mode: "monitor", mode_source: "default" }),
+  // An older replica mid-upgrade reports neither the mode in force nor an origin.
+  rule("legacy_rule", "Legacy rule", { default_mode: "monitor" }),
   rule("proc_creation_macos_curl", "Curl download", {
     origin: "SigmaHQ, by Someone",
     mode: "alert",
@@ -45,14 +47,18 @@ describe("RulesCatalog", () => {
 
     const table = await screen.findByRole("table");
     const names = within(table).getAllByRole("link").map((l) => l.textContent);
-    expect(names).toEqual(["Curl download", "Keychain extra", "Suspicious exec chain"]);
+    expect(names).toEqual(["Curl download", "Keychain extra", "Legacy rule", "Suspicious exec chain"]);
     expect(within(table).getByRole("link", { name: "Keychain extra" })).toHaveAttribute("href", "/rules/keychain_extra");
     expect(within(table).getByText("keychain_extra")).toBeVisible();
     const curlRow = within(table).getByRole("link", { name: "Curl download" }).closest("tr") as HTMLElement;
     expect(within(curlRow).getByText("low")).toBeVisible();
     // A mode an operator chose is marked, because a rule sitting in its own default and one moved there call for different follow-ups.
     expect(within(curlRow).getByText("Alert (set)")).toBeVisible();
-    expect(screen.getByText("3 rules, 1 written on this deployment.")).toBeVisible();
+    expect(screen.getByText("4 rules, 1 written on this deployment.")).toBeVisible();
+    // Without a reported mode, the rule's declaration is not presented as the mode in force.
+    const legacyRow = within(table).getByRole("link", { name: "Legacy rule" }).closest("tr") as HTMLElement;
+    expect(within(legacyRow).getAllByText("Unknown")).toHaveLength(2);
+    expect(within(legacyRow).queryByText("Monitor")).toBeNull();
   });
 
   // spec:web-ui/the-rule-catalogue-is-browsable/the-catalogue-distinguishes-shipped-rules-from-the-deployment-s-own
@@ -70,7 +76,9 @@ describe("RulesCatalog", () => {
     fireEvent.change(screen.getByLabelText("Show:"), { target: { value: "yours" } });
     expect(within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent)).toEqual(["Keychain extra"]);
     fireEvent.change(screen.getByLabelText("Show:"), { target: { value: "shipped" } });
-    expect(within(screen.getByRole("table")).queryByRole("link", { name: "Keychain extra" })).toBeNull();
+    const shipped = within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent);
+    // A rule whose origin the server did not report is neither shipped nor yours.
+    expect(shipped).toEqual(["Curl download", "Suspicious exec chain"]);
   });
 
   it("filters by name or identifier", async () => {

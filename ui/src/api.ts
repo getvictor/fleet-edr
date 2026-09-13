@@ -631,7 +631,10 @@ export interface RuleContentDocumentSummary {
 
 export async function listRuleContentDocuments(): Promise<RuleContentDocumentSummary[]> {
   const body = await fetchJSON<{ corpus_version: number; documents: RuleContentDocumentSummary[] | null }>("/v1/rule-content/documents");
-  return body.documents ?? [];
+  // The server always sends an array, empty for an empty corpus. A missing one is a malformed response, and treating it as empty would
+  // report every stored rule as built into the server.
+  if (!Array.isArray(body.documents)) throw new Error("malformed rule-content document list");
+  return body.documents;
 }
 
 // ruleDocumentStem is the rule identity a document path defines: the file name without its extension. Mirrors the server's loader, which
@@ -642,10 +645,23 @@ export function ruleDocumentStem(path: string): string {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
+// SUB_DELIMITER_ENCODINGS percent-encodes the characters encodeURIComponent leaves unescaped.
+const SUB_DELIMITER_ENCODINGS: ReadonlyMap<string, string> = new Map([
+  ["!", "%21"],
+  ["'", "%27"],
+  ["(", "%28"],
+  [")", "%29"],
+  ["*", "%2A"],
+]);
+
 // getRuleContentDocument returns a rule document verbatim. Each path segment is encoded separately, because the slashes between them are
-// part of the route and must survive while anything else in a segment must not steer the request.
+// part of the route and must survive while anything else in a segment must not steer the request. encodeURIComponent leaves ! ' ( ) *
+// alone, and the API path guard refuses them, so those are percent-encoded too: the server accepts them in a directory name, and a
+// document it lists must be one this page can open.
 export async function getRuleContentDocument(path: string): Promise<string> {
-  const encoded = path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const encodeSegment = (segment: string) =>
+    encodeURIComponent(segment).replace(/[!'()*]/g, (c) => SUB_DELIMITER_ENCODINGS.get(c) ?? c);
+  const encoded = path.split("/").map(encodeSegment).join("/");
   return fetchText(`/v1/rule-content/documents/${encoded}`);
 }
 

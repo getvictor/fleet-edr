@@ -401,8 +401,19 @@ describe("rule content documents", () => {
     expect(target.pathname).toBe("/api/v1/rule-content/documents/authored/keychain%20extra.yml");
   });
 
-  it("treats a null document list as empty", async () => {
+  it("percent-encodes the characters encodeURIComponent leaves, so a listed path can be opened", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("x", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await getRuleContentDocument("team's (draft)!/rule*.yml");
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.pathname).toBe("/api/v1/rule-content/documents/team%27s%20%28draft%29%21/rule%2A.yml");
+  });
+
+  // A missing list is a malformed response, not an empty corpus, and must not make every stored rule read as built in.
+  it("rejects a missing document list instead of treating it as empty", async () => {
     stubFetch({ corpus_version: 1, documents: null });
+    await expect(listRuleContentDocuments()).rejects.toThrow("malformed rule-content document list");
+    stubFetch({ corpus_version: 1, documents: [] });
     await expect(listRuleContentDocuments()).resolves.toEqual([]);
   });
 

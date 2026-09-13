@@ -6,6 +6,7 @@ import { severityBadgeVariant } from "./ui/severity";
 import { EmptyState, Table } from "./ui/Table";
 import { Input, Select } from "./ui/Input";
 import { PageHeader } from "./ui/PageHeader";
+import { ruleModeLabel } from "./ruleMode";
 import "./RulesCatalog.scss";
 
 // The origin the server reports for a rule written on this deployment (server/rules/api: LocalOrigin). The server records provenance
@@ -15,24 +16,21 @@ const localOrigin = "Locally authored";
 
 type OwnershipFilter = "all" | "shipped" | "yours";
 
-// MODE_LABELS names the mode a rule runs in. A Map so a mode this client does not know renders as the server sent it instead of resolving
-// an inherited object key.
-const MODE_LABELS: ReadonlyMap<string, string> = new Map([
-  ["alert", "Alert"],
-  ["monitor", "Monitor"],
-  ["disabled", "Disabled"],
-]);
-
+// modeLabel names the mode a rule runs in. A server that does not report it (an older replica mid-upgrade) gets "Unknown" rather than
+// the rule's declared default: the declaration is not the mode in force, and a rule an operator disabled would read as running.
 function modeLabel(rule: RuleDocEntry): string {
-  // The mode in force, falling back to the rule's own declaration only for a server that predates reporting it.
-  const mode = rule.mode ?? rule.default_mode;
-  if (mode === undefined) return "Unknown";
-  const label = MODE_LABELS.get(mode) ?? mode;
+  if (rule.mode === undefined) return "Unknown";
+  const label = ruleModeLabel(rule.mode);
   return rule.mode_source === "setting" ? `${label} (set)` : label;
 }
 
-function isOwnRule(rule: RuleDocEntry): boolean {
-  return rule.origin === localOrigin;
+type Ownership = "shipped" | "yours" | "unknown";
+
+// ownership says whether a rule shipped or was written on this deployment. An absent origin comes only from a server that predates
+// reporting one, and it is "unknown", not "shipped": counting it as shipped would hide an operator's own rule from the Yours filter.
+function ownership(rule: RuleDocEntry): Ownership {
+  if (rule.origin === undefined) return "unknown";
+  return rule.origin === localOrigin ? "yours" : "shipped";
 }
 
 // RulesCatalog is the browsable list of every rule this deployment runs (issue #1001). Before it, the rule detail page was reachable
@@ -43,7 +41,7 @@ export function RulesCatalog() {
   const [rules, setRules] = useState<RuleDocEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [ownership, setOwnership] = useState<OwnershipFilter>("all");
+  const [ownershipFilter, setOwnershipFilter] = useState<OwnershipFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -61,12 +59,12 @@ export function RulesCatalog() {
     if (rules === null) return [];
     const needle = query.trim().toLowerCase();
     return rules
-      .filter((r) => ownership === "all" || (ownership === "yours") === isOwnRule(r))
+      .filter((r) => ownershipFilter === "all" || ownership(r) === ownershipFilter)
       .filter((r) => needle === "" || r.id.toLowerCase().includes(needle) || r.doc.title.toLowerCase().includes(needle))
       .sort((a, b) => a.doc.title.localeCompare(b.doc.title));
-  }, [rules, query, ownership]);
+  }, [rules, query, ownershipFilter]);
 
-  const ownCount = rules?.filter(isOwnRule).length ?? 0;
+  const ownCount = rules?.filter((r) => ownership(r) === "yours").length ?? 0;
 
   const filters = (
     <div className="rules-catalog__filters">
@@ -80,8 +78,8 @@ export function RulesCatalog() {
       <Select
         id="rules-catalog-ownership"
         label="Show:"
-        value={ownership}
-        onChange={(e) => { setOwnership(e.target.value as OwnershipFilter); }}
+        value={ownershipFilter}
+        onChange={(e) => { setOwnershipFilter(e.target.value as OwnershipFilter); }}
       >
         <option value="all">All rules</option>
         <option value="shipped">Shipped</option>
@@ -127,13 +125,13 @@ export function RulesCatalog() {
                 </td>
                 <td>{modeLabel(r)}</td>
                 <td>
-                  {isOwnRule(r) ? (
-                    <Badge variant="info">Yours</Badge>
-                  ) : (
+                  {ownership(r) === "yours" && <Badge variant="info">Yours</Badge>}
+                  {ownership(r) === "unknown" && <span className="rules-catalog__shipped">Unknown</span>}
+                  {ownership(r) === "shipped" && (
                     <>
                       <span className="rules-catalog__shipped">Shipped</span>
                       {/* The imported corpus's licence requires its authors be credited wherever the rule is described. */}
-                      {r.origin && <div className="rules-catalog__origin">{r.origin}</div>}
+                      <div className="rules-catalog__origin">{r.origin}</div>
                     </>
                   )}
                 </td>

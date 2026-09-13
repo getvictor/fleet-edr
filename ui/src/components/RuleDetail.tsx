@@ -4,6 +4,7 @@ import { fetchRuleDocs, type RuleDocEntry } from "../api";
 import { vettedHTTPURL } from "../urls";
 import { PermissionAction, useCan } from "../permissions-core";
 import { RuleSource } from "./RuleSource";
+import { ruleModeLabel } from "./ruleMode";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
@@ -70,20 +71,14 @@ export function RuleDetail() {
   );
 }
 
-// MODE_LABEL and MODE_EFFECT render a resolved mode for a reader. Held as maps rather than nested ternaries because there are three
-// modes and two independent questions about them (what it is called, what it does), and a fourth mode would otherwise mean editing
-// two conditionals in the markup.
-const MODE_LABEL: Record<string, string> = {
-  alert: "Alert",
-  monitor: "Monitor",
-  disabled: "Disabled",
-};
-
-const MODE_EFFECT: Record<string, string> = {
-  alert: "This rule raises alerts as normal.",
-  monitor: "This rule records what it would have fired on and raises no alert.",
-  disabled: "This rule is off and produces nothing.",
-};
+// MODE_EFFECT says what a resolved mode does, beside its name from ruleModeLabel, which the rules catalogue shares. Held as a map rather
+// than nested ternaries so a fourth mode is one entry, not another conditional in the markup; a Map so an unrecognised mode string
+// cannot resolve an inherited object key.
+const MODE_EFFECT: ReadonlyMap<string, string> = new Map([
+  ["alert", "This rule raises alerts as normal."],
+  ["monitor", "This rule records what it would have fired on and raises no alert."],
+  ["disabled", "This rule is off and produces nothing."],
+]);
 
 // modeRow describes the Mode row for a rule, or null when the row says nothing a reader needs.
 //
@@ -146,8 +141,8 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
               <tr>
                 <th scope="row">{row.heading}</th>
                 <td>
-                  <span className="rule-detail__mode">{MODE_LABEL[row.mode] ?? row.mode}</span>{" "}
-                  {MODE_EFFECT[row.mode] ?? "Its mode is not one this page recognises."} {row.provenance}
+                  <span className="rule-detail__mode">{ruleModeLabel(row.mode)}</span>{" "}
+                  {MODE_EFFECT.get(row.mode) ?? "Its mode is not one this page recognises."} {row.provenance}
                   {/* Only claimed when a mode was actually resolved: saying "resolved at global scope" right after "this server
                       does not report the mode in force" is a contradiction in consecutive sentences. */}
                   {row.resolved && " Resolved at global scope; a host-group setting can differ for the hosts in that group."}
