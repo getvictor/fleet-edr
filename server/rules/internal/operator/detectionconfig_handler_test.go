@@ -402,6 +402,7 @@ func TestDetectionConfigHandler_MissingActorIs500(t *testing.T) {
 func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 	t.Parallel()
 	h := NewDetectionConfig(&fakeDCService{}, denyAllAuthZ{}, slog.Default())
+	h.SetWatchedPaths(&fakeWatchedPaths{})
 	// httpserver.RecordingRouter, not a local one: it already forwards and records patterns for the composition-time mount check,
 	// and a second copy would mean fixes to route recording maintained twice. Asking the handler what its surface IS, rather than
 	// keeping a second copy of the answer, is the same idea this type exists for.
@@ -428,6 +429,8 @@ func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 		"POST /api/v1/detection-config/exclusions":        {"/api/v1/detection-config/exclusions", `{}`},
 		"DELETE /api/v1/detection-config/exclusions/{id}": {"/api/v1/detection-config/exclusions/1?reason=r", ""},
 		"PUT /api/v1/detection-config/rule-settings":      {"/api/v1/detection-config/rule-settings", `{}`},
+		"GET /api/v1/detection-config/watched-paths":      {"/api/v1/detection-config/watched-paths", ""},
+		"PUT /api/v1/detection-config/watched-paths":      {"/api/v1/detection-config/watched-paths", `{}`},
 	}
 
 	require.NotEmpty(t, patterns, "RegisterRoutes registered nothing, so the loop below would assert nothing")

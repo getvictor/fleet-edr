@@ -21,6 +21,10 @@ const (
 	errSvcSnapshotComposeFmt = "appcontrol snapshot compose: %w"
 )
 
+// FanoutSkipReasonHostLister is the audit and API value for a push that reached no host because the host list could not be read.
+// Exported so the watched-path push records the same string, and one audit query finds both.
+const FanoutSkipReasonHostLister = "host_lister_error"
+
 // CommandBatchInserter is the closure cmd/main supplies so the application-control fan-out can enqueue one
 // `set_application_control` command per host across the whole assigned host set in a couple of round trips rather than one INSERT
 // per host. Method-value shape matches response.Service.InsertBatch so cmd/main passes `responseCtx.Service().InsertBatch`
@@ -243,7 +247,7 @@ func (s *Service) buildSnapshotPayload(ctx context.Context, policyID int64) (api
 // fanoutSkipReason values land verbatim on the audit row when the fan-out couldn't run end-to-end. The empty string means "no skip;
 // the loop ran" and is the happy path.
 const (
-	fanoutSkipReasonHostLister     = "host_lister_error"
+	fanoutSkipReasonHostLister     = FanoutSkipReasonHostLister
 	fanoutSkipReasonAssignmentList = "assignment_list_error"
 	fanoutSkipReasonNoAssignments  = "no_assignments"
 	fanoutSkipReasonNoHosts        = "no_hosts_resolved"
