@@ -69,11 +69,11 @@ func (s *Store) Seal(ctx context.Context, id int64, entry Entry) (bool, error) {
 
 // PendingAuditEntries returns up to limit deliverable entries, oldest first. A held entry whose hold has not passed is left out.
 //
-// A locking read that skips locked rows, not a plain read, and that is what makes Seal and delivery exclusive. A plain read sees the
-// last committed version, so a seal begun before the hold passed but not yet committed would let a drain read the unsealed payload
-// and record it while the seal went on to report success. A locking read cannot see past an uncommitted seal, and SKIP LOCKED leaves
-// that row for the next pass, by which time it is sealed; it likewise skips an entry whose change has not committed yet. The share
-// locks are held only for this statement.
+// A locking read, not a plain read, and that is what makes Seal and delivery exclusive. A plain read sees the last committed version,
+// so a seal begun before the hold passed but not yet committed would let a drain read the unsealed payload and record it while the
+// seal went on to report success. A locking read waits for that seal to commit and then reads the sealed entry, in its place in the
+// order. It does not skip the row: skipping would deliver the entries after it first. The wait is bounded by the writers it can meet,
+// a seal or a change's own transaction, each a few statements long, and the share locks last only for this statement.
 func (s *Store) PendingAuditEntries(ctx context.Context, limit int) ([]Pending, error) {
 	var rows []struct {
 		ID      int64  `db:"id"`
@@ -82,7 +82,7 @@ func (s *Store) PendingAuditEntries(ctx context.Context, limit int) ([]Pending, 
 	}
 	if err := s.db.SelectContext(ctx, &rows,
 		`SELECT id, kind, payload FROM detection_config_audit_outbox
-		 WHERE held_until IS NULL OR held_until <= NOW(6) ORDER BY id LIMIT ? FOR SHARE SKIP LOCKED`, limit); err != nil {
+		 WHERE held_until IS NULL OR held_until <= NOW(6) ORDER BY id LIMIT ? FOR SHARE`, limit); err != nil {
 		return nil, fmt.Errorf("read detection config audit outbox: %w", err)
 	}
 	out := make([]Pending, len(rows))

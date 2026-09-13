@@ -116,9 +116,9 @@ func TestStore_AHeldEntryWaitsForItsSealOrItsHold(t *testing.T) {
 	assert.False(t, sealed, "an entry already delivered cannot be sealed")
 }
 
-// A seal in flight holds its row, and a drain skips the row rather than reading the payload the seal is replacing, so an entry is
-// delivered either as first written (once a seal can no longer change it) or as sealed, never the first while a seal succeeds.
-func TestStore_ADrainSkipsAnEntryWhoseSealIsInFlight(t *testing.T) {
+// A seal in flight holds its row, and a drain waits for it rather than reading the payload the seal is replacing or skipping ahead of
+// it, so the entry is delivered sealed and in its place in the order.
+func TestStore_ADrainWaitsForASealInFlight(t *testing.T) {
 	t.Parallel()
 	s, db := openOutbox(t)
 	var id int64
@@ -126,6 +126,7 @@ func TestStore_ADrainSkipsAnEntryWhoseSealIsInFlight(t *testing.T) {
 		var err error
 		id, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
 		require.NoError(t, err)
+		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "written after it")))
 	})
 
 	sealing, err := db.BeginTxx(t.Context(), nil)
@@ -136,9 +137,30 @@ func TestStore_ADrainSkipsAnEntryWhoseSealIsInFlight(t *testing.T) {
 		string(sealed.Payload), id)
 	require.NoError(t, err)
 
-	assert.Empty(t, pendingTargets(t, s), "the row being sealed is skipped, not read as first written")
+	type result struct {
+		pending []auditoutbox.Pending
+		err     error
+	}
+	read := make(chan result, 1)
+	go func() {
+		pending, err := s.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+		read <- result{pending, err}
+	}()
+	select {
+	case r := <-read:
+		t.Fatalf("the drain read %d entries past an uncommitted seal instead of waiting for it", len(r.pending))
+	case <-time.After(300 * time.Millisecond):
+	}
 	require.NoError(t, sealing.Commit())
-	assert.Equal(t, []string{"with counts"}, pendingTargets(t, s), "and the next pass delivers it sealed")
+	r := <-read
+	require.NoError(t, r.err)
+	targets := make([]string, 0, len(r.pending))
+	for _, p := range r.pending {
+		e, err := auditoutbox.Decode(p.Payload)
+		require.NoError(t, err)
+		targets = append(targets, e.TargetID)
+	}
+	assert.Equal(t, []string{"with counts", "written after it"}, targets, "the sealed entry, first, as it was written")
 }
 
 // Once a held entry's hold has passed, a drain may already have read it as first written, so sealing it is refused and it is
