@@ -2,6 +2,7 @@ package tests
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -184,13 +185,27 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 	}
 	delete(body, "client_secret")
 
-	// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/an-update-without-the-mapping-keeps-it
-	withoutMapping := maps.Clone(body)
-	delete(withoutMapping, "groups_claim")
-	delete(withoutMapping, "group_roles")
-	withoutMapping["default_role"] = "analyst"
-	assert.Contains(t, put(t, withoutMapping), `"groups_claim":"groups","group_roles":[{"group":"edr-senior"`,
-		"an update that carries no mapping keeps the stored one")
+	// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/a-stale-update-is-refused
+	current, err := ssoStore.Get(t.Context())
+	require.NoError(t, err)
+	stale := maps.Clone(body)
+	stale["expected_version"] = current.Version - 1
+	stale["default_role"] = "analyst"
+	stale["groups_claim"] = ""
+	stale["group_roles"] = []map[string]string{}
+	raw, err = json.Marshal(stale)
+	require.NoError(t, err)
+	staleW := httptest.NewRecorder()
+	mux.ServeHTTP(staleW, adminActorCtx(
+		httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(raw))), uid))
+	require.Equal(t, http.StatusConflict, staleW.Code, "body: %s", staleW.Body.String())
+	unchanged, err := ssoStore.Get(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, current.Version, unchanged.Version, "a refused update writes nothing")
+	assert.Equal(t, "groups", unchanged.GroupsClaim)
+	body["expected_version"] = current.Version
+	assert.Contains(t, put(t, body), fmt.Sprintf(`"version":%d`, current.Version+1), "an update based on the current version is saved")
+	delete(body, "expected_version")
 
 	// An empty claim with no mappings turns the mapping off: none are stored, and the read returns an empty list.
 	body["groups_claim"] = ""

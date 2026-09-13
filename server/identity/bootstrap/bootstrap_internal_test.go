@@ -279,12 +279,21 @@ func TestSeedOIDCConfig(t *testing.T) {
 		ctx := t.Context()
 		require.NoError(t, SeedOIDCConfig(ctx, db, sealerKeyA,
 			OIDCSeedInput{Issuer: "https://first.example.com", ClientID: "cid", ClientSecret: "shh"}))
+		// A group mapping saved for the first provider must not carry over to the provider a forced seed replaces it with.
+		first, err := store.Get(ctx)
+		require.NoError(t, err)
+		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
+			Issuer: first.Issuer, ClientID: first.ClientID, JITEnabled: true, DefaultRole: "analyst",
+			GroupsClaim: "groups", GroupRoles: []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}},
+		}))
 		require.NoError(t, SeedOIDCConfig(ctx, db, sealerKeyA, OIDCSeedInput{
 			Issuer: "https://second.example.com", ClientID: "cid2", ClientSecret: "other", Force: true,
 		}))
 		cfg, err := store.GetDecrypted(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, "https://second.example.com", cfg.Issuer, "Force re-seeds over the existing config")
+		assert.Empty(t, cfg.GroupsClaim, "Force clears the previous provider's group mapping")
+		assert.Empty(t, cfg.GroupRoles)
 	})
 }
 
@@ -381,10 +390,8 @@ func TestNewOIDCJITPolicyFn(t *testing.T) {
 		secret := "shh"
 		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 			Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: &secret, JITEnabled: true, DefaultRole: "auditor",
-			GroupMapping: &ssoconfig.GroupMapping{
-				Claim: "groups",
-				Roles: []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
-			},
+			GroupsClaim: "groups",
+			GroupRoles:  []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
 		}))
 		fn := newOIDCJITPolicyFn(store)
 		policy, err := fn(ctx)

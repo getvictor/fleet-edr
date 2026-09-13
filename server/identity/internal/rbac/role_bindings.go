@@ -272,12 +272,43 @@ func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (p
 }
 
 // SyncUserRole makes roleID the single global role of a user, as an SSO sign-in's group mapping does, and reports whether it changed
-// anything. It leaves three users as they are, decided on the same locked transaction as the write so a concurrent grant or status
-// change cannot slip in between: one who already holds exactly roleID, one who holds super_admin (no mapping can grant it, so a sync
-// could only take it away), and one who is not active. Like SetUserRole it returns api.ErrLastAdmin, persisting nothing, when the
-// change would leave no active admin.
+// anything. It leaves three users as they are: one who already holds exactly roleID, one who holds super_admin (no mapping can grant
+// it, so a sync could only take it away), and one who is not active. Like SetUserRole it returns api.ErrLastAdmin, persisting nothing,
+// when the change would leave no active admin.
+//
+// Most sign-ins change nothing, so that is first decided from a plain read and returns without taking the admin sentinel, which would
+// queue every sign-in behind every other role change. A read that calls for a change is decided again on the locked transaction that
+// writes it, so a super_admin grant or a disable committed in between is seen and not overwritten. A skip writes nothing, so a change
+// committed after the plain read is at worst applied at the next sign-in.
 func (s *Store) SyncUserRole(ctx context.Context, userID int64, roleID string) (previous []string, changed bool, err error) {
+	if s.db == nil {
+		return nil, false, errNilDB
+	}
+	current, err := s.LiveGlobalRoles(ctx, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	status, err := userStatus(ctx, s.db, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	if syncLeavesAlone(current, status, roleID) {
+		return current, false, nil
+	}
 	return s.replaceGlobalRole(ctx, userID, roleID, true)
+}
+
+// syncLeavesAlone reports whether SyncUserRole leaves a user holding roles, with account status, as they are.
+func syncLeavesAlone(roles []string, status, roleID string) bool {
+	return status != users.StatusActive || slices.Equal(roles, []string{roleID}) || slices.Contains(roles, roleSuperAdmin)
+}
+
+func userStatus(ctx context.Context, q sqlx.QueryerContext, userID int64) (string, error) {
+	var status string
+	if err := sqlx.GetContext(ctx, q, &status, `SELECT status FROM users WHERE id = ?`, userID); err != nil {
+		return "", fmt.Errorf("read status of user %d: %w", userID, err)
+	}
+	return status, nil
 }
 
 // replaceGlobalRole is SetUserRole and SyncUserRole: with sync, the users SyncUserRole leaves alone are skipped inside the guarded
@@ -306,12 +337,11 @@ func (s *Store) replaceGlobalRole(
 		return nil, false, fmt.Errorf("read previous bindings for user %d: %w", userID, err)
 	}
 	if sync {
-		var status string
-		if err = tx.GetContext(ctx, &status, `SELECT status FROM users WHERE id = ?`, userID); err != nil {
-			return nil, false, fmt.Errorf("read status of user %d: %w", userID, err)
+		status, statusErr := userStatus(ctx, tx, userID)
+		if statusErr != nil {
+			return nil, false, statusErr
 		}
-		unchanged := slices.Equal(previous, []string{roleID})
-		if status != userStatusActive || unchanged || slices.Contains(previous, roleSuperAdmin) {
+		if syncLeavesAlone(previous, status, roleID) {
 			return previous, false, nil
 		}
 	}

@@ -44,7 +44,7 @@ describe("SSO config API client", () => {
     const mock = stubFetch({ configured: true });
     await updateSSOConfig({
       issuer: "https://idp", client_id: "cid", external_url: "https://e",
-      scopes: ["openid"], jit_enabled: true, default_role: "analyst",
+      scopes: ["openid"], jit_enabled: true, default_role: "analyst", groups_claim: "", group_roles: [],
     });
     const [target, init] = mock.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
     expect(target.toString()).toContain("/api/settings/sso");
@@ -55,6 +55,14 @@ describe("SSO config API client", () => {
     expect(Object.keys(expectedCsrf).length).toBeGreaterThan(0);
     expect(init.headers).toMatchObject(expectedCsrf);
     expect(JSON.parse(init.body as string)).toMatchObject({ issuer: "https://idp", default_role: "analyst" });
+  });
+
+  it("updateSSOConfig throws the handler's typed error code", async () => {
+    stubFetch({ error: "version_conflict" }, 409);
+    await expect(updateSSOConfig({
+      issuer: "https://idp", client_id: "cid", external_url: "https://e", scopes: ["openid"], jit_enabled: true,
+      default_role: "analyst", groups_claim: "", group_roles: [], expected_version: 2,
+    })).rejects.toMatchObject({ name: "SSOConfigApiError", code: "version_conflict", status: 409 });
   });
 
   it("testSSOConnection POSTs the issuer", async () => {

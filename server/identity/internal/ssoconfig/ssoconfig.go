@@ -18,6 +18,10 @@ import (
 // ErrNotFound is returned by the Get methods when no oidc_config row exists (OIDC has not been configured for the deployment).
 var ErrNotFound = errors.New("ssoconfig: not configured")
 
+// ErrVersionConflict is returned by an upsert that names the version it was based on when the stored configuration has changed since:
+// the write is refused rather than replace settings the writer never saw.
+var ErrVersionConflict = errors.New("ssoconfig: version conflict")
+
 // Config is the resolved OIDC configuration callers see. ClientSecret is populated ONLY by GetDecrypted (the login/resolver path);
 // Get leaves it empty and reports presence via HasSecret so the admin read API can never serialize the secret. Scopes is the parsed
 // list. Version is config_version, bumped on every Upsert, used by the per-replica provider cache to detect a change.
@@ -86,24 +90,21 @@ type row struct {
 }
 
 // UpsertInput is the write shape. NewSecret nil leaves the stored secret unchanged (rotate-only semantics); a non-nil pointer (even to
-// "") rotates it to the sealed new value. GroupMapping nil likewise leaves the stored groups claim and mappings unchanged, so a writer
-// that does not edit them cannot clear them; a non-nil value replaces both. UpdatedBy nil records an env-seed (no operator); non-nil
-// records the acting user id.
+// "") rotates it to the sealed new value. Every other field replaces what is stored, the group mapping included, so a writer that
+// leaves it empty turns mapping off. UpdatedBy nil records an env-seed (no operator); non-nil records the acting user id.
 type UpsertInput struct {
-	Issuer       string
-	ClientID     string
-	NewSecret    *string
-	Scopes       []string
-	JITEnabled   bool
-	DefaultRole  string
-	GroupMapping *GroupMapping
-	UpdatedBy    string
-}
-
-// GroupMapping is the groups claim and the group mappings, written together.
-type GroupMapping struct {
-	Claim string
-	Roles []GroupRole
+	Issuer      string
+	ClientID    string
+	NewSecret   *string
+	Scopes      []string
+	JITEnabled  bool
+	DefaultRole string
+	GroupsClaim string
+	GroupRoles  []GroupRole
+	// ExpectedVersion, when set, refuses the write with ErrVersionConflict unless the stored config_version equals it (0 when nothing is
+	// stored yet). It is checked under a row lock, so it holds against a concurrent writer only when ext is a transaction.
+	ExpectedVersion *int64
+	UpdatedBy       string
 }
 
 // Store owns the oidc_config table. It holds the Sealer so secret sealing/opening stays co-located with persistence.
@@ -221,13 +222,17 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 	if updatedBy == "" {
 		updatedBy = api.PrincipalSystemID
 	}
-	// Without a mapping the insert (first write) stores none, and the update keeps what is stored: the IF picks the stored column.
-	writeMapping := in.GroupMapping != nil
-	var groupsClaim string
-	var groupRoles []byte
-	if writeMapping {
-		groupsClaim, groupRoles = in.GroupMapping.Claim, encodeGroupRoles(in.GroupMapping.Roles)
+	if in.ExpectedVersion != nil {
+		var stored int64
+		err := sqlx.GetContext(ctx, ext, &stored, `SELECT config_version FROM oidc_config WHERE id = 1 FOR UPDATE`)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("ssoconfig: read version: %w", err)
+		}
+		if stored != *in.ExpectedVersion {
+			return ErrVersionConflict
+		}
 	}
+	groupRoles := encodeGroupRoles(in.GroupRoles)
 
 	if in.NewSecret != nil {
 		sealed, err := s.sealer.Seal([]byte(*in.NewSecret))
@@ -242,10 +247,9 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 			ON DUPLICATE KEY UPDATE
 				issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
 				scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
-				groups_claim = IF(?, VALUES(groups_claim), groups_claim), group_roles = IF(?, VALUES(group_roles), group_roles),
+				groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
 				config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, groupsClaim, groupRoles, updatedBy,
-			writeMapping, writeMapping)
+			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
 		if err != nil {
 			return fmt.Errorf("ssoconfig: upsert with secret: %w", err)
 		}
@@ -261,9 +265,9 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 		ON DUPLICATE KEY UPDATE
 			issuer = VALUES(issuer), client_id = VALUES(client_id),
 			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
-			groups_claim = IF(?, VALUES(groups_claim), groups_claim), group_roles = IF(?, VALUES(group_roles), group_roles),
+			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
 			config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, groupsClaim, groupRoles, updatedBy, writeMapping, writeMapping)
+		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
 	if err != nil {
 		return fmt.Errorf("ssoconfig: upsert: %w", err)
 	}

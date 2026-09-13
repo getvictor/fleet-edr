@@ -1013,6 +1013,8 @@ export interface SSOConfig {
   groups_claim: string;
   group_roles: SSOGroupRole[];
   secret_set: boolean;
+  // version is the stored configuration's version, 0 before anything is stored; an update sends it back as expected_version.
+  version: number;
 }
 
 // SSOGroupRole grants role to the members of the IdP group named group.
@@ -1032,9 +1034,23 @@ export interface SSOConfigUpdate {
   scopes: string[];
   jit_enabled: boolean;
   default_role: string;
-  // groups_claim and group_roles are sent together to replace the group mapping, or both omitted to keep the stored one.
-  groups_claim?: string;
-  group_roles?: SSOGroupRole[];
+  groups_claim: string;
+  group_roles: SSOGroupRole[];
+  // expected_version is the version the settings were read at; the server refuses the update with 409 version_conflict when the
+  // stored configuration has changed since.
+  expected_version?: number;
+}
+
+// SSOConfigApiError carries the typed `error` code the SSO settings handler writes on a 4xx (version_conflict, invalid_issuer, ...).
+export class SSOConfigApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "SSOConfigApiError";
+    this.code = code;
+    this.status = status;
+  }
 }
 
 export async function getSSOConfig(): Promise<SSOConfig> {
@@ -1042,7 +1058,8 @@ export async function getSSOConfig(): Promise<SSOConfig> {
 }
 
 export async function updateSSOConfig(req: SSOConfigUpdate): Promise<SSOConfig> {
-  return fetchJSON<SSOConfig>("/settings/sso", { method: "PUT", body: JSON.stringify(req) });
+  return typedMutationEndpoint("PUT", "/settings/sso", req, (res) => res.json() as Promise<SSOConfig>,
+    (code, message, status) => new SSOConfigApiError(code, message, status));
 }
 
 // testSSOConnection probes a candidate issuer's discovery + token endpoint without

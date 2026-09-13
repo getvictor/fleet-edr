@@ -1,9 +1,6 @@
 package rbac
 
-const (
-	roleSuperAdmin   = "super_admin"
-	userStatusActive = "active"
-)
+const roleSuperAdmin = "super_admin"
 
 // roleRank orders the seeded roles by privilege. Higher wins.
 //

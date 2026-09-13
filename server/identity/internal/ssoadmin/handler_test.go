@@ -415,7 +415,7 @@ func TestHandleUpdate_groupMappingValidation(t *testing.T) {
 	base := func(claim string, roles ...ssoconfig.GroupRole) updateRequest {
 		return updateRequest{
 			Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst",
-			GroupsClaim: &claim, GroupRoles: &roles,
+			GroupsClaim: claim, GroupRoles: roles,
 		}
 	}
 	long := strings.Repeat("g", maxGroupFieldLen+1)
@@ -464,14 +464,13 @@ func TestHandleUpdate_groupMappingIsNormalizedWrittenAuditedAndReturned(t *testi
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid", ExternalURL: "https://edr.example.com", Scopes: []string{"openid"},
 		JITEnabled: true, DefaultRole: "analyst",
-		GroupsClaim: new(" groups "),
-		GroupRoles:  &[]ssoconfig.GroupRole{{Group: " edr-admins", Role: "ADMIN"}, {Group: "edr-auditors", Role: "auditor"}},
+		GroupsClaim: " groups ",
+		GroupRoles:  []ssoconfig.GroupRole{{Group: " edr-admins", Role: "ADMIN"}, {Group: "edr-auditors", Role: "auditor"}},
 	}))
 	require.Equal(t, http.StatusOK, w.Code)
 	require.True(t, ap.called)
-	require.NotNil(t, ap.oidcIn.GroupMapping)
-	assert.Equal(t, "groups", ap.oidcIn.GroupMapping.Claim)
-	assert.Equal(t, saved, ap.oidcIn.GroupMapping.Roles, "groups are trimmed and roles lower-cased, in the order submitted")
+	assert.Equal(t, "groups", ap.oidcIn.GroupsClaim)
+	assert.Equal(t, saved, ap.oidcIn.GroupRoles, "groups are trimmed and roles lower-cased, in the order submitted")
 	require.Len(t, audit.events, 1)
 	assert.Equal(t, "groups", audit.events[0].Payload["groups_claim"])
 	assert.Equal(t, saved, audit.events[0].Payload["group_roles"])
@@ -511,42 +510,38 @@ func TestHandleUpdate_groupFieldsAreBoundedInCharacters(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst",
-		GroupsClaim: &wide, GroupRoles: &[]ssoconfig.GroupRole{{Group: wide, Role: "admin"}},
+		GroupsClaim: wide, GroupRoles: []ssoconfig.GroupRole{{Group: wide, Role: "admin"}},
 	}))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.NotNil(t, ap.oidcIn.GroupMapping)
-	assert.Equal(t, wide, ap.oidcIn.GroupMapping.Claim)
+	assert.Equal(t, wide, ap.oidcIn.GroupsClaim)
 }
 
-// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/an-update-without-the-mapping-keeps-it
-func TestHandleUpdate_withoutMappingFieldsKeepsTheStoredMapping(t *testing.T) {
+// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/a-stale-update-is-refused
+//
+// An update carrying the version it read passes it to the write, and a version conflict from the write is 409 version_conflict.
+func TestHandleUpdate_expectedVersion(t *testing.T) {
 	t.Parallel()
-	ap := &captureApply{}
-	audit := &captureAudit{}
-	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid"}}
-	h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, audit, okProbe, nil)
-	w := httptest.NewRecorder()
-	h.handleUpdate(w, putReq(t, updateRequest{
+	req := updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid", ExternalURL: "https://edr.example.com", Scopes: []string{"openid"},
-		JITEnabled: true, DefaultRole: "analyst",
-	}))
-	require.Equal(t, http.StatusOK, w.Code)
-	assert.Nil(t, ap.oidcIn.GroupMapping, "no mapping is written, so the stored one is kept")
-	require.Len(t, audit.events, 1)
-	assert.NotContains(t, audit.events[0].Payload, "groups_claim")
-	assert.NotContains(t, audit.events[0].Payload, "group_roles")
+		JITEnabled: true, DefaultRole: "analyst", ExpectedVersion: new(int64(4)),
+	}
+	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid", Version: 5}}
 
-	t.Run("an empty claim and no mappings turn the mapping off", func(t *testing.T) {
-		t.Parallel()
-		ap := &captureApply{}
-		h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
-		w := httptest.NewRecorder()
-		h.handleUpdate(w, putReq(t, updateRequest{
-			Issuer: "https://idp.example.com", ClientID: "cid", ExternalURL: "https://edr.example.com", Scopes: []string{"openid"},
-			JITEnabled: true, DefaultRole: "analyst", GroupsClaim: new(""), GroupRoles: &[]ssoconfig.GroupRole{},
-		}))
-		require.Equal(t, http.StatusOK, w.Code)
-		require.NotNil(t, ap.oidcIn.GroupMapping)
-		assert.Equal(t, ssoconfig.GroupMapping{Claim: "", Roles: []ssoconfig.GroupRole{}}, *ap.oidcIn.GroupMapping)
-	})
+	ap := &captureApply{}
+	h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	w := httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, req))
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, ap.oidcIn.ExpectedVersion)
+	assert.Equal(t, int64(4), *ap.oidcIn.ExpectedVersion)
+	assert.Contains(t, w.Body.String(), `"version":5`)
+
+	conflict := &captureApply{err: ssoconfig.ErrVersionConflict}
+	audit := &captureAudit{}
+	h = NewHandler(store, &fakeAppCfg{}, conflict.fn, allowAuthZ{}, audit, okProbe, nil)
+	w = httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, req))
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "version_conflict")
+	assert.Empty(t, audit.events, "a refused update is not audited")
 }

@@ -15,6 +15,7 @@ const baseConfig: api.SSOConfig = {
   groups_claim: "",
   group_roles: [],
   secret_set: true,
+  version: 3,
 };
 
 afterEach(() => {
@@ -61,7 +62,8 @@ describe("SSOSettings", () => {
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
   });
 
-  it("leaves the group mapping out of a save, so the stored mapping is kept", async () => {
+  // spec:sso-configuration/the-single-sign-on-admin-settings-page/a-save-after-the-settings-changed-elsewhere-is-refused
+  it("sends back the loaded mapping with the loaded version", async () => {
     const mapped = { ...baseConfig, groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }] };
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(mapped);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(mapped);
@@ -70,8 +72,21 @@ describe("SSOSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
-    expect(upd.mock.calls[0][0]).not.toHaveProperty("groups_claim");
-    expect(upd.mock.calls[0][0]).not.toHaveProperty("group_roles");
+    expect(upd.mock.calls[0][0]).toMatchObject({
+      groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }], expected_version: 3,
+    });
+  });
+
+  // spec:sso-configuration/the-single-sign-on-admin-settings-page/a-save-after-the-settings-changed-elsewhere-is-refused
+  it("says nothing was saved when the settings changed elsewhere", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    vi.spyOn(api, "updateSSOConfig").mockRejectedValue(new api.SSOConfigApiError("version_conflict", "version_conflict", 409));
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/These settings changed after this page loaded, so nothing was saved/)).toBeVisible();
+    expect(screen.queryByText("Settings saved.")).not.toBeInTheDocument();
   });
 
   it("includes client_secret on save when a new value is entered (rotate)", async () => {
