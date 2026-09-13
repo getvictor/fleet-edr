@@ -613,9 +613,9 @@ func TestLoop_ConnectFailureLog(t *testing.T) {
 	t.Run("upgrade pending past the threshold logs the distinct hint once", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := bufferLogger()
-		var probeCalls int
+		var probeCalls, staleCalls int
 		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
-			LoopHooks{UpgradeProbe: func() bool { probeCalls++; return true }}, logger)
+			LoopHooks{UpgradeProbe: func() bool { probeCalls++; return true }, OnUpgradeStale: func() { staleCalls++ }}, logger)
 		l.consecutiveFailures = staleProbeAfterFailures
 		l.logConnectFailure(context.Background(), connErr)
 		assert.Contains(t, buf.String(), distinct)
@@ -627,6 +627,21 @@ func TestLoop_ConnectFailureLog(t *testing.T) {
 		assert.NotContains(t, buf.String(), distinct, "the reboot hint fires once per stale episode")
 		assert.Contains(t, buf.String(), bare)
 		assert.Equal(t, 1, probeCalls, "probe is not consulted again once the hint has fired")
+		assert.Equal(t, 1, staleCalls, "OnUpgradeStale fires with the hint, once per stale episode")
+	})
+
+	t.Run("OnUpgradeStale does not fire for the bare warning", func(t *testing.T) {
+		t.Parallel()
+		var staleCalls int
+		probeFalse := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
+			LoopHooks{UpgradeProbe: func() bool { return false }, OnUpgradeStale: func() { staleCalls++ }}, discardLogger())
+		probeFalse.consecutiveFailures = staleProbeAfterFailures + 1
+		probeFalse.logConnectFailure(context.Background(), connErr)
+		underThreshold := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
+			LoopHooks{UpgradeProbe: func() bool { return true }, OnUpgradeStale: func() { staleCalls++ }}, discardLogger())
+		underThreshold.consecutiveFailures = staleProbeAfterFailures - 1
+		underThreshold.logConnectFailure(context.Background(), connErr)
+		assert.Zero(t, staleCalls)
 	})
 }
 

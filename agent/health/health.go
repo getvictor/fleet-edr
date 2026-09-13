@@ -50,6 +50,10 @@ const (
 	// stop the agent is about to fix from one it has already failed to fix three times, which is the difference between
 	// ignoring the alert and driving to the host.
 	reasonSelfHealFailed = "self_heal_failed"
+	// reasonRebootRequired is the network extension after an in-place upgrade (issue #985): macOS keeps the previous version
+	// registered until the Mac restarts, its Mach service stays bound to that version, and the agent cannot connect to the new
+	// one. never_connected would read as "not approved yet", which sends an operator to the wrong fix.
+	reasonRebootRequired = "reboot_required"
 )
 
 // Component is one condition in a status snapshot. The JSON tags match the server's ComponentHealth exactly; reason and message are
@@ -289,6 +293,16 @@ func (r *Registry) MarkAwaitingProviders(compType string) {
 func (r *Registry) MarkSelfHealFailed(compType, message string) {
 	r.transition(compType, func(s *componentState) {
 		s.set(StatusUnhealthy, reasonSelfHealFailed, s.displayName+": "+message)
+	})
+}
+
+// MarkRebootRequired records that compType cannot be reached because a previous version is waiting to be removed at the next
+// restart (issue #985). Unhealthy, under a reason that names the fix. Not sticky: the next successful connect overwrites it.
+// No-op for an unregistered type.
+func (r *Registry) MarkRebootRequired(compType string) {
+	r.transition(compType, func(s *componentState) {
+		s.set(StatusUnhealthy, reasonRebootRequired,
+			s.displayName+": the previous version is still registered until the Mac restarts; restart it to finish the upgrade")
 	})
 }
 

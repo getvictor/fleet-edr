@@ -98,6 +98,10 @@ type LoopHooks struct {
 	// (#399); nil on the ESF loop. Returning true switches the connect-failure log to a distinct, actionable reboot-required
 	// hint, emitted once per stale episode.
 	UpgradeProbe func() bool
+	// OnUpgradeStale, when non-nil, fires once per stale episode, when the reboot-required hint is logged: the connect failure has
+	// outlasted the grace threshold and UpgradeProbe reported a previous version pending removal. Production marks the component's
+	// health reboot_required, so the console says what the log says (issue #985).
+	OnUpgradeStale func()
 }
 
 // Loop runs a single connector's connect/reconnect/event-pump cycle. Build one with NewLoop and call Run(ctx) in its own goroutine.
@@ -217,6 +221,9 @@ func (l *Loop) logConnectFailure(ctx context.Context, err error) {
 		l.logger.WarnContext(ctx,
 			"network extension XPC registration is stale after an upgrade; reboot to complete the extension cutover",
 			"service", l.cfg.ServiceName, "err", err, "hint", "reboot_required_after_upgrade")
+		if l.hooks.OnUpgradeStale != nil {
+			l.hooks.OnUpgradeStale()
+		}
 		return
 	}
 	l.logger.WarnContext(ctx, "receiver connect", "service", l.cfg.ServiceName, "err", err)

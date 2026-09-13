@@ -144,3 +144,22 @@ func drainChanged(r *Registry) []struct{} {
 		}
 	}
 }
+
+// spec:agent-status-reporting/the-agent-distinguishes-never-connected-from-connection-lost-per-extension/upgrade-awaiting-restart-says-so
+func TestRegistry_MarkRebootRequiredUntilTheNextSession(t *testing.T) {
+	t.Parallel()
+	r := newRegistryWithClock(seqClock(1000))
+	r.Register(ComponentNetworkExtension, "Network extension") // stamp 1000
+
+	r.MarkRebootRequired(ComponentNetworkExtension)
+	got := r.Snapshot()[0]
+	assert.Equal(t, StatusUnhealthy, got.Status)
+	assert.Equal(t, reasonRebootRequired, got.Reason)
+	assert.Equal(t, "Network extension: the previous version is still registered until the Mac restarts; restart it to finish the upgrade",
+		got.Message)
+
+	r.MarkAwaitingProviders(ComponentNetworkExtension)
+	got = r.Snapshot()[0]
+	assert.Equal(t, StatusDegraded, got.Status)
+	assert.Equal(t, reasonAwaitingProviders, got.Reason, "an established session replaces reboot_required")
+}

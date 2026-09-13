@@ -616,6 +616,38 @@ type receiverLoopParams struct {
 	connectorFactory func() receiver.Connector
 }
 
+// withHealthHooks composes the agent-health transitions on top of any dispatcher wiring: a successful connect marks the component
+// healthy, a drop marks it connection_lost (issue #359), and a connect failure the receiver attributes to a staged upgrade marks it
+// reboot_required (issue #985). Composed (not overwritten) so the ESF loop still publishes into the dispatcher. Returns hooks unchanged
+// when the loop reports no health.
+func withHealthHooks(hooks receiver.LoopHooks, p receiverLoopParams) receiver.LoopHooks {
+	if p.health == nil || p.component == "" {
+		return hooks
+	}
+	priorConnected, priorDisconnected := hooks.OnConnected, hooks.OnDisconnected
+	hooks.OnConnected = func(c receiver.Connector) {
+		if priorConnected != nil {
+			priorConnected(c)
+		}
+		// A connected XPC session is proof the extension PROCESS is up, which for the network extension is not the same as
+		// its providers capturing (issue #649). Hold at degraded until the extension says which providers are running; it
+		// re-publishes that on every hello, so this resolves within milliseconds in practice.
+		if p.providerLiveness {
+			p.health.MarkAwaitingProviders(p.component)
+			return
+		}
+		p.health.MarkConnected(p.component)
+	}
+	hooks.OnDisconnected = func() {
+		if priorDisconnected != nil {
+			priorDisconnected()
+		}
+		p.health.MarkDisconnected(p.component)
+	}
+	hooks.OnUpgradeStale = func() { p.health.MarkRebootRequired(p.component) }
+	return hooks
+}
+
 func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	factory := p.connectorFactory
 	if factory == nil {
@@ -665,30 +697,7 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 		hooks.OnConnected = p.dispatcher.Set
 		hooks.OnDisconnected = p.dispatcher.Clear
 	}
-	// Compose the agent-health transitions on top of any dispatcher wiring: a successful connect marks the component healthy, a drop
-	// marks it connection_lost (issue #359). Composed (not overwritten) so the ESF loop still publishes into the dispatcher.
-	if p.health != nil && p.component != "" {
-		priorConnected, priorDisconnected := hooks.OnConnected, hooks.OnDisconnected
-		hooks.OnConnected = func(c receiver.Connector) {
-			if priorConnected != nil {
-				priorConnected(c)
-			}
-			// A connected XPC session is proof the extension PROCESS is up, which for the network extension is not the same as
-			// its providers capturing (issue #649). Hold at degraded until the extension says which providers are running; it
-			// re-publishes that on every hello, so this resolves within milliseconds in practice.
-			if p.providerLiveness {
-				p.health.MarkAwaitingProviders(p.component)
-				return
-			}
-			p.health.MarkConnected(p.component)
-		}
-		hooks.OnDisconnected = func() {
-			if priorDisconnected != nil {
-				priorDisconnected()
-			}
-			p.health.MarkDisconnected(p.component)
-		}
-	}
+	hooks = withHealthHooks(hooks, p)
 	// Only the network-extension loop wires UpgradeProbe (nil for ESF): after a staged upgrade the NE's nesessionmanager-owned
 	// Mach service stays bound to the terminated old version until reboot, so a sustained NE connect failure paired with a
 	// pending-uninstall old version means "reboot required", not "needs approval" (#399).
