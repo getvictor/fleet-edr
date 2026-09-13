@@ -5,7 +5,8 @@ import type { Alert } from "../types";
 import { useReauthRetry } from "../hooks/useReauthRetry";
 import { ReauthModal } from "./ReauthModal";
 import { Table, EmptyState } from "./ui/Table";
-import { Badge, type BadgeVariant } from "./ui/Badge";
+import { Badge } from "./ui/Badge";
+import { severityBadgeVariant } from "./ui/severity";
 import { Button } from "./ui/Button";
 import { Select } from "./ui/Input";
 import { PageHeader } from "./ui/PageHeader";
@@ -13,13 +14,6 @@ import { Can } from "../permissions";
 import { PermissionAction } from "../permissions-core";
 import { useHostNames } from "./useHostNames";
 import "./AlertList.scss";
-
-const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
-  critical: "critical",
-  high: "high",
-  medium: "medium",
-  low: "low",
-};
 
 const STATUS_OPTIONS = ["", "open", "acknowledged", "resolved"];
 const SEVERITY_OPTIONS = ["", "low", "medium", "high", "critical"];
@@ -174,7 +168,7 @@ export function AlertList() {
             {alerts.map((a) => (
               <tr key={a.id}>
                 <td>
-                  <Badge variant={SEVERITY_VARIANTS[a.severity] ?? "neutral"}>
+                  <Badge variant={severityBadgeVariant(a.severity)}>
                     {a.severity}
                   </Badge>
                 </td>

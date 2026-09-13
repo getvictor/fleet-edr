@@ -253,6 +253,7 @@ The first pass runs when the server starts, then hourly. Changing the setting ta
 A match from a rule in monitor mode is kept as a **monitor record** for **7 days** by default: the rule, host, severity, process, techniques, and triggering events, the same as an alert would carry. Monitor records are how you judge whether a rule is worth promoting from what it actually matched rather than from a count. Set `EDR_MONITOR_RETENTION_DAYS` to change the window, or `0` to keep them indefinitely.
 
 - **Not alerts.** They are left out of `GET /api/alerts` unless you pass `disposition=monitor` (add `rule_id` for one rule's), never delivered to a webhook, and cannot be acknowledged or resolved.
+- **Open them from Detection tuning.** Each rule with an Observed count has a **records** link to that rule's monitor records, newest first; each opens the same process tree an alert does, labelled as a monitor record and without triage controls.
 - **Deduplicated like alerts.** A rule matching the same process again adds no second record, so there can be fewer records than the rule's Observed count, which counts every match.
 - **Promotion does not rewrite them.** Records already kept stay monitor records, and the rule's next match raises an alert.
 - **Independent of both other windows.** Alert retention never deletes a monitor record and this window never deletes an alert. Deletions are counted by `edr.retention.monitor_records.rows_deleted`.

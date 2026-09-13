@@ -884,6 +884,35 @@ describe("ProcessTreeView alert attribution", () => {
 });
 
 
+// spec:web-ui/monitor-records-are-reachable-from-the-observed-count/a-monitor-record-offers-no-triage
+//
+// A monitor record (issue #994) opens on the alert investigation surface, but it has no lifecycle and the server refuses a status change
+// on it, so the surface must not offer the controls. The alert case alongside proves the controls are there to be removed.
+describe("ProcessTreeView monitor record", () => {
+  it("labels a monitor record and offers no triage, and leads back to its rule's records", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, disposition: "monitor" });
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText("Monitor record")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /acknowledge|resolve|reopen/i })).toBeNull();
+    expect(screen.getByRole("link", { name: /Monitor records/ })).toHaveAttribute(
+      "href",
+      "/rules/privilege_launchd_plist_write/monitor-records",
+    );
+    expect(screen.queryByRole("link", { name: /Alerts/ })).toBeNull();
+  });
+
+  it("keeps triage and the Alerts back link for an alert", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, disposition: "alert" });
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByRole("button", { name: "Acknowledge" })).toBeVisible();
+    expect(screen.queryByText("Monitor record")).toBeNull();
+    expect(screen.getByRole("link", { name: /Alerts/ })).toHaveAttribute("href", "/alerts");
+    expect(screen.queryByRole("link", { name: /Monitor records/ })).toBeNull();
+  });
+});
+
 // The Graph and the Timeline are meant to share one alert focus. The Timeline's scope is keyed on the (pid, pidversion) pair, so
 // a chain whose processes carry no pidversion cannot be scoped and the whole host stream is shown instead. These cover the
 // WIRING: ProcessTreeView deciding which of those two situations it is in and telling the Timeline. Deleting the computation

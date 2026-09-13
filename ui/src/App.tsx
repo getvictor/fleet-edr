@@ -9,6 +9,7 @@ import { ApplicationControlRoutes } from "./components/ApplicationControl/Applic
 import { DetectionConfig } from "./components/DetectionConfig/DetectionConfig";
 import { SearchPage } from "./components/Search/SearchPage";
 import { RuleDetail } from "./components/RuleDetail";
+import { MonitorRecords } from "./components/MonitorRecords";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { Webhooks } from "./components/Webhooks/Webhooks";
 import { ServiceAccounts } from "./components/ServiceAccounts/ServiceAccounts";
@@ -222,6 +223,7 @@ export function AuthedApp() {
             )}
           />
           <Route path="/rules/:ruleId" element={<RuleDetail />} />
+          <Route path="/rules/:ruleId/monitor-records" element={<MonitorRecords />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="/alerts/:alertId" element={<AlertGraphRoute />} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -72,6 +72,13 @@
   color: $ui-fleet-black-50;
 }
 
+// The way from a rule's count to the records behind it (issue #994), set apart from the figure so the two read as separate controls.
+.detection-config__observed-records {
+  display: inline-block;
+  margin-left: $pad-small;
+  font-size: $xxx-small;
+}
+
 // A rule with nothing recorded, muted so it does not read as a value.
 .detection-config__observed-none {
   color: $ui-fleet-black-50;

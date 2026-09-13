@@ -480,6 +480,9 @@ export async function listAlerts(params?: {
   status?: string;
   severity?: string;
   source?: string;
+  rule_id?: string;
+  // disposition selects monitor records instead of alerts; the server defaults to alerts when it is omitted.
+  disposition?: "alert" | "monitor";
   process_id?: number;
   limit?: number;
 }): Promise<Alert[]> {
@@ -488,6 +491,8 @@ export async function listAlerts(params?: {
   if (params?.status) query.set("status", params.status);
   if (params?.severity) query.set("severity", params.severity);
   if (params?.source) query.set("source", params.source);
+  if (params?.rule_id) query.set("rule_id", params.rule_id);
+  if (params?.disposition) query.set("disposition", params.disposition);
   if (params?.process_id) query.set("process_id", String(params.process_id));
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
@@ -147,7 +148,8 @@ function observedNoteBody(days: number): string {
   return (
     `counts how often each rule matched while in monitor mode, over the last ${String(days)} days. It shows how noisy a ` +
     "rule is, not how many alerts you would get by promoting it: once a rule alerts, repeated matches on the same " +
-    "process become one alert."
+    "process become one alert. Open a rule's records to read what it matched. There can be fewer records than matches: " +
+    "records collapse repeats the same way, and the server keeps them on their own retention window, 7 days by default."
   );
 }
 
@@ -248,12 +250,23 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
   const matches = `${count.matches.toLocaleString()} match${count.matches === 1 ? "" : "es"}`;
   const title =
     `approximately ${matches} on ${hosts} in the last ${String(days)} days` + (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
+  // The records link sits beside the figure rather than wrapping it: the figure is already a control, the disclosure of its precise
+  // value, and giving one element two actions would make activating it ambiguous (issue #994).
   return (
-    <AbbreviatedFigure full={title}>
-      {formatMatches(count.matches)}
-      <span className="detection-config__observed-hosts"> on {hosts}</span>
-      {lastSeen === "" ? null : <span className="detection-config__observed-last"> &middot; {lastSeen}</span>}
-    </AbbreviatedFigure>
+    <>
+      <AbbreviatedFigure full={title}>
+        {formatMatches(count.matches)}
+        <span className="detection-config__observed-hosts"> on {hosts}</span>
+        {lastSeen === "" ? null : <span className="detection-config__observed-last"> &middot; {lastSeen}</span>}
+      </AbbreviatedFigure>
+      <Link
+        className="detection-config__observed-records"
+        to={`/rules/${encodeURIComponent(ruleID)}/monitor-records`}
+        aria-label={`monitor records for ${ruleID}`}
+      >
+        records
+      </Link>
+    </>
   );
 }
 
