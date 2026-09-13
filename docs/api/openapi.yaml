@@ -1764,7 +1764,9 @@ components:
           type: array
           items: {type: string}
           uniqueItems: true
-          description: The ids of the roles the operator holds deployment-wide, sorted, each once. Always present; empty when the operator holds none.
+          description: >-
+            The ids of the roles the operator holds deployment-wide, sorted, each once. Always present; empty when the operator holds
+            none.
 
     ErrorResponse:
       type: object
