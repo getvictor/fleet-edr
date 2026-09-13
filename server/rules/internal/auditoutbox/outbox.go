@@ -60,7 +60,7 @@ const DrainBatch = 100
 //
 // TraceID is carried EXPLICITLY, which review corrected and which matters more than it looks. The recorder falls back to the trace
 // on the context of the Record call when the event carries none, and the drain's context is whichever caller happened to run it: a
-// request that changes one document also drains entries other requests left behind, so an empty trace here would stamp THIS
+// request that makes one change also drains entries other requests left behind, so an empty trace here would stamp THIS
 // request's trace onto somebody else's audit row. Carrying the writer's own trace, or none at all, is the only honest answer, and
 // the drain detaches its context so the fallback cannot fire.
 //
@@ -160,7 +160,7 @@ func NewDrain(outbox Outbox, audit identityapi.AuditRecorder, subject string, lo
 // whose order disagrees with the changes it records. A stalled entry is retried on the next pass.
 func (d *Drain) Drain(ctx context.Context) (int, error) {
 	// Detached from the caller's trace, deliberately. The recorder falls back to the trace on this context when an event carries
-	// none, and a request that changes one document also drains entries other requests left behind: without this, request B would
+	// none, and a request that makes one change also drains entries other requests left behind: without this, request B would
 	// stamp its own trace onto request A's audit row. Cancellation still propagates, so a shutting-down caller stops promptly.
 	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
 	pending, err := d.outbox.PendingAuditEntries(ctx, DrainBatch)
