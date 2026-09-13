@@ -197,6 +197,79 @@ func TestAppControlBlock_DefaultDescriptionWhenCustomMsgAbsent(t *testing.T) {
 		"missing custom_msg must fall back to the deterministic default")
 }
 
+// spec:server-detection-rules-engine/registered-rule-catalog/a-would-block-match-is-kept-as-a-monitor-record
+//
+// TestAppControlWouldBlock_EventBecomesMonitorRecord posts a block and a would-block event in one batch, for different rules on one
+// process. The block alert is the barrier: once it and the record both exist the batch has been evaluated, so asserting what is
+// absent is sound rather than racy.
+func TestAppControlWouldBlock_EventBecomesMonitorRecord(t *testing.T) {
+	t.Parallel()
+	stack := Setup(t)
+
+	const hostID = "DDDD1111-2222-3333-4444-555566667777"
+	const pid = 7373
+	hostToken := stepEnroll(t, stack, hostID)
+
+	now := time.Now().UnixNano()
+	postEvents(t, stack, hostToken, []detectionapi.Event{
+		{
+			EventID: "acwb-fork", HostID: hostID, TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(fmt.Sprintf(`{"child_pid":%d,"parent_pid":1}`, pid)),
+		},
+		{
+			EventID: "acwb-exec", HostID: hostID, TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d,"ppid":1,"path":"/bin/zsh","args":["zsh"]}`, pid)),
+		},
+	})
+	waitForProcess(t, stack, hostID, pid)
+
+	const blockRuleID, wouldBlockRuleID = "app_control:21", "app_control:22"
+	postEvents(t, stack, hostToken, []detectionapi.Event{
+		{
+			EventID: "acwb-block", HostID: hostID, TimestampNs: now + 2, EventType: "application_control_block",
+			Payload: blockPayload(t, blockPayloadInput{
+				PID: pid, Path: "/usr/local/bin/blocked", RuleID: blockRuleID, RuleType: "TEAMID", Identifier: "ABCDE12345",
+				Severity: "high", PolicyID: 11, PolicyVersion: 5,
+			}),
+		},
+		{
+			EventID: "acwb-would-block", HostID: hostID, TimestampNs: now + 3, EventType: "application_control_would_block",
+			Payload: blockPayload(t, blockPayloadInput{
+				PID: pid, Path: "/usr/local/bin/tool", RuleID: wouldBlockRuleID, RuleType: "TEAMID", Identifier: "EQHXZ8M8AV",
+				Severity: "low", PolicyID: 11, PolicyVersion: 5,
+			}),
+		},
+	})
+
+	listRecords := func() ([]detectionapi.Alert, error) {
+		return stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{
+			HostID: hostID, Disposition: detectionapi.AlertDispositionMonitor,
+		})
+	}
+	listAlerts := func() ([]detectionapi.Alert, error) {
+		return stack.DetectionService().ListAlerts(t.Context(), detectionapi.AlertFilter{HostID: hostID})
+	}
+	require.Eventually(t, func() bool {
+		alerts, alertsErr := listAlerts()
+		records, recordsErr := listRecords()
+		return alertsErr == nil && recordsErr == nil && len(alerts) == 1 && len(records) == 1
+	}, 10*time.Second, 50*time.Millisecond, "one alert from the block event and one monitor record from the would-block event")
+
+	alerts, err := listAlerts()
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+	assert.Equal(t, blockRuleID, alerts[0].RuleID, "the would-block match raised no alert")
+
+	records, err := listRecords()
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	record := records[0]
+	assert.Equal(t, wouldBlockRuleID, record.RuleID, "the record is kept under the matched application-control rule")
+	assert.Equal(t, detectionapi.AlertSourceApplicationControl, record.Source)
+	assert.Equal(t, "low", record.Severity, "with that rule's severity")
+	assert.Equal(t, "Application would be blocked: tool", record.Title)
+}
+
 type blockPayloadInput struct {
 	PID           int
 	Path          string

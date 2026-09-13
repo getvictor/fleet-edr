@@ -8,8 +8,14 @@
 - [x] Unit tests, including an exhaustive check that DETECT rules never change the verdict; mutation-check them.
 - [ ] Verify on a VM that a DETECT rule lets the exec run and the event reaches the server.
 
-## Server and console
+## Server
 
-- [ ] Accept enforcement on rule create and update, and choose the default for new rules.
-- [ ] Record would-block matches for operators.
-- [ ] Enforcement selector, Promote to Protect, and the would-block view in the console.
+- [x] Accept enforcement on rule create and update, validate it, push it, and audit it; a create without it stays PROTECT.
+- [x] `application_control_would_block` projection rule in monitor mode, with a fixture.
+- [x] Restate the shared rules-engine requirements identically in `sensor-recovery-as-host-health`.
+- [x] Integration tests for the API and for a would-block event becoming a monitor record; mutation-check them.
+- [x] Document Detect mode in `docs/operations.md` and the changelog.
+
+## Console
+
+- [ ] Enforcement selector (defaulting to Detect), Promote to Protect, and a link to the rule's monitor records.

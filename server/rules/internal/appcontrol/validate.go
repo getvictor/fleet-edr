@@ -131,6 +131,17 @@ func canonicalizePath(p string) (string, error) {
 	return cleaned, nil
 }
 
+// ValidateEnforcement returns nil for PROTECT or DETECT and an ErrAppControlInvalidEnforcement for anything else. Empty is allowed and
+// is treated by callers as "use the default" (PROTECT on create).
+func ValidateEnforcement(e api.Enforcement) error {
+	switch e {
+	case "", api.EnforcementProtect, api.EnforcementDetect:
+		return nil
+	default:
+		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidEnforcement, e)
+	}
+}
+
 // ValidateSeverity returns nil for a recognized severity and an ErrAppControlInvalidSeverity for anything else. Empty severity is
 // allowed and is treated by callers as "use the default" (medium).
 func ValidateSeverity(s api.Severity) error {

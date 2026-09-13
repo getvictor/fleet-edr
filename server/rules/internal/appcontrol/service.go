@@ -408,6 +408,7 @@ func (s *Service) emitAudit(
 		"rule_type":      string(rule.RuleType),
 		"identifier":     rule.Identifier,
 		"severity":       string(rule.Severity),
+		"enforcement":    string(rule.Enforcement),
 		"reason":         req.Reason,
 		"fanout_hosts":   fanoutHosts,
 		"fanout_failed":  fanoutFailed,
@@ -535,8 +536,8 @@ type ruleMutationAuditArgs struct {
 }
 
 // recordRuleMutationAudit is the per-op audit emitter for rule mutations (update + delete). Payload shape matches the create
-// flow's so SIEM dashboards can filter on the same key set across all three actions. Takes a struct (S107) so adding new fields
-// in Phase B's Detect-mode change (e.g. enforcement_before / enforcement_after) doesn't extend a positional argument list.
+// flow's so SIEM dashboards can filter on the same key set across all three actions. Takes a struct (S107) so a new field doesn't
+// extend a positional argument list.
 func (s *Service) recordRuleMutationAudit(ctx context.Context, args ruleMutationAuditArgs) {
 	payload := map[string]any{
 		"policy_id":      args.Rule.PolicyID,
@@ -544,6 +545,7 @@ func (s *Service) recordRuleMutationAudit(ctx context.Context, args ruleMutation
 		"rule_type":      string(args.Rule.RuleType),
 		"identifier":     args.Rule.Identifier,
 		"severity":       string(args.Rule.Severity),
+		"enforcement":    string(args.Rule.Enforcement),
 		"reason":         args.Reason,
 		"fanout_hosts":   args.FanoutHosts,
 		"fanout_failed":  args.FanoutFailed,

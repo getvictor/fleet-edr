@@ -177,13 +177,14 @@ func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Reque
 // fields (PolicyID comes from the URL, Actor from the actor on ctx). Keeping the JSON struct local to the handler so the public
 // api.CreateRule Request stays a pure server-internal contract that catalog tests keep using without HTTP scaffolding.
 type createRuleRequest struct {
-	RuleType   api.RuleType `json:"rule_type"`
-	Identifier string       `json:"identifier"`
-	CustomMsg  *string      `json:"custom_msg,omitempty"`
-	CustomURL  *string      `json:"custom_url,omitempty"`
-	Comment    string       `json:"comment,omitempty"`
-	Severity   api.Severity `json:"severity,omitempty"`
-	Reason     string       `json:"reason"`
+	RuleType    api.RuleType    `json:"rule_type"`
+	Identifier  string          `json:"identifier"`
+	Enforcement api.Enforcement `json:"enforcement,omitempty"`
+	CustomMsg   *string         `json:"custom_msg,omitempty"`
+	CustomURL   *string         `json:"custom_url,omitempty"`
+	Comment     string          `json:"comment,omitempty"`
+	Severity    api.Severity    `json:"severity,omitempty"`
+	Reason      string          `json:"reason"`
 }
 
 func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Request) {
@@ -212,15 +213,16 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rule, err := h.svc.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   policyID,
-		RuleType:   req.RuleType,
-		Identifier: req.Identifier,
-		CustomMsg:  req.CustomMsg,
-		CustomURL:  req.CustomURL,
-		Comment:    req.Comment,
-		Severity:   req.Severity,
-		Actor:      actorIdentifierFromContext(ctx),
-		Reason:     req.Reason,
+		PolicyID:    policyID,
+		RuleType:    req.RuleType,
+		Identifier:  req.Identifier,
+		Enforcement: req.Enforcement,
+		CustomMsg:   req.CustomMsg,
+		CustomURL:   req.CustomURL,
+		Comment:     req.Comment,
+		Severity:    req.Severity,
+		Actor:       actorIdentifierFromContext(ctx),
+		Reason:      req.Reason,
 	}, actor)
 	if err != nil {
 		h.writeCreateRuleError(ctx, w, err, policyID)
@@ -284,13 +286,14 @@ func (h *AppControlHandler) writePolicyMutationError(ctx context.Context, w http
 // explicit zero (e.g. clearing custom_msg by sending ""). Phase B's Detect-mode change layers an Enforcement field on top of this
 // struct; for Phase A the field is unsupported (the schema column carries it, the handler doesn't accept it).
 type updateRuleRequest struct {
-	Enabled   *bool         `json:"enabled,omitempty"`
-	Severity  *api.Severity `json:"severity,omitempty"`
-	CustomMsg *string       `json:"custom_msg,omitempty"`
-	CustomURL *string       `json:"custom_url,omitempty"`
-	Comment   *string       `json:"comment,omitempty"`
-	ExpiresAt *time.Time    `json:"expires_at,omitempty"`
-	Reason    string        `json:"reason"`
+	Enabled     *bool            `json:"enabled,omitempty"`
+	Severity    *api.Severity    `json:"severity,omitempty"`
+	Enforcement *api.Enforcement `json:"enforcement,omitempty"`
+	CustomMsg   *string          `json:"custom_msg,omitempty"`
+	CustomURL   *string          `json:"custom_url,omitempty"`
+	Comment     *string          `json:"comment,omitempty"`
+	ExpiresAt   *time.Time       `json:"expires_at,omitempty"`
+	Reason      string           `json:"reason"`
 }
 
 // handleGetRule serves GET /api/v1/app-control/rules/{id}: one rule, including the policy that owns it.
@@ -348,15 +351,16 @@ func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rule, err := h.svc.UpdateRule(ctx, api.UpdateRuleRequest{
-		RuleID:    ruleID,
-		Enabled:   req.Enabled,
-		Severity:  req.Severity,
-		CustomMsg: req.CustomMsg,
-		CustomURL: req.CustomURL,
-		Comment:   req.Comment,
-		ExpiresAt: req.ExpiresAt,
-		Actor:     actorIdentifierFromContext(ctx),
-		Reason:    req.Reason,
+		RuleID:      ruleID,
+		Enabled:     req.Enabled,
+		Severity:    req.Severity,
+		Enforcement: req.Enforcement,
+		CustomMsg:   req.CustomMsg,
+		CustomURL:   req.CustomURL,
+		Comment:     req.Comment,
+		ExpiresAt:   req.ExpiresAt,
+		Actor:       actorIdentifierFromContext(ctx),
+		Reason:      req.Reason,
 	}, actor)
 	if err != nil {
 		h.writeRuleMutationError(ctx, w, "update rule", err, ruleID)

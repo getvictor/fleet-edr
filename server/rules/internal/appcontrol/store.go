@@ -423,9 +423,16 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	if err := ValidateSeverity(req.Severity); err != nil {
 		return api.ApplicationControlRule{}, err
 	}
+	if err := ValidateEnforcement(req.Enforcement); err != nil {
+		return api.ApplicationControlRule{}, err
+	}
 	severity := req.Severity
 	if severity == "" {
 		severity = api.SeverityRuleMedium
+	}
+	enforcement := req.Enforcement
+	if enforcement == "" {
+		enforcement = api.EnforcementProtect
 	}
 
 	// Persist PATH identifiers in their canonical form (filepath.Clean + /tmp,/var,/etc → /private). The extension's AUTH_EXEC
@@ -445,9 +452,9 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 
 	const insert = `INSERT INTO app_control_rules
 		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
-		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?, ?, ?)`
+		VALUES (?, ?, ?, 'BLOCK', ?, 1, ?, 'admin', ?, ?, ?, ?)`
 	res, err := tx.ExecContext(ctx, insert,
-		req.PolicyID, req.RuleType, persistIdentifier, severity,
+		req.PolicyID, req.RuleType, persistIdentifier, enforcement, severity,
 		req.CustomMsg, req.CustomURL, req.Comment, req.Actor,
 	)
 	if err != nil {
@@ -497,8 +504,8 @@ func (s *Store) GetRuleByID(ctx context.Context, id int64) (api.ApplicationContr
 // Returns (clauseFragment, args, ok); ok is false when the caller sent zero mutable fields. The caller maps that to
 // ErrAppControlInvalidRequest at the top level.
 func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
-	setClauses := make([]string, 0, 6)
-	args := make([]any, 0, 7)
+	setClauses := make([]string, 0, 7)
+	args := make([]any, 0, 8)
 	if req.Enabled != nil {
 		setClauses = append(setClauses, "enabled = ?")
 		enabledInt := 0
@@ -510,6 +517,10 @@ func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
 	if req.Severity != nil {
 		setClauses = append(setClauses, "severity = ?")
 		args = append(args, *req.Severity)
+	}
+	if req.Enforcement != nil {
+		setClauses = append(setClauses, "enforcement = ?")
+		args = append(args, *req.Enforcement)
 	}
 	if req.CustomMsg != nil {
 		setClauses = append(setClauses, "custom_msg = ?")
@@ -533,8 +544,8 @@ func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
 	return strings.Join(setClauses, ", "), args, true
 }
 
-// validateUpdateRuleRequest covers the up-front guards: actor + reason required, severity (if present) must be a non-empty
-// enum value. Extracted so UpdateRule's body stays linear and Sonar's cognitive-complexity rule (S3776) does not fire.
+// validateUpdateRuleRequest covers the up-front guards: actor + reason required, severity and enforcement (if present) must be
+// non-empty enum values. Extracted so UpdateRule's body stays linear and Sonar's cognitive-complexity rule (S3776) does not fire.
 func validateUpdateRuleRequest(req api.UpdateRuleRequest) error {
 	if strings.TrimSpace(req.Actor) == "" {
 		return fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
@@ -550,6 +561,10 @@ func validateUpdateRuleRequest(req api.UpdateRuleRequest) error {
 		if strings.TrimSpace(string(*req.Severity)) == "" {
 			return fmt.Errorf("%w: severity must be a non-empty enum value when present on a PATCH", api.ErrAppControlInvalidSeverity)
 		}
+	}
+	if req.Enforcement != nil && *req.Enforcement != api.EnforcementProtect && *req.Enforcement != api.EnforcementDetect {
+		return fmt.Errorf("%w: enforcement must be PROTECT or DETECT when present on a PATCH, got %q",
+			api.ErrAppControlInvalidEnforcement, *req.Enforcement)
 	}
 	return nil
 }
