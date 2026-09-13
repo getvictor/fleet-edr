@@ -224,10 +224,8 @@ final class WatchedPathStore: Sendable {
     /// save persists a payload exactly as it was pushed, written atomically so a crash mid-write cannot leave a torn file, and reports
     /// whether it was written.
     private func save(_ data: Data) -> Bool {
-        let url = URL(fileURLWithPath: storagePath)
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
+            try AtomicFile.write(data, toPath: storagePath)
             return true
         } catch {
             logger.error("watched-path set not applied, persist failed: \(error.localizedDescription, privacy: .public)")

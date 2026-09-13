@@ -92,6 +92,8 @@ let package = Package(
             sources: [
                 "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
+                // AtomicFile.swift is the atomic write both persisted stores use. Pure Foundation.
+                "extension/AtomicFile.swift",
                 "extension/AuthExecDecider.swift",
                 // CDHashHex.swift holds the CDHash-to-hex helper and the Hardened Runtime flag test. It carried an
                 // EndpointSecurity import that nothing in it used (the only es_ references are in comments), so it moves
