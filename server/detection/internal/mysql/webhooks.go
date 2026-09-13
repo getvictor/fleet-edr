@@ -33,7 +33,7 @@ var validWebhookSeverities = map[string]bool{
 }
 
 var validWebhookEventTypes = map[string]bool{
-	detapi.WebhookEventAlertCreated: true, detapi.WebhookEventAlertStatusChanged: true,
+	detapi.WebhookEventAlertCreated: true, detapi.WebhookEventAlertStatusChanged: true, detapi.WebhookEventHealthEpisodeOpened: true,
 }
 
 type webhookDestinationRow struct {

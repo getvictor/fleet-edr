@@ -33,6 +33,9 @@ type WebhookDestinationInput struct {
 const (
 	WebhookEventAlertCreated       = "alert.created"
 	WebhookEventAlertStatusChanged = "alert.status_changed"
+	// WebhookEventHealthEpisodeOpened is a host health episode opening (issue #778): a fault in this product's own sensor that needs a
+	// person. Its delivery carries the episode instead of an alert.
+	WebhookEventHealthEpisodeOpened = "host.health_episode_opened"
 )
 
 // WebhookDeliveryClaim is one outbox row leased to the delivery worker: enough to sign and POST it. Payload is the stored envelope

@@ -80,7 +80,7 @@ func TestOpenHealthEpisode_RecordsTheFaultsOwnFields(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	_, opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
 	require.NoError(t, err)
 	assert.True(t, opened, "the first report of a fault is what opens its episode")
 
@@ -109,14 +109,14 @@ func TestOpenHealthEpisode_ARedeliveredEventDoesNotOpenASecond(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", 100))
+	_, opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", 100))
 	require.NoError(t, err)
 	require.True(t, opened)
 
 	// A plain loop rather than subtests: each redelivery is asserted against the store the previous one left behind, so the steps are
 	// sequential by nature and cannot be parallel subtests (tparallel), and serial subtests would name steps without isolating them.
 	for _, atNs := range []int64{200, 300, 400} {
-		opened, err = s.OpenHealthEpisode(t.Context(),
+		_, opened, err = s.OpenHealthEpisode(t.Context(),
 			selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", atNs))
 		require.NoError(t, err)
 		assert.False(t, opened, "a redelivered event is the same occurrence and is already recorded (delivery at %d)", atNs)
@@ -124,6 +124,15 @@ func TestOpenHealthEpisode_ARedeliveredEventDoesNotOpenASecond(t *testing.T) {
 
 	got := openEpisodes(t, db, "host-a")
 	require.Len(t, got, 1, "one outage is one episode however many times its event is delivered")
+
+	// The redelivery reports the EXISTING episode's id, not zero. The detection engine keys its webhook enqueue on it and redoes that
+	// enqueue on a redelivery, because it cannot share a transaction with this write; an id of zero there would silently lose the
+	// notification in exactly the case the retry exists to recover.
+	id, opened, err := s.OpenHealthEpisode(t.Context(),
+		selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", 500))
+	require.NoError(t, err)
+	assert.False(t, opened)
+	assert.Equal(t, got[0].ID, id, "a redelivery must hand back the id of the episode it collapsed onto")
 	assert.Equal(t, int64(100), got[0].OpenedAtNs, "the episode keeps the instant the outage began, not the latest delivery")
 }
 
@@ -138,7 +147,7 @@ func TestOpenHealthEpisode_ARedeliveryAfterTheEpisodeClosedIsStillTheSameOccurre
 	s, db := newTestStoreWithDB(t)
 
 	e := selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-1", 100)
-	opened, err := s.OpenHealthEpisode(t.Context(), e)
+	_, opened, err := s.OpenHealthEpisode(t.Context(), e)
 	require.NoError(t, err)
 	require.True(t, opened)
 
@@ -147,7 +156,7 @@ func TestOpenHealthEpisode_ARedeliveryAfterTheEpisodeClosedIsStillTheSameOccurre
 	require.NoError(t, err)
 	require.Equal(t, int64(1), closed)
 
-	opened, err = s.OpenHealthEpisode(t.Context(), e)
+	_, opened, err = s.OpenHealthEpisode(t.Context(), e)
 	require.NoError(t, err)
 	assert.False(t, opened, "the outage is already recorded; a replay must not resurrect it as a second one")
 	assert.Len(t, allEpisodes(t, db, "host-a"), 1)
@@ -166,7 +175,7 @@ func TestOpenHealthEpisode_SeparatesHostsComponentsAndKinds(t *testing.T) {
 		selfHealEpisode("host-b", "network_extension", 100),
 		selfHealEpisode("host-a", "endpoint_security_extension", 100),
 	} {
-		opened, err := s.OpenHealthEpisode(t.Context(), e)
+		_, opened, err := s.OpenHealthEpisode(t.Context(), e)
 		require.NoError(t, err)
 		assert.True(t, opened)
 	}
@@ -184,7 +193,7 @@ func TestCloseHealthEpisodes_ClosesOnRecoveryAndAllowsTheNextOne(t *testing.T) {
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
 	require.NoError(t, err)
 
 	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
@@ -201,7 +210,7 @@ func TestCloseHealthEpisodes_ClosesOnRecoveryAndAllowsTheNextOne(t *testing.T) {
 	// A second outage on the same component later is a separate episode, not a reopening of the first. It is a separate OCCURRENCE,
 	// carrying its own event, which is exactly how the agent reports it: the event fires at the edge where a repair budget is spent,
 	// so a later exhaustion is a later event.
-	opened, err := s.OpenHealthEpisode(t.Context(),
+	_, opened, err := s.OpenHealthEpisode(t.Context(),
 		selfHealEpisodeOf("host-a", "network_extension", "content_filter", "evt-second-outage", 1000))
 	require.NoError(t, err)
 	assert.True(t, opened)
@@ -216,7 +225,7 @@ func TestCloseHealthEpisodes_OnlyClosesTheComponentsReportedHealthy(t *testing.T
 	s, db := newTestStoreWithDB(t)
 
 	for _, c := range []string{"network_extension", "endpoint_security_extension"} {
-		_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", c, 100))
+		_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", c, 100))
 		require.NoError(t, err)
 	}
 
@@ -245,7 +254,7 @@ func TestCloseHealthEpisodes_HealthyWithNothingOpenIsNotAnError(t *testing.T) {
 
 	// And an empty recovered set closes nothing at all rather than everything, which is the dangerous reading of "no components
 	// named": a host reporting no healthy components has not recovered from anything.
-	_, err = s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	_, _, err = s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
 	require.NoError(t, err)
 	closed, err = s.CloseHealthEpisodes(t.Context(), "host-a", nil, 900)
 	require.NoError(t, err)
@@ -260,7 +269,7 @@ func TestCloseHealthEpisodes_DoesNotReachOtherHosts(t *testing.T) {
 	s, db := newTestStoreWithDB(t)
 
 	for _, h := range []string{"host-a", "host-b"} {
-		_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode(h, "network_extension", 100))
+		_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode(h, "network_extension", 100))
 		require.NoError(t, err)
 	}
 
@@ -282,7 +291,7 @@ func TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes(t *testin
 	s, db := newTestStoreWithDB(t)
 
 	for _, provider := range []string{"content_filter", "dns_proxy"} {
-		opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", provider, 100))
+		_, opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", provider, 100))
 		require.NoError(t, err)
 		assert.True(t, opened, "each provider's failure is its own outage")
 	}
@@ -296,7 +305,7 @@ func TestOpenHealthEpisode_TwoProvidersUnderOneComponentAreTwoEpisodes(t *testin
 	assert.ElementsMatch(t, []string{"content_filter", "dns_proxy"}, subjects)
 
 	// Redelivering one of them still does not open a third: the occurrence is the identity, so a repeat of one event is not an outage.
-	opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", "dns_proxy", 200))
+	_, opened, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", "dns_proxy", 200))
 	require.NoError(t, err)
 	assert.False(t, opened, "the same provider's event redelivered is the same occurrence")
 	assert.Len(t, openEpisodes(t, db, "host-a"), 2)
@@ -312,7 +321,7 @@ func TestCloseHealthEpisodes_ComponentRecoveryClosesEveryProviderUnderIt(t *test
 	s, db := newTestStoreWithDB(t)
 
 	for _, provider := range []string{"content_filter", "dns_proxy"} {
-		_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", provider, 100))
+		_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisodeFor("host-a", "network_extension", provider, 100))
 		require.NoError(t, err)
 	}
 	closed, err := s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", 900)), 900)
@@ -328,7 +337,7 @@ func TestCloseHealthEpisodes_StampsTheComponentsOwnTransitionInstant(t *testing.
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
 	require.NoError(t, err)
 
 	// The component recovered at 500; the snapshot carrying that news arrived at 900.
@@ -365,7 +374,7 @@ func TestCloseHealthEpisodes_ARecoveryThatPredatesTheFaultDoesNotCloseIt(t *test
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s, db := newTestStoreWithDB(t)
-			_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 1_000))
+			_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 1_000))
 			require.NoError(t, err)
 
 			_, err = s.CloseHealthEpisodes(t.Context(), "host-a", recov(rc("network_extension", tc.transitionNs)), 2_000)
@@ -391,7 +400,7 @@ func TestCloseHealthEpisodes_IgnoresASnapshotThatLostTheOrderingRace(t *testing.
 	t.Parallel()
 	s, db := newTestStoreWithDB(t)
 
-	_, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
+	_, _, err := s.OpenHealthEpisode(t.Context(), selfHealEpisode("host-a", "network_extension", 100))
 	require.NoError(t, err)
 	// The current health row was written by a NEWER snapshot than the delayed one below.
 	require.NoError(t, s.UpsertHostHealth(t.Context(), "host-a", "unhealthy", nil, 5_000))
@@ -419,7 +428,7 @@ func TestOpenHealthEpisode_AFaultWithNoComponentIsRecordedAndStaysOpen(t *testin
 	s, db := newTestStoreWithDB(t)
 
 	e := selfHealEpisode("host-a", "", 100)
-	opened, err := s.OpenHealthEpisode(t.Context(), e)
+	_, opened, err := s.OpenHealthEpisode(t.Context(), e)
 	require.NoError(t, err)
 	require.True(t, opened, "a report that names a host with no capture is worth recording even unattributed")
 

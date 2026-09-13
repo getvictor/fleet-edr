@@ -74,7 +74,7 @@ func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Disca
 
 func validClaim(t *testing.T, sealer *secretseal.Sealer, attempt int) detapi.WebhookDeliveryClaim {
 	t.Helper()
-	payload, err := json.Marshal(webhook.Envelope{SchemaVersion: "1.0", EventID: "e", EventType: webhook.EventAlertCreated, Alert: webhook.AlertBody{ID: 1}})
+	payload, err := json.Marshal(webhook.Envelope{SchemaVersion: "1.0", EventID: "e", EventType: webhook.EventAlertCreated, Alert: &webhook.AlertBody{ID: 1}})
 	require.NoError(t, err)
 	sealed, err := sealer.Seal([]byte("the-secret"))
 	require.NoError(t, err)

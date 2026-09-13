@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "event_id": "33333333-3333-4333-8333-333333333333",
+  "event_type": "alert.status_changed",
+  "occurred_at": "2026-01-01T00:01:30Z",
+  "delivery_attempt": 2,
+  "alert": {
+    "id": 44,
+    "status": "resolved",
+    "previous_status": "open",
+    "severity": "critical",
+    "source": "detection",
+    "title": "DYLD injection",
+    "description": "injection on exec",
+    "rule_id": "dyld_insert",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:01:30Z",
+    "resolved_at": "2026-01-01T00:02:00Z"
+  },
+  "host": {
+    "id": "host-c"
+  },
+  "process": {
+    "pid": 99
+  },
+  "links": {
+    "console": "https://edr.example.com/ui/alerts?id=44"
+  }
+}

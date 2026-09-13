@@ -19,6 +19,9 @@ import "./Webhooks.scss";
 
 const EVENT_CREATED = "alert.created";
 const EVENT_STATUS_CHANGED = "alert.status_changed";
+// A host health episode opening: this product's own sensor has a fault that needs a person, such as a capture provider its automatic
+// repair could not restore. Not an alert, so it has its own subscription rather than riding "Alert created" (issue #778).
+const EVENT_HEALTH_EPISODE_OPENED = "host.health_episode_opened";
 const SEVERITIES = ["low", "medium", "high", "critical"];
 
 // FormState mirrors the operator-editable fields. The signing secret is write-only: empty unless the operator is setting or rotating
@@ -29,13 +32,14 @@ interface FormState {
   url: string;
   onCreated: boolean;
   onStatusChanged: boolean;
+  onHealthEpisodeOpened: boolean;
   minSeverity: string;
   enabled: boolean;
   secret: string;
 }
 
 function emptyForm(): FormState {
-  return { editingId: null, name: "", url: "", onCreated: true, onStatusChanged: false, minSeverity: "low", enabled: true, secret: "" };
+  return { editingId: null, name: "", url: "", onCreated: true, onStatusChanged: false, onHealthEpisodeOpened: false, minSeverity: "low", enabled: true, secret: "" };
 }
 
 function toForm(d: WebhookDestination): FormState {
@@ -45,6 +49,7 @@ function toForm(d: WebhookDestination): FormState {
     url: d.url,
     onCreated: d.event_types.includes(EVENT_CREATED),
     onStatusChanged: d.event_types.includes(EVENT_STATUS_CHANGED),
+    onHealthEpisodeOpened: d.event_types.includes(EVENT_HEALTH_EPISODE_OPENED),
     minSeverity: d.min_severity,
     enabled: d.enabled,
     secret: "",
@@ -125,6 +130,7 @@ export function Webhooks() {
     const eventTypes: string[] = [];
     if (form.onCreated) eventTypes.push(EVENT_CREATED);
     if (form.onStatusChanged) eventTypes.push(EVENT_STATUS_CHANGED);
+    if (form.onHealthEpisodeOpened) eventTypes.push(EVENT_HEALTH_EPISODE_OPENED);
     const secret = form.secret.trim();
     const body: WebhookDestinationInput = {
       name: form.name.trim(),
@@ -182,7 +188,7 @@ export function Webhooks() {
 
   return (
     <div className="webhooks">
-      <PageHeader title="Webhooks" subtitle="Deliver alerts to an external endpoint over a signed HTTPS POST." />
+      <PageHeader title="Webhooks" subtitle="Deliver alerts and sensor health faults to an external endpoint over a signed HTTPS POST." />
       {error !== null && (
         <div className="webhooks__error" role="alert">
           {error}
@@ -207,6 +213,13 @@ export function Webhooks() {
           </label>
           <label>
             <input type="checkbox" checked={form.onStatusChanged} onChange={(e) => { update("onStatusChanged", e.target.checked); }} /> Status changed
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={form.onHealthEpisodeOpened}
+              onChange={(e) => { update("onHealthEpisodeOpened", e.target.checked); }}
+            /> Sensor health fault
           </label>
         </fieldset>
         <Select id="wh-severity" label="Minimum severity" value={form.minSeverity} onChange={(e) => { update("minSeverity", e.target.value); }} inline>

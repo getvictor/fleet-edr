@@ -109,6 +109,49 @@ describe("Webhooks", () => {
     expect(await screen.findByText("A signing secret is required.")).toBeInTheDocument();
   });
 
+  // A sensor health fault is not an alert, so it is its own subscription (issue #778). Asserting the exact event_types sent is what
+  // pins it: a checkbox wired to the wrong constant would still render and still toggle.
+  it("subscribes a destination to sensor health faults", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValueOnce([]).mockResolvedValueOnce([dest]);
+    const create = vi.spyOn(api, "createWebhook").mockResolvedValue(dest);
+    render(<Webhooks />);
+    await screen.findByText("No destinations configured.");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "pd" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://hooks.example.com/edr" } });
+    fireEvent.change(screen.getByLabelText("Signing secret"), { target: { value: "sekret" } });
+    // Off by default, like status changes: a new destination should not start receiving a class of event nobody asked it for.
+    const health = screen.getByLabelText("Sensor health fault");
+    expect(health).not.toBeChecked();
+    fireEvent.click(health);
+    fireEvent.click(screen.getByRole("button", { name: "Add destination" }));
+
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+    expect(create.mock.calls[0][0].event_types).toEqual(["alert.created", "host.health_episode_opened"]);
+  });
+
+  // The edit form must read the subscription back, or saving an unrelated change (a rename) would silently unsubscribe a destination
+  // from health faults because the checkbox came up unchecked.
+  it("keeps a health subscription across an unrelated edit", async () => {
+    const subscribed: api.WebhookDestination = { ...dest, event_types: ["alert.created", "host.health_episode_opened"] };
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([subscribed]);
+    const update = vi.spyOn(api, "updateWebhook").mockResolvedValue(subscribed);
+    render(<Webhooks />);
+    await screen.findByText("pd");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Sensor health fault")).toBeChecked();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "pd-renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(update).toHaveBeenCalledTimes(1);
+    });
+    expect(update.mock.calls[0][1].event_types).toEqual(["alert.created", "host.health_episode_opened"]);
+  });
+
   it("edits a destination, keeping the secret when left blank", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     const update = vi.spyOn(api, "updateWebhook").mockResolvedValue({ ...dest, name: "pd-renamed" });

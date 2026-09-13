@@ -95,6 +95,11 @@ type SelfHealFailedDetail struct {
 //
 // OpenHealthEpisode is idempotent on the occurrence it records, so a redelivered event collapses onto the episode it already opened
 // rather than opening a second one for an outage that is already recorded.
+//
+// It returns the episode's id in BOTH cases, not only when it opened one. A caller that does further work keyed on the episode (the
+// detection engine enqueues a webhook delivery for it) has to be able to redo that work on a redelivery, because the two writes live
+// in different contexts and cannot share a transaction: if the second one failed the first time, the redelivery is the only chance to
+// recover it, and by then the episode is already recorded.
 type HealthEpisodeRecorder interface {
-	OpenHealthEpisode(ctx context.Context, e HealthEpisode) (opened bool, err error)
+	OpenHealthEpisode(ctx context.Context, e HealthEpisode) (id int64, opened bool, err error)
 }
