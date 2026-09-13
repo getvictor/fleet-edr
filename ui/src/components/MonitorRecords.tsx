@@ -9,7 +9,7 @@ import { PageHeader } from "./ui/PageHeader";
 import { useHostNames } from "./useHostNames";
 import "./MonitorRecords.scss";
 
-// The most records the page asks for. A rule noisy enough to exceed it is already answered by the first page: the promote decision is
+// The most records the page shows. A rule noisy enough to exceed it is already answered by the first page: the promote decision is
 // about what the rule matches, and a hundred examples say that as well as a thousand.
 const recordLimit = 100;
 
@@ -22,6 +22,7 @@ const recordLimit = 100;
 export function MonitorRecords() {
   const { ruleId = "" } = useParams<{ ruleId: string }>();
   const [records, setRecords] = useState<Alert[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hostNames = useHostNames();
 
@@ -29,9 +30,13 @@ export function MonitorRecords() {
     let cancelled = false;
     setRecords(null); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch pattern
     setError(null);
-    listAlerts({ disposition: "monitor", rule_id: ruleId, limit: recordLimit })
+    // One past the limit, so "there are more" is proven by a row that exists rather than guessed from a full page: a rule with exactly
+    // the limit's worth of records would otherwise be told some were left out.
+    listAlerts({ disposition: "monitor", rule_id: ruleId, limit: recordLimit + 1 })
       .then((result) => {
-        if (!cancelled) setRecords(result);
+        if (cancelled) return;
+        setTruncated(result.length > recordLimit);
+        setRecords(result.slice(0, recordLimit));
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
@@ -60,7 +65,7 @@ export function MonitorRecords() {
       )}
       {records !== null && records.length > 0 && (
         <>
-          {records.length === recordLimit && (
+          {truncated && (
             <p className="monitor-records__limit">Showing the {String(recordLimit)} most recent records.</p>
           )}
           <Table>

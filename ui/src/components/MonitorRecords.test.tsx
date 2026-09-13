@@ -55,7 +55,7 @@ describe("MonitorRecords", () => {
     const table = await screen.findByRole("table");
     // Monitor records, for exactly this rule. Without the disposition the server serves alerts, and the page would list the wrong
     // kind of row under a heading that says otherwise.
-    expect(list).toHaveBeenCalledWith({ disposition: "monitor", rule_id: rule, limit: 100 });
+    expect(list).toHaveBeenCalledWith({ disposition: "monitor", rule_id: rule, limit: 101 });
     const links = within(table).getAllByRole("link", { name: /Team Viewer Session Started/ });
     expect(links.map((l) => l.getAttribute("href"))).toEqual(["/alerts/378", "/alerts/377"]);
     // The licence credit rides every surface showing a match, and a monitor record is a match.
@@ -101,12 +101,21 @@ describe("MonitorRecords", () => {
     expect(screen.queryByText(/No monitor records for this rule/)).toBeNull();
   });
 
-  it("says when it is showing only the most recent page", async () => {
-    vi.spyOn(api, "listAlerts").mockResolvedValue(
-      Array.from({ length: 100 }, (_, i) => makeRecord({ id: 1000 + i })),
-    );
+  // The page asks for one row past what it shows, so the notice rests on a row that exists. A rule with exactly a page of records is
+  // complete, and telling its operator some were left out would send them looking for records that do not exist.
+  it("says it is showing only the newest records when more exist", async () => {
+    vi.spyOn(api, "listAlerts").mockResolvedValue(Array.from({ length: 101 }, (_, i) => makeRecord({ id: 1000 + i })));
     renderPage();
 
     expect(await screen.findByText("Showing the 100 most recent records.")).toBeVisible();
+    expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(101); // header plus the 100 shown
+  });
+
+  it("does not claim truncation for exactly a page of records", async () => {
+    vi.spyOn(api, "listAlerts").mockResolvedValue(Array.from({ length: 100 }, (_, i) => makeRecord({ id: 1000 + i })));
+    renderPage();
+
+    await screen.findByRole("table");
+    expect(screen.queryByText(/most recent records/)).toBeNull();
   });
 });
