@@ -223,5 +223,6 @@ func TestActiveEnrollments(t *testing.T) {
 	register(t, s, "11111111-1111-4111-8111-111111111111")
 	got, err = s.ActiveEnrollments(ctx)
 	require.NoError(t, err)
+	require.Len(t, got, 1)
 	assert.True(t, got[0].EnrolledAt.After(before), "re-enrolling must advance enrolled_at")
 }
