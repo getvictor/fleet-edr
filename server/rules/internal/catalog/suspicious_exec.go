@@ -108,9 +108,8 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 			"race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second " +
 			"flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the " +
 			"time the trigger event lands.\n\n" +
-			"Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now " +
-			"`shell_network_connect`, which ships in monitor: a chain doing both raises one alert here and records a match " +
-			"there, and raises one alert per rule once that rule is promoted.\n\n" +
+			"The same chain making an outbound connection is `shell_network_connect`, which ships in monitor: a chain doing " +
+			"both raises one alert here and records a match there, and raises one alert per rule once that rule is promoted.\n\n" +
 			"30 seconds is the temporal cap between the shell exec and the temp exec.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
@@ -121,7 +120,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		},
 		Limitations: []string{
 			"The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
-			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.",
+			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa.",
 			"A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. Skipped chains are counted per rule on the server's detection traces. A shell started directly by launchd is a different case: it has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.",
 		},
 	}

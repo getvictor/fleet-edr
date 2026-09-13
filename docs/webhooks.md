@@ -2,7 +2,7 @@
 
 Fleet EDR can POST every alert, and every sensor health fault, to an HTTP endpoint you control, so they reach your team (Slack, PagerDuty, a SIEM, a SOAR runbook, or your own glue) in seconds instead of waiting for someone to open the console. This page covers configuring destinations, the payload shape, and how a receiver verifies a delivery. Operators manage destinations under Admin, Settings, Webhooks in the console, backed by the API described here.
 
-Related: deferred hardening and vendor-specific formatters are tracked in [issue #565](https://github.com/getvictor/fleet-edr/issues/565). Feature proposal: [issue #496](https://github.com/getvictor/fleet-edr/issues/496).
+Planned hardening and vendor-specific formatters are tracked in [issue #565](https://github.com/getvictor/fleet-edr/issues/565).
 
 ## What gets delivered
 

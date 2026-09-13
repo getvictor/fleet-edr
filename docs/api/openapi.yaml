@@ -264,7 +264,7 @@ paths:
           in: query
           description: >-
             When true, opt out of sibling aggregation and return the raw forest with every node. By default the response
-            collapses repeated identical-path leaf siblings under the same parent into aggregated `×N` nodes (issue #416).
+            collapses repeated identical-path leaf siblings under the same parent into aggregated `×N` nodes.
           schema: {type: boolean, default: false}
         - name: pin
           in: query
@@ -772,7 +772,7 @@ paths:
       description: |
         Returns every configured false-positive exclusion the detection
         engine consults at evaluation time. A `host_group_id` of 0 is a
-        global exclusion (the only scope the Phase A surface accepts).
+        global exclusion, the only scope currently accepted.
       security:
         - SessionCookie: []
       responses:
@@ -1822,8 +1822,8 @@ components:
     AggregatedSiblings:
       type: object
       description: >-
-        Present when this node is a collapsed group of identical-path sibling processes rather than a single process
-        (issue #416). The enclosing node then renders as a `×N` badge; its own process fields describe the earliest member
+        Present when this node is a collapsed group of identical-path sibling processes rather than a single process.
+        The enclosing node then renders as a `×N` badge; its own process fields describe the earliest member
         (a representative), `children` is empty, and `sample` carries a capped, fork-ordered slice of the underlying
         members the UI can expand in place. Absent from a normal (non-aggregated) node.
       required: [count, exited_count, running_count, first_fork_ns, last_fork_ns]
@@ -2132,7 +2132,7 @@ components:
         host_group_id:
           type: integer
           format: int64
-          description: 0 is the global scope (the only scope the Phase A surface accepts).
+          description: 0 is the global scope, the only scope currently accepted.
           example: 0
         reason: {type: string, example: "Claude Code (Anthropic PBC Q6L2SF6YDW, Developer ID); shells out to GitHub"}
         enabled: {type: boolean}

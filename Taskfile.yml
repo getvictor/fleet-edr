@@ -616,6 +616,15 @@ tasks:
       - bash tools/lint-no-emdash.sh
       - git ls-files -z | go run ./tools/dash-lint
 
+  lint:docs:issues:
+    desc: |
+      tools/doc-issue-lint: public-facing docs (operator docs, the OpenAPI spec, the rule pack files) may reference a GitHub
+      issue only while it is OPEN. A closed issue or any pull request is history, which belongs in CHANGELOG.md; describe the
+      current behavior instead. Needs GitHub API access (GITHUB_TOKEN, GH_TOKEN, or a logged-in gh CLI). CI gate is
+      .github/workflows/md-lint.yml, which also runs it daily because closing an issue can fail docs no PR touched.
+    cmds:
+      - 'GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-$(gh auth token)}}" sh -c "git ls-files -z | go run ./tools/doc-issue-lint"'
+
   lint:go:
     desc: |
       golangci-lint across the whole Go module. Runs the CUSTOM golangci-lint binary

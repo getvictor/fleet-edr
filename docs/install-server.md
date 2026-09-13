@@ -233,7 +233,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 
 Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`, `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents become the value. That's how the compose stack delivers secrets.
 
-Detection-rule tuning (false-positive exclusions and per-rule enable/monitor/disable) is no longer an env var. It moved to the DB-backed detection-config surface, edited through the admin API/UI and audited; see [operations.md](operations.md#detection-rule-tuning). The former `EDR_LAUNCHAGENT_ALLOWLIST`, `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`, `EDR_SUDOERS_WRITER_ALLOWLIST`, `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`, and `EDR_DISABLED_RULES` knobs are removed.
+Detection-rule tuning (false-positive exclusions and per-rule mode) is not configured through environment variables. It lives in the DB-backed detection-config surface, edited through the admin API and UI and audited; see [operations.md](operations.md#detection-rule-tuning).
 
 ## OTel metrics and logs
 

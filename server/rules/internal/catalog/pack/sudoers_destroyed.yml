@@ -27,8 +27,7 @@ detection:
   # `.` or ending in `~`, so destroying one of those destroys no policy.
   #
   # The narrowing is load-bearing here rather than merely tidy. visudo UNLINKS its own `<name>.tmp` on every run, measured on
-  # macOS 26.3, so a rule matching any direct child would report every legitimate sudoers edit as a policy deletion. That is
-  # the same over-match that made sudoers_tamper fire on visudo (#933), reappearing through the deletion door.
+  # macOS 26.3, so a rule matching any direct child would report every legitimate sudoers edit as a policy deletion.
   #
   # One condition covers both event types because both supply TargetFilename and both mean the same thing here: the policy
   # that was at this path is gone.

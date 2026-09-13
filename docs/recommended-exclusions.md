@@ -14,7 +14,7 @@ An exclusion is `(rule_id, match_type, value)`, with an optional expiry. The val
 - `cdhash`: matches a binary's code-directory hash exactly (40 lowercase hex characters), pinning one exact build. The agent reports a cdhash only for binaries built with Hardened Runtime, so it cannot match an ad-hoc signed binary such as most Homebrew formulae.
 - `path_glob`: matches an absolute filesystem path with the same glob semantics as `parent_path_glob`.
 
-Which rule consumes which match type is fixed by the rule, and the console offers only the match types the selected rule actually consults. Creating an exclusion for a `(rule_id, match_type)` pair the rule does not consult, or for a rule that does not exist, is rejected by the API, so a stored exclusion can no longer silently do nothing:
+Which rule consumes which match type is fixed by the rule, and the console offers only the match types the selected rule actually consults. Creating an exclusion for a `(rule_id, match_type)` pair the rule does not consult, or for a rule that does not exist, is rejected by the API, so a stored exclusion cannot silently do nothing:
 
 | Rule | Match types used | Matched against |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
 
-Exclusions are keyed by rule id. `suspicious_exec` and `shell_network_connect` share the same parent-matching logic but not their exclusions, so silencing a parent on both shapes takes one exclusion per rule. Before the two rules were split, one `suspicious_exec` exclusion silenced both.
+Exclusions are keyed by rule id. `suspicious_exec` and `shell_network_connect` share the same parent-matching logic but not their exclusions, so silencing a parent on both shapes takes one exclusion per rule.
 
 A matched exclusion suppresses the finding before an alert is created, and nothing records that it did. Treat every exclusion as a standing blind spot you cannot audit after the fact, and give environment-specific ones an expiry so they come back up for review.
 
@@ -59,7 +59,7 @@ Know what it costs. The 30-second window starts when the login shell starts, so 
 | `shell_network_connect` | `parent_path_glob` | `/usr/bin/login` | Workstations only | Interactive terminal logins spawn a shell that routinely reaches the network. Interim until host-class profiles exist. |
 | `privilege_launchd_plist_write` | `team_id` | `FDG8Q7N4CC` | All hosts | The EDR agent's own LaunchDaemon registration. Signed by the EDR vendor team; allowlist so the agent does not flag its own persistence. |
 
-Earlier versions of this page recommended the `/usr/bin/login` exclusion on `suspicious_exec`, back when that rule also covered the network shape. On `suspicious_exec` today it only silences temp-directory executions during shell startup, which is the persistence case above, so remove it there unless you have seen that noise.
+Do not add the `/usr/bin/login` exclusion to `suspicious_exec`: there it only silences temp-directory executions during shell startup, which is the shell-profile persistence case above.
 
 The `FDG8Q7N4CC` entry is the only one keyed on a team ID because `privilege_launchd_plist_write` accepts only team IDs. It should ideally be seeded at install time so a freshly deployed agent does not alert on its own daemon registration. Verify the team on the installed binary with `codesign -dv /usr/local/bin/fleet-edr-agent` before relying on it.
 
@@ -67,7 +67,7 @@ The `FDG8Q7N4CC` entry is the only one keyed on a team ID because `privilege_lau
 
 The table above is deliberately minimal because it is the only set that applies to every deployment. Most of the benign shell chain noise you actually see comes from tooling specific to your fleet, so those exclusions are yours to add, not blanket recommendations: add one only for a tool actually present in your environment. Common offenders shell out and then reach the network, which is exactly the rule's shape: infrastructure-as-code tools, AI coding assistants, CI runners, and package managers. For a Developer-ID signed tool, exclude it by its `team_id`. Fall back to a `parent_path_glob` anchored to the tool's full absolute binary path only for an unsigned or ad-hoc signed tool, give it an expiry, and never use a leading-wildcard fragment. For example, only if your fleet runs them:
 
-- Claude Code (signed by Anthropic): `team_id` `Q6L2SF6YDW`. The signature holds across version updates and a planted binary cannot carry it, so this is preferred over the path glob that earlier releases documented (`/Users/*/.local/share/claude/versions/*`, which lives under a user home an attacker can write to). Claude Code runs arbitrary shell commands by design, so this exclusion also hides a prompt-injected command that fetches or runs a payload. Confirm the team on your own host with `codesign -dv $(which claude)` before allowlisting it.
+- Claude Code (signed by Anthropic): `team_id` `Q6L2SF6YDW`. The signature holds across version updates and a planted binary cannot carry it, so it is preferred over a path glob such as `/Users/*/.local/share/claude/versions/*`, which lives under a user home an attacker can write to. Claude Code runs arbitrary shell commands by design, so this exclusion also hides a prompt-injected command that fetches or runs a payload. Confirm the team on your own host with `codesign -dv $(which claude)` before allowlisting it.
 - Terraform from HashiCorp's own Homebrew tap or release zip (signed by HashiCorp): `team_id` `D38WU7D763`. It covers every HashiCorp binary, and Terraform's `local-exec` provisioners and `external` data sources run arbitrary commands. A Terraform built from source (for example an older `homebrew-core` formula) is ad-hoc signed and has no team ID; run `codesign -dv $(which terraform)` to see which you have.
 - Git installed via Homebrew on Apple Silicon (ad-hoc signed, no team ID): `parent_path_glob` `/opt/homebrew/Cellar/git/*/bin/git`, with an expiry. `/opt/homebrew` is owned by the installing user, so this carries the residual risks in the caveats above.
 
