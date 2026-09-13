@@ -14,6 +14,10 @@ import (
 // rule's id and severity and the matched identifier. What differs is where they land. The rule declares monitor as its default mode,
 // so each finding is kept as a monitor record rather than raised as an alert: nothing was blocked, nobody needs notifying, and an
 // operator deciding whether to promote the app-control rule to PROTECT reads the records from the rule's monitor-records page.
+//
+// The subject process is the one that attempted the exec, as for a block: the event is stamped with the AUTH_EXEC instant, before
+// the image is replaced. For a would-block the exec then goes ahead, so the binary appears as that process's next generation in the
+// tree, and a record for the same rule and process deduplicates exactly as the block alert it would become does.
 type ApplicationControlWouldBlock struct{}
 
 // applicationControlWouldBlockEventType is the event_type the extension emits for a DETECT match. Mirrored on the Swift side in
