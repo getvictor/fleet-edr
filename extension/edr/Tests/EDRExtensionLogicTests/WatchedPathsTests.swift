@@ -6,6 +6,12 @@ import XCTest
 /// and the mute/unmute difference between two sets. Applying that difference to a live Endpoint Security client is exercised at the
 /// system / VM layer, because FileTamperSubscriber imports EndpointSecurity and is outside this target.
 final class WatchedPathsTests: XCTestCase {
+    private struct RefusedEntry {
+        let path: String
+        let match: WatchedPathMatch
+        let why: String
+    }
+
     private func payload(_ json: String) -> Data {
         Data(json.utf8)
     }
@@ -61,6 +67,45 @@ final class WatchedPathsTests: XCTestCase {
             WatchedPath(path: "/etc/emond.d/", match: .prefix)
         ])
         XCTAssertEqual(update?.skipped, 4)
+    }
+
+    // The same cases the server's ValidateWatchedPaths refuses, so a set that got past the server by a bug is still not watched.
+    func testIsAcceptableRefusesEverythingTheServerRefuses() {
+        let refused: [RefusedEntry] = [
+            RefusedEntry(path: "etc/hosts", match: .literal, why: "relative path"),
+            RefusedEntry(path: "", match: .literal, why: "empty path"),
+            RefusedEntry(path: "/etc//hosts", match: .literal, why: "empty segment"),
+            RefusedEntry(path: "/etc/./hosts", match: .literal, why: "dot segment"),
+            RefusedEntry(path: "/Library/../Users/", match: .prefix, why: "dot-dot segment"),
+            RefusedEntry(path: "/Users/child/../", match: .prefix, why: "dot-dot segment that reads as deep"),
+            RefusedEntry(path: "/etc/ho\nsts", match: .literal, why: "control character"),
+            RefusedEntry(path: "/Users/\u{0}ignored/", match: .prefix, why: "NUL, which truncates to a top-level prefix at the kernel"),
+            RefusedEntry(path: "/etc/hosts\u{7f}", match: .literal, why: "delete character"),
+            RefusedEntry(path: "/" + String(repeating: "a", count: 1024), match: .literal, why: "longer than PATH_MAX"),
+            RefusedEntry(path: "/Library/StartupItems/", match: .literal, why: "literal ending in a slash"),
+            RefusedEntry(path: "/Library/StartupItems", match: .prefix, why: "prefix without a trailing slash"),
+            RefusedEntry(path: "/", match: .prefix, why: "root prefix"),
+            RefusedEntry(path: "/Users/", match: .prefix, why: "top-level prefix"),
+            RefusedEntry(path: "/private/etc/", match: .prefix, why: "top-level prefix through the firmlink"),
+            RefusedEntry(path: "/private/", match: .prefix, why: "firmlink parent itself")
+        ]
+        for entry in refused {
+            XCTAssertFalse(WatchedPaths.isAcceptable(entry.path, entry.match), entry.why)
+        }
+    }
+
+    func testIsAcceptableAcceptsWhatTheServerAccepts() {
+        let accepted: [(String, WatchedPathMatch)] = [
+            ("/Library/StartupItems/", .prefix),
+            ("/etc/emond.d/rules/", .prefix),
+            ("/private/var/root/.ssh/", .prefix),
+            ("/Users/Shared/canary.docx", .literal),
+            ("/etc/sudoers", .literal),
+            ("/Library/" + String(repeating: "a", count: 1024 - "/Library/".count), .literal)
+        ]
+        for (path, match) in accepted {
+            XCTAssertTrue(WatchedPaths.isAcceptable(path, match), path)
+        }
     }
 
     func testDecodeReadsTheEpochWhenPresent() {
@@ -208,6 +253,19 @@ final class WatchedPathsTests: XCTestCase {
 
         XCTAssertEqual(store.current?.version, 2)
         XCTAssertEqual(WatchedPathStore(storagePath: store.storagePath).current?.version, 2)
+    }
+
+    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-set-that-cannot-be-persisted-is-not-applied
+    // A set that cannot be written is not applied, so the running set never differs from the one a restart loads, and a redelivery
+    // once the disk recovers still counts as new.
+    func testStoreDoesNotAcceptASetItCannotPersist() throws {
+        let blocker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: blocker) }
+        try Data("not a directory".utf8).write(to: blocker)
+        let store = WatchedPathStore(storagePath: blocker.appendingPathComponent("watched-paths.json").path)
+
+        XCTAssertNil(store.accept(payload(#"{"version": 1, "epoch": 10, "paths": [{"path": "/etc/emond.d/", "match": "prefix"}]}"#)))
+        XCTAssertNil(store.current)
     }
 
     func testStoreStartsEmptyFromAnUnreadableFile() throws {

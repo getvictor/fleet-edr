@@ -138,7 +138,7 @@ final class FileTamperSubscriber: Sendable {
         var failedMutes = 0
         for target in mute {
             guard es_mute_path(client, target.path, Self.muteType(target.match)) == ES_RETURN_SUCCESS else {
-                logger.error("file-tamper mute failed for \(target.path, privacy: .public)")
+                logger.error("file-tamper mute failed for \(target.path, privacy: .private)")
                 if builtIn.contains(target) {
                     exit(EXIT_FAILURE)
                 }
@@ -153,7 +153,7 @@ final class FileTamperSubscriber: Sendable {
             for target in unmute {
                 guard es_unmute_path(client, target.path, Self.muteType(target.match)) == ES_RETURN_SUCCESS else {
                     // Still muted, so still observed: it stays in the applied set, and the next update tries again.
-                    logger.error("file-tamper unmute failed for \(target.path, privacy: .public)")
+                    logger.error("file-tamper unmute failed for \(target.path, privacy: .private)")
                     continue
                 }
                 applied.removeAll { $0 == target }

@@ -68,23 +68,16 @@ enum WatchedPaths {
     }
 
     /// decode reads a `watched_paths.update` payload. It returns nil for a payload that is not a watched-path document at all, which
-    /// leaves the active set untouched. Within a valid document, an entry is skipped and counted, rather than failing the whole set,
-    /// when its match type is one this extension does not know, its path is not absolute, or it is a prefix at the top of the
-    /// filesystem. The first two keep an older extension watching what it understands when a newer server adds a kind of entry.
-    ///
-    /// The third is a limit on cost that this extension holds itself rather than trusting the server to have held it. A prefix such as
-    /// `/` or `/Users/` would put every write under that tree on the wire, the firehose ADR-0008 removed after it delayed detection by
-    /// about 12 minutes, and a server bug should not be able to bring it back. The server refuses such a set with the same rule.
+    /// leaves the active set untouched. Within a valid document, an entry the extension would not watch (see isAcceptable) is skipped
+    /// and counted rather than failing the whole set, so an older extension keeps watching what it understands when a newer server adds
+    /// a kind of entry.
     static func decode(_ data: Data) -> WatchedPathsUpdate? {
         guard let document = try? JSONDecoder().decode(Document.self, from: data) else {
             return nil
         }
         var paths: [WatchedPath] = []
         for entry in document.paths {
-            guard entry.path.hasPrefix("/"), let match = WatchedPathMatch(rawValue: entry.match) else {
-                continue
-            }
-            if match == .prefix && !isBelowTopLevel(entry.path) {
+            guard let match = WatchedPathMatch(rawValue: entry.match), isAcceptable(entry.path, match) else {
                 continue
             }
             paths.append(WatchedPath(path: entry.path, match: match))
@@ -94,13 +87,39 @@ enum WatchedPaths {
         )
     }
 
-    /// isBelowTopLevel reports whether a path names something below a top-level directory, judging a path under /private/etc,
-    /// /private/tmp or /private/var by its root-linked form so the rule cannot be walked around through the firmlink.
-    static func isBelowTopLevel(_ path: String) -> Bool {
-        let rootLinked = spellings(of: path).last ?? path
-        return rootLinked.split(separator: "/", omittingEmptySubsequences: true).count >= minimumPrefixDepth
+    /// isAcceptable is the server's rule for one entry (ValidateWatchedPaths in server/rules/api), held again here.
+    ///
+    /// The server is where a set is validated, but a mute is applied here, and what reaches the kernel is a C string: a path carrying a
+    /// NUL, or `..` segments, can read as a deep path to a component count while muting a top-level one, and a top-level prefix puts
+    /// every write under that tree on the wire, the firehose ADR-0008 removed after it delayed detection by about 12 minutes. A server
+    /// bug should not be able to bring that back, so every rule the server applies to an entry is applied again: an absolute path
+    /// within maxPathBytes, free of control characters (NUL included), with no empty, `.` or `..` segment; a literal that does not end
+    /// in "/"; and a prefix that ends in "/" and lies below a top-level directory, judged through /private for /etc, /tmp and /var.
+    static func isAcceptable(_ path: String, _ match: WatchedPathMatch) -> Bool {
+        guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes,
+              !path.unicodeScalars.contains(where: { $0.value < firstPrintable || $0.value == deleteCharacter }) else {
+            return false
+        }
+        let body = path.dropFirst()
+        let trimmed = body.hasSuffix("/") ? body.dropLast() : body
+        let segments = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+        guard !segments.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+            return false
+        }
+        switch match {
+        case .literal:
+            return !path.hasSuffix("/")
+        case .prefix:
+            let rootLinked = spellings(of: path).last ?? path
+            return path.hasSuffix("/") && rootLinked.split(separator: "/").count >= minimumPrefixDepth
+        }
     }
 
+    /// maxPathBytes is the macOS PATH_MAX, the server's MaxWatchedPathBytes.
+    private static let maxPathBytes = 1024
+    /// firstPrintable and deleteCharacter bound the control characters a path may not carry.
+    private static let firstPrintable: UInt32 = 0x20
+    private static let deleteCharacter: UInt32 = 0x7f
     /// minimumPrefixDepth is how many path components a prefix needs: a top-level directory is one, so a prefix must name something
     /// inside one.
     private static let minimumPrefixDepth = 2
@@ -168,22 +187,21 @@ final class WatchedPathStore: Sendable {
         accepted.withLock { $0 }
     }
 
-    /// accept decodes a pushed payload and, when it supersedes the last accepted set, records and persists it and returns it for the
-    /// caller to apply. It returns nil, changing nothing, for a payload that is not a watched-path document or a set that does not
-    /// supersede the current one.
+    /// accept decodes a pushed payload and, when it supersedes the last accepted set and has been persisted, records it and returns it
+    /// for the caller to apply. It returns nil, changing nothing, for a payload that is not a watched-path document, a set that does not
+    /// supersede the current one, or a set that could not be written to disk.
+    ///
+    /// Persisting comes before accepting so the running set and the one a restart loads never disagree: a set applied without being
+    /// written would vanish at the next restart, and, already accepted, could not be retried by a redelivery. Refused instead, it is
+    /// retried by the next delivery of the same set.
+    ///
+    /// Called from the XPC server's serial queue, which is what makes the check, the write and the commit a sequence nothing else
+    /// interleaves with.
     func accept(_ data: Data) -> WatchedPathsUpdate? {
-        guard let update = WatchedPaths.decode(data) else {
+        guard let update = WatchedPaths.decode(data), update.supersedes(current), save(data) else {
             return nil
         }
-        let superseded = accepted.withLock { current -> Bool in
-            guard update.supersedes(current) else { return false }
-            current = update
-            return true
-        }
-        guard superseded else {
-            return nil
-        }
-        save(data)
+        accepted.withLock { $0 = update }
         return update
     }
 
@@ -200,14 +218,17 @@ final class WatchedPathStore: Sendable {
         return update
     }
 
-    /// save persists a payload exactly as it was pushed, written atomically so a crash mid-write cannot leave a torn file.
-    private func save(_ data: Data) {
+    /// save persists a payload exactly as it was pushed, written atomically so a crash mid-write cannot leave a torn file, and reports
+    /// whether it was written.
+    private func save(_ data: Data) -> Bool {
         let url = URL(fileURLWithPath: storagePath)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            return true
         } catch {
-            logger.error("watched-path set persist failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("watched-path set not applied, persist failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 }

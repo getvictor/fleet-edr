@@ -36,9 +36,9 @@ The built-in paths SHALL stay watched whatever set is pushed: a pushed set adds 
 
 Replacing the set SHALL NOT stop observing a path that both the previous and the new set cover. A path under a firmlinked root (`/etc`, `/tmp`, `/var`) SHALL be watched in both its `/private` and its root-linked spelling, since Endpoint Security reports the resolved form.
 
-The extension SHALL persist the last set it applied and SHALL start from it, so a restarted extension watches the pushed paths before the agent next delivers a set.
+The extension SHALL persist a set before applying it and SHALL start from the persisted set, so a restarted extension watches the pushed paths before the agent next delivers a set. A set that cannot be persisted SHALL NOT be applied, so the running set and the one a restart loads never differ; a later delivery of the same set tries again.
 
-An entry the extension does not understand, a `match` it does not know or a path that is not absolute, SHALL be skipped while the rest of the set is applied, so an older extension keeps watching what it understands when a newer server adds a kind of entry. A `prefix` entry that does not lie below a top-level directory (judged through `/private` for `/etc`, `/tmp` and `/var`) SHALL also be skipped: it would put every write under that tree on the wire, and the extension holds that limit itself rather than relying on the server to have held it. A payload that is not a watched-path document at all SHALL leave the watched set, and the persisted one, unchanged.
+An entry with a `match` the extension does not know SHALL be skipped while the rest of the set is applied, so an older extension keeps watching what it understands when a newer server adds a kind of entry. So SHALL any entry the server's rules for an entry refuse, which the extension holds again rather than relying on the server to have held them, because what reaches the kernel is a C string: a path that is not absolute, is longer than 1024 bytes, contains a control character (NUL included), or has an empty, `.` or `..` segment; a `literal` ending in `/`; and a `prefix` not ending in `/` or not lying below a top-level directory (judged through `/private` for `/etc`, `/tmp` and `/var`). A top-level prefix, however it is spelled, would put every write under that tree on the wire. A payload that is not a watched-path document at all SHALL leave the watched set, and the persisted one, unchanged.
 
 A pushed path that the client cannot mute SHALL be logged rather than end the extension, since the set persists and ending the extension would restart it into the same failure. When any mute in an update fails, the client SHALL NOT unmute anything that update drops, so a failure never leaves a path unwatched that was watched before; the failed path is attempted again by the next update.
 
@@ -51,6 +51,12 @@ Note on verification: decoding, the combination with the built-in paths, the mut
 - **THEN** the client starts observing the added path and stops observing the dropped one
 - **AND** paths in both sets are not unmuted at any point, and the extension does not restart
 
+#### Scenario: A set that cannot be persisted is not applied
+
+- **GIVEN** the extension cannot write its persisted set
+- **WHEN** a set that supersedes the current one arrives
+- **THEN** the set is not applied, the current set stays in force, and a later delivery of the same set is still treated as new
+
 #### Scenario: An older set delivered late does not replace a newer one
 
 - **GIVEN** the extension has accepted a set at a given version and epoch
@@ -60,7 +66,7 @@ Note on verification: decoding, the combination with the built-in paths, the mut
 
 #### Scenario: A prefix at the top of the filesystem is not watched
 
-- **GIVEN** a pushed set containing a `prefix` entry for `/`, a top-level directory such as `/Users/`, or `/private/etc/`
+- **GIVEN** a pushed set containing a `prefix` entry for `/`, a top-level directory such as `/Users/`, `/private/etc/`, or a path that only reads as deeper through a NUL or `..` segments
 - **WHEN** the extension decodes it
 - **THEN** those entries are skipped and counted, and the remaining entries are applied
 
