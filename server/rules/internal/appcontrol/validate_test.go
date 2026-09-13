@@ -250,7 +250,7 @@ func TestValidateEnforcement(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.ErrorIs(t, err, api.ErrAppControlInvalidEnforcement)
+			require.ErrorIs(t, err, api.ErrAppControlInvalidEnforcement)
 			assert.True(t, api.IsApplicationControlValidationError(err), "the REST handlers map it to 400")
 		})
 	}

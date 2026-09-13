@@ -43,16 +43,17 @@ func TestAppControlREST_CreateRule_Enforcement(t *testing.T) {
 		name        string
 		enforcement any
 		want        rulesapi.Enforcement
+		hashDigit   string
 	}{
-		{name: "detect is stored, pushed and audited", enforcement: "DETECT", want: rulesapi.EnforcementDetect},
-		{name: "protect is stored, pushed and audited", enforcement: "PROTECT", want: rulesapi.EnforcementProtect},
-		{name: "omitted enforcement blocks", enforcement: nil, want: rulesapi.EnforcementProtect},
+		{name: "detect is stored, pushed and audited", enforcement: "DETECT", want: rulesapi.EnforcementDetect, hashDigit: "a"},
+		{name: "protect is stored, pushed and audited", enforcement: "PROTECT", want: rulesapi.EnforcementProtect, hashDigit: "b"},
+		{name: "omitted enforcement blocks", enforcement: nil, want: rulesapi.EnforcementProtect, hashDigit: "e"},
 	}
-	for i, tc := range cases {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newAppControlRig(t, []string{"host-a", "host-b"})
-			identifier := strings.Repeat(string(rune('a'+i)), 64)
+			identifier := strings.Repeat(tc.hashDigit, 64)
 			body := map[string]any{
 				"rule_type":  rulesapi.RuleTypeBinary,
 				"identifier": identifier,
