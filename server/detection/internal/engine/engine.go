@@ -36,6 +36,9 @@ import (
 // on the transition that says the batch will not come round again: its acknowledgement, or its withdrawal from the queue.
 type batchTally struct {
 	monitor map[monitorKey]int
+	// records are the batch's monitor records, written together when the batch's evaluation ends (issue #1011) rather than one
+	// transaction per finding on the detection path.
+	records []mysql.MonitorRecord
 }
 
 type monitorKey struct{ ruleID, hostID, severity string }
@@ -133,7 +136,7 @@ type Engine struct {
 // monitorRecorder is the one write the monitor route needs, split out of the concrete store for the same reason as healthNotifier: the
 // routing tests run the engine with a nil store so that reaching alert persistence panics, and a monitor-mode finding must not.
 type monitorRecorder interface {
-	InsertAlert(ctx context.Context, a api.Alert, eventIDs []string) (int64, bool, error)
+	InsertMonitorRecords(ctx context.Context, records []mysql.MonitorRecord) error
 }
 
 // healthNotifier is the one outbox write the health route needs. An interface rather than the concrete store because the health
@@ -331,16 +334,28 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 			// processing entirely once its retry bounds are passed (#836), and then there is no later attempt to count it. Only
 			// the caller can tell those apart, because only the queue knows whether this nack was the withdrawal, so the engine
 			// hands the tally over and does not decide (#843).
-			return tally.snapshot(), err
+			return e.finishBatch(ctx, tally, err)
 		}
 		pendingMiss = retryCause(pendingMiss, err)
 	}
-	if pendingMiss != nil {
-		// Same reasoning as the hard error above: the tally travels with the error, and whether it is recorded is the caller's
-		// decision, because it turns on whether this nack withdrew the batch for good.
-		return tally.snapshot(), pendingMiss
+	// Same reasoning as the hard error above when pendingMiss is set: the tally travels with the error, and whether it is recorded is
+	// the caller's decision, because it turns on whether this nack withdrew the batch for good.
+	return e.finishBatch(ctx, tally, pendingMiss)
+}
+
+// finishBatch writes the monitor records the batch found and returns its tally with the batch's error, joined with the write's.
+//
+// The records are written on every exit, including one that nacks the batch. Each record was written as it was found before issue
+// #1011, so a batch that ended in an error still kept what it had found, which matters when that nack withdraws the batch for good
+// (#836) and no retry will find the records again. A failed write fails the batch, as a failed alert write does; the retry's write
+// is a no-op for anything already committed, because of the dedup key.
+func (e *Engine) finishBatch(ctx context.Context, tally *batchTally, err error) (rulesapi.MonitorTally, error) {
+	if len(tally.records) > 0 {
+		if werr := e.monitorRecords.InsertMonitorRecords(ctx, tally.records); werr != nil {
+			err = errors.Join(err, fmt.Errorf("persist monitor records for %d findings: %w", len(tally.records), werr))
+		}
 	}
-	return tally.snapshot(), nil
+	return tally.snapshot(), err
 }
 
 // retryCause folds one rule's retryable error into the batch's reported cause, keeping every MATERIALLY DISTINCT one.
@@ -751,9 +766,7 @@ func (e *Engine) routeFinding(
 		tally.addMonitorMatch(ruleID, f.HostID, f.Severity)
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-		if err := e.keepMonitorRecord(ctx, isHealthRule, f, techniques, origin); err != nil {
-			return 0, err
-		}
+		e.keepMonitorRecord(tally, isHealthRule, f, techniques, origin)
 		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the persist path below.
@@ -917,17 +930,14 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 // so a monitor record of one would put an operational fault in the table that path exists to keep it out of; the count still records
 // that the rule matched.
 //
-// A failure fails the batch, as an alert write does. The batch is retried, and the dedup key makes the retry's write a no-op for any
-// record the failed attempt already committed.
-func (e *Engine) keepMonitorRecord(ctx context.Context, isHealthRule bool, f api.Finding, techniques []string, origin string) error {
+// The record is added to the batch and written with the batch's others when its evaluation ends; see finishBatch.
+func (e *Engine) keepMonitorRecord(tally *batchTally, isHealthRule bool, f api.Finding, techniques []string, origin string) {
 	if isHealthRule || e.monitorRecords == nil {
-		return nil
+		return
 	}
-	record := alertFromFinding(f, techniques, origin, api.AlertDispositionMonitor)
-	if _, _, err := e.monitorRecords.InsertAlert(ctx, record, f.EventIDs); err != nil {
-		return fmt.Errorf("persist monitor record for rule %s on host %s: %w", f.RuleID, f.HostID, err)
-	}
-	return nil
+	tally.records = append(tally.records, mysql.MonitorRecord{
+		Alert: alertFromFinding(f, techniques, origin, api.AlertDispositionMonitor), EventIDs: f.EventIDs,
+	})
 }
 
 // alertFromFinding builds the row a finding is persisted as, for either disposition, so an alert and a monitor record of the same finding
