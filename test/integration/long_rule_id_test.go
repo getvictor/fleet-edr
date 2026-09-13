@@ -122,8 +122,8 @@ func TestLongRuleID_PromotedRuleAlertsWithoutWedgingTheQueue(t *testing.T) {
 			"with nothing capping the attempts, so detection for this host stops for every rule and not just this one")
 
 	// One alert, not one per replay. If the queue were still cycling, dedup would hide it in the alert list but the row count
-	// would not: alert dedup keys on (source, host, rule, subject), so a wedged queue shows up as an unacknowledged queue rather
-	// than duplicate alerts. Asserted so a future change to dedup cannot quietly turn a wedge into a flood.
+	// would not: alert dedup keys on (source, disposition, host, rule, subject), so a wedged queue shows up as an unacknowledged
+	// queue rather than duplicate alerts. Asserted so a future change to dedup cannot quietly turn a wedge into a flood.
 	var alertRows int
 	require.NoError(t, stack.DB.GetContext(ctx, &alertRows,
 		`SELECT COUNT(*) FROM alerts WHERE host_id = ? AND rule_id = ?`, hostID, longRuleID))

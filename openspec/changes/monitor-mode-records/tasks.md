@@ -9,4 +9,4 @@
 - [x] Monitor-record rows-deleted metric
 - [x] Docs: install table, operations, OpenAPI, CHANGELOG
 - [x] Mutation-check the dedup key, the default filter, the prune scoping, and the webhook gate
-- [ ] Manual QA on the dev server with SigNoz
+- [x] Manual QA on the dev server with SigNoz
