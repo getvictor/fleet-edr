@@ -891,22 +891,25 @@ describe("ProcessTreeView alert attribution", () => {
 describe("ProcessTreeView monitor record", () => {
   it("labels a monitor record and offers no triage, and leads back to its rule's records", async () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, disposition: "monitor" });
-    const { container } = renderTree("?alert=7&process=0&at=1750248000000");
+    renderTree("?alert=7&process=0&at=1750248000000");
 
     expect(await screen.findByText("Monitor record")).toBeVisible();
     expect(screen.queryByRole("button", { name: /acknowledge|resolve|reopen/i })).toBeNull();
-    const back = container.querySelector(".alert-breadcrumb__back");
-    expect(back).toHaveAttribute("href", "/rules/privilege_launchd_plist_write/monitor-records");
-    expect(back).toHaveTextContent("Monitor records");
+    expect(screen.getByRole("link", { name: /Monitor records/ })).toHaveAttribute(
+      "href",
+      "/rules/privilege_launchd_plist_write/monitor-records",
+    );
+    expect(screen.queryByRole("link", { name: /Alerts/ })).toBeNull();
   });
 
   it("keeps triage and the Alerts back link for an alert", async () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, disposition: "alert" });
-    const { container } = renderTree("?alert=7&process=0&at=1750248000000");
+    renderTree("?alert=7&process=0&at=1750248000000");
 
     expect(await screen.findByRole("button", { name: "Acknowledge" })).toBeVisible();
     expect(screen.queryByText("Monitor record")).toBeNull();
-    expect(container.querySelector(".alert-breadcrumb__back")).toHaveAttribute("href", "/alerts");
+    expect(screen.getByRole("link", { name: /Alerts/ })).toHaveAttribute("href", "/alerts");
+    expect(screen.queryByRole("link", { name: /Monitor records/ })).toBeNull();
   });
 });
 

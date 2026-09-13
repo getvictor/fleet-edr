@@ -13,7 +13,7 @@ const makeRecord = (over: Partial<Alert> = {}): Alert => ({
   rule_id: rule,
   source: "detection",
   severity: "low",
-  title: "Remote Access Tool - Team Viewer Session Started On MacOS Host",
+  title: "Team Viewer Session Started On MacOS Host",
   description: "",
   process_id: 98446,
   status: "open",
@@ -71,7 +71,7 @@ describe("MonitorRecords", () => {
     const explanation = screen.getByText(/These are not alerts/);
     expect(explanation).toBeVisible();
     expect(explanation).toHaveTextContent(/fewer records than the rule's Observed count/);
-    expect(explanation).toHaveTextContent(/kept for a limited time/);
+    expect(explanation).toHaveTextContent(/retention window, 7 days by default/);
   });
 
   // spec:web-ui/monitor-records-are-reachable-from-the-observed-count/a-monitor-record-offers-no-triage

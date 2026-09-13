@@ -9,7 +9,8 @@ import type { ApplicationControlPolicy, ApplicationControlRule } from "../../typ
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
-import { Badge, type BadgeVariant } from "../ui/Badge";
+import { Badge } from "../ui/Badge";
+import { severityBadgeVariant } from "../ui/severity";
 import { AddRuleModal } from "./AddRuleModal";
 import { EditRuleModal } from "./EditRuleModal";
 import { ConfirmActionModal } from "./ConfirmActionModal";
@@ -35,13 +36,6 @@ type ActiveModal =
   | { kind: "edit"; rule: ApplicationControlRule }
   | { kind: "confirm-delete"; rule: ApplicationControlRule }
   | { kind: "confirm-toggle"; rule: ApplicationControlRule };
-
-const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
-  critical: "critical",
-  high: "high",
-  medium: "medium",
-  low: "low",
-};
 
 // truncateIdentifier renders the leading 16 chars of a SHA-256
 // identifier so the rules table stays scannable without dropping the
@@ -173,7 +167,6 @@ export function PolicyDetail() {
       </Button>
     </>
   );
-
 
   // confirmRule extracts the rule from a confirm-* modal kind so the JSX below stays terse; returns null for non-confirm
   // modals (the ConfirmActionModal won't render its content in that case).
@@ -381,7 +374,7 @@ function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
               {truncateIdentifier(rule.identifier)}
             </td>
             <td>
-              <Badge variant={SEVERITY_VARIANTS[rule.severity] ?? "neutral"}>
+              <Badge variant={severityBadgeVariant(rule.severity)}>
                 {rule.severity}
               </Badge>
             </td>

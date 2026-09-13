@@ -21,6 +21,7 @@ import { CopyButton } from "./ui/CopyButton";
 import { Button } from "./ui/Button";
 import { TechniqueTags } from "./TechniqueTags";
 import { Badge, type BadgeVariant } from "./ui/Badge";
+import { severityBadgeVariant } from "./ui/severity";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 import { deriveSigningVerdict, type SigningVerdictKind } from "../signing";
 import { formatCommandLine } from "../cmdline";
@@ -41,13 +42,6 @@ interface Props {
   // panel never links back to the page you are already on; other alerts on the process still show.
   readonly currentAlertId?: number;
 }
-
-const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
-  critical: "critical",
-  high: "high",
-  medium: "medium",
-  low: "low",
-};
 
 // VERDICT_BADGE maps the signer category to the panel badge's tone: the two identity-less categories read as attention (high for no
 // signature at all, medium for ad-hoc), a verifiable Developer ID reads informational, and platform/signed are neutral facts.
@@ -424,7 +418,7 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
             {relatedAlerts.map((a) => (
               <li key={a.id} className="process-detail__alert-ref">
                 <Link className="process-detail__alert-link" to={`/alerts/${String(a.id)}`}>
-                  <Badge variant={SEVERITY_VARIANTS[a.severity] ?? "neutral"}>{a.severity}</Badge>
+                  <Badge variant={severityBadgeVariant(a.severity)}>{a.severity}</Badge>
                   <span className="process-detail__alert-name">{a.title}</span>
                   <span className={`status-text status-text--${a.status}`}>{a.status}</span>
                 </Link>

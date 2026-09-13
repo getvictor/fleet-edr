@@ -16,7 +16,8 @@ import { TechniqueTags } from "./TechniqueTags";
 import { TimeRangeControl } from "./TimeRangeControl";
 import { ActivityHistogram } from "./ActivityHistogram";
 import { DEFAULT_ALERT_WINDOW_MS, DEFAULT_LIVE_WINDOW_MS, windowBounds, type TimeWindow } from "../timewindow";
-import { Badge, type BadgeVariant } from "./ui/Badge";
+import { Badge } from "./ui/Badge";
+import { severityBadgeVariant } from "./ui/severity";
 import { Button } from "./ui/Button";
 import {
   buildPreservedIds,
@@ -36,13 +37,6 @@ import {
 } from "./ProcessTree.helpers";
 import { renderTree, TREE_MARGIN_PX } from "./ProcessTree.render";
 import "./ProcessTree.scss";
-
-const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
-  critical: "critical",
-  high: "high",
-  medium: "medium",
-  low: "low",
-};
 
 // Evidence tooltip layout (issue #580): how far the hover card sits from the pointer, and the room reserved so a card near the
 // right/bottom viewport edge clamps back into view instead of rendering off-screen (width tracks the card's 34rem max-width).
@@ -619,7 +613,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           )}
           <span className="alert-breadcrumb__sep">/</span>
           <span className="alert-breadcrumb__id">#{String(alertDetail.id)}</span>
-          <Badge variant={SEVERITY_VARIANTS[alertDetail.severity] ?? "neutral"}>
+          <Badge variant={severityBadgeVariant(alertDetail.severity)}>
             {alertDetail.severity}
           </Badge>
           {/* Render the alert title itself as a link to the rule's

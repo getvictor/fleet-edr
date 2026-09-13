@@ -148,8 +148,8 @@ function observedNoteBody(days: number): string {
   return (
     `counts how often each rule matched while in monitor mode, over the last ${String(days)} days. It shows how noisy a ` +
     "rule is, not how many alerts you would get by promoting it: once a rule alerts, repeated matches on the same " +
-    "process become one alert. Open a rule's records to read what it matched; they collapse repeats the same way, so " +
-    "there can be fewer records than matches."
+    "process become one alert. Open a rule's records to read what it matched. There can be fewer records than matches: " +
+    "records collapse repeats the same way, and the server keeps them on their own retention window, 7 days by default."
   );
 }
 

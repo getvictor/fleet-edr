@@ -2,18 +2,12 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { listAlerts } from "../api";
 import type { Alert } from "../types";
-import { Badge, type BadgeVariant } from "./ui/Badge";
+import { Badge } from "./ui/Badge";
+import { severityBadgeVariant } from "./ui/severity";
 import { EmptyState, Table } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
 import { useHostNames } from "./useHostNames";
 import "./MonitorRecords.scss";
-
-const SEVERITY_VARIANTS: Map<string, BadgeVariant> = new Map([
-  ["critical", "critical"],
-  ["high", "high"],
-  ["medium", "medium"],
-  ["low", "low"],
-]);
 
 // The most records the page asks for. A rule noisy enough to exceed it is already answered by the first page: the promote decision is
 // about what the rule matches, and a hundred examples say that as well as a thousand.
@@ -53,14 +47,15 @@ export function MonitorRecords() {
       <p className="monitor-records__explanation">
         What this rule matched while it ran in monitor mode, newest first. These are not alerts: nobody was notified and there is
         nothing to triage. A rule matching the same process again adds no record, so there can be fewer records than the rule&apos;s
-        Observed count, which counts every match. Records are kept for a limited time, 7 days by default.
+        Observed count, which counts every match. Records also age out on the server&apos;s monitor-record retention window, 7 days by
+        default, which can be set shorter or longer than the Observed window.
       </p>
       {records === null && error === null && <EmptyState>Loading monitor records...</EmptyState>}
       {error !== null && <EmptyState>Monitor records could not be loaded: {error}</EmptyState>}
       {records?.length === 0 && (
         <EmptyState>
-          No monitor records for this rule. A rule can show matches with no records once they have aged out, or if it matched before
-          records were kept.
+          No monitor records for this rule. A rule can show matches with no records once they have aged out on the retention window, or if
+          it matched before records were kept.
         </EmptyState>
       )}
       {records !== null && records.length > 0 && (
@@ -81,7 +76,7 @@ export function MonitorRecords() {
               {records.map((r) => (
                 <tr key={r.id}>
                   <td>
-                    <Badge variant={SEVERITY_VARIANTS.get(r.severity) ?? "neutral"}>{r.severity}</Badge>
+                    <Badge variant={severityBadgeVariant(r.severity)}>{r.severity}</Badge>
                   </td>
                   <td>
                     <Link className="link-button" to={`/alerts/${String(r.id)}`} title="Open this record's process tree">
