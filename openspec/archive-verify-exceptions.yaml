@@ -460,3 +460,37 @@
     application_control.update carrying snapshot JSON in data, handed to the snapshot store unread, with an absent or empty
     data field rejected without touching the active snapshot or closing the connection. Narrowed to that transport contract by
     the v0.5.0 archive, because what happens to the bytes afterwards is the snapshot requirement's contract.
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# The last three: two requirements the unbuilt Detect-mode change wrote (one restating an existing requirement, one added) around
+# behaviour that did ship under other requirements, and one user-management requirement that was never built. Audited at the close
+# of #905.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+- requirement: server-detection-rules-engine/alert-dedup-key-depends-on-source
+  covered_by: server-detection-rules-engine/alert-dedup-by-subject
+  reason: >-
+    Superseded. Of the five archived scenarios, the two about would-block events (a would-block followed by a block updating the
+    existing alert, and repeated would-block events collapsing into one) are Detect mode (#929), never built; the archived
+    application-control key (source, host_id, rule_id), with no process, existed for them. The other three hold under the canonical
+    key (source, host id, rule id, subject). A catalog rule re-firing on the same process reuses its row, the canonical
+    requirement's first scenario. A different process on the same host is a different subject, so a distinct alert. A catalog rule
+    id colliding with an application-control rule id on one process stays distinct, because source is in the key.
+    application_control_block findings are process-backed and take their process id as the subject
+    (catalog/application_control_block.go). The store's uk_alerts_dedup adds disposition to that tuple, (source, disposition,
+    host_id, rule_id, subject), so a monitor record and an alert of the same finding stay apart.
+
+- requirement: server-detection-rules-engine/alerts-list-filters-by-source-and-subtype
+  covered_by: server-rest-api/filterable-alerts-list
+  reason: >-
+    The source half shipped and is specified there: GET /api/alerts filters by source, conjunctively with the other filters. Of the
+    three archived scenarios, filtering to a catalog source is that shipped behaviour. The other two, would-block alerts only and an
+    unknown subtype, are the subtype half, which is Detect mode (#929): no alert carries a subtype and the API accepts no subtype
+    parameter.
+
+- requirement: web-ui/account-menu-surfaces-role-and-authentication-method
+  tracked_by: "#1038"
+  reason: >-
+    Never built. The account menu shows a Break-glass badge for a break-glass session, which
+    web-ui/account-menu-conceals-the-signed-in-identity-until-opened specifies, and nothing about the role or an SSO session. The
+    archived text is also stale: it labels OIDC sessions Okta, and SSO is any OIDC provider now. #1038 carries the feature.
