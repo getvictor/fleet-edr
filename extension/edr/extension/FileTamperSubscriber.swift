@@ -123,31 +123,45 @@ final class FileTamperSubscriber: Sendable {
     /// reconcile mutes and unmutes the difference between the applied targets and those the current pushed set calls for. Runs on
     /// applyQueue.
     ///
+    /// Mutes come first and unmutes only follow when every mute succeeded. A mute that fails leaves the client watching everything it
+    /// watched before this update, the paths the update drops included, rather than dropping them while the paths meant to replace
+    /// them are missing; the failed target is not recorded as applied, so the next update tries it again.
+    ///
     /// A built-in path that fails to mute is fatal, as it was when the set was fixed: after inversion that path would silently go
-    /// unobserved, and the shipped sudoers rules would go blind with it. A pushed path that fails is logged and left out instead,
-    /// because the set persists, and exiting on it would restart the extension into the same failure on every launch.
+    /// unobserved, and the shipped sudoers rules would go blind with it. A pushed path that fails is logged instead, because the set
+    /// persists, and exiting on it would restart the extension into the same failure on every launch.
     private func reconcile() {
         let next = WatchedPaths.targets(pushed: pushed)
         let builtIn = Set(WatchedPaths.targets(pushed: []))
         let (mute, unmute) = WatchedPaths.changes(from: applied, to: next)
-        var nowApplied = applied.filter { !unmute.contains($0) }
+        var muted = 0
+        var failedMutes = 0
         for target in mute {
             guard es_mute_path(client, target.path, Self.muteType(target.match)) == ES_RETURN_SUCCESS else {
                 logger.error("file-tamper mute failed for \(target.path, privacy: .public)")
                 if builtIn.contains(target) {
                     exit(EXIT_FAILURE)
                 }
+                failedMutes += 1
                 continue
             }
-            nowApplied.append(target)
+            applied.append(target)
+            muted += 1
         }
-        for target in unmute where es_unmute_path(client, target.path, Self.muteType(target.match)) != ES_RETURN_SUCCESS {
-            // Still muted, so still observed: keep it in the applied set so the next reconcile tries again.
-            logger.error("file-tamper unmute failed for \(target.path, privacy: .public)")
-            nowApplied.append(target)
+        var unmuted = 0
+        if failedMutes == 0 {
+            for target in unmute {
+                guard es_unmute_path(client, target.path, Self.muteType(target.match)) == ES_RETURN_SUCCESS else {
+                    // Still muted, so still observed: it stays in the applied set, and the next update tries again.
+                    logger.error("file-tamper unmute failed for \(target.path, privacy: .public)")
+                    continue
+                }
+                applied.removeAll { $0 == target }
+                unmuted += 1
+            }
         }
-        applied = nowApplied
-        let summary = "file-tamper watched targets: \(applied.count) (+\(mute.count) -\(unmute.count))"
+        let summary = "file-tamper watched targets: \(applied.count) (+\(muted) -\(unmuted), \(failedMutes) failed" +
+            (failedMutes > 0 ? ", nothing unmuted)" : ")")
         logger.info("\(summary, privacy: .public)")
     }
 

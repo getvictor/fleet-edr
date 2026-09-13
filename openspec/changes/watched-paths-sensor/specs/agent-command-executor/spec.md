@@ -4,7 +4,7 @@
 
 The system SHALL execute a `set_watched_paths` command by forwarding the watched-path set to the local Endpoint Security extension, and SHALL report the set's `version` and the number of entries forwarded.
 
-The payload SHALL carry `{version, paths}`, where each `paths` entry carries `{path, match}`. The executor SHALL validate, before forwarding, that `version` is a positive integer and that `paths` is a JSON array, and SHALL NOT validate the entries: they are addressed to the extension, which skips an entry it does not understand, and the agent forwards the raw payload bytes so the wire shape stays identical across server, agent, and extension. An empty `paths` array SHALL be forwarded, since it is how the server removes every path it added.
+The payload SHALL carry `{version, paths}` and MAY carry `epoch`, where each `paths` entry carries `{path, match}`. The executor SHALL validate, before forwarding, that `version` is a positive integer and that `paths` is a JSON array, and SHALL NOT validate the entries or `epoch`: they are addressed to the extension, which skips an entry it does not understand, and the agent forwards the raw payload bytes so the wire shape stays identical across server, agent, and extension. An empty `paths` array SHALL be forwarded, since it is how the server removes every path it added.
 
 #### Scenario: Watched paths forwarded successfully
 

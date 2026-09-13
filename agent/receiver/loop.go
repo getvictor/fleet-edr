@@ -337,8 +337,8 @@ type dispatcherBox struct {
 // NewDispatcher returns a fresh Dispatcher with no Connector published.
 func NewDispatcher() *Dispatcher { return &Dispatcher{} }
 
-// ErrNoConnector is returned by SendApplicationControl and SendWatchedPaths when no Connector is currently published. This is the expected error during
-// reconnect windows; callers should treat the command as failed and let the server retry.
+// ErrNoConnector is returned by SendApplicationControl and SendWatchedPaths when no Connector is currently published. This is the
+// expected error during reconnect windows; callers should treat the command as failed and let the server retry.
 var ErrNoConnector = errors.New("receiver dispatcher: no connector published")
 
 // Set publishes c as the active Connector. Safe to call concurrently with SendApplicationControl. Wire this to LoopHooks.OnConnected

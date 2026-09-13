@@ -28,7 +28,9 @@ Note on verification: this scenario pins the event's SHAPE, which is what the ex
 
 ### Requirement: The watched-path set is pushed by the server
 
-The system extension SHALL accept a watched-path set from the server, delivered by the agent, and SHALL make it part of the sensitive target set on the running file-tamper client without a restart. A set is a `version` and a list of `paths` entries, each an absolute `path` and a `match` of `literal` (exactly that file) or `prefix` (every path starting with it).
+The system extension SHALL accept a watched-path set from the server, delivered by the agent, and SHALL make it part of the sensitive target set on the running file-tamper client without a restart. A set is a `version`, an optional `epoch` (the set's server update time in Unix microseconds), and a list of `paths` entries, each an absolute `path` and a `match` of `literal` (exactly that file) or `prefix` (every path starting with it).
+
+The extension SHALL apply a set only when its `version` or its `epoch` is ahead of the last set it accepted, and SHALL otherwise leave the active and persisted sets unchanged. Commands can reach the host out of order, so without this an older set delivered late would replace a newer one; `epoch` keeps ordering sets after a server database restore sends `version` backwards.
 
 The built-in paths SHALL stay watched whatever set is pushed: a pushed set adds to them and cannot remove them, because the shipped sudoers detections depend on them. An empty pushed set SHALL therefore leave exactly the built-in paths watched.
 
@@ -36,9 +38,9 @@ Replacing the set SHALL NOT stop observing a path that both the previous and the
 
 The extension SHALL persist the last set it applied and SHALL start from it, so a restarted extension watches the pushed paths before the agent next delivers a set.
 
-An entry the extension does not understand, a `match` it does not know or a path that is not absolute, SHALL be skipped while the rest of the set is applied, so an older extension keeps watching what it understands when a newer server adds a kind of entry. A payload that is not a watched-path document at all SHALL leave the watched set, and the persisted one, unchanged.
+An entry the extension does not understand, a `match` it does not know or a path that is not absolute, SHALL be skipped while the rest of the set is applied, so an older extension keeps watching what it understands when a newer server adds a kind of entry. A `prefix` entry that does not lie below a top-level directory (judged through `/private` for `/etc`, `/tmp` and `/var`) SHALL also be skipped: it would put every write under that tree on the wire, and the extension holds that limit itself rather than relying on the server to have held it. A payload that is not a watched-path document at all SHALL leave the watched set, and the persisted one, unchanged.
 
-A pushed path that the client cannot mute SHALL be left out of the watched set and logged, rather than ending the extension: the set persists, so ending the extension would restart it into the same failure.
+A pushed path that the client cannot mute SHALL be logged rather than end the extension, since the set persists and ending the extension would restart it into the same failure. When any mute in an update fails, the client SHALL NOT unmute anything that update drops, so a failure never leaves a path unwatched that was watched before; the failed path is attempted again by the next update.
 
 Note on verification: decoding, the combination with the built-in paths, the mute difference between two sets, and persistence are pinned by the extension's unit tests. That the running client observes an added path and stops observing a dropped one is exercised at the system / VM layer per `docs/testing-strategy.md`, because `FileTamperSubscriber` imports EndpointSecurity and is outside the unit-testable target.
 
@@ -48,6 +50,19 @@ Note on verification: decoding, the combination with the built-in paths, the mut
 - **WHEN** a new set arrives that adds one path and drops another
 - **THEN** the client starts observing the added path and stops observing the dropped one
 - **AND** paths in both sets are not unmuted at any point, and the extension does not restart
+
+#### Scenario: An older set delivered late does not replace a newer one
+
+- **GIVEN** the extension has accepted a set at a given version and epoch
+- **WHEN** a set arrives that is behind on both version and epoch, or is the same set again
+- **THEN** the active set and the persisted set are unchanged
+- **AND** a set whose version is behind but whose epoch is ahead, as after a server database restore, is applied
+
+#### Scenario: A prefix at the top of the filesystem is not watched
+
+- **GIVEN** a pushed set containing a `prefix` entry for `/`, a top-level directory such as `/Users/`, or `/private/etc/`
+- **WHEN** the extension decodes it
+- **THEN** those entries are skipped and counted, and the remaining entries are applied
 
 #### Scenario: The built-in paths stay watched whatever is pushed
 

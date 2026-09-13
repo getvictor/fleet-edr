@@ -15,7 +15,7 @@ ApplicationControlStore.shared.loadFromDisk()
 // here, ahead of the XPC server, because the server's inbound hook applies pushed sets to it; it starts subscribing further down.
 // It starts from the persisted set so a restarted extension watches the operator's paths from its first event.
 let watchedPathStore = WatchedPathStore()
-let fileTamper = FileTamperSubscriber(pushed: watchedPathStore.load()?.paths ?? [])
+let fileTamper = FileTamperSubscriber(pushed: watchedPathStore.current?.paths ?? [])
 let watchedPathsLogger = Logger(subsystem: "com.fleetdm.edr.securityextension", category: "WatchedPaths")
 
 // The security extension wires the shared XPCEventServer's inbound hooks to apply app-control policy and watched-path sets pushed
@@ -25,15 +25,19 @@ let server = XPCEventServer(
     logger: Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer"),
     onApplicationControl: { data in ApplicationControlStore.shared.apply(rawJSON: data) },
     onWatchedPaths: { data in
-        // A payload that is not a watched-path document leaves the active set, and the persisted one, as they were.
-        guard let update = WatchedPaths.decode(data) else {
-            watchedPathsLogger.error("watched_paths.update could not be decoded; keeping the current set")
+        // The store turns away a payload that is not a watched-path document and a set older than the one in force, which commands
+        // delivered out of order would otherwise put back; either way the active and persisted sets stay as they were.
+        guard let update = watchedPathStore.accept(data) else {
+            let current = watchedPathStore.current
+            let skip = "watched_paths.update not applied: undecodable or not newer than " +
+                "version=\(current?.version ?? 0) epoch=\(current?.epoch ?? 0)"
+            watchedPathsLogger.info("\(skip, privacy: .public)")
             return
         }
-        let summary = "watched_paths.update version=\(update.version) paths=\(update.paths.count) skipped=\(update.skipped)"
+        let summary = "watched_paths.update version=\(update.version) epoch=\(update.epoch) " +
+            "paths=\(update.paths.count) skipped=\(update.skipped)"
         watchedPathsLogger.info("\(summary, privacy: .public)")
         fileTamper.apply(pushed: update.paths)
-        watchedPathStore.save(data)
     }
 )
 // Per-producer EventSerializer instances. EventSerializer wraps a JSONEncoder that must not be shared across concurrent

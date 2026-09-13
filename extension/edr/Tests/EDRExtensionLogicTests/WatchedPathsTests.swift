@@ -21,6 +21,7 @@ final class WatchedPathsTests: XCTestCase {
         """))
         XCTAssertEqual(update, WatchedPathsUpdate(
             version: 7,
+            epoch: 0,
             paths: [
                 WatchedPath(path: "/Library/StartupItems/", match: .prefix),
                 WatchedPath(path: "/etc/emond.d/rules/rule.plist", match: .literal)
@@ -34,7 +35,7 @@ final class WatchedPathsTests: XCTestCase {
         let update = WatchedPaths.decode(payload("""
         {"version": 3, "paths": [
           {"path": "/Library/StartupItems/", "match": "prefix"},
-          {"path": "/Users/", "match": "recursive_glob"},
+          {"path": "/Users/victor/qa", "match": "recursive_glob"},
           {"path": "relative/path", "match": "literal"}
         ]}
         """))
@@ -42,7 +43,48 @@ final class WatchedPathsTests: XCTestCase {
         XCTAssertEqual(update?.skipped, 2)
     }
 
-    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-malformed-push-leaves-the-watched-set-unchanged
+    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-prefix-at-the-top-of-the-filesystem-is-not-watched
+    func testDecodeSkipsAPrefixAtTheTopOfTheFilesystem() {
+        let update = WatchedPaths.decode(payload("""
+        {"version": 3, "paths": [
+          {"path": "/", "match": "prefix"},
+          {"path": "/Users/", "match": "prefix"},
+          {"path": "/private/etc/", "match": "prefix"},
+          {"path": "/private/", "match": "prefix"},
+          {"path": "/Users", "match": "literal"},
+          {"path": "/etc/emond.d/", "match": "prefix"}
+        ]}
+        """))
+        // A literal names one file, so only prefixes are held to the rule; /private/etc/ is judged as /etc/.
+        XCTAssertEqual(update?.paths, [
+            WatchedPath(path: "/Users", match: .literal),
+            WatchedPath(path: "/etc/emond.d/", match: .prefix)
+        ])
+        XCTAssertEqual(update?.skipped, 4)
+    }
+
+    func testDecodeReadsTheEpochWhenPresent() {
+        XCTAssertEqual(WatchedPaths.decode(payload(#"{"version": 2, "epoch": 1789300000000000, "paths": []}"#))?.epoch, 1_789_300_000_000_000)
+    }
+
+    // MARK: supersedes
+
+    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/an-older-set-delivered-late-does-not-replace-a-newer-one
+    func testSupersedesOnlyWhenVersionOrEpochIsAhead() {
+        func update(_ version: Int64, _ epoch: Int64) -> WatchedPathsUpdate {
+            WatchedPathsUpdate(version: version, epoch: epoch, paths: [], skipped: 0)
+        }
+        XCTAssertTrue(update(1, 10).supersedes(nil), "anything supersedes having no set")
+        XCTAssertTrue(update(3, 30).supersedes(update(2, 20)))
+        XCTAssertFalse(update(2, 20).supersedes(update(3, 30)), "an older set delivered late")
+        XCTAssertFalse(update(3, 30).supersedes(update(3, 30)), "the same set delivered twice")
+        // After a server database restore the version goes back, but the next change carries a later epoch.
+        XCTAssertTrue(update(1, 40).supersedes(update(3, 30)))
+        // A server that sends no epoch is ordered by version alone.
+        XCTAssertTrue(update(4, 0).supersedes(update(3, 0)))
+        XCTAssertFalse(update(3, 0).supersedes(update(4, 0)))
+    }
+
     func testDecodeRejectsAPayloadThatIsNotAWatchedPathDocument() {
         XCTAssertNil(WatchedPaths.decode(payload("not json")))
         XCTAssertNil(WatchedPaths.decode(payload(#"{"paths": []}"#)), "a document without a version is not a watched-path set")
@@ -50,7 +92,7 @@ final class WatchedPathsTests: XCTestCase {
     }
 
     func testDecodeAcceptsAnEmptySet() {
-        XCTAssertEqual(WatchedPaths.decode(payload(#"{"version": 4, "paths": []}"#)), WatchedPathsUpdate(version: 4, paths: [], skipped: 0))
+        XCTAssertEqual(WatchedPaths.decode(payload(#"{"version": 4, "paths": []}"#)), WatchedPathsUpdate(version: 4, epoch: 0, paths: [], skipped: 0))
     }
 
     // MARK: targets
@@ -126,24 +168,52 @@ final class WatchedPathsTests: XCTestCase {
 
     // MARK: WatchedPathStore
 
-    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-pushed-set-survives-an-extension-restart
-    func testStoreRoundTripsAPushedPayload() throws {
+    private func temporaryStore() -> WatchedPathStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        let store = WatchedPathStore(storagePath: directory.appendingPathComponent("watched-paths.json").path)
-        XCTAssertNil(store.load(), "nothing pushed yet")
-
-        store.save(payload(#"{"version": 9, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#))
-
-        let reloaded = WatchedPathStore(storagePath: store.storagePath).load()
-        XCTAssertEqual(reloaded?.version, 9)
-        XCTAssertEqual(reloaded?.paths, [WatchedPath(path: "/Library/StartupItems/", match: .prefix)])
+        return WatchedPathStore(storagePath: directory.appendingPathComponent("watched-paths.json").path)
     }
 
-    func testStoreIgnoresAnUnreadableFile() throws {
+    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-pushed-set-survives-an-extension-restart
+    func testStoreAcceptsAndPersistsAPushedSet() {
+        let store = temporaryStore()
+        XCTAssertNil(store.current, "nothing pushed yet")
+
+        let accepted = store.accept(payload(#"{"version": 9, "epoch": 90, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#))
+        XCTAssertEqual(accepted?.paths, [WatchedPath(path: "/Library/StartupItems/", match: .prefix)])
+
+        let restarted = WatchedPathStore(storagePath: store.storagePath)
+        XCTAssertEqual(restarted.current?.version, 9)
+        XCTAssertEqual(restarted.current?.epoch, 90)
+        XCTAssertEqual(restarted.current?.paths, [WatchedPath(path: "/Library/StartupItems/", match: .prefix)])
+    }
+
+    func testStoreTurnsAwayAnOlderSetAndKeepsTheNewerOnePersisted() {
+        let store = temporaryStore()
+        XCTAssertNotNil(store.accept(payload(#"{"version": 2, "epoch": 20, "paths": [{"path": "/etc/emond.d/", "match": "prefix"}]}"#)))
+
+        XCTAssertNil(store.accept(payload(#"{"version": 1, "epoch": 10, "paths": [{"path": "/Library/StartupItems/", "match": "prefix"}]}"#)))
+        XCTAssertNil(store.accept(payload(#"{"version": 2, "epoch": 20, "paths": []}"#)), "a redelivery of the set in force")
+
+        XCTAssertEqual(store.current?.version, 2)
+        XCTAssertEqual(WatchedPathStore(storagePath: store.storagePath).current?.paths, [WatchedPath(path: "/etc/emond.d/", match: .prefix)])
+    }
+
+    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-malformed-push-leaves-the-watched-set-unchanged
+    func testStoreLeavesTheSetAloneForAPayloadThatIsNotAWatchedPathDocument() {
+        let store = temporaryStore()
+        XCTAssertNotNil(store.accept(payload(#"{"version": 2, "paths": [{"path": "/etc/emond.d/", "match": "prefix"}]}"#)))
+
+        XCTAssertNil(store.accept(payload(#"{"version": 3, "paths": [{"path": 5, "match": "prefix"}]}"#)))
+
+        XCTAssertEqual(store.current?.version, 2)
+        XCTAssertEqual(WatchedPathStore(storagePath: store.storagePath).current?.version, 2)
+    }
+
+    func testStoreStartsEmptyFromAnUnreadableFile() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         addTeardownBlock { try? FileManager.default.removeItem(at: file) }
         try Data("{".utf8).write(to: file)
-        XCTAssertNil(WatchedPathStore(storagePath: file.path).load())
+        XCTAssertNil(WatchedPathStore(storagePath: file.path).current)
     }
 }
