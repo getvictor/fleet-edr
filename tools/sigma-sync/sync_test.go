@@ -160,29 +160,54 @@ func TestApply_WritesNothingWhenADownloadDoesNotMatchItsBlobID(t *testing.T) {
 	t.Parallel()
 	dir := vendor(t, map[string]string{"process_creation/a.yml": "title: a\n"})
 	before := read(t, dir, manifestName)
+	// The new rule is downloaded before the changed one, so it has already been fetched and verified when the changed one fails.
 	src := fakeUpstream{
 		files: map[string][]byte{
 			"rules/macos/process_creation/a.yml": []byte("title: a2\n"),
 			"rules/macos/process_creation/b.yml": []byte("title: b\n"),
 		},
-		corrupt: "rules/macos/process_creation/b.yml",
+		corrupt: "rules/macos/process_creation/a.yml",
 	}
 
 	err := run(t.Context(), src, dir, true, "")
-	require.ErrorContains(t, err, "rules/macos/process_creation/b.yml: content has blob id")
-	assert.Equal(t, "title: a\n", read(t, dir, "process_creation/a.yml"), "not even the download that did match is written")
-	assert.NoFileExists(t, filepath.Join(dir, "process_creation", "b.yml"))
+	require.ErrorContains(t, err, "rules/macos/process_creation/a.yml: content has blob id")
+	assert.NoFileExists(t, filepath.Join(dir, "process_creation", "b.yml"), "not even the download that did match is written")
+	assert.Equal(t, "title: a\n", read(t, dir, "process_creation/a.yml"))
 	assert.Equal(t, before, read(t, dir, manifestName))
 }
 
-func TestCompare_RefusesTwoUpstreamRulesForOneVendoredPath(t *testing.T) {
+// The loader identifies a rule by its case-folded file stem wherever it sits, and refuses a corpus in which two files share one, so
+// two upstream files that would do that are refused before anything is written.
+func TestCompare_RefusesTwoUpstreamRulesForOneRuleID(t *testing.T) {
 	t.Parallel()
-	dir := vendor(t, map[string]string{})
-	_, err := compare(dir, "c0ffee", []treeEntry{
-		{Path: "rules/macos/process_creation/x.yml", BlobSHA: "1"},
-		{Path: "rules-threat-hunting/macos/process_creation/x.yml", BlobSHA: "2"},
-	})
-	require.ErrorContains(t, err, "both map to process_creation/x.yml")
+	cases := map[string][]string{
+		"one vendored path":          {"rules/macos/process_creation/x.yml", "rules-threat-hunting/macos/process_creation/x.yml"},
+		"names differing by case":    {"rules/macos/process_creation/Foo.yml", "rules-dfir/macos/process_creation/foo.yml"},
+		"one stem in two categories": {"rules/macos/process_creation/y.yml", "rules-threat-hunting/macos/file/file_event/y.yml"},
+	}
+	for name, paths := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := compare(vendor(t, map[string]string{}), "c0ffee",
+				[]treeEntry{{Path: paths[0], BlobSHA: "1"}, {Path: paths[1], BlobSHA: "2"}})
+			require.ErrorContains(t, err, "would be one rule id in the vendored corpus")
+		})
+	}
+}
+
+// A rule file whose extension is upper or mixed case is one the loader runs, so it is compared and recorded like any other.
+func TestRun_ARuleWithAnUppercaseExtensionIsSynced(t *testing.T) {
+	t.Parallel()
+	dir := vendor(t, map[string]string{"process_creation/old.YML": "title: old\n"})
+	assert.Contains(t, read(t, dir, manifestName), "process_creation/old.YML")
+	src := fakeUpstream{files: map[string][]byte{
+		"rules/macos/process_creation/old.YML": []byte("title: old\n"),
+		"rules/macos/process_creation/new.Yml": []byte("title: new\n"),
+	}}
+
+	require.NoError(t, run(t.Context(), src, dir, true, ""))
+	assert.Equal(t, "title: new\n", read(t, dir, "process_creation/new.Yml"))
+	assert.Contains(t, read(t, dir, manifestName), "process_creation/new.Yml")
 }
 
 func TestReport_SaysWhenTheCorpusMatches(t *testing.T) {

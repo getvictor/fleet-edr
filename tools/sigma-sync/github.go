@@ -73,7 +73,11 @@ func (g *github) Snapshot(ctx context.Context) (string, []treeEntry, error) {
 
 // File returns a file's bytes at a commit.
 func (g *github) File(ctx context.Context, commit, repoPath string) ([]byte, error) {
-	return g.get(ctx, g.rawBase+"/"+g.repo+"/"+commit+"/"+repoPath, "", false, maxFileBytes)
+	segments := strings.Split(repoPath, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return g.get(ctx, g.rawBase+"/"+g.repo+"/"+commit+"/"+strings.Join(segments, "/"), "", false, maxFileBytes)
 }
 
 // get fetches one URL. The token goes only to the API, never to the raw content host, which serves public files without one.

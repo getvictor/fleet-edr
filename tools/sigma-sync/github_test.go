@@ -32,6 +32,11 @@ func fakeGitHub(t *testing.T, truncated bool) (*github, *[]string) {
 	mux.HandleFunc("GET /raw/SigmaHQ/sigma/abc123/missing.yml", func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)
 	})
+	mux.HandleFunc("GET /raw/SigmaHQ/sigma/abc123/rules/macos/process_creation/", func(w http.ResponseWriter, r *http.Request) {
+		// A name carrying URL-significant characters must arrive as the path it is, not be cut at ? or #.
+		auth = append(auth, "escaped:"+r.URL.Path)
+		_, _ = w.Write([]byte("odd"))
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	g := newGitHub("SigmaHQ/sigma", "master", "secret")
@@ -55,6 +60,11 @@ func TestGitHub_SnapshotAndFileReadOneCommit(t *testing.T) {
 
 	_, err = g.File(t.Context(), commit, "missing.yml")
 	require.ErrorContains(t, err, "404")
+
+	odd, err := g.File(t.Context(), commit, "rules/macos/process_creation/what?#now.yml")
+	require.NoError(t, err)
+	assert.Equal(t, "odd", string(odd))
+	assert.Equal(t, "escaped:/raw/SigmaHQ/sigma/abc123/rules/macos/process_creation/what?#now.yml", (*auth)[len(*auth)-1])
 }
 
 func TestGitHub_RefusesATruncatedTree(t *testing.T) {

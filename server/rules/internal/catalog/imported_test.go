@@ -42,7 +42,7 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 
 	assert.Len(t, rules, 68, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
 
-	// Two refusals, one reason, and the reason is the refusal contract working rather than a gap.
+	// Three refusals, one reason, and the reason is the refusal contract working rather than a gap.
 	reasons := map[string]string{}
 	for _, r := range rejected {
 		reasons[path.Base(r.File)] = r.Reason

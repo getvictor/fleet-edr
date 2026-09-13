@@ -65,13 +65,24 @@ func localPathFor(repoPath string) (string, bool) {
 	parts := strings.Split(repoPath, "/")
 	macos := slices.Index(parts, "macos")
 	// The file must sit in a category directory below macos, so there are at least two more segments after it.
-	if !isRuleTree(parts[0]) || macos < 1 || len(parts)-macos < 3 || path.Ext(repoPath) != ".yml" {
+	if !isRuleTree(parts[0]) || macos < 1 || len(parts)-macos < 3 || !isRuleFile(repoPath) {
 		return "", false
 	}
 	return parts[len(parts)-2] + "/" + parts[len(parts)-1], true
 }
 
 func isRuleTree(name string) bool { return name == "rules" || strings.HasPrefix(name, "rules-") }
+
+// isRuleFile matches the corpus loader's own test (catalog.IsCorpusFile, which this tool cannot import from outside server/rules):
+// a .yml extension in any case, so a file the loader would run is never left out of the comparison or the manifest.
+func isRuleFile(p string) bool { return strings.EqualFold(path.Ext(p), ".yml") }
+
+// ruleIDKey is how the corpus loader tells two rules apart: the file stem, case-folded, wherever in the tree the file sits
+// (catalog.RuleIDKey). Two upstream files with one key would be refused as a whole by the loader, so they are refused here first.
+func ruleIDKey(p string) string {
+	base := path.Base(p)
+	return strings.ToLower(strings.TrimSuffix(base, path.Ext(base)))
+}
 
 // gitBlobSHA is the id git gives content: SHA-1 over a "blob <size>" header and the bytes. Comparing it with the tree's id tells
 // whether a vendored file is byte-identical to upstream without downloading the file.
@@ -86,6 +97,7 @@ func gitBlobSHA(content []byte) string {
 func compare(dir, commit string, entries []treeEntry) (diff, error) {
 	d := diff{Commit: commit}
 	rules := map[string]upstreamRule{}
+	byID := map[string]string{}
 	deprecated := map[string]string{}
 	for _, e := range entries {
 		if parts := strings.Split(e.Path, "/"); len(parts) >= 3 && parts[0] == "deprecated" && parts[1] == "macos" {
@@ -95,9 +107,10 @@ func compare(dir, commit string, entries []treeEntry) (diff, error) {
 		if !ok {
 			continue
 		}
-		if prior, dup := rules[local]; dup {
-			return diff{}, fmt.Errorf("upstream %s and %s both map to %s in the vendored tree", prior.RepoPath, e.Path, local)
+		if prior, dup := byID[ruleIDKey(local)]; dup {
+			return diff{}, fmt.Errorf("upstream %s and %s would be one rule id in the vendored corpus", prior, e.Path)
 		}
+		byID[ruleIDKey(local)] = e.Path
 		rules[local] = upstreamRule{RepoPath: e.Path, LocalPath: local, BlobSHA: e.BlobSHA}
 	}
 
@@ -131,7 +144,7 @@ func byLocalPath(a, b upstreamRule) int { return strings.Compare(a.LocalPath, b.
 func vendoredRules(dir string) (map[string][]byte, error) {
 	out := map[string][]byte{}
 	err := filepath.WalkDir(dir, func(p string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || filepath.Ext(p) != ".yml" {
+		if err != nil || entry.IsDir() || !isRuleFile(p) {
 			return err
 		}
 		content, err := os.ReadFile(p) //nolint:gosec // walking the directory the caller named.
@@ -214,7 +227,8 @@ func report(d diff) string {
 		}
 		b.WriteString("\n")
 	}
-	section("New rules", "Copied verbatim. Each imports in monitor mode, or is refused by name if it reads telemetry this sensor does not supply.",
+	section("New rules",
+		"Copied verbatim. Each imports in monitor mode, or is refused by name if it reads telemetry this sensor does not supply.",
 		ruleLines(d.New))
 	section("Changed rules", "Copied verbatim; the diff is the review.", ruleLines(d.Changed))
 	withdrawn := make([]string, len(d.Withdrawn))
