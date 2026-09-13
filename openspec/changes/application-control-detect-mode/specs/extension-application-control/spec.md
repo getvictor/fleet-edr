@@ -4,7 +4,7 @@
 
 ### Requirement: Detect-mode rules report would-block matches
 
-When the precedence walk for an AUTH_EXEC matches a `BLOCK` rule whose `enforcement` is `DETECT`, the extension SHALL continue the walk rather than end it, and SHALL record the first such match in precedence order. A `DETECT` rule SHALL NOT change the verdict: the verdict for any exec SHALL be the verdict the same snapshot reaches with its `DETECT` rules removed, so a `PROTECT` rule at any precedence still denies and the deadline fallback posture still governs an unresolved BINARY hash.
+When the precedence walk for an AUTH_EXEC matches a `BLOCK` rule whose `enforcement` is `DETECT`, the extension SHALL continue the walk rather than end it, and SHALL record the first such match in precedence order. A `DETECT` rule SHALL NOT change the verdict: the verdict for any exec SHALL be the verdict the same snapshot reaches with its `DETECT` rules removed, so a `PROTECT` rule at any precedence still denies and the deadline fallback posture still governs an unresolved BINARY hash. The posture SHALL apply only when the snapshot has a BINARY rule that is not `DETECT`: a snapshot without its `DETECT` rules would compute no hash when those were its only BINARY rules, so it has no unresolved hash for a posture to govern.
 
 When the verdict allows the exec and a `DETECT` rule was matched, the extension SHALL emit an `application_control_would_block` event for that match. The event SHALL carry the fields of `application_control_block`: `policy_id`, `policy_version`, `rule_id`, `rule_type`, `identifier`, `severity`, `pid`, and `path`, plus `custom_msg` and `custom_url` when the matched rule sets them. The `identifier` SHALL be the value from the target tuple that matched the `DETECT` rule. The extension SHALL NOT present the desktop block notification for a would-block match, and SHALL NOT emit a would-block event for an exec it denies.
 
@@ -35,6 +35,13 @@ When the verdict allows the exec and a `DETECT` rule was matched, the extension 
 - **GIVEN** an exec matches a `SIGNINGID` rule and a `TEAMID` rule, both with `enforcement=DETECT`
 - **WHEN** the extension evaluates the exec
 - **THEN** the reported match is the `SIGNINGID` rule
+
+#### Scenario: A DETECT-only BINARY rule never fails closed
+
+- **GIVEN** a snapshot under `fail-closed` whose only BINARY rules are `DETECT`
+- **WHEN** an exec's hash cannot be computed before the deadline, or cannot be read
+- **THEN** the exec is allowed
+- **AND** no undecided event is emitted
 
 #### Scenario: The fallback posture still applies
 

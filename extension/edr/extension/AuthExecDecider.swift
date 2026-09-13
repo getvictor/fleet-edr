@@ -157,7 +157,8 @@ func authResultIsCacheable(
 /// A PROTECT rule ends the walk with a deny. A DETECT rule does not end it: the first DETECT match in precedence order is
 /// recorded and the walk goes on, so a DETECT rule never weakens enforcement. The verdict for any exec is the verdict the
 /// snapshot would give with its DETECT rules removed; adding a DETECT rule for a binary that a lower-precedence PROTECT rule
-/// blocks leaves that binary blocked, and the fallback posture below still governs an unresolved BINARY hash.
+/// blocks leaves that binary blocked, and the fallback posture below still governs an unresolved BINARY hash. The posture applies
+/// only when a BINARY rule other than a DETECT one exists, because without the DETECT rules there would have been no hash to miss.
 ///
 /// The BINARY layer is gated on hashOutcome: if .computed, walk the BINARY map; if .deadlineExceeded or .readFailed the walk
 /// CONTINUES through every lower-precedence layer first, because a definitive lower-precedence DENY dominates the BINARY
@@ -196,10 +197,20 @@ func evaluateAuthExec(
     if let end = walk.consult(tuple.canonicalPath, in: snapshot.pathRules) {
         return end
     }
-    if let reason = unresolvedBinaryReason(for: hashOutcome) {
+    if let reason = unresolvedBinaryReason(for: hashOutcome), snapshot.binaryRules.values.contains(where: { !isDetectRule($0) }) {
         return walk.finish(applyPosture(snapshot.deadlineFallback, reason: reason))
     }
     return walk.finish(.allow)
+}
+
+/// isDetectRule reports whether a rule is a BLOCK rule in DETECT, the kind of match that is recorded and never decides a verdict.
+///
+/// The posture above consults it because the hash is computed whenever the snapshot has any BINARY rule, DETECT ones included, so a
+/// DETECT BINARY rule is what makes an unresolved hash possible at all. Without the check, a snapshot whose only BINARY rules are
+/// DETECT would fail closed on a slow hash, while the same snapshot without them skips the hash and allows: the DETECT rule would
+/// have changed the verdict. The scan runs only after a deadline miss or read failure, never on the ordinary path.
+private func isDetectRule(_ rule: ApplicationControlRule) -> Bool {
+    rule.action == ApplicationControlAction.block && rule.enforcement == ApplicationControlEnforcement.detect
 }
 
 /// PrecedenceWalk carries the one piece of state a walk accumulates: the first DETECT rule it matched.
@@ -214,20 +225,16 @@ private struct PrecedenceWalk {
         guard let identifier, let rule = rules[identifier] else {
             return nil
         }
-        guard rule.action == ApplicationControlAction.block else {
-            return finish(.allow)
-        }
-        switch rule.enforcement {
-        case ApplicationControlEnforcement.protect:
-            return finish(.deny(rule: rule, matchedIdentifier: identifier))
-        case ApplicationControlEnforcement.detect:
+        if isDetectRule(rule) {
             if wouldBlock == nil {
                 wouldBlock = RuleMatch(rule: rule, matchedIdentifier: identifier)
             }
             return nil
-        default:
-            return finish(.allow)
         }
+        if rule.action == ApplicationControlAction.block && rule.enforcement == ApplicationControlEnforcement.protect {
+            return finish(.deny(rule: rule, matchedIdentifier: identifier))
+        }
+        return finish(.allow)
     }
 
     /// finish pairs the verdict with the recorded DETECT match, dropping the match when the verdict denies.

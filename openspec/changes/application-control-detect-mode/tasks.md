@@ -4,7 +4,7 @@
 
 - [x] The decider records the highest-precedence DETECT match, keeps walking for a PROTECT rule, and reports the match only on an allow.
 - [x] The AUTH_EXEC dispatch emits `application_control_would_block` with the block payload, without a notification, and never caches that allow.
-- [x] Document the event type in `schema/events.json`.
+- [x] Document the event type in `schema/events.json` and `docs/api/openapi.yaml`, with a test keeping the two lists equal.
 - [x] Unit tests, including an exhaustive check that DETECT rules never change the verdict; mutation-check them.
 - [ ] Verify on a VM that a DETECT rule lets the exec run and the event reaches the server.
 

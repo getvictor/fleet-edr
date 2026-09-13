@@ -83,6 +83,21 @@ final class AuthExecDeciderDetectTests: XCTestCase {
         XCTAssertEqual(result.wouldBlock, RuleMatch(rule: signingRule, matchedIdentifier: "EQHXZ8M8AV:com.example.tool"))
     }
 
+    // spec:extension-application-control/detect-mode-rules-report-would-block-matches/a-detect-only-binary-rule-never-fails-closed
+    func testDetectOnlyBinaryRuleNeverAppliesThePosture() {
+        let binaryRule = makeRule(
+            ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee", enforcement: ApplicationControlEnforcement.detect
+        )
+        for hashOutcome in [HashOutcome.deadlineExceeded, .readFailed] {
+            let result = evaluateAuthExec(
+                tuple: makeTuple(),
+                snapshot: makeSnapshot(deadlineFallback: .failClosed, binaryRules: ["anyShaWeCantSee": binaryRule]),
+                hashOutcome: hashOutcome
+            )
+            XCTAssertEqual(result, AuthEvaluation(decision: .allow, wouldBlock: nil), "hash outcome \(hashOutcome)")
+        }
+    }
+
     // spec:extension-application-control/detect-mode-rules-report-would-block-matches/the-fallback-posture-still-applies
     func testDetectMatchLeavesTheFallbackPostureInForce() {
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "anyShaWeCantSee")
@@ -182,8 +197,11 @@ final class AuthExecDeciderDetectTests: XCTestCase {
                     let withDetect = evaluateAuthExec(
                         tuple: Self.fullTuple, snapshot: snapshot(states: states, posture: posture, keepDetect: true), hashOutcome: hashOutcome
                     )
+                    // The wire side hashes only when the snapshot has BINARY rules, so the snapshot without its DETECT rules gets the
+                    // outcome it would have been given, not the one the DETECT rules made possible.
+                    let stripped = snapshot(states: states, posture: posture, keepDetect: false)
                     let withoutDetect = evaluateAuthExec(
-                        tuple: Self.fullTuple, snapshot: snapshot(states: states, posture: posture, keepDetect: false), hashOutcome: hashOutcome
+                        tuple: Self.fullTuple, snapshot: stripped, hashOutcome: stripped.binaryRules.isEmpty ? .notNeeded : hashOutcome
                     )
                     let label = "states \(states) hash \(hashOutcome) posture \(posture)"
                     XCTAssertEqual(withDetect.decision, withoutDetect.decision, label)
