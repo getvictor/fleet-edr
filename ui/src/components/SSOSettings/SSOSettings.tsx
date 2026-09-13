@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getSSOConfig, updateSSOConfig, testSSOConnection, SSOConfigApiError, type SSOConfig } from "../../api";
+import { getSSOConfig, updateSSOConfig, testSSOConnection, type SSOConfig } from "../../api";
 import { isHTTPURL } from "../../urls";
 import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
@@ -138,25 +138,16 @@ export function SSOSettings() {
         // an admin disable JIT and pre-provision operators is not built yet, so there is no UI to turn this off.
         jit_enabled: true,
         default_role: form.defaultRole,
-        // The update replaces the whole configuration and this page does not edit the group mapping, so it sends back the mapping it
-        // loaded, with the version it loaded: if the settings were saved elsewhere since, the server refuses the save rather than let
-        // this stale copy overwrite them.
+        // The update replaces the whole configuration, like every field on this page, and the page does not edit the group mapping,
+        // so it sends back the mapping it loaded rather than clearing it.
         groups_claim: config.groups_claim,
         group_roles: config.group_roles,
-        expected_version: config.version,
-        expected_app_config_version: config.app_config_version,
       });
       setConfig(updated);
       setForm(toForm(updated));
       setSaved(true);
     } catch (err: unknown) {
-      if (err instanceof SSOConfigApiError && err.code === "version_conflict") {
-        setSaveError(
-          "These settings changed after this page loaded, so nothing was saved. Reload the page to see them, then make your change again.",
-        );
-      } else {
-        setSaveError(err instanceof Error ? err.message : "Failed to save settings.");
-      }
+      setSaveError(err instanceof Error ? err.message : "Failed to save settings.");
     } finally {
       setSaving(false);
     }

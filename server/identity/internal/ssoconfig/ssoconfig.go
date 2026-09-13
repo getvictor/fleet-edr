@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/identity/api"
@@ -18,10 +17,6 @@ import (
 
 // ErrNotFound is returned by the Get methods when no oidc_config row exists (OIDC has not been configured for the deployment).
 var ErrNotFound = errors.New("ssoconfig: not configured")
-
-// ErrVersionConflict is returned by an upsert that names the version it was based on when the stored configuration has changed since:
-// the write is refused rather than replace settings the writer never saw.
-var ErrVersionConflict = errors.New("ssoconfig: version conflict")
 
 // Config is the resolved OIDC configuration callers see. ClientSecret is populated ONLY by GetDecrypted (the login/resolver path);
 // Get leaves it empty and reports presence via HasSecret so the admin read API can never serialize the secret. Scopes is the parsed
@@ -102,11 +97,7 @@ type UpsertInput struct {
 	DefaultRole string
 	GroupsClaim string
 	GroupRoles  []GroupRole
-	// ExpectedVersion, when set, refuses the write with ErrVersionConflict unless the stored config_version equals it (0 when nothing is
-	// stored yet). It is checked under a row lock, so it holds against a concurrent writer only when ext is a REPEATABLE READ
-	// transaction, whose gap lock also makes two first saves conflict.
-	ExpectedVersion *int64
-	UpdatedBy       string
+	UpdatedBy   string
 }
 
 // Store owns the oidc_config table. It holds the Sealer so secret sealing/opening stays co-located with persistence.
@@ -237,17 +228,6 @@ const (
 			config_version = config_version + 1, updated_by = VALUES(updated_by)`
 )
 
-// mysqlErrDeadlock is the error a version-checked first save that lost its race ends with: the deadlock the two inserts' gap locks make.
-const mysqlErrDeadlock = 1213
-
-func lostFirstSave(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) {
-		return false
-	}
-	return mysqlErr.Number == mysqlErrDeadlock
-}
-
 func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInput) error {
 	scopes := strings.Join(in.Scopes, ",")
 	// An unset updater records the system principal (env-seed / background write), matching the column's NOT NULL DEFAULT 'sys' and its
@@ -256,16 +236,7 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 	if updatedBy == "" {
 		updatedBy = api.PrincipalSystemID
 	}
-	if in.ExpectedVersion != nil {
-		var stored int64
-		err := sqlx.GetContext(ctx, ext, &stored, `SELECT config_version FROM oidc_config WHERE id = 1 FOR UPDATE`)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("ssoconfig: read version: %w", err)
-		}
-		if stored != *in.ExpectedVersion {
-			return ErrVersionConflict
-		}
-	}
+
 	groupRoles := encodeGroupRoles(in.GroupRoles)
 	// The two statements differ only in whether they write the sealed client secret column.
 
@@ -281,11 +252,6 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 		// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
 		_, err = ext.ExecContext(ctx, upsertKeepingClientKey,
 			in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
-	}
-	// Two version-checked first saves race on the row neither found. In a REPEATABLE READ transaction each holds the gap lock its FOR
-	// UPDATE took, so one insert is rolled back as a deadlock: that save lost, and it is a conflict rather than an error.
-	if in.ExpectedVersion != nil && lostFirstSave(err) {
-		return ErrVersionConflict
 	}
 	if err != nil {
 		return fmt.Errorf("ssoconfig: upsert: %w", err)

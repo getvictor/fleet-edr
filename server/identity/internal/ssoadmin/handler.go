@@ -116,11 +116,6 @@ type configResponse struct {
 	GroupsClaim string                `json:"groups_claim"`
 	GroupRoles  []ssoconfig.GroupRole `json:"group_roles"`
 	SecretSet   bool                  `json:"secret_set"`
-	// Version is the stored OIDC configuration's version, 0 before anything is stored, and AppConfigVersion the version of the
-	// deployment settings the external URL lives in. An update sends them back as expected_version and expected_app_config_version.
-	// Each describes its own part, so a response read between two saves still makes the next update stale if either part changed.
-	Version          int64 `json:"version"`
-	AppConfigVersion int64 `json:"app_config_version"`
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +124,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// External URL is deployment-level (appconfig) and may be set even before OIDC is configured; always include it.
-	appCfg, appVersion, err := h.appCfg.Get(ctx)
+	appCfg, _, err := h.appCfg.Get(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "app config get", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
@@ -138,11 +133,10 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	cfg, err := h.store.Get(ctx)
 	if errors.Is(err, ssoconfig.ErrNotFound) {
 		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, configResponse{
-			Configured:       false,
-			ExternalURL:      appCfg.ExternalURL,
-			RedirectURL:      ssoconfig.RedirectURLFor(appCfg.ExternalURL),
-			GroupRoles:       []ssoconfig.GroupRole{},
-			AppConfigVersion: appVersion,
+			Configured:  false,
+			ExternalURL: appCfg.ExternalURL,
+			RedirectURL: ssoconfig.RedirectURLFor(appCfg.ExternalURL),
+			GroupRoles:  []ssoconfig.GroupRole{},
 		})
 		return
 	}
@@ -151,7 +145,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, appCfg.ExternalURL, appVersion))
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, appCfg.ExternalURL))
 }
 
 // updateRequest is the write shape. ClientSecret is a pointer so the field is distinguishable as absent (keep the stored secret) vs
@@ -167,11 +161,6 @@ type updateRequest struct {
 	DefaultRole  string                `json:"default_role"`
 	GroupsClaim  string                `json:"groups_claim"`
 	GroupRoles   []ssoconfig.GroupRole `json:"group_roles"`
-	// ExpectedVersion and ExpectedAppConfigVersion are the versions the caller read. When present, the update is refused with 409
-	// version_conflict if that part has changed since, so a page left open cannot overwrite a newer save. A script that means to
-	// overwrite omits them.
-	ExpectedVersion          *int64 `json:"expected_version"`
-	ExpectedAppConfigVersion *int64 `json:"expected_app_config_version"`
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -207,14 +196,10 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	if req.ExpectedAppConfigVersion != nil && *req.ExpectedAppConfigVersion != appVersion {
-		writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
-		return
-	}
 	appCfg.ExternalURL = externalURL
 	// One transaction writes oidc_config + app_config together: a partial write can never pair a new issuer with a stale redirect.
 	if err := h.apply(ctx, in, appCfg, appVersion, in.UpdatedBy); err != nil {
-		if errors.Is(err, appconfig.ErrVersionConflict) || errors.Is(err, ssoconfig.ErrVersionConflict) {
+		if errors.Is(err, appconfig.ErrVersionConflict) {
 			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
 			return
 		}
@@ -230,13 +215,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	_, savedAppVersion, err := h.appCfg.Get(ctx)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "app config re-read after update", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
-	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, externalURL, savedAppVersion))
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, externalURL))
 }
 
 // testConnectionRequest carries the candidate issuer to probe. Empty issuer means "probe the stored config".
@@ -348,15 +327,14 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, string, bool
 		newSecret = &s
 	}
 	return ssoconfig.UpsertInput{
-		Issuer:          issuer,
-		ClientID:        clientID,
-		NewSecret:       newSecret,
-		Scopes:          scopes,
-		JITEnabled:      req.JITEnabled,
-		DefaultRole:     role,
-		GroupsClaim:     groupsClaim,
-		GroupRoles:      groupRoles,
-		ExpectedVersion: req.ExpectedVersion,
+		Issuer:      issuer,
+		ClientID:    clientID,
+		NewSecret:   newSecret,
+		Scopes:      scopes,
+		JITEnabled:  req.JITEnabled,
+		DefaultRole: role,
+		GroupsClaim: groupsClaim,
+		GroupRoles:  groupRoles,
 	}, externalURL, "", true
 }
 
@@ -390,25 +368,23 @@ func validGroupMapping(claim string, in []ssoconfig.GroupRole) (string, []ssocon
 	return claim, out, ""
 }
 
-func toResponse(c *ssoconfig.Config, externalURL string, appConfigVersion int64) configResponse {
+func toResponse(c *ssoconfig.Config, externalURL string) configResponse {
 	groupRoles := c.GroupRoles
 	if groupRoles == nil {
 		groupRoles = []ssoconfig.GroupRole{}
 	}
 	return configResponse{
-		Configured:       true,
-		Issuer:           c.Issuer,
-		ClientID:         c.ClientID,
-		ExternalURL:      externalURL,
-		RedirectURL:      ssoconfig.RedirectURLFor(externalURL),
-		Scopes:           c.Scopes,
-		JITEnabled:       c.JITEnabled,
-		DefaultRole:      c.DefaultRole,
-		GroupsClaim:      c.GroupsClaim,
-		GroupRoles:       groupRoles,
-		SecretSet:        c.HasSecret,
-		Version:          c.Version,
-		AppConfigVersion: appConfigVersion,
+		Configured:  true,
+		Issuer:      c.Issuer,
+		ClientID:    c.ClientID,
+		ExternalURL: externalURL,
+		RedirectURL: ssoconfig.RedirectURLFor(externalURL),
+		Scopes:      c.Scopes,
+		JITEnabled:  c.JITEnabled,
+		DefaultRole: c.DefaultRole,
+		GroupsClaim: c.GroupsClaim,
+		GroupRoles:  groupRoles,
+		SecretSet:   c.HasSecret,
 	}
 }
 

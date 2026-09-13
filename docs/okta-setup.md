@@ -59,7 +59,7 @@ With a groups claim and group mappings configured, every sign-in sets the operat
 
 1. In Okta, open the EDR app's **Sign On** tab. Under **OpenID Connect ID Token**, set **Groups claim type** to **Filter**, the claim name to `groups`, and a filter matching your EDR groups (for example, **Starts with** `edr-`).
 2. Add `groups` to the requested scopes: Okta's org authorization server includes the claim only when that scope is requested.
-3. Save the claim name and the mappings through the SSO settings API, `PUT /api/settings/sso`, as a user or service account holding `sso.manage`. The request carries the whole configuration: read it with `GET /api/settings/sso` first and send it back with the fields below added or changed (omit `client_secret` to keep the stored one, and set `expected_version` to the `version` you read, so the update is refused with `409` if someone saved in between). This fragment shows only those fields:
+3. Save the claim name and the mappings through the SSO settings API, `PUT /api/settings/sso`, as a user or service account holding `sso.manage`. The request carries the whole configuration: read it with `GET /api/settings/sso` first and send it back with the fields below added or changed (omit `client_secret` to keep the stored one). This fragment shows only those fields:
 
 ```json
 {
