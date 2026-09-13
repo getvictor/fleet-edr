@@ -474,8 +474,8 @@
     alert and the block that follows it would collapse into one row, which is Detect mode (#929) and was never built. What shipped
     is the canonical requirement's subject semantics: application_control_block findings are process-backed and take the process id
     as their subject (catalog/application_control_block.go), exactly as catalog rules do. The store enforces that as uk_alerts_dedup
-    over five columns, (source, disposition, host_id, rule_id, subject), the fifth, disposition, keeping a monitor record and an
-    alert of the same finding apart. The catalog-rule half of the archived text is the canonical requirement's own
+    over five columns, (source, disposition, host_id, rule_id, subject): disposition is the column added beyond the requirement's
+    tuple, keeping a monitor record and an alert of the same finding apart. The catalog-rule half of the archived text is the canonical requirement's own
     first scenario.
 
 - requirement: server-detection-rules-engine/alerts-list-filters-by-source-and-subtype
