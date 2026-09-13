@@ -1167,7 +1167,7 @@ tasks:
 
   profiles:render:
     desc: |
-      Render the two .mobileconfig templates with APPLE_TEAM_ID substituted.
+      Render the three .mobileconfig templates with APPLE_TEAM_ID substituted.
       Profiles ship unsigned by design; MDM channels sign them at delivery
       (Fleet rejects pre-signed uploads).
     cmds:

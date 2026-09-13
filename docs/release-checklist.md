@@ -107,7 +107,7 @@ If any of steps 4 through 7 surfaces a blocker, fix it on `main` and return to s
 ## 8. Promote to a stable tag
 
 1. Create the annotated stable tag on the same commit the clean RC was built from: `git tag -a vX.Y.Z -m "vX.Y.Z"` and push it.
-2. `release.yml` re-runs and, because this is a non-`-rc` tag, advances `:latest` and produces the final signed pkg, the two mobileconfig profiles, the SBOMs, the `SHA256SUMS`, and the cosign bundles.
+2. `release.yml` re-runs and, because this is a non-`-rc` tag, advances `:latest` and produces the final signed pkg, the three mobileconfig profiles, the SBOMs, the `SHA256SUMS`, and the cosign bundles.
 
 ## 9. Verify the published release
 

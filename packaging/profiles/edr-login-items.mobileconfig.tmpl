@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Managed login items. Marks the Fleet EDR background items as managed, so a console user cannot turn them off in System
+    Settings > General > Login Items & Extensions. Without it, a user can silently disable the agent daemon
+    (com.fleetdm.edr.agent) or the activation agent (com.fleetdm.edr.activate). macOS 13 and later; MDM-only. Ships unsigned on purpose; the MDM signs it at delivery (see
+    packaging/profiles/render.sh). The __TEAM_ID__ token is substituted with the value of APPLE_TEAM_ID.
+
+    One TeamIdentifier rule covers every item signed by the team, so a background item added later is managed without a profile
+    change.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.servicemanagement</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>Fleet EDR Background Items</string>
+            <key>PayloadDescription</key>
+            <string>Manages the Fleet EDR agent and activation background items so users cannot turn them off.</string>
+            <key>PayloadIdentifier</key>
+            <string>com.fleetdm.edr.login-items</string>
+            <key>PayloadUUID</key>
+            <string>740A3213-A155-4350-A49D-0329D78E31C4</string>
+            <key>Rules</key>
+            <array>
+                <dict>
+                    <key>RuleType</key>
+                    <string>TeamIdentifier</string>
+                    <key>RuleValue</key>
+                    <string>__TEAM_ID__</string>
+                    <key>Comment</key>
+                    <string>Fleet EDR agent daemon and activation agent</string>
+                </dict>
+            </array>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>Fleet EDR - Background Items (__TEAM_ID__)</string>
+    <key>PayloadDescription</key>
+    <string>Keeps Fleet EDR's background items enabled. Team ID __TEAM_ID__.</string>
+    <key>PayloadIdentifier</key>
+    <string>com.fleetdm.edr.profile.login-items</string>
+    <key>PayloadOrganization</key>
+    <string>Fleet EDR</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>B451BDF2-4B88-44E5-AF63-77F6FAB936CB</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+</dict>
+</plist>

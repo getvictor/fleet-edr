@@ -2,17 +2,18 @@
 
 This is the Fleet-specific recipe for deploying the Fleet EDR agent to a fleet of Macs. For the vendor-neutral contract (what the three artifacts are and why) see [mdm-deployment.md](mdm-deployment.md).
 
-Fleet and Fleet EDR are independent products. Fleet owns MDM + osquery; Fleet EDR owns the endpoint security / detection data plane. The contact between them is a deployment contract: Fleet delivers a signed `.pkg`, two `.mobileconfig` profiles, and an install script. The EDR server receives events from the resulting agents directly, not via Fleet.
+Fleet and Fleet EDR are independent products. Fleet owns MDM + osquery; Fleet EDR owns the endpoint security / detection data plane. The contact between them is a deployment contract: Fleet delivers a signed `.pkg`, three `.mobileconfig` profiles, and an install script. The EDR server receives events from the resulting agents directly, not via Fleet.
 
 ## Prerequisites
 
-- A Fleet server (version 4.86+) with MDM turned on and an Apple APNs + ABM (Apple Business Manager) push certificate uploaded. Macs must be ADE-enrolled or manually UAMDM-enrolled. Without UAMDM, macOS refuses the restricted payloads in our two profiles.
+- A Fleet server (version 4.86+) with MDM turned on and an Apple APNs + ABM (Apple Business Manager) push certificate uploaded. Macs must be ADE-enrolled or manually UAMDM-enrolled. Without UAMDM, macOS refuses the restricted payloads in our profiles.
 - `fleetctl` installed locally and authenticated (`fleetctl login`). The UI also works; this doc uses `fleetctl` because every step is reproducible.
 - A running Fleet EDR server with a known enroll secret (the value in `./secrets/enroll_secret` from [install-server.md](install-server.md)).
 - Downloaded release artifacts from [GitHub Releases](https://github.com/getvictor/fleet-edr/releases):
   - `fleet-edr-<version>.pkg`
   - `edr-system-extension.mobileconfig`
   - `edr-tcc-fda.mobileconfig`
+  - `edr-login-items.mobileconfig`
   - `SHA256SUMS`
 
 ## Scope
@@ -24,9 +25,9 @@ fleetctl get fleets
 # Pick the fleet id + name. Examples below assume fleet "EDR pilot".
 ```
 
-## Step 1: push the two profiles
+## Step 1: push the three profiles
 
-Fleet's "custom settings" feature sends a `.mobileconfig` verbatim to the Macs in a fleet's scope. Both of our profiles go here.
+Fleet's "custom settings" feature sends a `.mobileconfig` verbatim to the Macs in a fleet's scope. All three of our profiles go here: the system-extension approval, Full Disk Access, and the background items profile that keeps users from turning off the agent (macOS 13 or later).
 
 ```sh
 fleetctl apply -f - <<'EOF'
@@ -40,6 +41,7 @@ spec:
         custom_settings:
           - path: ./edr-system-extension.mobileconfig
           - path: ./edr-tcc-fda.mobileconfig
+          - path: ./edr-login-items.mobileconfig
 EOF
 ```
 
@@ -54,6 +56,7 @@ sudo profiles list | grep fleetdm
 # Expect:
 #   com.fleetdm.edr.profile.system-extension
 #   com.fleetdm.edr.profile.tcc-fda
+#   com.fleetdm.edr.profile.login-items
 ```
 
 ## Step 2: add the pkg with a custom install script
@@ -172,13 +175,13 @@ Open `https://<your-edr-server>/ui/`. The Macs that finished the Fleet-driven in
 
 On each Mac the EDR pkg's preinstall stops the old daemon and the postinstall starts the new one. The host token at `/var/db/fleet-edr/enrolled.plist` survives the upgrade so agents don't re-enroll.
 
-If the new release changes one of the two `.mobileconfig` profiles, push the new profile first (Step 1), wait for Fleet to confirm delivery, then push the new pkg. The reverse order risks an activation prompt if the pkg expects a payload that hasn't landed yet.
+If the new release changes one of the `.mobileconfig` profiles, push the new profile first (Step 1), wait for Fleet to confirm delivery, then push the new pkg. The reverse order risks an activation prompt if the pkg expects a payload that hasn't landed yet.
 
 ## Uninstall
 
 The uninstall script attached in Step 2 wraps the pkg's bundled `uninstall.sh`, which removes the daemon, host app, and system extension. Trigger it per host in the Fleet UI: **Hosts > \<host\> > Software**, find Fleet EDR, then **Actions > Uninstall**. There is no fleetctl command for a per-host uninstall; script results land under **Hosts > \<host\> > Activity**.
 
-To remove the profiles as well, edit the fleet's YAML and drop the two `custom_settings` entries. Fleet removes the profiles from each Mac on the next check-in; macOS tears down the TCC grants and sysext allow-list within minutes.
+To remove the profiles as well, edit the fleet's YAML and drop the three `custom_settings` entries. Fleet removes the profiles from each Mac on the next check-in; macOS tears down the TCC grants and sysext allow-list within minutes.
 
 ## Rotate the enroll secret
 

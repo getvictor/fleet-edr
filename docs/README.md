@@ -27,7 +27,7 @@ The recommended path: stand up the server on a single Linux VM with your own dom
 
 - **Server**: container image `ghcr.io/getvictor/fleet-edr-server` running behind your TLS-terminating ingress, backed by MySQL 8.4. Serves the agent ingestion API, the admin web UI, and the OTel metric pipeline.
 - **Agent**: signed + notarized `.pkg` installed on each macOS endpoint. Runs as a LaunchDaemon, receives events from an embedded system extension over XPC, queues them in SQLite, uploads to the server.
-- **MDM profiles**: two unsigned `.mobileconfig` files that pre-approve the system extension and grant Full Disk Access. Delivered by whichever MDM the customer uses; the MDM signs them at delivery time.
+- **MDM profiles**: three unsigned `.mobileconfig` files that pre-approve the system extension, grant Full Disk Access, and keep users from turning off the agent's background items. Delivered by whichever MDM the customer uses; the MDM signs them at delivery time.
 - **Install script**: a one-line Bash snippet your MDM runs before the `.pkg` installer to drop the enroll secret into `/etc/fleet-edr.conf`.
 
 Artifacts ship on each [GitHub Release](https://github.com/getvictor/fleet-edr/releases):
@@ -35,6 +35,7 @@ Artifacts ship on each [GitHub Release](https://github.com/getvictor/fleet-edr/r
 - `fleet-edr-<version>.pkg` (signed + notarized)
 - `edr-system-extension.mobileconfig` (unsigned; your MDM signs at delivery)
 - `edr-tcc-fda.mobileconfig` (unsigned; your MDM signs at delivery)
+- `edr-login-items.mobileconfig` (unsigned; your MDM signs at delivery)
 - `SHA256SUMS` (verify your downloads)
 
 Server image is tagged on each release: `ghcr.io/getvictor/fleet-edr-server:<version>`. `:latest` only advances on stable (non-`-rc`, non-`-beta`) tags.

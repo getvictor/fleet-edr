@@ -33,11 +33,12 @@ IDENTITY="^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.y
 
 ## Step 1: confirm every expected asset is present
 
-Pull the asset list for the tag and check it against what the workflow uploads. For a tag `vX.Y.Z` the release must carry these 12 assets (six artifacts, each with its `.sigstore.json` bundle):
+Pull the asset list for the tag and check it against what the workflow uploads. For a tag `vX.Y.Z` the release must carry these 14 assets (seven artifacts, each with its `.sigstore.json` bundle):
 
 - `fleet-edr-<TAG>.pkg` (+ `.sigstore.json`)
 - `edr-system-extension.mobileconfig` (+ `.sigstore.json`)
 - `edr-tcc-fda.mobileconfig` (+ `.sigstore.json`)
+- `edr-login-items.mobileconfig` (+ `.sigstore.json`)
 - `fleet-edr-<TAG>-sbom.spdx.json` (+ `.sigstore.json`)
 - `fleet-edr-<TAG>-sbom.cdx.json` (+ `.sigstore.json`)
 - `SHA256SUMS` (+ `.sigstore.json`)
@@ -65,7 +66,7 @@ cosign verify-blob \
 
 # 2. Only now use the trusted SHA256SUMS to checksum every other artifact.
 #    No --ignore-missing: we downloaded the whole release, so every file listed
-#    in SHA256SUMS (pkg, both profiles, both SBOMs) MUST be present. Omitting
+#    in SHA256SUMS (pkg, the three profiles, both SBOMs) MUST be present. Omitting
 #    the flag turns a not-downloaded or misnamed artifact into a hard FAILED
 #    instead of a silently skipped line. The extra files on disk (the
 #    .sigstore.json bundles and SHA256SUMS itself) are not listed in
@@ -77,12 +78,13 @@ Expect `Verified OK` for the bundle, then every `shasum` line `OK`. Any `FAILED`
 
 ## Step 3: verify the Sigstore bundle for each remaining blob artifact
 
-`SHA256SUMS` was already verified in step 2. The same identity/issuer constraints apply to every other blob; loop over the remaining five artifacts:
+`SHA256SUMS` was already verified in step 2. The same identity/issuer constraints apply to every other blob; loop over the remaining six artifacts:
 
 ```sh
 for f in fleet-edr-"$TAG".pkg \
          edr-system-extension.mobileconfig \
          edr-tcc-fda.mobileconfig \
+         edr-login-items.mobileconfig \
          fleet-edr-"$TAG"-sbom.spdx.json \
          fleet-edr-"$TAG"-sbom.cdx.json; do
   echo "== $f =="
@@ -124,7 +126,7 @@ Skip this comparison for an `-rc` tag: `:latest` legitimately points at the prev
 
 ## Step 5: verify build-provenance attestations
 
-The workflow attests the pkg, both profiles, both SBOMs, `SHA256SUMS`, and the image via `actions/attest-build-provenance`. Spot-check with the GitHub attestation verifier:
+The workflow attests the pkg, the three profiles, both SBOMs, `SHA256SUMS`, and the image via `actions/attest-build-provenance`. Spot-check with the GitHub attestation verifier:
 
 ```sh
 gh attestation verify fleet-edr-"$TAG".pkg --owner getvictor
