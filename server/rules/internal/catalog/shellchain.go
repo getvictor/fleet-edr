@@ -284,8 +284,9 @@ func parentPathFor(parent, child *api.Process) string {
 // parentExcluded reports whether the given non-shell parent process is excluded for hostID. It matches four dimensions of the parent
 // (issue #520): the path glob (match type parent_path_glob) and the parent's already-persisted code-signing identity (team_id,
 // signing_id, cdhash). The signature dimensions let an operator exclude a benign signed parent (e.g. a Developer-ID developer tool
-// such as Claude Code) by a non-spoofable identifier rather than a path glob an attacker who can write to /tmp can land inside. Glob
-// semantics live in the resolver (api.GlobMatch).
+// such as Claude Code) by its team ID rather than a path glob an attacker who can write to /tmp can land inside. Each dimension is
+// checked on its own, so a signing_id exclusion also matches an ad-hoc signed binary that claims that identifier: only team_id and
+// cdhash resist a planted binary. Glob semantics live in the resolver (api.GlobMatch).
 //
 // A parent with no process ROW is not the blanket non-match it used to be, and that sentence in this doc was what issue #831 had to
 // undo. Pid 1 is nameable, so the path glob applies to it; a parent that cannot be named at all still matches nothing, and a parent

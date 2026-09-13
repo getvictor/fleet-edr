@@ -2011,20 +2011,22 @@ components:
         id: {type: integer, format: int64}
         rule_id:
           type: string
-          description: Rule the exclusion applies to. An empty string is a shared exclusion that applies to every rule.
+          description: Rule the exclusion applies to. It must name a registered rule that reads this match type; a create with an empty or unknown rule_id is rejected.
           example: suspicious_exec
         match_type:
           type: string
           enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain]
+          example: team_id
         value:
           type: string
-          example: "*/claude/versions/*"
+          description: The value to match. Globs use `*` as the only wildcard and it matches `/`, so anchor a path to the full binary path rather than starting it with `*`.
+          example: "Q6L2SF6YDW"
         host_group_id:
           type: integer
           format: int64
           description: 0 is the global scope (the only scope the Phase A surface accepts).
           example: 0
-        reason: {type: string, example: "Claude Code CLI"}
+        reason: {type: string, example: "Claude Code (Anthropic PBC Q6L2SF6YDW, Developer ID); shells out to GitHub"}
         enabled: {type: boolean}
         expires_at:
           type: string
@@ -2032,8 +2034,12 @@ components:
           description: Optional expiry; the resolver stops honouring the entry past this instant.
         created_by:
           type: string
-          description: Actor identifier recorded at creation (e.g. `user:42`).
-          example: "user:42"
+          description: Principal id of the actor that created the exclusion (`usr_<id>` for a user, `svc_<id>` for a service account, `sys` for the system).
+          example: "usr_42"
+        created_by_label:
+          type: string
+          description: Display label for created_by (a user's email, a service account's name, or "system"), omitted when it cannot be resolved.
+          example: "alice@example.com"
         created_at: {type: string, format: date-time}
 
     DetectionRuleSetting:
@@ -2061,7 +2067,7 @@ components:
           type: object
           additionalProperties: true
           description: Reserved for per-rule typed settings; absent until a rule declares a config schema.
-        updated_by: {type: string, example: "user:42"}
+        updated_by: {type: string, example: "usr_42"}
         updated_at: {type: string, format: date-time}
 
     RuleMatchCount:
@@ -2194,11 +2200,12 @@ components:
         match_type:
           type: string
           enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain]
-        value: {type: string, example: "*/claude/versions/*"}
+          example: team_id
+        value: {type: string, example: "Q6L2SF6YDW"}
         reason:
           type: string
           description: Required; recorded on the audit row.
-          example: "Claude Code CLI"
+          example: "Claude Code (Anthropic PBC Q6L2SF6YDW, Developer ID); shells out to GitHub"
         host_group_id:
           type: integer
           format: int64

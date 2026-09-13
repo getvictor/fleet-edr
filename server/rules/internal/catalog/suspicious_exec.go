@@ -43,10 +43,10 @@ var suspiciousPrefixes = sync.OnceValue(func() []string { return sharedList("wor
 // Resolved by dropping both rather than picking the survivor: T1204 needs a user to be observed opening something, and the
 // rule sees a process tree; T1105 needs a transfer, and the rule sees an execution. See Techniques below (issue #755).
 type SuspiciousExec struct {
-	// Exclusions is the per-host false-positive resolver. The rule consults it (match type parent_path_glob, value = the non-shell
-	// parent path) before firing on EITHER arm, so a trusted parent like `/usr/libexec/sshd-session` or a version-stamped developer
-	// tool (`*/claude/versions/*`) is suppressed. Nil excludes nothing (the empty-config default). The both-arms trade-off and the
-	// over-broad-glob caveat (`*/git` would also match `/tmp/evil/git`) are documented on the detection-config surface (issue #459).
+	// Exclusions is the per-host false-positive resolver. The rule consults it for the non-shell parent (see parentExcluded) before
+	// firing, so a trusted parent such as a Developer-ID tool excluded by team_id is suppressed. Nil excludes nothing (the
+	// empty-config default). The over-broad-glob caveat (`*/git` would also match `/tmp/evil/git`) and the cost of trusting a parent
+	// that runs arbitrary commands are documented in docs/recommended-exclusions.md (issue #459).
 	Exclusions api.ExclusionResolver
 }
 
@@ -59,7 +59,8 @@ func (r *SuspiciousExec) AlgorithmName() string { return "ancestor_walk_path_pre
 
 // SupportedExclusionMatchTypes lists the match types parentExcluded consults: the non-shell parent's path glob plus its code-signing
 // identity (team_id / signing_id / cdhash), so an operator can exclude a benign signed parent (e.g. a Developer-ID developer tool) by
-// its non-spoofable signature rather than a path glob a writable-directory attacker can land inside (issue #520).
+// its team ID rather than a path glob a writable-directory attacker can land inside (issue #520). signing_id is matched on its own,
+// and an ad-hoc signature can claim any identifier, so it does not carry that guarantee.
 func (r *SuspiciousExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 	return []api.ExclusionMatchType{
 		api.ExclusionMatchParentPathGlob,
@@ -114,8 +115,8 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
-			"Interactive SSH where an admin runs a script from /tmp. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.",
-			"Developer tooling that shells out to a versioned install (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.",
+			"Interactive SSH where an admin runs a script from /tmp. Where that is routine on a server, a parent-path-glob exclusion for `/usr/libexec/sshd-session` silences it, but it also silences every command an attacker runs with a stolen SSH credential. Set an expiry on it and do not apply it to workstations.",
+			"Developer tooling that shells out (AI coding assistants, git hooks, IDEs). Exclude a Developer-ID signed tool by its `team_id` (Claude Code is `Q6L2SF6YDW`), which survives upgrades and cannot be claimed by a planted binary. For an unsigned tool use a parent-path-glob anchored to its full install path, never a leading `*`, with an expiry. Either way the exclusion trusts everything that parent can be made to run, so do not exclude a script interpreter.",
 			"Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.",
 		},
 		Limitations: []string{

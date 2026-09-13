@@ -759,7 +759,7 @@ export function DetectionConfig() {
                     onChange={(e) => {
                       setFormValue(e.target.value);
                     }}
-                    placeholder="*/MyApp/versions/*"
+                    placeholder="/Applications/MyApp.app/Contents/MacOS/MyApp"
                   />
                 </div>
                 <div className="detection-config__form-field--full">

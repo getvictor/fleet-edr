@@ -399,7 +399,7 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 }
 
 // TestSuspiciousExec_ParentSignatureExclusion covers signature-based parent exclusions (issue #520): an operator can suppress a benign
-// signed parent by its non-spoofable code-signing identity (team_id / signing_id / cdhash) read from the parent's already-persisted
+// signed parent by its code-signing identity (team_id / signing_id / cdhash) read from the parent's already-persisted
 // process record, and an unsigned lookalike at a benign-looking path is NOT suppressed by such an exclusion. This is the concrete win
 // that lets team_id=Q6L2SF6YDW replace a spoofable `*/claude/versions/*` path glob for a Developer-ID tool like Claude Code.
 //

@@ -132,8 +132,8 @@ Until issue #776 this rule also fired on the same chain making an outbound conne
 
 ### Known false-positive sources
 
-- Interactive SSH where an admin runs a script from /tmp. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.
-- Developer tooling that shells out to a versioned install (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
+- Interactive SSH where an admin runs a script from /tmp. Where that is routine on a server, a parent-path-glob exclusion for `/usr/libexec/sshd-session` silences it, but it also silences every command an attacker runs with a stolen SSH credential. Set an expiry on it and do not apply it to workstations.
+- Developer tooling that shells out (AI coding assistants, git hooks, IDEs). Exclude a Developer-ID signed tool by its `team_id` (Claude Code is `Q6L2SF6YDW`), which survives upgrades and cannot be claimed by a planted binary. For an unsigned tool use a parent-path-glob anchored to its full install path, never a leading `*`, with an expiry. Either way the exclusion trusts everything that parent can be made to run, so do not exclude a script interpreter.
 - Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.
 
 ### Limitations
@@ -169,8 +169,8 @@ Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-d
 
 ### Known false-positive sources
 
-- Interactive SSH where an admin curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that is a routine workflow on the host class.
-- Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` that survives upgrades.
+- Interactive SSH where an admin curls a tool. Where that is routine on a server, a parent-path-glob exclusion for `/usr/libexec/sshd-session` silences it, but it also silences every command an attacker runs with a stolen SSH credential. Set an expiry on it and do not apply it to workstations.
+- Developer tooling that shells out and connects (AI coding assistants, git hooks, IDEs). Exclude a Developer-ID signed tool by its `team_id` (Claude Code is `Q6L2SF6YDW`), which survives upgrades and cannot be claimed by a planted binary. For an unsigned tool use a parent-path-glob anchored to its full install path, never a leading `*`, with an expiry. Either way the exclusion trusts everything that parent can be made to run, so do not exclude a script interpreter.
 
 ### Limitations
 
