@@ -32,8 +32,6 @@ func insertEpisode(t *testing.T, db *sqlx.DB, hostID, subject, eventID string, o
 	require.NoError(t, err)
 }
 
-func ptrNs(v int64) *int64 { return &v }
-
 // spec:server-host-status/the-host-api-surfaces-per-host-health/the-detail-reports-recorded-sensor-faults
 //
 // TestHostHealth_ReportsEpisodesOpenFirst: a host's recorded faults ride the same read the host page already makes, open ones first
@@ -51,7 +49,7 @@ func TestHostHealth_ReportsEpisodesOpenFirst(t *testing.T) {
 	require.NoError(t, err)
 
 	insertEpisode(t, db, host, "content_filter", "evt-old-open", 1_000, nil)          // oldest, still open
-	insertEpisode(t, db, host, "dns_proxy", "evt-resolved", 5_000, ptrNs(6_000))      // newest overall, resolved
+	insertEpisode(t, db, host, "dns_proxy", "evt-resolved", 5_000, new(int64(6_000))) // newest overall, resolved
 	insertEpisode(t, db, host, "content_filter", "evt-new-open", 3_000, nil)          // open
 	insertEpisode(t, db, "OTHER-HOST", "content_filter", "evt-elsewhere", 9_000, nil) // another host's
 
@@ -123,7 +121,7 @@ func TestHostHealth_BoundsEachHalfOfTheEpisodeRead(t *testing.T) {
 	const perHalf = 25 // above the read limit on both halves
 	for i := range perHalf {
 		insertEpisode(t, db, host, "content_filter", fmt.Sprintf("open-%d", i), int64(1_000+i), nil)
-		insertEpisode(t, db, host, "dns_proxy", fmt.Sprintf("resolved-%d", i), int64(1_000+i), ptrNs(int64(10_000+i)))
+		insertEpisode(t, db, host, "dns_proxy", fmt.Sprintf("resolved-%d", i), int64(1_000+i), new(int64(10_000+i)))
 	}
 
 	h, err := d.Store().HostHealth(t.Context(), host)

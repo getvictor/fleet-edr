@@ -433,6 +433,45 @@ describe("HostHeader agent health", () => {
     expect(trigger).not.toHaveAttribute("title", "Agent needs attention");
   });
 
+  // Episode fields are open-vocabulary values the agent reports. An inherited property name used as a lookup key into a plain label table
+  // resolves to something that is not a label: "__proto__" yields Object.prototype, which React refuses to render, so one malformed or
+  // compromised sensor report would crash the popover for every operator who opened it. Each hostile value must fall back to itself (or
+  // to nothing, for an outcome) exactly as an unrecognised one does.
+  it("renders hostile fault names as plain text instead of crashing", async () => {
+    const detail = detailFixture();
+    const nowNs = Date.now() * NANOSECONDS_PER_MILLISECOND;
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        overall_status: "unhealthy",
+        components: [
+          { type: "constructor", status: "unhealthy", message: "hostile component type", last_transition_ns: nowNs },
+        ],
+        episodes: [
+          {
+            id: 1,
+            kind: "self_heal_failed",
+            component: "network_extension",
+            subject: "__proto__",
+            severity: "critical",
+            title: "EDR sensor could not be restored",
+            detail: { outcome: "toString" },
+            opened_at_ns: nowNs,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText("Sensor faults")).toBeVisible();
+    expect(screen.getByText("__proto__")).toBeVisible();
+    // An inherited outcome name is not an outcome: the title stands alone, with no "[object]" or function source appended.
+    expect(screen.getByText("EDR sensor could not be restored")).toBeVisible();
+    expect(screen.getByText("constructor")).toBeVisible();
+  });
+
   it("names each capture provider the agent reports", async () => {
     const detail = detailFixture();
     vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);

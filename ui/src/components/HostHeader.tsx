@@ -98,6 +98,17 @@ function metaRow(detail: HostDetail, online: boolean): ReactNode {
   return <span className="host-header__meta">{segments}</span>;
 }
 
+// labelFor looks up an open-vocabulary wire value in a label table, returning undefined for anything the table does not itself define.
+//
+// The own-property check is the point. A plain object also answers for its inherited keys, and these values come from the agent: a
+// subject of "__proto__" indexed straight into COMPONENT_LABELS yields Object.prototype, which React refuses to render, so a malformed or
+// compromised sensor report would throw the moment an operator opened the host's Details. An outcome of "toString" would likewise return
+// a function instead of falling back. Only a key the table was written with is a label.
+function labelFor(table: Readonly<Record<string, string>>, key: string): string | undefined {
+  // eslint-disable-next-line security/detect-object-injection -- guarded by the own-property check on the line itself
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
 // OUTCOME_LABELS phrase a self_heal_failed episode's outcome for an operator. The two shapes point at different fixes, so they are
 // spelled out rather than shown as their wire names. An outcome this build does not recognise renders nothing rather than the raw
 // value, since the title and description already say the repair gave up.
@@ -128,8 +139,10 @@ function HostHealthEpisodes({ episodes }: { readonly episodes: readonly HostHeal
       <ul className="host-header__health-list">
         {episodes.map((e) => {
           const open = e.resolved_at_ns === undefined;
-          const part = e.subject ? (COMPONENT_LABELS[e.subject] ?? e.subject) : (COMPONENT_LABELS[e.component] ?? e.component);
-          const outcome = OUTCOME_LABELS[episodeDetailString(e, "outcome")] ?? "";
+          // `||`, not `??`: an empty subject means "the component as a whole", the same as an absent one, and must fall back too.
+          const partKey = e.subject || e.component;
+          const part = labelFor(COMPONENT_LABELS, partKey) ?? partKey;
+          const outcome = labelFor(OUTCOME_LABELS, episodeDetailString(e, "outcome")) ?? "";
           return (
             <li key={e.id} className="host-header__health-item">
               <div className="host-header__health-item-head">
@@ -220,7 +233,7 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
                           components in one panel rendered in two different shapes at the same width. */}
                       <div className="host-header__health-item-head">
                         <HealthBadge status={c.status} />
-                        <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
+                        <span className="host-header__health-component">{labelFor(COMPONENT_LABELS, c.type) ?? c.type}</span>
                       </div>
                       {/* Server-derived conditions carry no transition instant (see HostHealth.derived_components); rendering one
                           would date a possibly days-old fault to the moment the page loaded. */}

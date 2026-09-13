@@ -24,3 +24,4 @@ rules:
   - rule_id: sensor_recovery_failed
     severity: critical
     expect: health_episode
+    kind: self_heal_failed

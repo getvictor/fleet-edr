@@ -232,28 +232,45 @@ const hostEpisodeReadLimit = 20
 // open episode is a host that needs someone now, and a list ordered purely by time would bury a fault from yesterday under this
 // morning's resolved blip.
 //
+// ONE statement, not a query per half, because the halves must agree about which episodes are open. Two statements run in two read
+// views, so a status check-in closing an episode between them returns it in both: once as open, once as resolved, with the same id. The
+// popover keys its rows on that id, so the fault would render twice. A single UNION ALL reads both halves from one snapshot, where an
+// episode is open or resolved and never both.
+//
+// Each half keeps its own ORDER BY and LIMIT inside parentheses, so the bound applies per half. The outer ORDER BY is required rather
+// than decorative: UNION ALL does not promise to preserve the order of its parts.
+//
 // Always a non-nil slice, so the wire carries [] rather than null for a host with no recorded faults and a client can iterate it
 // without a guard.
 func (s *Store) hostHealthEpisodes(ctx context.Context, hostID string) ([]api.HostHealthEpisode, error) {
 	const cols = `id, kind, component, subject, severity, title, COALESCE(description, '') AS description, detail, opened_at_ns,
 		resolved_at_ns`
-	episodes := []api.HostHealthEpisode{}
-	var open []api.HostHealthEpisode
-	if err := s.db.SelectContext(ctx, &open, `
-		SELECT `+cols+` FROM host_health_episodes
-		WHERE host_id = ? AND resolved_at_ns IS NULL
-		ORDER BY opened_at_ns DESC LIMIT ?`, hostID, hostEpisodeReadLimit); err != nil {
-		return nil, fmt.Errorf("query open host health episodes: %w", err)
+	type episodeRow struct {
+		api.HostHealthEpisode
+		// halfRank orders the open half before the resolved half; halfSortNs is each half's own recency.
+		HalfRank   int   `db:"half_rank"`
+		HalfSortNs int64 `db:"half_sort_ns"`
 	}
-	var resolved []api.HostHealthEpisode
-	if err := s.db.SelectContext(ctx, &resolved, `
-		SELECT `+cols+` FROM host_health_episodes
-		WHERE host_id = ? AND resolved_at_ns IS NOT NULL
-		ORDER BY resolved_at_ns DESC LIMIT ?`, hostID, hostEpisodeReadLimit); err != nil {
-		return nil, fmt.Errorf("query resolved host health episodes: %w", err)
+	var rows []episodeRow
+	if err := s.db.SelectContext(ctx, &rows, `
+		(SELECT `+cols+`, 0 AS half_rank, opened_at_ns AS half_sort_ns
+		 FROM host_health_episodes
+		 WHERE host_id = ? AND resolved_at_ns IS NULL
+		 ORDER BY opened_at_ns DESC LIMIT ?)
+		UNION ALL
+		(SELECT `+cols+`, 1 AS half_rank, resolved_at_ns AS half_sort_ns
+		 FROM host_health_episodes
+		 WHERE host_id = ? AND resolved_at_ns IS NOT NULL
+		 ORDER BY resolved_at_ns DESC LIMIT ?)
+		ORDER BY half_rank, half_sort_ns DESC`,
+		hostID, hostEpisodeReadLimit, hostID, hostEpisodeReadLimit); err != nil {
+		return nil, fmt.Errorf("query host health episodes: %w", err)
 	}
-	episodes = append(episodes, open...)
-	return append(episodes, resolved...), nil
+	episodes := make([]api.HostHealthEpisode, 0, len(rows))
+	for _, r := range rows {
+		episodes = append(episodes, r.HostHealthEpisode)
+	}
+	return episodes, nil
 }
 
 // histogramTargetBuckets bounds how many bars a window produces: the bucket size is the window divided by this, floored to whole

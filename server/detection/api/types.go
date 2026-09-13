@@ -174,8 +174,8 @@ type HostHealth struct {
 	// db:"-" because this field is filled in after the query, not scanned from it: the derived conditions come from the event
 	// archive, not from the host_health row.
 	DerivedComponents []DerivedComponent `db:"-" json:"derived_components"`
-	// Episodes are the host's recorded sensor faults that needed a person (issue #778): every one still open, then the most recent
-	// resolved ones. db:"-" for the same reason as DerivedComponents: they come from a second query, not from the host_health row.
+	// Episodes are the host's recorded sensor faults that needed a person (issue #778): the newest still open, then the most recently
+	// resolved, each half bounded. db:"-" for the same reason as DerivedComponents: they come from a second query, not the host_health row.
 	//
 	// Deliberately NOT folded into OverallStatus. The rollup answers "is this host healthy now", which is level state, and while a fault
 	// is live the component that reports it is already unhealthy, so the rollup already says so. Folding open episodes in would add
