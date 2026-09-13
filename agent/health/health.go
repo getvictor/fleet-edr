@@ -109,7 +109,7 @@ type providerHealth struct {
 
 // Registry is the agent's concurrency-safe health state. Each monitored component is registered once at startup (seeding
 // unhealthy/never_connected) and then driven by the receiver loops' connect/disconnect transitions. The poster reads Snapshot(); a
-// buffered Changed() channel pulses on any status transition so the poster can report promptly rather than waiting for its periodic tick.
+// buffered Changed() channel pulses on any change of status or reason so the poster can report promptly rather than waiting for its periodic tick.
 type Registry struct {
 	mu    sync.Mutex
 	comps map[string]*componentState
@@ -440,7 +440,7 @@ func providerDisplayName(name string) string {
 	}
 }
 
-// Changed returns a channel that receives a value after any status transition. It is buffered with capacity one and sent non-blocking,
+// Changed returns a channel that receives a value after any change of a component's status or reason. It is buffered with capacity one and sent non-blocking,
 // so a burst of transitions coalesces into a single pending wake-up (the poster debounces further).
 func (r *Registry) Changed() <-chan struct{} { return r.changed }
 
