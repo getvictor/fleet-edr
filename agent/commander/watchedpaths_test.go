@@ -118,7 +118,7 @@ func TestSetWatchedPathsPayload_JSONRoundTrip(t *testing.T) {
 		}), 0, 8).Draw(t, "entries")
 		paths, err := json.Marshal(entries)
 		require.NoError(t, err)
-		want := setWatchedPathsPayload{Version: rapid.Int64().Draw(t, "version"), Paths: paths}
+		want := setWatchedPathsPayload{Version: rapid.Int64().Draw(t, "version"), Epoch: rapid.Int64().Draw(t, "epoch"), Paths: paths}
 
 		b, err := json.Marshal(want)
 		require.NoError(t, err)

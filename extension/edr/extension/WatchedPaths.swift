@@ -117,8 +117,9 @@ enum WatchedPaths {
         }
     }
 
-    /// maxPathBytes is the macOS PATH_MAX, the server's MaxWatchedPathBytes.
-    private static let maxPathBytes = 1024
+    /// maxPathBytes is the longest path es_mute_path can take: PATH_MAX (1024) counts the terminating NUL of the C string. The server's
+    /// MaxWatchedPathBytes.
+    private static let maxPathBytes = 1023
     /// firstPrintable and deleteCharacter bound the control characters a path may not carry.
     private static let firstPrintable: UInt32 = 0x20
     private static let deleteCharacter: UInt32 = 0x7f

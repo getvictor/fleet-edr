@@ -29,7 +29,8 @@ let server = XPCEventServer(
         // delivered out of order would otherwise put back; either way the active and persisted sets stay as they were.
         guard let update = watchedPathStore.accept(data) else {
             let current = watchedPathStore.current
-            let skip = "watched_paths.update not applied: undecodable or not newer than " +
+            // The store logs a persist failure itself; this line covers every refusal, so it names none of them.
+            let skip = "watched_paths.update not accepted; the set in force is " +
                 "version=\(current?.version ?? 0) epoch=\(current?.epoch ?? 0)"
             watchedPathsLogger.info("\(skip, privacy: .public)")
             return

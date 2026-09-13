@@ -81,8 +81,8 @@ final class WatchedPathsTests: XCTestCase {
             RefusedEntry(path: "/etc/ho\nsts", match: .literal, why: "control character"),
             RefusedEntry(path: "/Users/\u{0}ignored/", match: .prefix, why: "NUL, which truncates to a top-level prefix at the kernel"),
             RefusedEntry(path: "/etc/hosts\u{7f}", match: .literal, why: "delete character"),
-            RefusedEntry(path: "/" + String(repeating: "a", count: 1024), match: .literal, why: "longer than PATH_MAX"),
-            RefusedEntry(path: "/etc/" + String(repeating: "a", count: 1024 - "/etc/".count), match: .literal,
+            RefusedEntry(path: "/" + String(repeating: "a", count: 1023), match: .literal, why: "no room for the C string's NUL in PATH_MAX"),
+            RefusedEntry(path: "/etc/" + String(repeating: "a", count: 1023 - "/etc/".count), match: .literal,
                          why: "fits as written but not in the /private spelling the kernel reports"),
             RefusedEntry(path: "/Library/StartupItems/", match: .literal, why: "literal ending in a slash"),
             RefusedEntry(path: "/Library/StartupItems", match: .prefix, why: "prefix without a trailing slash"),
@@ -103,7 +103,7 @@ final class WatchedPathsTests: XCTestCase {
             ("/private/var/root/.ssh/", .prefix),
             ("/Users/Shared/canary.docx", .literal),
             ("/etc/sudoers", .literal),
-            ("/Library/" + String(repeating: "a", count: 1024 - "/Library/".count), .literal)
+            ("/Library/" + String(repeating: "a", count: 1023 - "/Library/".count), .literal)
         ]
         for (path, match) in accepted {
             XCTAssertTrue(WatchedPaths.isAcceptable(path, match), path)
