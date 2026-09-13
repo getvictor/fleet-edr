@@ -1,6 +1,6 @@
 # MDM deployment (vendor-neutral)
 
-Fleet EDR ships through any MDM that can deliver a `.pkg` + two `.mobileconfig` profiles + a one-line install script: Jamf Pro, Kandji, Intune, mosyle, Fleet, or any equivalent platform.
+Fleet EDR ships through any MDM that can deliver a `.pkg` + three `.mobileconfig` profiles + a one-line install script: Jamf Pro, Kandji, Intune, mosyle, Fleet, or any equivalent platform.
 
 For the Fleet-specific recipe see [fleet-deployment.md](fleet-deployment.md). For single-Mac eval without an MDM see [install-agent-manual.md](install-agent-manual.md).
 
@@ -8,7 +8,7 @@ For the Fleet-specific recipe see [fleet-deployment.md](fleet-deployment.md). Fo
 
 Three artifacts, delivered in this order:
 
-1. **Two unsigned `.mobileconfig` profiles** pushed via MDM "custom settings". Pre-approves the Endpoint Security and Network system extensions and grants Full Disk Access. These must arrive BEFORE the pkg so the extensions activate silently on install. The profiles ship unsigned on purpose: every supported MDM signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright.
+1. **Three unsigned `.mobileconfig` profiles** pushed via MDM "custom settings". They pre-approve the Endpoint Security and Network system extensions, grant Full Disk Access, and keep users from turning off the agent's background items. These must arrive BEFORE the pkg so the extensions activate silently on install. The profiles ship unsigned on purpose: every supported MDM signs profiles itself at delivery time, and Fleet rejects a pre-signed upload outright.
 2. **An install script** your MDM runs before the pkg installer. It writes `/etc/fleet-edr.conf` with the enroll secret + server URL.
 3. **The signed `.pkg`** pushed via MDM "software installer".
 
@@ -16,31 +16,33 @@ Each MDM names these three primitives differently; the mapping is in the vendor-
 
 ## Why this shape
 
-Restricted Apple payload types (`com.apple.system-extension-policy`, `com.apple.TCC.configuration-profile-policy`) require delivery by an MDM the Mac has user-approved. Any other delivery path (web download, `profiles install`) is rejected on modern macOS. That's why the two profiles MUST come from your MDM; there's no workaround.
+Restricted Apple payload types (`com.apple.system-extension-policy`, `com.apple.TCC.configuration-profile-policy`, `com.apple.servicemanagement`) require delivery by an MDM the Mac has user-approved. Any other delivery path (web download, `profiles install`) is rejected on modern macOS. That's why the profiles MUST come from your MDM; there's no workaround.
 
 The install script is the clean hand-off for the enroll secret. Your MDM knows the secret (you configured it as an MDM variable); the pkg itself is customer-agnostic so it can ship from our Releases page unmodified. The script bridges the gap by dropping the secret into `/etc/fleet-edr.conf` on each Mac.
 
 ## Artifacts
 
-All three files live on the [GitHub Release page](https://github.com/getvictor/fleet-edr/releases) for each version:
+These files live on the [GitHub Release page](https://github.com/getvictor/fleet-edr/releases) for each version:
 
 | Artifact                 | Filename on Release                 | Notes                                                  |
 | ------------------------ | ----------------------------------- | ------------------------------------------------------ |
 | Pkg installer            | `fleet-edr-<version>.pkg`           | Signed with Developer ID Installer, notarized, stapled |
 | System-extension profile | `edr-system-extension.mobileconfig` | Unsigned XML; your MDM signs it at delivery            |
 | TCC FDA profile          | `edr-tcc-fda.mobileconfig`          | Unsigned XML; your MDM signs it at delivery            |
+| Background items profile | `edr-login-items.mobileconfig`      | Unsigned XML; your MDM signs it at delivery            |
 | Checksums                | `SHA256SUMS`                        | Verify downloads before uploading to your MDM          |
 
-Download all four, verify checksums, then upload the three artifacts into your MDM.
+Download all five, verify checksums, then upload the four artifacts into your MDM.
 
 ```sh
 cd ~/Downloads
 curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.5.1/fleet-edr-v0.5.1.pkg
 curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.5.1/edr-system-extension.mobileconfig
 curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.5.1/edr-tcc-fda.mobileconfig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.5.1/edr-login-items.mobileconfig
 curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.5.1/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
-# All three artifacts should print "OK".
+# All four artifacts should print "OK".
 ```
 
 ## Step 1: push the system-extension profile
@@ -53,9 +55,10 @@ Verify on a target Mac:
 
 ```sh
 profiles list | grep fleetdm
-# Expect two profiles once both are pushed:
+# Expect three profiles once all are pushed:
 #   com.fleetdm.edr.profile.system-extension
 #   com.fleetdm.edr.profile.tcc-fda
+#   com.fleetdm.edr.profile.login-items
 ```
 
 ## Step 2: push the TCC FDA profile
@@ -72,7 +75,15 @@ sudo tail -n 50 /var/log/fleet-edr-agent.log | grep -E 'ES|receiver'
 # Expect: receiver connected ... (FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc)
 ```
 
-## Step 3: install script
+## Step 3: push the background items profile
+
+Upload `edr-login-items.mobileconfig` the same way. It needs macOS 13 or later.
+
+What the profile does: a `com.apple.servicemanagement` payload with one rule matching team ID `FDG8Q7N4CC` marks every background item the team signs as managed: the agent daemon (`com.fleetdm.edr.agent`) and the activation LaunchAgent (`com.fleetdm.edr.activate`). Without it, a user can turn either off in **System Settings > General > Login Items & Extensions**, which stops the agent or the re-activation after an upgrade, and macOS shows a "Background Items Added" notification when the pkg installs. With it, both show as managed, cannot be turned off, and install without the notification.
+
+Verify after the pkg installs: in **System Settings > General > Login Items & Extensions**, the Fleet EDR items show as managed by your organization, with no switch to turn them off.
+
+## Step 4: install script
 
 Your MDM must run this script BEFORE the pkg installer. It writes the enroll secret + server URL into `/etc/fleet-edr.conf`. The pkg's postinstall starts the agent, which reads that file and enrolls.
 
@@ -100,7 +111,7 @@ EOF
 
 `$EDR_ENROLL_SECRET` is the value from your server's `./secrets/enroll_secret`. Store it as an MDM secret variable; don't inline it in the script in your MDM repo.
 
-## Step 4: push the pkg
+## Step 5: push the pkg
 
 Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope to the same Macs. The release tag is part of the filename verbatim (e.g., tag `v0.5.1` ships as `fleet-edr-v0.5.1.pkg`).
 
@@ -143,7 +154,7 @@ Pick any host and view its process tree; executions from that Mac appear within 
 
 Push the newer `.pkg` via your MDM. Same scope. The agent's preinstall stops the old daemon, postinstall starts the new one, and the persisted token at `/var/db/fleet-edr/enrolled.plist` survives so enrollments don't churn.
 
-If a new version changes the two profiles (rare), push the new ones first, then the new pkg. Profile changes are live immediately; pkg changes require the upgrade cycle.
+If a new version changes the profiles (rare), push the new ones first, then the new pkg. Profile changes are live immediately; pkg changes require the upgrade cycle.
 
 ## Uninstall via MDM
 
@@ -168,7 +179,7 @@ For an unmanaged Mac (no profile), the script removes the extensions itself by s
 ### Jamf Pro
 
 - Pkg upload: **Settings > Computer Management > Packages**. Upload, then assign via a **Policy** with the **Packages** payload.
-- Profiles: **Configuration Profiles**, upload both `.mobileconfig` files. Scope to the same Smart Group as the policy.
+- Profiles: **Configuration Profiles**, upload all three `.mobileconfig` files. Scope to the same Smart Group as the policy.
 - Install script: in the same policy, add a **Scripts** payload that runs BEFORE the package. Priority: **Before**.
 
 ### Kandji
@@ -186,7 +197,7 @@ For an unmanaged Mac (no profile), the script removes the extensions itself by s
 ### mosyle
 
 - Pkg upload: **Management > Applications > Applications Catalog > Add Enterprise Application**. Upload the `.pkg`.
-- Profiles: **Management > Profiles > Custom Profiles**. Upload both `.mobileconfig` files and assign to the same device group.
+- Profiles: **Management > Profiles > Custom Profiles**. Upload all three `.mobileconfig` files and assign to the same device group.
 - Install script: **Management > Commands > Scripts**. Schedule to run before the enterprise app install.
 
 ### Fleet MDM

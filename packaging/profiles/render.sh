@@ -1,8 +1,8 @@
 #!/bin/sh
 # Substitute __TEAM_ID__ in each .mobileconfig.tmpl and lint the result.
 #
-# The rendered profiles ship UNSIGNED on purpose. The system-extension and TCC
-# payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji,
+# The rendered profiles ship UNSIGNED on purpose. The system-extension, TCC and
+# managed login items payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji,
 # Intune, mosyle) signs profiles itself at delivery time, and Fleet rejects a
 # pre-signed upload outright. Download authenticity is covered by the cosign
 # signatures the release workflow attaches to every artifact, not by a CMS
@@ -13,6 +13,7 @@
 # Outputs:
 #   dist/edr-system-extension.mobileconfig
 #   dist/edr-tcc-fda.mobileconfig
+#   dist/edr-login-items.mobileconfig
 #
 # Required env:
 #   APPLE_TEAM_ID    bake into the template
@@ -36,7 +37,7 @@ DIST="$ROOT/dist"
 TEMPLATES="$ROOT/packaging/profiles"
 mkdir -p "$DIST"
 
-for tmpl in edr-system-extension edr-tcc-fda; do
+for tmpl in edr-system-extension edr-tcc-fda edr-login-items; do
     SRC="$TEMPLATES/$tmpl.mobileconfig.tmpl"
     OUT="$DIST/$tmpl.mobileconfig"
 
@@ -48,5 +49,19 @@ for tmpl in edr-system-extension edr-tcc-fda; do
     sed "s/__TEAM_ID__/$escaped_team_id/g" "$SRC" > "$OUT"
     plutil -lint "$OUT"
 done
+
+# spec:release-packaging/mobile-configuration-profiles-ship-alongside-the-package/the-background-items-profile-manages-the-team-s-items
+#
+# The background items profile manages items by ONE TeamIdentifier rule for the team. plutil -lint accepts a profile whose rule
+# names another type or team, and that profile would install and manage nothing, so the rule is read back from the rendered file.
+LOGIN_ITEMS="$DIST/edr-login-items.mobileconfig"
+rule_type=$(plutil -extract PayloadContent.0.Rules.0.RuleType raw -o - "$LOGIN_ITEMS")
+rule_value=$(plutil -extract PayloadContent.0.Rules.0.RuleValue raw -o - "$LOGIN_ITEMS")
+rule_count=$(plutil -extract PayloadContent.0.Rules raw -o - "$LOGIN_ITEMS")
+if [ "$rule_type" != "TeamIdentifier" ] || [ "$rule_value" != "$APPLE_TEAM_ID" ] || [ "$rule_count" != "1" ]; then
+    echo "error: $LOGIN_ITEMS must carry exactly one TeamIdentifier rule for $APPLE_TEAM_ID;" \
+        "got $rule_count rule(s), first $rule_type $rule_value" >&2
+    exit 1
+fi
 
 ls -la "$DIST"/*.mobileconfig
