@@ -2,7 +2,7 @@
 
 ### Requirement: SSO sign-in maps IdP groups to a role
 
-When the stored OIDC configuration names a groups claim, every successful OIDC sign-in SHALL set the operator's single deployment-wide role from the groups that claim lists in the verified ID token. The role SHALL be the most privileged role the configured mapping gives any listed group, ranked `super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor` from most to least privileged, and the configured default role when no listed group is mapped, including when the token carries no such claim. A group SHALL match a mapping only by its exact name. The claim SHALL be read as a JSON array of group names or as a single group name. This SHALL apply at every sign-in, to a newly provisioned account, an existing one, and an adopted pre-provisioned one, and SHALL replace a role an administrator set by hand, so the identity provider remains the source of truth. A change SHALL be recorded as a role binding audit row (`authz.role_binding.update`, or `authz.role_binding.create` when the user held no role) attributed to the system principal, carrying the previous and new role, `source` `oidc.groups`, and the mapped groups that matched. Two users SHALL keep their role: one who holds `super_admin`, which no mapping can grant; and the last active admin, when the mapped role would leave the deployment without one, in which case the sign-in SHALL still succeed. When no groups claim is configured, sign-in SHALL NOT change an existing user's role.
+When the stored OIDC configuration names a groups claim, every successful OIDC sign-in SHALL set the operator's single deployment-wide role from the groups that claim lists in the verified ID token. The role SHALL be the most privileged role the configured mapping gives any listed group, ranked `super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor` from most to least privileged, and the configured default role when no listed group is mapped, including when the token carries no such claim. A group SHALL match a mapping only by its exact name. The claim SHALL be read as a JSON array of group names or as a single group name. This SHALL apply at every sign-in, to a newly provisioned account, an existing one, and an adopted pre-provisioned one, and SHALL replace a role an administrator set by hand, so the identity provider remains the source of truth. A change SHALL be recorded as a role binding audit row (`authz.role_binding.update`, or `authz.role_binding.create` when the user held no role) attributed to the system principal, carrying the previous and new role, `source` `oidc.groups`, and the mapped groups that matched. Three users SHALL keep their role: one who holds `super_admin`, which no mapping can grant; one whose account is not active; and the last active admin, when the mapped role would leave the deployment without one, in which case the sign-in SHALL still succeed. Whether a user holds `super_admin` or is active SHALL be decided together with the role change, so a grant or status change committed at the same moment is not overwritten. When no groups claim is configured, sign-in SHALL NOT change an existing user's role.
 
 #### Scenario: Joining a mapped admin group makes the operator an admin
 
@@ -34,6 +34,12 @@ When the stored OIDC configuration names a groups claim, every successful OIDC s
 - **GIVEN** group to role mapping is configured and an SSO operator who holds `super_admin`
 - **WHEN** the operator signs in with an ID token whose groups map to `analyst`
 - **THEN** the operator still holds `super_admin` and no role binding audit row is recorded
+
+#### Scenario: A disabled operator's role is not changed
+
+- **GIVEN** group to role mapping is configured and an SSO operator who holds `analyst` and whose account is disabled
+- **WHEN** an OIDC sign-in for that operator carries a group mapped to `admin`
+- **THEN** the operator still holds `analyst` and no role binding audit row is recorded
 
 #### Scenario: The last active admin keeps their role and still signs in
 

@@ -3,6 +3,7 @@ package tests
 import (
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -171,17 +172,30 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 	assert.Contains(t, getW.Body.String(),
 		`"groups_claim":"groups","group_roles":[{"group":"edr-senior","role":"senior_analyst"},{"group":"edr-admins","role":"admin"}]`)
 
-	// An update that turns the mapping off stores no mappings, and the read returns an empty list.
-	delete(body, "groups_claim")
-	delete(body, "group_roles")
+	put := func(t *testing.T, body map[string]any) string {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(raw)))
+		mux.ServeHTTP(w, adminActorCtx(req, uid))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		return w.Body.String()
+	}
 	delete(body, "client_secret")
-	raw, err = json.Marshal(body)
-	require.NoError(t, err)
-	offW := httptest.NewRecorder()
-	offReq := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(raw)))
-	mux.ServeHTTP(offW, adminActorCtx(offReq, uid))
-	require.Equal(t, http.StatusOK, offW.Code, "body: %s", offW.Body.String())
-	assert.Contains(t, offW.Body.String(), `"groups_claim":"","group_roles":[]`)
+
+	// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/an-update-without-the-mapping-keeps-it
+	withoutMapping := maps.Clone(body)
+	delete(withoutMapping, "groups_claim")
+	delete(withoutMapping, "group_roles")
+	withoutMapping["default_role"] = "analyst"
+	assert.Contains(t, put(t, withoutMapping), `"groups_claim":"groups","group_roles":[{"group":"edr-senior"`,
+		"an update that carries no mapping keeps the stored one")
+
+	// An empty claim with no mappings turns the mapping off: none are stored, and the read returns an empty list.
+	body["groups_claim"] = ""
+	body["group_roles"] = []map[string]string{}
+	assert.Contains(t, put(t, body), `"groups_claim":"","group_roles":[]`)
 	var stored []byte
 	require.NoError(t, db.GetContext(t.Context(), &stored, `SELECT group_roles FROM oidc_config WHERE id = 1`))
 	assert.Nil(t, stored, "no mappings are stored as NULL")

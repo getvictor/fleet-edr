@@ -114,7 +114,7 @@ export function SSOSettings() {
   }
 
   async function handleSave() {
-    if (!form || !config) return;
+    if (!form) return;
     const invalid = validate(form);
     if (invalid) {
       setSaveError(invalid);
@@ -138,10 +138,8 @@ export function SSOSettings() {
         // an admin disable JIT and pre-provision operators is not built yet, so there is no UI to turn this off.
         jit_enabled: true,
         default_role: form.defaultRole,
-        // The update replaces the whole configuration, and this page does not edit the group mapping, so it sends back what is
-        // stored rather than clearing a mapping saved through the API.
-        groups_claim: config.groups_claim,
-        group_roles: config.group_roles,
+        // No groups_claim or group_roles: this page does not edit the group mapping, and an update without them keeps the stored one,
+        // including a mapping saved through the API after this page loaded.
       });
       setConfig(updated);
       setForm(toForm(updated));

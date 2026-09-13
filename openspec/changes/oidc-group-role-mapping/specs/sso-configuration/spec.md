@@ -2,7 +2,7 @@
 
 ### Requirement: Admin API reads and updates the OIDC configuration behind the chokepoint
 
-The system SHALL expose operator API endpoints to read and update the stored OIDC configuration. Both endpoints MUST sit behind the operator-session middleware and funnel through the authorization chokepoint on the `sso.manage` action; a caller lacking that grant SHALL receive `403 Forbidden` with the chokepoint's machine-readable reason. The update endpoint MUST enforce the CSRF check required for state-changing methods, MUST validate the submitted configuration (issuer is a syntactically valid URL; when JIT is enabled a default role is present and names a seeded role; the default role is restricted to `analyst` or `auditor`; a groups claim, when present, is at most 255 characters and comes with at least one group mapping, and group mappings come only with a groups claim; each group mapping names a group of at most 255 characters that no other mapping names, and a role among `analyst`, `senior_analyst`, `auditor` and `admin`, never `super_admin`), and MUST reject an invalid submission without persisting it. The read endpoint SHALL return the groups claim and the group mappings in the order they were saved, and an update SHALL replace both.
+The system SHALL expose operator API endpoints to read and update the stored OIDC configuration. Both endpoints MUST sit behind the operator-session middleware and funnel through the authorization chokepoint on the `sso.manage` action; a caller lacking that grant SHALL receive `403 Forbidden` with the chokepoint's machine-readable reason. The update endpoint MUST enforce the CSRF check required for state-changing methods, MUST validate the submitted configuration (issuer is a syntactically valid URL; when JIT is enabled a default role is present and names a seeded role; the default role is restricted to `analyst` or `auditor`; a groups claim, when present, is at most 255 characters and comes with at least one group mapping, and group mappings come only with a groups claim; each group mapping names a group of at most 255 characters that no other mapping names, and a role among `analyst`, `senior_analyst`, `auditor` and `admin`, never `super_admin`), and MUST reject an invalid submission without persisting it. The read endpoint SHALL return the groups claim and the group mappings in the order they were saved. An update that carries either field SHALL replace both, and an update that carries neither SHALL keep the stored claim and mappings, so a client that does not edit them cannot clear a mapping another client saved.
 
 #### Scenario: Unauthorized caller cannot read or update
 
@@ -21,6 +21,12 @@ The system SHALL expose operator API endpoints to read and update the stored OID
 - **GIVEN** an admin holding `sso.manage`
 - **WHEN** the admin submits an update with the groups claim `groups` and a mapping of `edr-root` to `super_admin`
 - **THEN** the server rejects the update without persisting it and returns a validation error
+
+#### Scenario: An update without the mapping keeps it
+
+- **GIVEN** a stored configuration with the groups claim `groups` and a mapping of `edr-admins` to `admin`
+- **WHEN** an admin saves an update that changes the default role and carries neither the groups claim nor the group mappings
+- **THEN** the stored groups claim and mapping are unchanged
 
 #### Scenario: Group mappings are saved and read back
 

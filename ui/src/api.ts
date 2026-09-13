@@ -1032,8 +1032,9 @@ export interface SSOConfigUpdate {
   scopes: string[];
   jit_enabled: boolean;
   default_role: string;
-  groups_claim: string;
-  group_roles: SSOGroupRole[];
+  // groups_claim and group_roles are sent together to replace the group mapping, or both omitted to keep the stored one.
+  groups_claim?: string;
+  group_roles?: SSOGroupRole[];
 }
 
 export async function getSSOConfig(): Promise<SSOConfig> {

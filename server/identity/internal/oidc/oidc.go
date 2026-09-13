@@ -115,10 +115,11 @@ func (c *Client) AuthURL(state, nonce, codeChallenge string) string {
 	)
 }
 
-// Claims is the per-flow subset of ID-token claims the JIT provisioner reads. Subject is the stable per-user identifier (always
-// present per OIDC spec). Email is best-effort; some IdPs require an extra scope. EmailVerified mirrors the IdP's email_verified claim
-// it is true when the IdP attests the address is owned by the subject, false when the IdP says it is not, nil when the IdP omitted
-// the claim entirely. Name is whatever the IdP populates as preferred display (preferred_username falls through to name when present).
+// Claims is the verified ID token's claims as the provisioner reads them: the named fields it always uses, and Raw, every claim.
+// Subject is the stable per-user identifier (always present per OIDC spec). Email is best-effort; some IdPs require an extra scope.
+// EmailVerified mirrors the IdP's email_verified claim it is true when the IdP attests the address is owned by the subject, false when
+// the IdP says it is not, nil when the IdP omitted the claim entirely. Name is whatever the IdP populates as preferred display
+// (preferred_username falls through to name when present).
 type Claims struct {
 	Subject       string
 	Email         string

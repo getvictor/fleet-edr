@@ -233,3 +233,65 @@ func insertBinding(t *testing.T, db *sqlx.DB, b bindingFixture) {
 		b.UserID, b.RoleID, b.ScopeType, b.ScopeID, b.ExpiresAt)
 	require.NoError(t, err, "insert binding role=%s for user=%d", b.RoleID, b.UserID)
 }
+
+// SyncUserRole replaces an active user's global role, and leaves alone a user who already holds exactly that role, one who holds
+// super_admin, and one who is not active, reporting whether it changed anything.
+func TestSyncUserRole(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		status      string
+		roles       []string
+		wantChanged bool
+		wantRoles   []string
+	}{
+		{name: "an analyst is set to senior analyst", status: "active", roles: []string{"analyst"}, wantChanged: true,
+			wantRoles: []string{"senior_analyst"}},
+		{name: "two legacy bindings collapse to one", status: "active", roles: []string{"analyst", "auditor"}, wantChanged: true,
+			wantRoles: []string{"senior_analyst"}},
+		{name: "a user with no role is bound", status: "active", wantChanged: true, wantRoles: []string{"senior_analyst"}},
+		{name: "a user already holding the role is left alone", status: "active", roles: []string{"senior_analyst"},
+			wantRoles: []string{"senior_analyst"}},
+		{name: "a super admin is left alone", status: "active", roles: []string{"super_admin"}, wantRoles: []string{"super_admin"}},
+		{name: "a disabled user is left alone", status: "disabled", roles: []string{"analyst"}, wantRoles: []string{"analyst"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := openSchema(t)
+			ctx := t.Context()
+			// Another active admin, so no case trips the last-admin guard.
+			admin := insertUser(t, db, "admin@example.com")
+			insertBinding(t, db, bindingFixture{UserID: admin, RoleID: "admin", ScopeType: "global", ScopeID: "*"})
+			uid := insertUser(t, db, "target@example.com")
+			_, err := db.ExecContext(ctx, `UPDATE users SET status = ? WHERE id = ?`, tc.status, uid)
+			require.NoError(t, err)
+			for _, role := range tc.roles {
+				insertBinding(t, db, bindingFixture{UserID: uid, RoleID: role, ScopeType: "global", ScopeID: "*"})
+			}
+			store := rbac.New(db)
+
+			previous, changed, err := store.SyncUserRole(ctx, uid, "senior_analyst")
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantChanged, changed)
+			assert.ElementsMatch(t, tc.roles, previous)
+			got, err := store.LiveGlobalRoles(ctx, uid)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantRoles, got)
+		})
+	}
+
+	t.Run("the last active admin is refused and keeps the role", func(t *testing.T) {
+		t.Parallel()
+		db := openSchema(t)
+		uid := insertUser(t, db, "only-admin@example.com")
+		insertBinding(t, db, bindingFixture{UserID: uid, RoleID: "admin", ScopeType: "global", ScopeID: "*"})
+		store := rbac.New(db)
+		_, changed, err := store.SyncUserRole(t.Context(), uid, "analyst")
+		require.ErrorIs(t, err, api.ErrLastAdmin)
+		assert.False(t, changed)
+		got, err := store.LiveGlobalRoles(t.Context(), uid)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"admin"}, got)
+	})
+}

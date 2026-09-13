@@ -101,19 +101,22 @@ func TestProvisionOrFind_GroupMappedToAdminPromotesAtSignIn(t *testing.T) {
 // spec:server-identity-authentication/sso-sign-in-maps-idp-groups-to-a-role/leaving-the-group-returns-the-operator-to-the-default-role
 func TestProvisionOrFind_LeavingTheGroupReturnsToTheDefaultRole(t *testing.T) {
 	t.Parallel()
-	cases := map[string]*oidc.Claims{
-		"the claim lists no mapped group": withGroups("bob", "engineering"),
-		"the claim is empty":              withGroups("bob"),
-		"the token has no groups claim":   {Subject: "bob", Email: "bob@example.com"},
+	cases := []struct {
+		name   string
+		claims *oidc.Claims
+	}{
+		{"the claim lists no mapped group", withGroups("bob", "engineering")},
+		{"the claim is empty", withGroups("bob")},
+		{"the token has no groups claim", &oidc.Claims{Subject: "bob", Email: "bob@example.com"}},
 	}
-	for name, claims := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			g := newGroupsDB(t)
 			g.ssoUser(t, "other-admin", "admin")
 			uid := g.ssoUser(t, "bob", "admin")
 
-			_, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), claims)
+			_, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), tc.claims)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"analyst"}, g.roles(t, uid))
 			require.Len(t, g.rec.events, 1)
@@ -188,6 +191,20 @@ func TestProvisionOrFind_WithoutAGroupsClaimTheRoleIsLeftAlone(t *testing.T) {
 	_, _, err := g.provisioner(noClaim).ProvisionOrFind(t.Context(), withGroups("grace", "edr-admins"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"senior_analyst"}, g.roles(t, uid))
+	assert.Empty(t, g.rec.events)
+}
+
+// spec:server-identity-authentication/sso-sign-in-maps-idp-groups-to-a-role/a-disabled-operator-s-role-is-not-changed
+func TestProvisionOrFind_ADisabledOperatorsRoleIsNotChanged(t *testing.T) {
+	t.Parallel()
+	g := newGroupsDB(t)
+	uid := g.ssoUser(t, "ivan", "analyst")
+	_, err := g.db.ExecContext(t.Context(), `UPDATE users SET status = 'disabled' WHERE id = ?`, uid)
+	require.NoError(t, err)
+
+	_, _, err = g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("ivan", "edr-admins"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"analyst"}, g.roles(t, uid))
 	assert.Empty(t, g.rec.events)
 }
 

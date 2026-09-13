@@ -381,8 +381,10 @@ func TestNewOIDCJITPolicyFn(t *testing.T) {
 		secret := "shh"
 		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 			Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: &secret, JITEnabled: true, DefaultRole: "auditor",
-			GroupsClaim: "groups",
-			GroupRoles:  []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
+			GroupMapping: &ssoconfig.GroupMapping{
+				Claim: "groups",
+				Roles: []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
+			},
 		}))
 		fn := newOIDCJITPolicyFn(store)
 		policy, err := fn(ctx)

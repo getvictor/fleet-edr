@@ -22,12 +22,10 @@ import (
 // same email) wins the insert, and the loser sees this code.
 const mysqlErrDupEntry = 1062
 
-// DefaultJITRole is the role JIT-provisioned OIDC users are bound to. The lowest-privilege role available, so a freshly-provisioned
-// operator can read but cannot mutate. An admin promotes them later via the wave-2 admin surface.
+// DefaultJITRole is the default role when the stored configuration names none: the role a JIT-provisioned OIDC user is bound to when
+// no group mapping applies. The lowest-privilege role available, so such an operator can read but cannot mutate until an admin
+// promotes them or a mapped group gives them more.
 const DefaultJITRole = "analyst"
-
-// roleSuperAdmin is never mapped from an IdP group, so group mapping leaves a user who holds it alone.
-const roleSuperAdmin = "super_admin"
 
 // Policy is how a sign-in treats an OIDC subject, read from the runtime OIDC configuration on every sign-in.
 type Policy struct {
@@ -72,7 +70,8 @@ var ErrEmailConflict = errors.New("oidc: email already bound to another account"
 // stores it writes to, the audit recorder it logs to, and the
 // allow-JIT flag that gates whether unknown subjects auto-provision.
 //
-// A successful ProvisionOrFind call is one of three shapes:
+// A successful ProvisionOrFind call is one of three shapes. As written they are the shapes with group mapping off; the paragraph after
+// them says what mapping changes.
 //
 //  1. Existing identity: lookup-by-(provider, subject) finds the row;
 //     return the bound user. No DB writes; no audit emission (every
@@ -88,8 +87,9 @@ var ErrEmailConflict = errors.New("oidc: email already bound to another account"
 //     + role_bindings; emits one audit row (action="user.created",
 //     payload.source="oidc.jit").
 //
-// With group mapping on, a JIT account is created in the role its groups map to, and shapes 1 and 2 then set the user's role to that
-// mapped role (see reconcileRole).
+// With group mapping on, shape 3 binds the role the user's groups map to instead of the default role, and shapes 1 and 2 are followed
+// by setting the user's role to that mapped role, which writes a role binding and an audit row when the role changes (see
+// reconcileRole). Shape 2 then no longer keeps the pre-assigned role.
 type Provisioner struct {
 	db          *sqlx.DB
 	users       *users.Store
@@ -148,7 +148,7 @@ func NewProvisioner(
 }
 
 // ProvisionOrFind resolves the OIDC subject to a local user. Four
-// outcomes:
+// outcomes, with group mapping off:
 //
 //   - identity exists -> return its user_id + identity_id.
 //   - identity missing + verified email matches a pre-provisioned stub
@@ -246,18 +246,11 @@ func (p *Provisioner) provisionNew(
 
 // reconcileRole makes role, the one group mapping gives a signed-in user, their single global role, as the admin Users page would, and
 // audits a change with source oidc.groups. The IdP is the source of truth, so a role an admin set by hand is replaced at the next
-// sign-in. Two roles are left alone. super_admin is never mapped from a group, so mapping could only ever take it away. And the last
-// active admin keeps their role rather than leave the deployment with no administrator; the sign-in still succeeds, and a warning is
-// logged.
+// sign-in. rbac.SyncUserRole leaves a super admin, whom no mapping can grant, and a user who is not active as they are, deciding that on
+// the same locked transaction as the write. The last active admin also keeps their role rather than leave the deployment with no
+// administrator; the sign-in still succeeds, and a warning is logged.
 func (p *Provisioner) reconcileRole(ctx context.Context, userID int64, role string, matched []string) error {
-	current, err := p.rbac.LiveGlobalRoles(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("oidc: read roles of user %d: %w", userID, err)
-	}
-	if (len(current) == 1 && current[0] == role) || slices.Contains(current, roleSuperAdmin) {
-		return nil
-	}
-	previous, err := p.rbac.SetUserRole(ctx, userID, role)
+	previous, changed, err := p.rbac.SyncUserRole(ctx, userID, role)
 	if errors.Is(err, api.ErrLastAdmin) {
 		p.logger.WarnContext(ctx, "oidc group mapping left the last active admin's role unchanged",
 			"user_id", userID, "mapped_role", role)
@@ -265,6 +258,9 @@ func (p *Provisioner) reconcileRole(ctx context.Context, userID int64, role stri
 	}
 	if err != nil {
 		return fmt.Errorf("oidc: set role of user %d: %w", userID, err)
+	}
+	if !changed {
+		return nil
 	}
 	action := api.AuditRoleBindingUpdate
 	if len(previous) == 0 {

@@ -35,12 +35,7 @@ const (
 
 // bindableRoles is the set of seeded roles the UI offers and an admin may grant. super_admin is excluded here and handled separately:
 // only a super_admin actor may grant it (the UI never offers it). When custom roles land this becomes a grant-based check.
-var bindableRoles = map[string]bool{
-	"analyst":        true,
-	"senior_analyst": true,
-	"auditor":        true,
-	roleAdmin:        true,
-}
+var bindableRoles = rbac.GrantableRoles
 
 // UsersStore is the users-table surface the handler needs.
 type UsersStore interface {

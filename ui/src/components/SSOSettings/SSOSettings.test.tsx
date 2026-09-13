@@ -61,7 +61,7 @@ describe("SSOSettings", () => {
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
   });
 
-  it("keeps a stored group mapping when saving", async () => {
+  it("leaves the group mapping out of a save, so the stored mapping is kept", async () => {
     const mapped = { ...baseConfig, groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }] };
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(mapped);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(mapped);
@@ -70,7 +70,8 @@ describe("SSOSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
-    expect(upd.mock.calls[0][0]).toMatchObject({ groups_claim: "groups", group_roles: [{ group: "edr-admins", role: "admin" }] });
+    expect(upd.mock.calls[0][0]).not.toHaveProperty("groups_claim");
+    expect(upd.mock.calls[0][0]).not.toHaveProperty("group_roles");
   });
 
   it("includes client_secret on save when a new value is entered (rotate)", async () => {

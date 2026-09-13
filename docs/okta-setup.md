@@ -55,11 +55,11 @@ Without group mapping, every JIT-provisioned user lands in the default role (`an
 
 ## Map Okta groups to EDR roles
 
-With a groups claim and group mappings configured, every sign-in sets the operator's role from their Okta groups: the most privileged role any of their mapped groups gives (admin, then senior analyst, analyst, auditor), or the default role when none of their groups is mapped. Adding someone to the group makes them that role at their next sign-in, and removing them takes it away at their next sign-in. A role set by hand in the Users page is replaced at the next sign-in. A group cannot grant super admin, a super admin's role is never changed, and the last active admin keeps their role. Every change is audited as a role binding update with source `oidc.groups`.
+With a groups claim and group mappings configured, every sign-in sets the operator's role from their Okta groups: the most privileged role any of their mapped groups gives (admin, then senior analyst, analyst, auditor), or the default role when none of their groups is mapped. Adding someone to the group makes them that role at their next sign-in, and removing them takes it away at their next sign-in. A role set by hand in the Users page is replaced at the next sign-in. A group cannot grant super admin, a super admin's role is never changed, and the last active admin keeps their role. Every change is audited as a role binding update (or create, for a user who held no role) with source `oidc.groups`.
 
 1. In Okta, open the EDR app's **Sign On** tab. Under **OpenID Connect ID Token**, set **Groups claim type** to **Filter**, the claim name to `groups`, and a filter matching your EDR groups (for example, **Starts with** `edr-`).
 2. Add `groups` to the requested scopes: Okta's org authorization server includes the claim only when that scope is requested.
-3. Save the claim name and the mappings through the SSO settings API, `PUT /api/settings/sso`, as a user or service account holding `sso.manage`. The request carries the whole configuration: read it with `GET /api/settings/sso` first and send it back with these fields changed (omit `client_secret` to keep the stored one):
+3. Save the claim name and the mappings through the SSO settings API, `PUT /api/settings/sso`, as a user or service account holding `sso.manage`. The request carries the whole configuration: read it with `GET /api/settings/sso` first and send it back with the fields below added or changed (omit `client_secret` to keep the stored one). This fragment shows only those fields:
 
 ```json
 {
@@ -73,7 +73,7 @@ With a groups claim and group mappings configured, every sign-in sets the operat
 }
 ```
 
-Group names match exactly, including case. The claim must be a top-level claim in the ID token holding a list of group names (or a single name). To turn mapping off, send an empty `groups_claim` and no `group_roles`; roles then stay as they are at sign-in.
+Group names match exactly, including case. The claim must be a top-level claim in the ID token holding a list of group names (or a single name). An update that carries neither `groups_claim` nor `group_roles` keeps the stored mapping. To turn mapping off, send an empty `groups_claim` and an empty `group_roles`; roles then stay as they are at sign-in.
 
 ## Note the client credentials
 

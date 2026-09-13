@@ -86,17 +86,24 @@ type row struct {
 }
 
 // UpsertInput is the write shape. NewSecret nil leaves the stored secret unchanged (rotate-only semantics); a non-nil pointer (even to
-// "") rotates it to the sealed new value. UpdatedBy nil records an env-seed (no operator); non-nil records the acting user id.
+// "") rotates it to the sealed new value. GroupMapping nil likewise leaves the stored groups claim and mappings unchanged, so a writer
+// that does not edit them cannot clear them; a non-nil value replaces both. UpdatedBy nil records an env-seed (no operator); non-nil
+// records the acting user id.
 type UpsertInput struct {
-	Issuer      string
-	ClientID    string
-	NewSecret   *string
-	Scopes      []string
-	JITEnabled  bool
-	DefaultRole string
-	GroupsClaim string
-	GroupRoles  []GroupRole
-	UpdatedBy   string
+	Issuer       string
+	ClientID     string
+	NewSecret    *string
+	Scopes       []string
+	JITEnabled   bool
+	DefaultRole  string
+	GroupMapping *GroupMapping
+	UpdatedBy    string
+}
+
+// GroupMapping is the groups claim and the group mappings, written together.
+type GroupMapping struct {
+	Claim string
+	Roles []GroupRole
 }
 
 // Store owns the oidc_config table. It holds the Sealer so secret sealing/opening stays co-located with persistence.
@@ -132,6 +139,16 @@ func (s *Store) fetch(ctx context.Context) (*row, error) {
 		return nil, fmt.Errorf("ssoconfig: fetch: %w", err)
 	}
 	return &r, nil
+}
+
+// encodeGroupRoles is the group_roles column value for pairs: NULL for none ([]byte(nil) is what binds as NULL), otherwise the JSON
+// array. GroupRole holds only strings, so encoding it cannot fail.
+func encodeGroupRoles(pairs []GroupRole) []byte {
+	if len(pairs) == 0 {
+		return nil
+	}
+	encoded, _ := json.Marshal(pairs)
+	return encoded
 }
 
 func toConfig(r *row) (*Config, error) {
@@ -204,14 +221,12 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 	if updatedBy == "" {
 		updatedBy = api.PrincipalSystemID
 	}
-	// No pairs store NULL, and []byte(nil) is what binds as NULL.
+	// Without a mapping the insert (first write) stores none, and the update keeps what is stored: the IF picks the stored column.
+	writeMapping := in.GroupMapping != nil
+	var groupsClaim string
 	var groupRoles []byte
-	if len(in.GroupRoles) > 0 {
-		encoded, err := json.Marshal(in.GroupRoles)
-		if err != nil {
-			return fmt.Errorf("ssoconfig: encode group_roles: %w", err)
-		}
-		groupRoles = encoded
+	if writeMapping {
+		groupsClaim, groupRoles = in.GroupMapping.Claim, encodeGroupRoles(in.GroupMapping.Roles)
 	}
 
 	if in.NewSecret != nil {
@@ -227,9 +242,10 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 			ON DUPLICATE KEY UPDATE
 				issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
 				scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
-				groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
+				groups_claim = IF(?, VALUES(groups_claim), groups_claim), group_roles = IF(?, VALUES(group_roles), group_roles),
 				config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
+			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, groupsClaim, groupRoles, updatedBy,
+			writeMapping, writeMapping)
 		if err != nil {
 			return fmt.Errorf("ssoconfig: upsert with secret: %w", err)
 		}
@@ -245,9 +261,9 @@ func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInpu
 		ON DUPLICATE KEY UPDATE
 			issuer = VALUES(issuer), client_id = VALUES(client_id),
 			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled), default_role = VALUES(default_role),
-			groups_claim = VALUES(groups_claim), group_roles = VALUES(group_roles),
+			groups_claim = IF(?, VALUES(groups_claim), groups_claim), group_roles = IF(?, VALUES(group_roles), group_roles),
 			config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, in.GroupsClaim, groupRoles, updatedBy)
+		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, groupsClaim, groupRoles, updatedBy, writeMapping, writeMapping)
 	if err != nil {
 		return fmt.Errorf("ssoconfig: upsert: %w", err)
 	}

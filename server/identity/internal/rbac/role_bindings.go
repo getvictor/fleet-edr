@@ -267,17 +267,35 @@ func (s *Store) beginGuarded(ctx context.Context) (*sqlx.Tx, error) {
 // admin-tier role returns api.ErrLastAdmin and persists nothing. The caller (useradmin handler) validates roleID and runs the
 // break-glass / self / super_admin guards before calling.
 func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (previous []string, err error) {
+	previous, _, err = s.replaceGlobalRole(ctx, userID, roleID, false)
+	return previous, err
+}
+
+// SyncUserRole makes roleID the single global role of a user, as an SSO sign-in's group mapping does, and reports whether it changed
+// anything. It leaves three users as they are, decided on the same locked transaction as the write so a concurrent grant or status
+// change cannot slip in between: one who already holds exactly roleID, one who holds super_admin (no mapping can grant it, so a sync
+// could only take it away), and one who is not active. Like SetUserRole it returns api.ErrLastAdmin, persisting nothing, when the
+// change would leave no active admin.
+func (s *Store) SyncUserRole(ctx context.Context, userID int64, roleID string) (previous []string, changed bool, err error) {
+	return s.replaceGlobalRole(ctx, userID, roleID, true)
+}
+
+// replaceGlobalRole is SetUserRole and SyncUserRole: with sync, the users SyncUserRole leaves alone are skipped inside the guarded
+// transaction.
+func (s *Store) replaceGlobalRole(
+	ctx context.Context, userID int64, roleID string, sync bool,
+) (previous []string, changed bool, err error) {
 	if s.db == nil {
-		return nil, errNilDB
+		return nil, false, errNilDB
 	}
 	tx, err := s.beginGuarded(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("begin set-role tx: %w", err)
+		return nil, false, fmt.Errorf("begin set-role tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err = lockAdminSentinel(ctx, tx); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err = tx.SelectContext(ctx, &previous, `
 		SELECT role_id FROM role_bindings
@@ -285,28 +303,38 @@ func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (p
 		  AND (expires_at IS NULL OR expires_at > NOW(6))
 		ORDER BY role_id
 	`, userID, globalScope); err != nil {
-		return nil, fmt.Errorf("read previous bindings for user %d: %w", userID, err)
+		return nil, false, fmt.Errorf("read previous bindings for user %d: %w", userID, err)
+	}
+	if sync {
+		var status string
+		if err = tx.GetContext(ctx, &status, `SELECT status FROM users WHERE id = ?`, userID); err != nil {
+			return nil, false, fmt.Errorf("read status of user %d: %w", userID, err)
+		}
+		unchanged := slices.Equal(previous, []string{roleID})
+		if status != userStatusActive || unchanged || slices.Contains(previous, roleSuperAdmin) {
+			return previous, false, nil
+		}
 	}
 	// Guard: demoting an active admin-tier user to a non-admin role must leave at least one other active admin.
 	if isAdminTier(previous) && !isAdminTier([]string{roleID}) {
 		if err = refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `
 		DELETE FROM role_bindings WHERE user_id = ? AND scope_type = ?
 	`, userID, globalScope); err != nil {
-		return nil, fmt.Errorf("clear bindings for user %d: %w", userID, err)
+		return nil, false, fmt.Errorf("clear bindings for user %d: %w", userID, err)
 	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id) VALUES (?, ?, ?, '*')
 	`, userID, roleID, globalScope); err != nil {
-		return nil, fmt.Errorf("bind role %q to user %d: %w", roleID, userID, err)
+		return nil, false, fmt.Errorf("bind role %q to user %d: %w", roleID, userID, err)
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit set-role tx: %w", err)
+		return nil, false, fmt.Errorf("commit set-role tx: %w", err)
 	}
-	return previous, nil
+	return previous, true, nil
 }
 
 // SetUserStatus sets a user's account status. Enabling never threatens the invariant and is a plain update. Disabling is guarded
