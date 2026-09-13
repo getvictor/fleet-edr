@@ -6,6 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Upgrade notes (action required)
 
+- **Alerts are now deleted 180 days after their last triage activity.** Until now nothing deleted alerts. To keep them longer, or indefinitely as before, set `EDR_ALERT_RETENTION_DAYS` (0 keeps them forever) before upgrading: the first hourly run after the upgrade deletes every alert past the cutoff.
 - **Subscribe webhook destinations to sensor health faults.** A host whose sensor cannot be restored no longer raises an alert, so a destination that learned about it through alert deliveries stops hearing about it until you tick **Sensor health fault** for it in Settings, Webhooks.
 
 ### Changed

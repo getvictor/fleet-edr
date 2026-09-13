@@ -101,7 +101,36 @@ func TestLoad(t *testing.T) {
 				assert.Equal(t, "info", c.LogLevel)
 				assert.Equal(t, "json", c.LogFormat)
 				assert.Equal(t, 30, c.EnrollRatePerMin)
+				assert.Equal(t, 30, c.RetentionDays)
+				// The alert window is a STATED default rather than an implicit "forever" (issue #995), and it is the longest tier.
+				assert.Equal(t, 180, c.AlertRetentionDays)
 			},
+		},
+		{
+			// The two retention windows are independent knobs, in both directions. The likely slip is reading the alert window off
+			// EDR_RETENTION_DAYS, which setting one without the other exposes.
+			// spec:server-detection-rules-engine/alerts-expire-on-their-own-window/the-alert-window-is-independent-of-the-process-window
+			name: "the alert retention window is independent of EDR_RETENTION_DAYS",
+			env:  withExtra(minEnv, map[string]string{"EDR_RETENTION_DAYS": "0", "EDR_ALERT_RETENTION_DAYS": "365"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, 0, c.RetentionDays)
+				assert.Equal(t, 365, c.AlertRetentionDays, "disabling process retention must not touch the alert window")
+			},
+		},
+		{
+			name: "EDR_ALERT_RETENTION_DAYS=0 disables the alert prune and leaves the process window alone",
+			env:  withExtra(minEnv, map[string]string{"EDR_ALERT_RETENTION_DAYS": "0"}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, 0, c.AlertRetentionDays)
+				assert.Equal(t, 30, c.RetentionDays)
+			},
+		},
+		{
+			name:    "a negative EDR_ALERT_RETENTION_DAYS is rejected",
+			env:     withExtra(minEnv, map[string]string{"EDR_ALERT_RETENTION_DAYS": "-1"}),
+			wantErr: "EDR_ALERT_RETENTION_DAYS",
 		},
 		{
 			// Removed tuning knobs must be inert: setting them (even to unparseable junk that the old parsers would have

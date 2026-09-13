@@ -65,6 +65,7 @@ type Recorder struct {
 	alertsCreated                   metric.Int64Counter
 	monitorMatches                  metric.Int64Counter
 	processRetentionRowsDeleted     metric.Int64Counter
+	alertRetentionRowsDeleted       metric.Int64Counter
 	queueRowsPruned                 metric.Int64Counter
 	processesReconciled             metric.Int64Counter
 	queueDropped                    metric.Int64Counter
@@ -139,6 +140,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.processes.rows_deleted",
 		metric.WithDescription("Total completed process rows deleted by the retention job since server start."),
+		metric.WithUnit("{row}"),
+	)
+	r.alertRetentionRowsDeleted, _ = meter.Int64Counter(
+		"edr.retention.alerts.rows_deleted",
+		metric.WithDescription("Total alerts deleted by the retention job since server start, past the alert retention window."),
 		metric.WithUnit("{row}"),
 	)
 	r.queueRowsPruned, _ = meter.Int64Counter(
@@ -357,6 +363,14 @@ func (r *Recorder) ProcessRetentionRowsDeleted(ctx context.Context, n int64) {
 		return
 	}
 	r.processRetentionRowsDeleted.Add(ctx, n)
+}
+
+// AlertRetentionRowsDeleted satisfies api.MetricsRecorder. Counts alerts pruned past the alert retention window (issue #995).
+func (r *Recorder) AlertRetentionRowsDeleted(ctx context.Context, n int64) {
+	if r == nil || r.alertRetentionRowsDeleted == nil || n <= 0 {
+		return
+	}
+	r.alertRetentionRowsDeleted.Add(ctx, n)
 }
 
 // QueueRowsPruned satisfies api.MetricsRecorder. Counts acked rows the queue-prune sweep removed from the event work queue, so a

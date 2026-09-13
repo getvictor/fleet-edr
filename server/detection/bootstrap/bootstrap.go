@@ -70,7 +70,9 @@ type Deps struct {
 	StaleProcessTTL      time.Duration
 	StaleProcessInterval time.Duration
 	RetentionDays        int
-	RetentionInterval    time.Duration
+	// AlertRetentionDays is the alert window (issue #995), independent of RetentionDays in both directions. 0 disables the alert prune.
+	AlertRetentionDays int
+	RetentionInterval  time.Duration
 	// QueuePruneInterval is the cadence of the visibility event-queue sweep that removes acked rows (ADR-0015). Zero uses the
 	// pipeline default (1 minute). The ACKED-row sweep is independent of RetentionDays and runs even when age-based retention is
 	// disabled; the same sweep's set-aside half does honour RetentionDays, because a set-aside row is the only record of which
@@ -239,9 +241,10 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 		Logger:   logger,
 	})
 	retention := pipeline.NewRetention(deps.DB, pipeline.RetentionOptions{
-		RetentionDays: deps.RetentionDays,
-		Interval:      deps.RetentionInterval,
-		Logger:        logger,
+		RetentionDays:      deps.RetentionDays,
+		AlertRetentionDays: deps.AlertRetentionDays,
+		Interval:           deps.RetentionInterval,
+		Logger:             logger,
 	})
 	queuePrune := pipeline.NewQueuePrune(deps.EventLog, pipeline.QueuePruneOptions{
 		Interval: deps.QueuePruneInterval,
