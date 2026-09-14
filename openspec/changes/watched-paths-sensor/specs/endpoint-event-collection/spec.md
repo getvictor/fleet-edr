@@ -30,7 +30,7 @@ Note on verification: this scenario pins the event's SHAPE, which is what the ex
 
 The system extension SHALL accept a watched-path set from the server, delivered by the agent, and SHALL make it part of the sensitive target set on the running file-tamper client without a restart. A set is a `version`, an optional `epoch` (the set's server update time in Unix microseconds), and a list of `paths` entries, each an absolute `path` and a `match` of `literal` (exactly that file) or `prefix` (every path starting with it).
 
-The extension SHALL apply a set only when its `version` or its `epoch` is ahead of the last set it accepted, and SHALL otherwise leave the active and persisted sets unchanged. Commands can reach the host out of order, so without this an older set delivered late would replace a newer one; `epoch` keeps ordering sets after a server database restore sends `version` backwards. This is the rule application control uses for its policy snapshots, and the two SHALL keep one rule. Accepting a set that is ahead on either axis keeps ordering when either one fails: `version` across a restore, and `epoch` across a step back in the database clock. Ordering by `epoch` first would be safe for this set, whose update time the server forces later than the one before, but not for an application control policy, whose update time is the row's plain timestamp, so a clock step could give a newer policy an older epoch and have it refused. A command still queued at a restore does not outrank the restored set, because the restore brings the pending commands back with it, so none carries a `version` above the restored one, and the next replacement takes that `version` plus one with a later `epoch`. The rule accepts one narrow exception: a set already on its way to the host when the database is restored, arriving after a set saved since, is ahead on `version` and is applied, and it stays until the next replacement, which is ahead on `epoch`.
+The extension SHALL apply a set only when it is ahead of the last set it accepted, ordered by `epoch` and then by `version`, and SHALL otherwise leave the active and persisted sets unchanged. Commands can reach the host out of order, so without this an older set delivered late would replace a newer one. The server forces each set's `epoch` past the previous one, so `epoch` orders every set it has issued, including across a server database restore that sends `version` backwards and across a step back in the database clock; `version` breaks a tie, which is what orders sets from a server that sends no `epoch`. A set issued before a restore, still on its way to the host when a set is saved since, is therefore older and is not applied, even though its `version` is higher. This is the rule application control uses for its policy snapshots, and the two SHALL keep one rule.
 
 The built-in paths SHALL stay watched whatever set is pushed: a pushed set adds to them and cannot remove them, because the shipped sudoers detections depend on them. An empty pushed set SHALL therefore leave exactly the built-in paths watched.
 
@@ -63,6 +63,12 @@ Note on verification: decoding, the combination with the built-in paths, the mut
 - **WHEN** a set arrives that is behind on both version and epoch, or is the same set again
 - **THEN** the active set and the persisted set are unchanged
 - **AND** a set whose version is behind but whose epoch is ahead, as after a server database restore, is applied
+
+#### Scenario: A pre-restore set is refused
+
+- **GIVEN** the extension has accepted a set saved after a server database restore, whose version is lower than before the restore
+- **WHEN** a set issued before the restore arrives, with a higher version and an earlier epoch
+- **THEN** the active set and the persisted set are unchanged
 
 #### Scenario: A prefix at the top of the filesystem is not watched
 

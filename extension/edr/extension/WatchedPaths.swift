@@ -29,14 +29,16 @@ struct WatchedPathsUpdate: Equatable {
     let paths: [WatchedPath]
     let skipped: Int
 
-    /// supersedes reports whether this update should replace `current`, the last one accepted. It does when either its version or
-    /// its epoch is ahead: version orders sets within one server database, and epoch still moves forward after a restore sends
-    /// version backwards. An update behind on both is a delayed or duplicate delivery, and applying it would put an older set back
-    /// over a newer one. Commands can reach the agent out of order (a poll returns pending commands newest first, and the poll and
-    /// the control stream can overlap), so this is the gate that keeps the newest set in force.
+    /// supersedes reports whether this update should replace `current`, the last one accepted. Sets are ordered by epoch, then by
+    /// version: the server forces each update time past the one before, so epoch orders every set it has issued, and it keeps
+    /// moving forward after a database restore sends version backwards. Version breaks a tie, which is what orders sets from a
+    /// server that sends no epoch. An update that is not ahead is a delayed or duplicate delivery, and applying it would put an
+    /// older set back over a newer one. Commands can reach the agent out of order (a poll returns pending commands newest first,
+    /// and the poll and the control stream can overlap), so this is the gate that keeps the newest set in force. Application
+    /// control orders its snapshots the same way (ApplicationControlStore.apply).
     func supersedes(_ current: WatchedPathsUpdate?) -> Bool {
         guard let current else { return true }
-        return version > current.version || epoch > current.epoch
+        return (epoch, version) > (current.epoch, current.version)
     }
 }
 

@@ -119,7 +119,8 @@ final class WatchedPathsTests: XCTestCase {
     // MARK: supersedes
 
     // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/an-older-set-delivered-late-does-not-replace-a-newer-one
-    func testSupersedesOnlyWhenVersionOrEpochIsAhead() {
+    // spec:endpoint-event-collection/the-watched-path-set-is-pushed-by-the-server/a-pre-restore-set-is-refused
+    func testSupersedesOrdersByEpochThenVersion() {
         func update(_ version: Int64, _ epoch: Int64) -> WatchedPathsUpdate {
             WatchedPathsUpdate(version: version, epoch: epoch, paths: [], skipped: 0)
         }
@@ -129,6 +130,8 @@ final class WatchedPathsTests: XCTestCase {
         XCTAssertFalse(update(3, 30).supersedes(update(3, 30)), "the same set delivered twice")
         // After a server database restore the version goes back, but the next change carries a later epoch.
         XCTAssertTrue(update(1, 40).supersedes(update(3, 30)))
+        // A set that was on its way when the database was restored is ahead on version but behind on epoch: it is older.
+        XCTAssertFalse(update(4, 25).supersedes(update(1, 40)), "a set issued before a restore does not replace one saved since")
         // A server that sends no epoch is ordered by version alone.
         XCTAssertTrue(update(4, 0).supersedes(update(3, 0)))
         XCTAssertFalse(update(3, 0).supersedes(update(4, 0)))

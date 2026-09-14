@@ -33,9 +33,10 @@ type WatchedPath struct {
 // SetWatchedPathsPayload is the payload of a set_watched_paths command. Version is the set's server version, reported back by the
 // agent so an operator can see which set a host took. Epoch is the set's update time in Unix microseconds.
 //
-// The extension applies a set only when its version or its epoch is ahead of the last one it accepted, because commands can reach a
-// host out of order. Epoch is what keeps that ordering true after a database restore sends version backwards: the next change is
-// stamped with a later wall-clock time than anything before the restore, the same reason application control carries policy_epoch.
+// The extension applies a set only when it is ahead of the last one it accepted, ordered by epoch and then version, because
+// commands can reach a host out of order. Epoch is what keeps that ordering true after a database restore sends version backwards:
+// the next change is stamped with a later time than anything before the restore. Application control orders policy_epoch the
+// same way.
 type SetWatchedPathsPayload struct {
 	Version int64         `json:"version"`
 	Epoch   int64         `json:"epoch"`

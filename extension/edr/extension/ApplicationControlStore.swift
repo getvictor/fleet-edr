@@ -253,17 +253,13 @@ final class ApplicationControlStore {
     /// message, gates it for recency, atomically swaps the in-memory state,
     /// and persists the new snapshot to disk.
     ///
-    /// Recency gate (#322): for the same policy_id the snapshot is accepted
-    /// when EITHER policy_version advanced OR policy_epoch advanced, and
-    /// rejected (no-op) only when both are <= the active snapshot's. version
-    /// is monotonic within a single server DB lifetime; epoch (the policy's
-    /// updated_at in microseconds) survives a DB restore that regresses
-    /// version, because the next mutation stamps a fresh wall-clock. Rejecting
-    /// only when both axes are older keeps protection against duplicate and
-    /// out-of-order replays (older on both) while letting a post-restore push
-    /// re-sync (newer epoch). A version regression accepted via the epoch axis
-    /// is the restore signature: it is logged above Info and reported as an
-    /// `application_control_resync` event.
+    /// Recency gate: for the same policy_id the snapshot is accepted only when it is ahead of the active one, ordered by
+    /// policy_epoch and then policy_version. The epoch is the policy's updated_at in microseconds, which the server forces past
+    /// its previous value on every mutation, so it orders every snapshot the server has issued and keeps moving forward after a
+    /// database restore regresses the version (#322). The version breaks a tie, which is what orders snapshots from a server that
+    /// sends no epoch. Anything not ahead is a duplicate or out-of-order replay and is ignored. A version regression accepted
+    /// because the epoch is ahead is the restore signature: it is logged above Info and reported as an
+    /// `application_control_resync` event. The watched-path set is ordered the same way (WatchedPathsUpdate.supersedes).
     func apply(rawJSON data: Data) {
         guard let document = decodeDocument(data) else {
             logger.error("application_control.update missing or malformed; ignoring")
@@ -276,12 +272,11 @@ final class ApplicationControlStore {
         // by value, so currentSnapshot() never observes a half-applied state.
         let prior: ApplicationControlSnapshot? = lock.withLock { current in
             let samePolicy = snapshot.policyID == current.policyID
-            let versionAdvanced = snapshot.policyVersion > current.policyVersion
-            let epochAdvanced = snapshot.policyEpoch > current.policyEpoch
-            // Stale / duplicate / out-of-order: same policy and neither axis advanced. Skip the swap so a replayed older
-            // snapshot can't regress the active ruleset and the disk write doesn't fire for a no-op. A different policy_id
-            // always falls through to acceptance (the host was retargeted to another policy).
-            if samePolicy && !versionAdvanced && !epochAdvanced {
+            let ahead = (snapshot.policyEpoch, snapshot.policyVersion) > (current.policyEpoch, current.policyVersion)
+            // Stale / duplicate / out-of-order: same policy and not ahead. Skip the swap so a replayed older snapshot can't
+            // regress the active ruleset and the disk write doesn't fire for a no-op. A different policy_id always falls
+            // through to acceptance (the host was retargeted to another policy).
+            if samePolicy && !ahead {
                 return nil
             }
             let replaced = current
