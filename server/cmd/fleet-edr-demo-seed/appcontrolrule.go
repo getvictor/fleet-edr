@@ -70,12 +70,14 @@ func upsertRuleAndBumpPolicy(ctx context.Context, db dbExecQuerier, policyID int
 	defer func() { _ = tx.Rollback() }() // no-op once committed
 
 	// enforcement PROTECT because the block event reports an execution that was actually denied; DETECT would mean the binary
-	// ran and was only recorded, which is not what the alert says happened.
+	// ran and was only recorded, which is not what the alert says happened. Restored on a duplicate too: someone may have moved
+	// the demo rule to Detect in the console, and a re-seed that left it there would fabricate a block the rule no longer makes.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO app_control_rules
 			(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, source_ref, custom_msg)
 		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?)
 		ON DUPLICATE KEY UPDATE
+			enforcement = VALUES(enforcement),
 			custom_msg = VALUES(custom_msg),
 			severity   = VALUES(severity),
 			enabled    = VALUES(enabled)`,

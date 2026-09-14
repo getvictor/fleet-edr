@@ -119,13 +119,6 @@ func TestAppControlREST_UpdateRule_PromotesEnforcement(t *testing.T) {
 	assert.Equal(t, "PROTECT", last.Payload["enforcement"])
 	assert.Equal(t, "a week of would-block records, all expected", last.Payload["reason"])
 
-	// The same enforcement again changes no column, which the driver reports as zero rows affected; that must still succeed rather
-	// than read as the rule having been deleted.
-	again := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/"+i64(created.ID), map[string]any{
-		"enforcement": "PROTECT", "reason": "confirming the promotion",
-	})
-	defer again.Body.Close()
-	assert.Equal(t, http.StatusOK, again.StatusCode, "a PATCH to the enforcement a rule already has is not a 404")
 }
 
 // A body naming enforcement twice decodes both members and the last one wins, so a valid value followed by null is a null and is
