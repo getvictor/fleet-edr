@@ -847,10 +847,10 @@ export async function createAppControlRule(
 
 // UpdateAppControlRuleRequest is the JSON body the PATCH endpoint accepts. Mirrors updateRuleRequest in
 // server/rules/internal/operator/appcontrol_handler.go. Every mutable field is optional so a body that flips only `enabled`
-// still validates; `reason` is required for the audit trail. Phase B's Detect-mode change will layer an `enforcement` field
-// on top of this shape.
+// still validates; `reason` is required for the audit trail. `enforcement` is how a Detect rule is promoted to Protect or moved back.
 export interface UpdateAppControlRuleRequest {
   enabled?: boolean;
+  enforcement?: Enforcement;
   severity?: string;
   custom_msg?: string;
   custom_url?: string;

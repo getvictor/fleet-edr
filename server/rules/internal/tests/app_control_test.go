@@ -940,8 +940,14 @@ func TestAppControl_BulkUpsertRules_HappyPath_MixedInsertAndUpdate(t *testing.T)
 	result, err := store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("a", 64), Severity: api.SeverityRuleHigh},
-			{RuleType: api.RuleTypeCDHash, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("b", 40), Severity: api.SeverityRuleMedium},
+			{
+				RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("a",
+					64), Severity: api.SeverityRuleHigh,
+			},
+			{
+				RuleType: api.RuleTypeCDHash, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("b",
+					40), Severity: api.SeverityRuleMedium,
+			},
 			{RuleType: api.RuleTypeTeamID, Enforcement: api.EnforcementProtect, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
 		},
 		Actor:  "demo-admin",
@@ -974,8 +980,14 @@ func TestAppControl_BulkUpsertRules_Idempotent(t *testing.T) {
 	batch := api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("c", 64), Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeCDHash, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("d", 40), Severity: api.SeverityRuleMedium},
+			{
+				RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("c",
+					64), Severity: api.SeverityRuleMedium,
+			},
+			{
+				RuleType: api.RuleTypeCDHash, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("d",
+					40), Severity: api.SeverityRuleMedium,
+			},
 		},
 		Actor: "demo-admin", Reason: "first import",
 	}
@@ -1011,7 +1023,10 @@ func TestAppControl_BulkUpsertRules_BadItemRejectsBatch(t *testing.T) {
 	_, err = store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("e", 64), Severity: api.SeverityRuleMedium},
+			{
+				RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("e",
+					64), Severity: api.SeverityRuleMedium,
+			},
 			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: "TOO-SHORT", Severity: api.SeverityRuleMedium},
 			{RuleType: api.RuleTypeTeamID, Enforcement: api.EnforcementProtect, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
 		},
@@ -1064,8 +1079,14 @@ func TestAppControl_BulkUpsertRules_DuplicateKeyInBatch(t *testing.T) {
 	_, err = store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleHigh},
+			{
+				RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("7",
+					64), Severity: api.SeverityRuleMedium,
+			},
+			{
+				RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("7",
+					64), Severity: api.SeverityRuleHigh,
+			},
 		},
 		Actor: "demo-admin", Reason: "should reject the duplicate",
 	})
@@ -1105,7 +1126,10 @@ func TestAppControl_BulkUpsertRules_UnknownPolicyMapsToNotFound(t *testing.T) {
 	_, err := store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
 		PolicyID: 9_999_999,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("f", 64), Severity: api.SeverityRuleMedium},
+			{
+				RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("f",
+					64), Severity: api.SeverityRuleMedium,
+			},
 		},
 		Actor: "demo-admin", Reason: "stale policy id",
 	})

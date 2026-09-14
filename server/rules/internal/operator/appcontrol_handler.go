@@ -282,18 +282,19 @@ func (h *AppControlHandler) writePolicyMutationError(ctx context.Context, w http
 	}
 }
 
-// updateRuleRequest is the PATCH wire shape. Every mutable field is a pointer so a JSON omit / null is distinguishable from an
-// explicit zero (e.g. clearing custom_msg by sending ""). Phase B's Detect-mode change layers an Enforcement field on top of this
-// struct; for Phase A the field is unsupported (the schema column carries it, the handler doesn't accept it).
+// updateRuleRequest is the PATCH wire shape. Every mutable field is a pointer so an omitted field (nil) is distinguishable from an
+// explicit zero (e.g. clearing custom_msg by sending ""); encoding/json also decodes an explicit null to nil. Enforcement is the
+// exception: it records that the field was present, so an explicit null is refused like any other value that is not PROTECT or
+// DETECT rather than read as "leave it unchanged".
 type updateRuleRequest struct {
-	Enabled     *bool            `json:"enabled,omitempty"`
-	Severity    *api.Severity    `json:"severity,omitempty"`
-	Enforcement *api.Enforcement `json:"enforcement,omitempty"`
-	CustomMsg   *string          `json:"custom_msg,omitempty"`
-	CustomURL   *string          `json:"custom_url,omitempty"`
-	Comment     *string          `json:"comment,omitempty"`
-	ExpiresAt   *time.Time       `json:"expires_at,omitempty"`
-	Reason      string           `json:"reason"`
+	Enabled     *bool              `json:"enabled,omitempty"`
+	Severity    *api.Severity      `json:"severity,omitempty"`
+	Enforcement presentEnforcement `json:"enforcement"`
+	CustomMsg   *string            `json:"custom_msg,omitempty"`
+	CustomURL   *string            `json:"custom_url,omitempty"`
+	Comment     *string            `json:"comment,omitempty"`
+	ExpiresAt   *time.Time         `json:"expires_at,omitempty"`
+	Reason      string             `json:"reason"`
 }
 
 // handleGetRule serves GET /api/v1/app-control/rules/{id}: one rule, including the policy that owns it.
@@ -326,6 +327,31 @@ func (h *AppControlHandler) handleGetRule(w http.ResponseWriter, r *http.Request
 	writeJSON(ctx, h.logger, w, http.StatusOK, rule)
 }
 
+// presentEnforcement is a PATCH enforcement field that remembers whether the request carried it. UnmarshalJSON runs only for a
+// field that is present, including an explicit null, so an absent field stays unset.
+type presentEnforcement struct {
+	present bool
+	raw     api.Enforcement
+}
+
+func (e *presentEnforcement) UnmarshalJSON(data []byte) error {
+	e.present = true
+	if string(data) == "null" {
+		return nil
+	}
+	return json.Unmarshal(data, &e.raw)
+}
+
+// value is the enforcement to apply: nil when the request left the field out, and otherwise what it sent, with a null reaching
+// the store as an empty value that its validation refuses.
+func (e presentEnforcement) value() *api.Enforcement {
+	if !e.present {
+		return nil
+	}
+	v := e.raw
+	return &v
+}
+
 func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
@@ -354,7 +380,7 @@ func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Requ
 		RuleID:      ruleID,
 		Enabled:     req.Enabled,
 		Severity:    req.Severity,
-		Enforcement: req.Enforcement,
+		Enforcement: req.Enforcement.value(),
 		CustomMsg:   req.CustomMsg,
 		CustomURL:   req.CustomURL,
 		Comment:     req.Comment,

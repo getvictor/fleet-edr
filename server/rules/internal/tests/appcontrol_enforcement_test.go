@@ -141,7 +141,7 @@ func TestAppControlREST_UnknownEnforcementIsRejected(t *testing.T) {
 		assert.Empty(t, rules, "and nothing is stored")
 		assert.Empty(t, r.inserter.snapshot())
 	})
-	for _, value := range []any{"AUDIT", "detect", "", 1} {
+	for _, value := range []any{"AUDIT", "detect", "", 1, nil} {
 		t.Run("create "+jsonLabel(t, value), func(t *testing.T) {
 			t.Parallel()
 			r := newAppControlRig(t, []string{"host-a"})
@@ -162,14 +162,16 @@ func TestAppControlREST_UnknownEnforcementIsRejected(t *testing.T) {
 			r := newAppControlRig(t, []string{"host-a"})
 			ruleID := seedRule(t, r, r.defaultPolicyID(t), strings.Repeat("d", 64))
 			pushedBefore := len(r.inserter.snapshot())
+			// An explicit null sits beside a real change, which it must not let through as "leave enforcement alone".
 			resp := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/"+i64(ruleID), map[string]any{
-				"enforcement": value, "reason": "bad",
+				"enforcement": value, "severity": "high", "reason": "bad",
 			})
 			defer resp.Body.Close()
 			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 			stored, err := r.rules.ApplicationControlStore().GetRuleByID(t.Context(), ruleID)
 			require.NoError(t, err)
 			assert.Equal(t, rulesapi.EnforcementProtect, stored.Enforcement, "a rejected update changes nothing")
+			assert.Equal(t, rulesapi.SeverityRuleMedium, stored.Severity, "not even a field sent beside it")
 			assert.Len(t, r.inserter.snapshot(), pushedBefore, "and pushes nothing")
 		})
 	}
@@ -220,8 +222,23 @@ func TestAppControlREST_BulkUpsert_Enforcement(t *testing.T) {
 	assert.Equal(t, map[string]rulesapi.Enforcement{detectID: rulesapi.EnforcementDetect, protectID: rulesapi.EnforcementProtect},
 		storedEnforcement())
 
+	events := r.audit.snapshot()
+	require.NotEmpty(t, events)
+	assert.Equal(t, 1, events[len(events)-1].Payload["rules_detect"], "the single bulk audit event says how the batch set enforcement")
+	assert.Equal(t, 1, events[len(events)-1].Payload["rules_protect"])
+
 	resp = upsert(map[string]any{"rule_type": "BINARY", "identifier": detectID, "enforcement": "PROTECT"})
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, rulesapi.EnforcementProtect, storedEnforcement()[detectID], "re-upserting an existing rule updates its enforcement")
+
+	// Two spellings of one path are one rule, so a batch naming both is a duplicate rather than a silent overwrite of the first
+	// item's enforcement by the second's.
+	resp = upsert(
+		map[string]any{"rule_type": "PATH", "identifier": "/tmp/qa-alias", "enforcement": "PROTECT"},
+		map[string]any{"rule_type": "PATH", "identifier": "/private/tmp/qa-alias", "enforcement": "DETECT"},
+	)
+	resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.NotContains(t, storedEnforcement(), "/private/tmp/qa-alias", "and nothing from the batch is stored")
 }

@@ -1380,8 +1380,14 @@ func TestAppControlREST_ListRulesAcrossPolicies_Filters(t *testing.T) {
 	policyID := r.defaultPolicyID(t)
 	// Seed: one BINARY high + one CDHASH medium so each filter dimension has a unique target.
 	for _, body := range []map[string]any{
-		{"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": strings.Repeat("a", 64), "severity": rulesapi.SeverityRuleHigh, "reason": "binary seed"},
-		{"rule_type": rulesapi.RuleTypeCDHash, "enforcement": "PROTECT", "identifier": strings.Repeat("c", 40), "severity": rulesapi.SeverityRuleMedium, "reason": "cdhash seed"},
+		{
+			"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": strings.Repeat("a", 64),
+			"severity": rulesapi.SeverityRuleHigh, "reason": "binary seed",
+		},
+		{
+			"rule_type": rulesapi.RuleTypeCDHash, "enforcement": "PROTECT", "identifier": strings.Repeat("c", 40),
+			"severity": rulesapi.SeverityRuleMedium, "reason": "cdhash seed",
+		},
 	} {
 		create := r.do(t, http.MethodPost, "/api/v1/app-control/policies/"+i64(policyID)+"/rules", body)
 		require.Equal(t, http.StatusCreated, create.StatusCode)

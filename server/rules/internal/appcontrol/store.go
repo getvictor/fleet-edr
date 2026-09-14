@@ -925,11 +925,8 @@ func normalizeBulkUpsertItems(items []api.BulkUpsertRuleItem) ([]api.BulkUpsertR
 	return out, nil
 }
 
-// validateBulkUpsertItems runs the per-item shape checks AND the in-batch duplicate-key guard. CodeRabbit on PR #190 flagged a
-// duplicate key in the same batch as a count-correctness bug: without this guard, the second occurrence of the same
-// (rule_type, identifier) tuple would be classified as Insert because the preflight only sees pre-batch state.
+// validateBulkUpsertItems runs the per-item shape checks.
 func validateBulkUpsertItems(items []api.BulkUpsertRuleItem) error {
-	seen := make(map[string]int, len(items))
 	for i, item := range items {
 		if err := ValidateRuleType(item.RuleType); err != nil {
 			return fmt.Errorf(errBulkItemFmt, i, err)
@@ -943,6 +940,18 @@ func validateBulkUpsertItems(items []api.BulkUpsertRuleItem) error {
 		if err := ValidateEnforcement(item.Enforcement); err != nil {
 			return fmt.Errorf(errBulkItemFmt, i, err)
 		}
+	}
+	return nil
+}
+
+// rejectDuplicateBulkKeys is the in-batch duplicate-key guard, run on canonical identifiers. CodeRabbit on PR #190 flagged a
+// duplicate key in the same batch as a count-correctness bug: without this guard, the second occurrence of the same
+// (rule_type, identifier) tuple would be classified as Insert because the preflight only sees pre-batch state. It runs after
+// PATH canonicalisation because two spellings of one path (`/tmp/foo` and `/private/tmp/foo`) are one rule: the upsert would
+// otherwise apply both, and the later item would silently overwrite the earlier one's enforcement and severity.
+func rejectDuplicateBulkKeys(items []api.BulkUpsertRuleItem) error {
+	seen := make(map[string]int, len(items))
+	for i, item := range items {
 		key := bulkItemKey(item.RuleType, item.Identifier)
 		if prev, dup := seen[key]; dup {
 			return fmt.Errorf("%w: bulk item %d duplicates the (rule_type, identifier) of item %d",
@@ -1069,10 +1078,12 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 	// matches what the extension's AUTH_EXEC walker computes from the exec target's path. Without this, a paste-many import
 	// of `/tmp/foo` lands as `/tmp/foo` in the DB but the extension queries `/private/tmp/foo` and the rule silently never
 	// fires (Gemini PR #290). Replaces both req.Items + the working slice so collectExistingBulkKeys + the INSERT loop both
-	// see canonical identifiers; the in-batch duplicate guard already ran on raw input so two canonical-form duplicates
-	// (e.g. `/tmp/foo` and `/private/tmp/foo` pasted in the same batch) collide as expected at the DB unique-key gate.
+	// see canonical identifiers, and so the duplicate guard below treats two spellings of one path as the same rule.
 	normalized, err := normalizeBulkUpsertItems(req.Items)
 	if err != nil {
+		return api.BulkUpsertResult{}, err
+	}
+	if err := rejectDuplicateBulkKeys(normalized); err != nil {
 		return api.BulkUpsertResult{}, err
 	}
 	req.Items = normalized

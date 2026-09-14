@@ -119,6 +119,25 @@ describe("PasteManyModal", () => {
     });
   });
 
+  // spec:web-ui/rule-forms-require-an-enforcement-choice/neither-enforcement-is-preselected
+  it("clears the enforcement choice when the dialog is reopened", () => {
+    const { rerender } = render(
+      <PasteManyModal open policyID={1} onClose={() => undefined} onUpserted={() => undefined} />,
+    );
+    fireEvent.change(screen.getByLabelText(/identifiers/i), { target: { value: "EQHXZ8M8AV" } });
+    fireEvent.click(screen.getByRole("button", { name: /parse/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
+    expect(screen.getByRole("radio", { name: /protect/i })).toBeChecked();
+
+    rerender(<PasteManyModal open={false} policyID={1} onClose={() => undefined} onUpserted={() => undefined} />);
+    rerender(<PasteManyModal open policyID={1} onClose={() => undefined} onUpserted={() => undefined} />);
+    // A later import must not inherit the previous one's choice: back in the paste phase, then parse again to see the choice.
+    fireEvent.change(screen.getByLabelText(/identifiers/i), { target: { value: "EQHXZ8M8AV" } });
+    fireEvent.click(screen.getByRole("button", { name: /parse/i }));
+    expect(screen.getByRole("radio", { name: /protect/i })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /detect/i })).not.toBeChecked();
+  });
+
   it("surfaces a typed AppControlApiError message inline without firing onUpserted", async () => {
     // For invalid_rule, the modal intentionally falls through to the server's per-item message (e.g. "bulk item 1: ...")
     // rather than overriding with generic copy: the row index is strictly more useful to the operator than any UI string.
