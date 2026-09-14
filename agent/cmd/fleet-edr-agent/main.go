@@ -29,6 +29,7 @@ import (
 	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/commandledger"
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/containment"
 	"github.com/fleetdm/edr/agent/controlclient"
 	"github.com/fleetdm/edr/agent/enrich"
 	"github.com/fleetdm/edr/agent/enrollment"
@@ -133,6 +134,12 @@ func run() error {
 
 	logAgentStart(ctx, logger, cfg)
 
+	// Created before enrollment because every server connection, the token refresh included, dials through the containment manager:
+	// a contained host reaches the server only through its lifeline. neDispatcher is the manager's route to the network extension,
+	// published by that extension's receiver loop below.
+	neDispatcher := receiver.NewDispatcher()
+	containmentMgr, serverDial := newContainment(cfg, neDispatcher.SendNetworkContainment, logger)
+
 	tokenProvider, err := enrollment.Ensure(ctx, enrollment.Options{
 		ServerURL:         cfg.ServerURL,
 		EnrollSecret:      cfg.EnrollSecret,
@@ -141,6 +148,7 @@ func run() error {
 		AllowInsecure:     cfg.AllowInsecure,
 		HostIDOverride:    cfg.HostIDOverride,
 		AgentVersion:      version,
+		DialContext:       serverDial,
 		Logger:            logger,
 	})
 	if err != nil {
@@ -181,7 +189,7 @@ func run() error {
 	rec := metrics.New(q)
 	q.SetMetrics(rec)
 
-	agentTransport, httpClient, err := newAgentHTTPClient(cfg, logger)
+	agentTransport, httpClient, err := newAgentHTTPClient(cfg, serverDial, logger)
 	if err != nil {
 		return err
 	}
@@ -229,6 +237,8 @@ func run() error {
 		pidTable:      pidTable,
 		health:        healthRegistry,
 		esfDispatcher: esfDispatcher,
+		neDispatcher:  neDispatcher,
+		containment:   containmentMgr,
 		hostID:        hostID,
 		hostIDFn:      tokenProvider.HostID,
 	})
@@ -266,8 +276,15 @@ func run() error {
 		generation:      genRegistry,
 		// One tracker for both transports, which is the whole point: it is what stops the floor poll and the push path executing the
 		// same command at once now that the poll no longer waits on the stream indefinitely (issue #711).
-		inFlight: commander.NewInFlight(),
-		logger:   logger,
+		inFlight:       commander.NewInFlight(),
+		containmentMgr: containmentMgr,
+		serverDial:     serverDial,
+		logger:         logger,
+	}
+	if containmentMgr != nil {
+		// Assigned only when present so the executor sees a nil interface, not a nil pointer, and reports the command unsupported.
+		cmdDeps.containment = containmentMgr
+		go containmentMgr.Run(ctx)
 	}
 	startCommander(ctx, hostID, cfg.ServerURL, agentTransport, cmdDeps)
 	if err := startControlClient(ctx, cfg, hostID, cmdDeps); err != nil {
@@ -345,7 +362,7 @@ func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config)
 // We clone http.DefaultTransport (rather than &http.Transport{}) so the agent
 // keeps ProxyFromEnvironment, keep-alive, and the stdlib's hardened
 // dial/idle timeouts. Real deployments behind HTTPS_PROXY fail without them.
-func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
+func newAgentHTTPClient(cfg *config.Config, dial dialFunc, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
 	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
 	if err != nil {
 		logger.ErrorContext(context.Background(), "build tls config", "err", err)
@@ -353,6 +370,7 @@ func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTrip
 	}
 	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	baseTransport.TLSClientConfig = tlsCfg
+	baseTransport.DialContext = dial
 	// Enable HTTP/2 with keep-alive PINGs so the long-lived agent connection (shared by the uploader + commander) detects a half-open
 	// link (laptop sleep, NAT rebind) and re-establishes it instead of hanging until the request timeout. ConfigureTransports negotiates
 	// h2 over the existing TLS config and returns the h2 transport for tuning. Non-fatal on failure: the agent keeps HTTP/1.1 keep-alive.
@@ -411,7 +429,12 @@ type commandDeps struct {
 	// inFlight is the process-wide executing-command set shared by both transports. It exists because the poll is a bounded floor
 	// rather than suspended while the stream is believed up, so push and poll can deliver one command at the same time (issue #711).
 	inFlight *commander.InFlight
-	logger   *slog.Logger
+	// containment applies set_network_containment on both transports; nil where the host cannot contain.
+	containment commander.NetworkContainment
+	// containmentMgr and serverDial route the control channel through the containment lifeline.
+	containmentMgr *containment.Manager
+	serverDial     dialFunc
+	logger         *slog.Logger
 }
 
 // startCommander spins up the command-poll loop when we have a host_id. With no host_id the agent keeps running (events still upload)
@@ -436,7 +459,8 @@ func startCommander(ctx context.Context, hostID, serverURL string, transport htt
 		// Shared live generation map so a kill_process is pinned to the operator-selected process generation (issue #627).
 		Generation: deps.generation,
 		// Shared executing-command set so the floor poll and the push path cannot both run one command (issue #711).
-		InFlight: deps.inFlight,
+		InFlight:    deps.inFlight,
+		Containment: deps.containment,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, deps.logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -463,7 +487,8 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 	if err != nil {
 		return err
 	}
-	conn, err := grpc.NewClient(target,
+	dialTarget, dialOpts := controlDialOptions(cfg, target, deps.containmentMgr, deps.serverDial, http.ProxyFromEnvironment)
+	conn, err := grpc.NewClient(dialTarget, append(dialOpts,
 		grpc.WithTransportCredentials(creds),
 		// Keep-alive PINGs detect a half-open link (laptop sleep, NAT rebind) on the long-lived stream, mirroring the HTTP/2 transport.
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -471,7 +496,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 			Timeout:             h2PingTimeout,
 			PermitWithoutStream: true,
 		}),
-	)
+	)...)
 	if err != nil {
 		logger.ErrorContext(ctx, "control channel dial", "addr", target, "err", err)
 		return err
@@ -485,6 +510,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 		Ledger:            deps.ledger,
 		Generation:        deps.generation,
 		InFlight:          deps.inFlight,
+		Containment:       deps.containment,
 		OnConnectedChange: deps.streamConnected.Store,
 		Logger:            logger,
 	})
@@ -611,6 +637,8 @@ type receiverLoopParams struct {
 	// transitions records capture-provider state changes as durable events (issue #684). Nil disables the recording, which
 	// is what the ESF loop and every non-darwin build get.
 	transitions *sensorevent.Transitions
+	// containment receives the network extension's containment status (#948). Nil for every loop but the network extension's.
+	containment *containment.Manager
 	// connectorFactory overrides how the loop builds its Connector. Nil uses the default XPC receiver (macOS); the Windows sensor seam
 	// sets it to build an ETW-backed Connector instead, so both platforms share the same reconnect/backoff/heartbeat + health machinery.
 	connectorFactory func() receiver.Connector
@@ -657,6 +685,13 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
+			// Containment status is a control message like provider liveness: consumed here and never uploaded.
+			if p.containment != nil {
+				if status, ok := containment.ParseStatus(evt.Data); ok {
+					p.containment.Observe(ctx, status)
+					return
+				}
+			}
 			// Provider-liveness status is a control message, not telemetry: it rides the event channel because the XPC bridge
 			// only surfaces messages carrying a `data` blob, but the agent consumes it for health and never uploads it
 			// (issue #649). Handled before anything else so it cannot reach the proctable or the upload queue.

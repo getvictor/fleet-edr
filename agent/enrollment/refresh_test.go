@@ -3,8 +3,10 @@ package enrollment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -224,4 +226,25 @@ func TestRunRefresh_ImmediateThenCancel(t *testing.T) {
 	require.Eventually(t, func() bool { return p.Token() == "ref-tok" }, 2*time.Second, 10*time.Millisecond)
 	cancel()
 	<-done
+}
+
+// The enrollment and refresh client dials through Options.DialContext, which routes a contained host's token refresh through the
+// containment lifeline (#948).
+func TestHTTPClient_DialsThroughTheConfiguredDial(t *testing.T) {
+	t.Parallel()
+	var dialed atomic.Value
+	p := &provider{logger: slog.Default(), opts: Options{AllowInsecure: true, DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed.Store(addr)
+		return nil, errors.New("dial recorded")
+	}}}
+	client, err := p.httpClient()
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://edr.example.com:8089/api/token/refresh", nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	require.ErrorContains(t, err, "dial recorded")
+	assert.Equal(t, "edr.example.com:8089", dialed.Load())
 }

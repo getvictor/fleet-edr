@@ -10,9 +10,16 @@
 - [x] Route `network_containment.update` through the shared XPC server to the network extension.
 - [x] VM: contain and release edr-dev from a hand-sent update; containment survives an extension restart; the lifeline, DHCP and direct DNS keep working; established connections elsewhere are cut.
 
+## Agent
+
+- [x] `set_network_containment` command: resolve the lifeline with a direct resolver query, send the extension its document, complete only on the extension's confirmation.
+- [x] Dial the server through the lifeline while contained: agent transport, enrollment and token refresh, control channel (except through a proxy).
+- [x] Refresh the lifeline every five minutes while contained, and once when a restarted agent learns the containment from the extension.
+- [x] Consume `ne_containment_status` without uploading it.
+- [x] VM: contain and release edr-dev through a server command; uploads and command delivery keep working while contained.
+
 ## Later steps
 
-- [ ] Agent command, lifeline resolution and refresh, status reporting.
 - [ ] DNS proxy answers only the server name while contained.
 - [ ] Server state, API, audit, delivery and host API.
 - [ ] Console actions and state.

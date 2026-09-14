@@ -843,3 +843,61 @@ func TestPollFloorDispatchesACommandStrandedByABelievedStream(t *testing.T) {
 	require.NotEmpty(t, statuses, "the stranded command must reach the executor, which reports as it goes")
 	assert.Equal(t, "acked", statuses[0], "the command is acked rather than left pending forever")
 }
+
+// fakeContainment applies set_network_containment with a fixed outcome and records what it was given.
+type fakeContainment struct {
+	result json.RawMessage
+	err    error
+	seen   []string
+}
+
+func (f *fakeContainment) Apply(_ context.Context, payload []byte) (json.RawMessage, error) {
+	f.seen = append(f.seen, string(payload))
+	return f.result, f.err
+}
+
+// spec:agent-command-executor/set-network-containment-command/a-host-without-the-network-extension-cannot-contain
+func TestExecuteSetNetworkContainment(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		containment NetworkContainment
+		wantStatus  string
+		wantResult  string
+	}{
+		{"a host that cannot contain", nil, StatusFailed, `{"error":"network containment is not supported on this host"}`},
+		{"the extension confirmed", &fakeContainment{result: json.RawMessage(`{"version":1,"contained":true,"applied":true}`)},
+			StatusCompleted, `{"version":1,"contained":true,"applied":true}`},
+		{"the extension refused", &fakeContainment{err: errors.New("the network extension did not apply it: content filter is not running")},
+			StatusFailed, `{"error":"the network extension did not apply it: content filter is not running"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var status string
+			var result json.RawMessage
+			report := func(_ context.Context, s string, r json.RawMessage) error {
+				status, result = s, r
+				return nil
+			}
+			e := NewExecutor(nil, nil, nil)
+			e.SetContainment(tc.containment)
+			cmd := Command{ID: 1, CommandType: "set_network_containment", Payload: json.RawMessage(`{"version":1,"contained":true}`)}
+			e.Execute(t.Context(), cmd, report)
+			assert.Equal(t, tc.wantStatus, status)
+			assert.JSONEq(t, tc.wantResult, string(result))
+		})
+	}
+}
+
+// The poll transport hands its configured containment to the executor.
+func TestCommanderWiresContainment(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer srv.Close()
+	fake := &fakeContainment{result: json.RawMessage(`{"applied":true}`)}
+	c := New(Config{ServerURL: srv.URL, HostID: "host-a", Containment: fake}, nil, nil)
+	cmd := Command{ID: 12, CommandType: "set_network_containment", Payload: json.RawMessage(`{"version":2,"contained":false}`)}
+	c.dispatch(t.Context(), cmd)
+	assert.Equal(t, []string{`{"version":2,"contained":false}`}, fake.seen)
+}

@@ -43,6 +43,8 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 			enqueue:      d.enqueue,
 			pt:           d.pidTable,
 			upgradeProbe: func() bool { return receiver.NEUpgradePending(ctx) },
+			dispatcher:   d.neDispatcher,
+			containment:  d.containment,
 			health:       d.health,
 			component:    health.ComponentNetworkExtension,
 			// Only this loop: the network extension's XPC listener starts before its providers, so health here must key on

@@ -41,6 +41,13 @@ type ExtensionSender interface {
 	SendWatchedPaths(payload []byte) error
 }
 
+// NetworkContainment applies a set_network_containment command (#948): it resolves the lifeline, hands the network extension its
+// document and waits for the extension to confirm. It returns the result to report, or the reason the command failed. The production
+// implementation is containment.Manager; nil means the host cannot contain, and the command is reported failed.
+type NetworkContainment interface {
+	Apply(ctx context.Context, payload []byte) (json.RawMessage, error)
+}
+
 // Config holds commander settings.
 type Config struct {
 	ServerURL string
@@ -66,6 +73,8 @@ type Config struct {
 	// Generation is the live pid -> pidversion registry (issue #627), shared with the control client so both transports run the same
 	// kill_process generation check. Nil disables the check (kill falls back to pid-only).
 	Generation *procgen.Registry
+	// Containment applies set_network_containment commands, shared with the control client. Nil reports them failed.
+	Containment NetworkContainment
 	// InFlight is the process-wide executing-command set, shared with the control client. Required once the poll is a bounded floor
 	// rather than suspended while the stream is up, because the two transports can then deliver one command at the same time
 	// (issue #711). Nil disables the check, which is correct only when this is the sole transport.
@@ -100,6 +109,7 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	executor := NewExecutor(cfg.ExtensionSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
 	executor.SetInFlight(cfg.InFlight)
+	executor.SetContainment(cfg.Containment)
 	// Start the floor clock now rather than at the zero time, so a fresh commander defers to a live stream like any other and the
 	// contract stays exactly "defer for at most FloorInterval" instead of "always poll once at startup, then defer".
 	return &Commander{

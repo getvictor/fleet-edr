@@ -51,6 +51,7 @@ type Connector interface {
 	Ping(timeout time.Duration) error
 	SendApplicationControl(payload []byte) error
 	SendWatchedPaths(payload []byte) error
+	SendNetworkContainment(payload []byte) error
 }
 
 // Compile-time check that *Receiver (darwin/cgo build) and the non-darwin stub both satisfy Connector. The stub's Inject method is
@@ -378,4 +379,14 @@ func (d *Dispatcher) SendWatchedPaths(payload []byte) error {
 		return ErrNoConnector
 	}
 	return b.c.SendWatchedPaths(payload)
+}
+
+// SendNetworkContainment delivers a network_containment.update to the network extension's active Connector, routing like
+// SendApplicationControl: ErrNoConnector between connect cycles, otherwise the active Connector.
+func (d *Dispatcher) SendNetworkContainment(payload []byte) error {
+	b := d.cur.Load()
+	if b == nil || b.c == nil {
+		return ErrNoConnector
+	}
+	return b.c.SendNetworkContainment(payload)
 }

@@ -2,6 +2,7 @@ package controlclient_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"path/filepath"
@@ -119,6 +120,25 @@ func (r *recordingSender) count() int {
 
 // startClient wires a fakeGateway over bufconn and runs a control client against it until the test ends. It returns a connected
 // predicate and an auth-failure counter so tests can observe re-enrollment without standing up a real token provider.
+// recordingContainment records each set_network_containment payload and applies it successfully.
+type recordingContainment struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (r *recordingContainment) Apply(_ context.Context, payload []byte) (json.RawMessage, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = append(r.seen, string(payload))
+	return json.RawMessage(`{"applied":true}`), nil
+}
+
+func (r *recordingContainment) payloads() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.seen...)
+}
+
 func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isConnected func() bool, authFails func() int) {
 	t.Helper()
 	// Zero leaves the production default, which is minutes: long enough that no existing test trips the watchdog.
@@ -135,6 +155,7 @@ func startClientWithSilence(
 
 func startClientWithClock(
 	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration, now func() time.Time,
+	configure ...func(*controlclient.Config),
 ) (isConnected func() bool, authFails func() int) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
@@ -157,7 +178,7 @@ func startClientWithClock(
 	var connected bool
 	var authFailCount int
 	var mu sync.Mutex
-	client := controlclient.New(controlclient.Config{
+	cfg := controlclient.Config{
 		Client:          control.NewControlChannelClient(cc),
 		HostID:          "host-a",
 		TokenFn:         func() string { return "tok" },
@@ -177,7 +198,11 @@ func startClientWithClock(
 		MaxBackoff:      50 * time.Millisecond,
 		SilenceDeadline: silence,
 		Now:             now,
-	})
+	}
+	for _, c := range configure {
+		c(&cfg)
+	}
+	client := controlclient.New(cfg)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() { _ = client.Run(ctx) }()
@@ -222,6 +247,18 @@ func TestControlClient(t *testing.T) {
 		assert.Equal(t, "acked", outs[0].GetStatus())
 		assert.Equal(t, "completed", outs[1].GetStatus())
 		assert.Equal(t, int64(7), outs[0].GetId())
+	})
+
+	t.Run("a pushed containment command runs through the configured containment", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeGateway{push: []*control.Command{
+			{Id: 31, HostId: "host-a", CommandType: "set_network_containment", Payload: []byte(`{"version":1,"contained":true}`)},
+		}}
+		applied := &recordingContainment{}
+		_, _ = startClientWithClock(t, fake, &recordingSender{}, 0, nil, func(c *controlclient.Config) { c.Containment = applied })
+		require.Eventually(t, func() bool { return len(fake.recorded()) >= 2 }, 2*time.Second, 10*time.Millisecond)
+		assert.Equal(t, []string{`{"version":1,"contained":true}`}, applied.payloads())
+		assert.Equal(t, "completed", fake.recorded()[1].GetStatus())
 	})
 
 	// spec:agent-control-channel/delivery-is-at-least-once-and-idempotent-by-command-identity/a-re-delivered-command-re-reports-its-recorded-outcome-without-repeating-the-side-effect
