@@ -112,11 +112,13 @@ export function PolicyDetail() {
       });
     return () => {
       cancelled = true;
-      // Cleared whenever access changes, so the figure is only ever the result of a read made under the current grant: it is gone as
-      // soon as a permission refresh revokes access, and while a read after access is restored is pending or once it fails.
+      // Cleared whenever access changes, so a read made under an earlier grant is not shown while a read after access is restored is
+      // pending, or once it fails.
       setImpact(null);
     };
   }, [canReadMatchCounts]);
+  // Gated during render as well, because the cleanup above runs only after the render that revokes access has committed.
+  const shownImpact = canReadMatchCounts ? impact : null;
 
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
@@ -248,7 +250,7 @@ export function PolicyDetail() {
               ) : (
                 <RulesTable
                   rules={visibleRules}
-                  impact={impact}
+                  impact={shownImpact}
                   onEnforcement={(rule) => { setActiveModal({ kind: "confirm-enforcement", rule }); }}
                   onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
                   onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
@@ -300,7 +302,7 @@ export function PolicyDetail() {
         key={confirmRule ? `confirm-${String(confirmKind)}-${String(confirmRule.id)}` : "confirm-closed"}
         open={confirmRule !== null}
         title={confirmTitleFor(activeModal)}
-        description={confirmDescriptionFor(activeModal, impact)}
+        description={confirmDescriptionFor(activeModal, shownImpact)}
         confirmLabel={confirmLabelFor(activeModal)}
         confirmVariant={activeModal.kind === "confirm-delete" ? "alert" : "primary"}
         reasonPlaceholder={confirmReasonPlaceholderFor(activeModal)}
