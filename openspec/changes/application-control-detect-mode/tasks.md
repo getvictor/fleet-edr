@@ -23,5 +23,6 @@
 
 ## Console: promote and impact
 
-- [ ] Promote to Protect (and back) from the policy page.
-- [ ] A rule's would-block impact where the promote decision is made, linked to its monitor records.
+- [x] Promote to Protect (and back) from the policy page, with a reason.
+- [x] A rule's would-block impact in its row and the promote dialog, linked to its monitor records.
+- [x] Explain an application-control rule's monitor records as would-block runs.

@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { Link, MemoryRouter, Routes, Route } from "react-router";
 import { PolicyDetail } from "./PolicyDetail";
 import * as api from "../../api";
+import { PermissionAction, PermissionsContext } from "../../permissions-core";
 import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";
 
 const makeRule = (over: Partial<ApplicationControlRule> = {}): ApplicationControlRule => ({
@@ -41,17 +42,21 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
 // Routes so the :id parameter is bound. Wrapping the rendered
 // component this way keeps the test focused on the page output
 // rather than reproducing the App.tsx routing pyramid.
-function renderPolicyDetailAt(path: string) {
+function renderPolicyDetailAt(path: string, permissions?: readonly string[]) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
-      </Routes>
-    </MemoryRouter>,
+    <PermissionsContext.Provider value={permissions}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </PermissionsContext.Provider>,
   );
 }
 
 beforeEach(() => {
+  // The page reads the would-block counts for Detect rules; keep it off the network unless a test says otherwise.
+  vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({ counts: [], days: 7 });
   // Same jsdom-stub posture as AddRuleModal.test.tsx; the runtime
   // existence check trips no-unnecessary-condition because TS
   // believes the prototype methods exist.
@@ -104,8 +109,71 @@ describe("PolicyDetail", () => {
       expect(screen.getByRole("heading", { name: "Default" })).toBeInTheDocument();
     });
     const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
-    const enforcementCell = (row: HTMLElement) => within(row).getAllByRole("cell")[2].textContent;
-    expect(rows.map(enforcementCell)).toEqual(["Detect", "Protect"]);
+    // The badge is the cell's first element; a Detect rule's cell also carries its would-block figure beneath it.
+    const enforcementBadge = (row: HTMLElement) => within(row).getAllByRole("cell")[2].firstElementChild?.textContent;
+    await waitFor(() => {
+      expect(rows.map(enforcementBadge)).toEqual(["Detect", "Protect"]);
+    });
+  });
+
+  // spec:web-ui/a-detect-rule-can-be-promoted-with-its-impact-in-view/promoting-shows-what-the-rule-would-have-blocked
+  it("shows a Detect rule's would-block impact and promotes it to Protect with a reason", async () => {
+    const detectRule = makeRule({ id: 7, identifier: "e".repeat(64), enforcement: "DETECT" });
+    const getSpy = vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [detectRule] }));
+    vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({
+      counts: [{ rule_id: "app_control:7", matches: 12, hosts: 3, last_seen: "2026-09-14T00:00:00Z" }],
+      days: 7,
+    });
+    const updateSpy = vi.spyOn(api, "updateAppControlRule").mockResolvedValue(makeRule({ id: 7, enforcement: "PROTECT" }));
+
+    renderPolicyDetailAt("/app-control/policies/7");
+    const impactLink = await screen.findByRole("link", { name: "Would have blocked 12 runs on 3 hosts in 7 days" });
+    expect(impactLink).toHaveAttribute("href", "/rules/app_control%3A7/monitor-records");
+
+    fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    const dialog = await waitFor(() => openModal(/promote rule to protect/i));
+    expect(dialog.textContent).toContain("Would have blocked 12 runs on 3 hosts in 7 days");
+    expect(within(dialog).getByRole("link", { name: /review the records/i })).toHaveAttribute(
+      "href",
+      "/rules/app_control%3A7/monitor-records",
+    );
+    fireEvent.change(within(dialog).getByLabelText(/reason \(required for audit log\)/i), {
+      target: { value: "a week of expected matches" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /promote to protect/i }));
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith(7, { enforcement: "PROTECT", reason: "a week of expected matches" });
+    });
+    await waitFor(() => {
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("moves a Protect rule back to Detect", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 9, enforcement: "PROTECT" })] }));
+    const updateSpy = vi.spyOn(api, "updateAppControlRule").mockResolvedValue(makeRule({ id: 9, enforcement: "DETECT" }));
+
+    renderPolicyDetailAt("/app-control/policies/7");
+    fireEvent.click(await screen.findByRole("button", { name: "Move to Detect" }));
+    const dialog = await waitFor(() => openModal(/move rule to detect/i));
+    fireEvent.change(within(dialog).getByLabelText(/reason \(required for audit log\)/i), { target: { value: "too noisy" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /move to detect/i }));
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith(9, { enforcement: "DETECT", reason: "too noisy" });
+    });
+  });
+
+  // spec:web-ui/a-detect-rule-can-be-promoted-with-its-impact-in-view/without-access-to-match-counts-the-figure-is-left-out
+  it("leaves the impact out for an operator who cannot read detection tuning", async () => {
+    const countsSpy = vi.spyOn(api, "listDetectionRuleMatchCounts");
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
+
+    renderPolicyDetailAt("/app-control/policies/7", [PermissionAction.AppControlRead]);
+    expect(await screen.findByRole("button", { name: "Promote" })).toBeInTheDocument();
+    expect(countsSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText(/would-block|would have blocked/i)).toBeNull();
   });
 
   // PolicyDetail mounts the modals as siblings. Each modal renders a <dialog> that, even when closed in JSDOM, keeps its

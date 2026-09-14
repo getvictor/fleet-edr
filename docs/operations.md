@@ -388,13 +388,13 @@ Two unconditional carve-outs run before any rule:
 
 ### Detect mode
 
-A rule's `enforcement` is `PROTECT` or `DETECT`. A `DETECT` rule does not block what it matches: when the exec runs, the host reports the match, which the server keeps as a monitor record under the rule's id (`app_control:<id>`) with the rule's severity. Use it to see what a rule would block before it blocks anything, then promote the rule to `PROTECT`.
+A rule's `enforcement` is `PROTECT` or `DETECT`. A `DETECT` rule does not block what it matches: when the exec runs, the host reports the match, which the server keeps as a monitor record under the rule's id (`app_control:<id>`) with the rule's severity. Use it to see what a rule would block before it blocks anything, then promote the rule to `PROTECT`. For operators who can read detection tuning, the policy page shows each Detect rule's would-block runs and hosts over the last 7 days (or the retention window, if shorter), in its row and in the promote dialog, linked to its records.
 
 - **A `DETECT` rule never weakens enforcement.** The verdict for an exec is the one the policy reaches without its `DETECT` rules, so a `PROTECT` rule anywhere in the precedence order still blocks, and the deadline-fallback posture below still applies. An exec that is blocked records no would-block match.
 - **Every matching exec is reported.** An allow that matched a `DETECT` rule is not cached by the kernel, so each exec of the binary is evaluated and reported again. Records deduplicate on the process and age out like any [monitor record](#monitor-records).
 - **The records are not alerts.** They stay out of the alert queue and webhook deliveries, like the monitor records of detection rules. There is no desktop notification on the Mac, since nothing was blocked.
 
-Every rule names its enforcement; there is no default. Choose it in the **Add rule** and **Paste many** dialogs, or send `enforcement` when you create rules through the API (`POST /api/v1/app-control/policies/{id}/rules`, and on each item of `rules:bulkUpsert`). A request without it is refused with a 400. Change it with `PATCH /api/v1/app-control/rules/{id}` and a `reason`; re-upserting a rule also updates it. The change is audited and reaches hosts like any other rule change.
+Every rule names its enforcement; there is no default. Choose it in the **Add rule** and **Paste many** dialogs, or send `enforcement` when you create rules through the API (`POST /api/v1/app-control/policies/{id}/rules`, and on each item of `rules:bulkUpsert`). A request without it is refused with a 400. On the policy page, **Promote** moves a Detect rule to Protect and **Move to Detect** moves it back, each with a reason; through the API, send `enforcement` to `PATCH /api/v1/app-control/rules/{id}` with a `reason`. Re-upserting a rule also updates it. The change is audited and reaches hosts like any other rule change.
 
 ### BINARY rules and the deadline-fallback posture
 
