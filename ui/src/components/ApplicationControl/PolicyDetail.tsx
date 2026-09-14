@@ -109,7 +109,9 @@ export function PolicyDetail() {
         if (!cancelled) setImpact(wouldBlockImpactFrom(result.counts, result.days));
       })
       .catch(() => {
-        // The figure stays out.
+        // The figure stays out, including counts an earlier read left, so a failed re-read after the permission is restored does not
+        // show them as current.
+        if (!cancelled) setImpact(null);
       });
     return () => { cancelled = true; };
   }, [canReadMatchCounts]);
@@ -341,11 +343,26 @@ function otherEnforcement(rule: ApplicationControlRule): Enforcement {
   return isDetect(rule) ? "PROTECT" : "DETECT";
 }
 
+// isExpired is whether a rule's expiry has passed. The server leaves an expired rule out of every host's snapshot whatever its
+// enforcement or enabled flag, so it does nothing in either mode.
+function isExpired(rule: ApplicationControlRule): boolean {
+  if (!rule.expires_at) return false;
+  return Date.parse(rule.expires_at) <= Date.now();
+}
+
 // enforcementDescription is the promote / demote dialog's explanation. Promoting states the rule's counted would-block matches, the
-// evidence the decision rests on, and links to the records behind them. A disabled rule does nothing in either mode until it is
-// enabled, and the change leaves it disabled, so the copy says so rather than promising a block or a record.
+// evidence the decision rests on, and links to the records behind them. An expired rule does nothing in either mode, and a disabled
+// one nothing until it is enabled; the change leaves both as they are, so the copy says so rather than promising a block or a
+// record. Expiry is checked first because enabling an expired rule does not bring it back.
 function enforcementDescription(rule: ApplicationControlRule, impact: WouldBlockImpact | null): React.ReactNode {
   const ident = rule.identifier;
+  if (isExpired(rule)) {
+    return (
+      <>
+        This rule has expired, so hosts no longer receive it: <code>{ident}</code> is neither blocked nor recorded by it in either mode.
+      </>
+    );
+  }
   if (!isDetect(rule)) {
     return rule.enabled ? (
       <>

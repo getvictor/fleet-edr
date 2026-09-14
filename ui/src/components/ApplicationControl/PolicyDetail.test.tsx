@@ -217,7 +217,15 @@ describe("PolicyDetail", () => {
     vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
       makePolicy({
         rules: [
-          makeRule({ id: 7, identifier: "DETECTTEAM", rule_type: "TEAMID", enforcement: "DETECT", enabled: false }),
+          // An expiry still ahead leaves the rule live, so the disabled copy applies.
+          makeRule({
+            id: 7,
+            identifier: "DETECTTEAM",
+            rule_type: "TEAMID",
+            enforcement: "DETECT",
+            enabled: false,
+            expires_at: "2999-01-01T00:00:00Z",
+          }),
           makeRule({ id: 8, identifier: "PROTECTTEA", rule_type: "TEAMID", enforcement: "PROTECT", enabled: false }),
         ],
       }),
@@ -234,6 +242,67 @@ describe("PolicyDetail", () => {
     expect(demote.textContent).toContain(
       "This rule is disabled. Once it is enabled, Detect keeps a record of each match of PROTECTTEA that runs.",
     );
+  });
+
+  it("says an expired rule does nothing in either mode, even when it is also disabled", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({
+        rules: [
+          makeRule({ id: 7, identifier: "EXPIREDDET", rule_type: "TEAMID", enforcement: "DETECT", expires_at: "2026-01-01T00:00:00Z" }),
+          makeRule({
+            id: 8,
+            identifier: "EXPIREDPRO",
+            rule_type: "TEAMID",
+            enforcement: "PROTECT",
+            enabled: false,
+            expires_at: "2026-01-01T00:00:00Z",
+          }),
+        ],
+      }),
+    );
+
+    renderPolicyDetailAt("/app-control/policies/7");
+    fireEvent.click(await screen.findByRole("button", { name: "Promote" }));
+    const promote = await waitFor(() => openModal(/promote rule to protect/i));
+    expect(promote.textContent).toContain("This rule has expired, so hosts no longer receive it: EXPIREDDET is neither blocked");
+    expect(promote.textContent).not.toMatch(/protect blocks/i);
+    fireEvent.click(within(promote).getByRole("button", { name: /cancel/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Move to Detect" }));
+    const demote = await waitFor(() => openModal(/move rule to detect/i));
+    expect(demote.textContent).toContain("This rule has expired, so hosts no longer receive it: EXPIREDPRO is neither blocked");
+    expect(demote.textContent).not.toMatch(/once it is enabled/i);
+  });
+
+  it("does not bring back earlier counts when a read after the permission is restored fails", async () => {
+    const countsSpy = vi
+      .spyOn(api, "listDetectionRuleMatchCounts")
+      .mockResolvedValueOnce({
+        counts: [{ rule_id: "app_control:7", matches: 12, hosts: 3, last_seen: "2026-09-14T00:00:00Z" }],
+        days: 7,
+      })
+      .mockRejectedValueOnce(new Error("counts unavailable"));
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
+    const tree = (permissions?: readonly string[]) => (
+      <PermissionsContext.Provider value={permissions}>
+        <MemoryRouter initialEntries={["/app-control/policies/7"]}>
+          <Routes>
+            <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </PermissionsContext.Provider>
+    );
+
+    const { rerender } = render(tree());
+    expect(await screen.findByRole("link", { name: /would have blocked 12 runs/i })).toBeVisible();
+    rerender(tree([PermissionAction.AppControlRead]));
+    rerender(tree());
+    await waitFor(() => {
+      expect(countsSpy).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
+    });
   });
 
   it("keeps the rules usable when the match counts cannot be read", async () => {
