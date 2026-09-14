@@ -26,33 +26,42 @@ type workflowStep struct {
 	Run  string `yaml:"run"`
 }
 
-// TestWorkflow_TheAppKeyIsReadFromTheMainOnlyEnvironment pins where the App credentials come from. They are stored in the sigma-sync
-// environment, not the repository, so a job that stopped naming it would read an empty client id and fail at the first upstream change.
-func TestWorkflow_TheAppKeyIsReadFromTheMainOnlyEnvironment(t *testing.T) {
+// TestWorkflow_ThePullRequestIsOpenedWithTheAppToken pins the credential wiring the tests of the step scripts cannot see. The App's
+// client id and key are stored in the sigma-sync environment, not the repository, so a job that stopped naming it would read an empty
+// client id. The push step must use the App's token, since a pull request opened with the workflow's own token starts no CI. And the
+// token is minted only when there is something to push.
+func TestWorkflow_ThePullRequestIsOpenedWithTheAppToken(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(workflowPath)
 	require.NoError(t, err)
+	type step struct {
+		ID   string            `yaml:"id"`
+		If   string            `yaml:"if"`
+		With map[string]string `yaml:"with"`
+		Env  map[string]string `yaml:"env"`
+	}
 	var wf struct {
 		Jobs map[string]struct {
 			Environment string `yaml:"environment"`
-			Steps       []struct {
-				ID   string            `yaml:"id"`
-				With map[string]string `yaml:"with"`
-			} `yaml:"steps"`
+			Steps       []step `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &wf))
 	job := wf.Jobs["sync"]
 	assert.Equal(t, "sigma-sync", job.Environment)
-	var with map[string]string
+	steps := map[string]step{}
 	for _, s := range job.Steps {
-		if s.ID == "app-token" {
-			with = s.With
+		if s.ID != "" {
+			steps[s.ID] = s
 		}
 	}
-	require.NotNil(t, with, "no app-token step")
-	assert.Equal(t, "${{ vars.SIGMA_SYNC_APP_CLIENT_ID }}", with["client-id"])
-	assert.Equal(t, "${{ secrets.SIGMA_SYNC_APP_PRIVATE_KEY }}", with["private-key"])
+	token, push := steps["app-token"], steps["push"]
+	require.NotEmpty(t, token.ID, "no app-token step")
+	require.NotEmpty(t, push.ID, "no push step")
+	assert.Equal(t, "${{ vars.SIGMA_SYNC_APP_CLIENT_ID }}", token.With["client-id"])
+	assert.Equal(t, "${{ secrets.SIGMA_SYNC_APP_PRIVATE_KEY }}", token.With["private-key"])
+	assert.Equal(t, "steps.sync.outputs.changed == 'true'", token.If)
+	assert.Equal(t, "${{ steps.app-token.outputs.token }}", push.Env["GH_TOKEN"])
 }
 
 // stepScript returns the run script of the step with the given id, or, for the step without one, the given name.
