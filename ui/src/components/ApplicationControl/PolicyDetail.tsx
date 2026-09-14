@@ -97,8 +97,7 @@ export function PolicyDetail() {
   // What each Detect rule would have blocked, read from the monitor-match counts. Only for an operator who may read detection
   // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. Read once per visit: a
   // rule edit on this page does not change what was counted. A failed read leaves the figure out rather than failing the page,
-  // since the rules are still usable without it. The figure is shown only while the permission holds, so counts read before a
-  // permission refresh revoked it are not left on screen.
+  // since the rules are still usable without it.
   const canReadMatchCounts = useCan()(PermissionAction.DetectionConfigRead);
   const [impact, setImpact] = useState<WouldBlockImpact | null>(null);
   useEffect(() => {
@@ -109,13 +108,15 @@ export function PolicyDetail() {
         if (!cancelled) setImpact(wouldBlockImpactFrom(result.counts, result.days));
       })
       .catch(() => {
-        // The figure stays out, including counts an earlier read left, so a failed re-read after the permission is restored does not
-        // show them as current.
-        if (!cancelled) setImpact(null);
+        // The figure stays out.
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Cleared whenever access changes, so the figure is only ever the result of a read made under the current grant: it is gone as
+      // soon as a permission refresh revokes access, and while a read after access is restored is pending or once it fails.
+      setImpact(null);
+    };
   }, [canReadMatchCounts]);
-  const shownImpact = canReadMatchCounts ? impact : null;
 
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
@@ -247,7 +248,7 @@ export function PolicyDetail() {
               ) : (
                 <RulesTable
                   rules={visibleRules}
-                  impact={shownImpact}
+                  impact={impact}
                   onEnforcement={(rule) => { setActiveModal({ kind: "confirm-enforcement", rule }); }}
                   onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
                   onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
@@ -299,7 +300,7 @@ export function PolicyDetail() {
         key={confirmRule ? `confirm-${String(confirmKind)}-${String(confirmRule.id)}` : "confirm-closed"}
         open={confirmRule !== null}
         title={confirmTitleFor(activeModal)}
-        description={confirmDescriptionFor(activeModal, shownImpact)}
+        description={confirmDescriptionFor(activeModal, impact)}
         confirmLabel={confirmLabelFor(activeModal)}
         confirmVariant={activeModal.kind === "confirm-delete" ? "alert" : "primary"}
         reasonPlaceholder={confirmReasonPlaceholderFor(activeModal)}
@@ -343,45 +344,24 @@ function otherEnforcement(rule: ApplicationControlRule): Enforcement {
   return isDetect(rule) ? "PROTECT" : "DETECT";
 }
 
-// isExpired is whether a rule's expiry has passed. The server leaves an expired rule out of every host's snapshot whatever its
-// enforcement or enabled flag, so it does nothing in either mode.
-function isExpired(rule: ApplicationControlRule): boolean {
-  if (!rule.expires_at) return false;
-  return Date.parse(rule.expires_at) <= Date.now();
-}
-
-// enforcementDescription is the promote / demote dialog's explanation. Promoting states the rule's counted would-block matches, the
-// evidence the decision rests on, and links to the records behind them. An expired rule does nothing in either mode, and a disabled
-// one nothing until it is enabled; the change leaves both as they are, so the copy says so rather than promising a block or a
-// record. Expiry is checked first because enabling an expired rule does not bring it back.
+// enforcementDescription is the promote / demote dialog's explanation. It says what the new mode makes this rule do, not whether the
+// rule is live: whether it is enabled, unexpired, or reached past the platform and self-allow carve-outs is the same before and after
+// the change, and the page is not the authority on any of them. Promoting also states the rule's counted would-block matches, the
+// evidence the decision rests on, and links to the records behind them.
 function enforcementDescription(rule: ApplicationControlRule, impact: WouldBlockImpact | null): React.ReactNode {
   const ident = rule.identifier;
-  if (isExpired(rule)) {
+  if (!isDetect(rule)) {
     return (
       <>
-        This rule has expired, so hosts no longer receive it: <code>{ident}</code> is neither blocked nor recorded by it in either mode.
-      </>
-    );
-  }
-  if (!isDetect(rule)) {
-    return rule.enabled ? (
-      <>
-        In Detect, this rule stops blocking <code>{ident}</code> and keeps a record of each match that runs. Another Protect rule that
-        matches still blocks it. The agents pick it up on the next snapshot.
-      </>
-    ) : (
-      <>
-        This rule is disabled. Once it is enabled, Detect keeps a record of each match of <code>{ident}</code> that runs.
+        Detect makes this rule record the executables it matches for <code>{ident}</code> that run, instead of blocking them. Another
+        Protect rule that matches still blocks. Hosts receive the change with the next snapshot.
       </>
     );
   }
   return (
     <>
-      {rule.enabled ? (
-        <>Protect blocks <code>{ident}</code> on every assigned host from the next snapshot.</>
-      ) : (
-        <>This rule is disabled. Once it is enabled, Protect blocks <code>{ident}</code> on every assigned host.</>
-      )}
+      Protect makes this rule block the executables it matches for <code>{ident}</code>, instead of recording them. Hosts receive the
+      change with the next snapshot.
       {impact && (
         <>
           {" "}{describeWouldBlock(impact, rule.id)}.{" "}
