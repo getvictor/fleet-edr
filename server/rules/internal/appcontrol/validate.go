@@ -131,6 +131,20 @@ func canonicalizePath(p string) (string, error) {
 	return cleaned, nil
 }
 
+// ValidateEnforcement returns nil for PROTECT or DETECT and an ErrAppControlInvalidEnforcement for anything else, empty included. A
+// rule's enforcement has no default: PROTECT blocks and DETECT only records, and a rule that silently took either would be wrong for
+// the caller who meant the other.
+func ValidateEnforcement(e api.Enforcement) error {
+	switch e {
+	case api.EnforcementProtect, api.EnforcementDetect:
+		return nil
+	case "":
+		return fmt.Errorf("%w: enforcement is required (PROTECT or DETECT)", api.ErrAppControlInvalidEnforcement)
+	default:
+		return fmt.Errorf(wrapFmt, api.ErrAppControlInvalidEnforcement, e)
+	}
+}
+
 // ValidateSeverity returns nil for a recognized severity and an ErrAppControlInvalidSeverity for anything else. Empty severity is
 // allowed and is treated by callers as "use the default" (medium).
 func ValidateSeverity(s api.Severity) error {

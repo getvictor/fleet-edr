@@ -75,11 +75,12 @@ func TestAppControlREST_CreateRule_FansOutAndAudits(t *testing.T) {
 
 	policy := lookupDefaultPolicy(t, ctx, stack)
 	createBody := mustJSON(t, map[string]any{
-		"rule_type":  rulesapi.RuleTypeBinary,
-		"identifier": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-		"severity":   rulesapi.SeverityRuleHigh,
-		"custom_msg": "Blocked by corporate policy",
-		"reason":     "demo dry-run rehearsal",
+		"rule_type":   rulesapi.RuleTypeBinary,
+		"enforcement": "PROTECT",
+		"identifier":  "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		"severity":    rulesapi.SeverityRuleHigh,
+		"custom_msg":  "Blocked by corporate policy",
+		"reason":      "demo dry-run rehearsal",
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -132,10 +133,11 @@ func TestAppControlREST_CreateRule_AnalystForbidden(t *testing.T) {
 	policy := lookupDefaultPolicy(t, ctx, stack)
 	analyst := testkit.SeedJITUser(t, stack.DB, "analyst@appcontrol.test", "analyst")
 	body := mustJSON(t, map[string]any{
-		"rule_type":  rulesapi.RuleTypeBinary,
-		"identifier": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-		"severity":   rulesapi.SeverityRuleMedium,
-		"reason":     "should fail at the chokepoint",
+		"rule_type":   rulesapi.RuleTypeBinary,
+		"enforcement": "PROTECT",
+		"identifier":  "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"severity":    rulesapi.SeverityRuleMedium,
+		"reason":      "should fail at the chokepoint",
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		stack.Server.URL+"/api/v1/app-control/policies/"+strconv.FormatInt(policy.ID, 10)+"/rules",
@@ -222,10 +224,11 @@ func TestAppControlREST_VersionRegression_EpochStillAdvances(t *testing.T) {
 func createAppControlRule(t *testing.T, ctx context.Context, stack *Stack, admin testkit.SeededUser, policyID int64, identifier string) {
 	t.Helper()
 	body := mustJSON(t, map[string]any{
-		"rule_type":  rulesapi.RuleTypeBinary,
-		"identifier": identifier,
-		"severity":   rulesapi.SeverityRuleHigh,
-		"reason":     "version-regression regression test",
+		"rule_type":   rulesapi.RuleTypeBinary,
+		"enforcement": "PROTECT",
+		"identifier":  identifier,
+		"severity":    rulesapi.SeverityRuleHigh,
+		"reason":      "version-regression regression test",
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		stack.Server.URL+"/api/v1/app-control/policies/"+strconv.FormatInt(policyID, 10)+"/rules",

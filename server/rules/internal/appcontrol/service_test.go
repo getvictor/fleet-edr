@@ -92,12 +92,13 @@ func TestService_CreateRule_RejectsNilActor(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("a", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "test",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("a", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "test",
 	}, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlInvalidRequest)
@@ -112,12 +113,13 @@ func TestService_CreateRule_AuditCarriesActorEmail(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("c", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "admin@audit.test",
-		Reason:     "actor email check",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("c", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "admin@audit.test",
+		Reason:      "actor email check",
 	}, newAdmin())
 	require.NoError(t, err)
 
@@ -182,12 +184,13 @@ func TestService_NilAudit_RuleStillCreates(t *testing.T) {
 	require.NoError(t, err)
 
 	rule, err := svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("d", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "nil audit",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("d", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "nil audit",
 	}, newAdmin())
 	require.NoError(t, err)
 	assert.NotZero(t, rule.ID)
@@ -257,12 +260,13 @@ func TestService_Fanout_NoAssignments(t *testing.T) {
 	require.NoError(t, err)
 
 	rule, err := svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("a", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fanout: no_assignments",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("a", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fanout: no_assignments",
 	}, newAdmin())
 	require.NoError(t, err)
 	assert.NotZero(t, rule.ID)
@@ -283,12 +287,13 @@ func TestService_Fanout_NoHostsResolved(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("b", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fanout: no_hosts_resolved",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("b", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fanout: no_hosts_resolved",
 	}, newAdmin())
 	require.NoError(t, err)
 
@@ -311,12 +316,13 @@ func TestService_Fanout_HostListerError(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("c", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fanout: host_lister_error via unknown criteria",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("c", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fanout: host_lister_error via unknown criteria",
 	}, newAdmin())
 	require.NoError(t, err)
 
@@ -340,12 +346,13 @@ func TestService_Fanout_CachesHostLister(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("e", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fanout: hostLister cache",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("e", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fanout: hostLister cache",
 	}, newAdmin())
 	require.NoError(t, err)
 
@@ -366,12 +373,13 @@ func TestService_Fanout_PartialFailureAuditsHostListerError(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = svc.CreateRule(t.Context(), api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("f", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fanout: partial failure surfaces host_lister_error",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("f", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fanout: partial failure surfaces host_lister_error",
 	}, newAdmin())
 	require.NoError(t, err)
 
@@ -390,12 +398,13 @@ func TestService_UpdateRule_FansOutAndAudits(t *testing.T) {
 	policy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	rule, err := svc.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("1", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fixture for update",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("1", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fixture for update",
 	}, newAdmin())
 	require.NoError(t, err)
 	versionAfterCreate := policy.Version + 1 // CreateRule bumps once
@@ -426,12 +435,13 @@ func TestService_DeleteRule_FansOutAndAudits(t *testing.T) {
 	policy, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	rule, err := svc.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   policy.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("2", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "user:7",
-		Reason:     "fixture for delete",
+		PolicyID:    policy.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("2", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "user:7",
+		Reason:      "fixture for delete",
 	}, newAdmin())
 	require.NoError(t, err)
 	versionAfterCreate := policy.Version + 1

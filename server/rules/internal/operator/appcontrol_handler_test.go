@@ -261,7 +261,7 @@ func TestMutationHandlerEarlyExits(t *testing.T) {
 	t.Run("create rule: valid body but no actor is 500", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/app-control/policies/1/rules",
-			strings.NewReader(`{"rule_type":"BINARY","identifier":"/bin/x","reason":"r"}`))
+			strings.NewReader(`{"rule_type":"BINARY", "enforcement": "PROTECT","identifier":"/bin/x","reason":"r"}`))
 		req.SetPathValue("id", "1")
 		rec := httptest.NewRecorder()
 		h.handleCreateRule(rec, req)

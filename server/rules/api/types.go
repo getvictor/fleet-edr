@@ -562,8 +562,9 @@ const (
 	ActionBlock Action = "BLOCK"
 )
 
-// Enforcement is the rule's audit-vs-enforce switch. The column is reserved in this phase: every rule runs as PROTECT. The DETECT
-// semantic (log the would-be decision but allow the exec) arrives with the Lockdown change.
+// Enforcement is the rule's audit-vs-enforce switch. A PROTECT rule denies a matching exec. A DETECT rule lets it run and the
+// extension reports it as an application_control_would_block event, which is kept as a monitor record, so an operator can see what a
+// rule would block before promoting it to PROTECT. A DETECT rule never changes the verdict another rule reaches.
 type Enforcement string
 
 const (
@@ -691,34 +692,38 @@ type ApplicationControlRule struct {
 }
 
 // CreateRuleRequest carries the operator-supplied fields for a new rule. The server fills in `Enabled=true`, `Action=BLOCK`,
-// `Enforcement=PROTECT`, `Source=admin`, `CreatedBy=<session user>` and timestamps. Severity defaults to medium when blank.
+// `Source=admin`, `CreatedBy=<session user>` and timestamps. Severity defaults to medium when blank. Enforcement has no default and
+// is required: PROTECT blocks and DETECT only records, and either one chosen silently would be wrong for the caller who meant the
+// other.
 type CreateRuleRequest struct {
-	PolicyID   int64
-	RuleType   RuleType
-	Identifier string
-	CustomMsg  *string
-	CustomURL  *string
-	Comment    string
-	Severity   Severity
-	Actor      string
-	Reason     string
+	PolicyID    int64
+	RuleType    RuleType
+	Identifier  string
+	Enforcement Enforcement
+	CustomMsg   *string
+	CustomURL   *string
+	Comment     string
+	Severity    Severity
+	Actor       string
+	Reason      string
 }
 
 // UpdateRuleRequest is the server-internal contract for PATCH /api/v1/app-control/rules/{id}. Every mutable field is a pointer so
 // "field absent" (nil) is distinguishable from "field set to zero value". Phase A allows mutating Enabled, Severity, CustomMsg,
-// CustomURL, Comment, and ExpiresAt. Phase B's Detect-mode change layers Enforcement on top; this struct does not carry it today.
+// CustomURL, Comment, ExpiresAt, and Enforcement, which is how a DETECT rule is promoted to PROTECT (or moved back).
 // PolicyID is set by the handler from the existing row (PATCH does not move a rule between policies), Actor and Reason are required
 // for every state-changing call so the audit row is honest.
 type UpdateRuleRequest struct {
-	RuleID    int64
-	Enabled   *bool
-	Severity  *Severity
-	CustomMsg *string
-	CustomURL *string
-	Comment   *string
-	ExpiresAt *time.Time
-	Actor     string
-	Reason    string
+	RuleID      int64
+	Enabled     *bool
+	Severity    *Severity
+	Enforcement *Enforcement
+	CustomMsg   *string
+	CustomURL   *string
+	Comment     *string
+	ExpiresAt   *time.Time
+	Actor       string
+	Reason      string
 }
 
 // DeleteRuleRequest is the server-internal contract for DELETE /api/v1/app-control/rules/{id}. Actor + Reason are required so the
@@ -763,12 +768,13 @@ type DeletePolicyRequest struct {
 // custom_url / comment overwrite the existing row when the key collides. PolicyID is supplied by the request envelope, not by
 // each item, so the operator cannot accidentally mix policies inside one batch.
 type BulkUpsertRuleItem struct {
-	RuleType   RuleType
-	Identifier string
-	Severity   Severity
-	CustomMsg  *string
-	CustomURL  *string
-	Comment    string
+	RuleType    RuleType
+	Identifier  string
+	Enforcement Enforcement
+	Severity    Severity
+	CustomMsg   *string
+	CustomURL   *string
+	Comment     string
 }
 
 // BulkUpsertRulesRequest is the server-internal contract for POST /policies/{id}/rules:bulkUpsert. All-or-nothing semantics:
@@ -822,6 +828,9 @@ var (
 	// not one of low/medium/high/critical.
 	ErrAppControlInvalidSeverity = errors.New("rules: invalid application control rule severity")
 
+	// ErrAppControlInvalidEnforcement is returned when the enforcement is not PROTECT or DETECT.
+	ErrAppControlInvalidEnforcement = errors.New("rules: invalid application control rule enforcement")
+
 	// ErrAppControlInvalidRequest is returned when a request is missing required fields (e.g. empty actor or reason on a state-changing
 	// call). Distinct from the identifier-shape errors above so audit logs can tell them apart.
 	ErrAppControlInvalidRequest = errors.New("rules: invalid application control request")
@@ -855,6 +864,7 @@ func IsApplicationControlValidationError(err error) bool {
 		errors.Is(err, ErrAppControlUnsupportedRuleType) ||
 		errors.Is(err, ErrAppControlInvalidIdentifier) ||
 		errors.Is(err, ErrAppControlInvalidSeverity) ||
+		errors.Is(err, ErrAppControlInvalidEnforcement) ||
 		errors.Is(err, ErrAppControlInvalidRequest)
 }
 

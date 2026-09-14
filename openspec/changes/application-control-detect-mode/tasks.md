@@ -14,7 +14,14 @@
 - [x] Restate the shared rules-engine requirements identically in `sensor-recovery-as-host-health`.
 - [x] Integration test for a would-block event becoming a monitor record; mutation-check it.
 
-## Enforcement and console
+## Enforcement is a required choice
 
-- [ ] Require enforcement on rule create and bulk upsert, and change it on update.
-- [ ] Enforcement choice in the console's add and paste forms, Promote to Protect, and a rule's would-block impact.
+- [x] Require enforcement on rule create and every bulk-upsert item, change it on update and re-upsert, and audit it.
+- [x] Detect / Protect choice, with neither preselected, in the Add rule and Paste many dialogs.
+- [x] Update the API tests, the policy editor end-to-end test, and the L5 app-control scenario to name an enforcement.
+- [x] Document Detect mode and the required field in `docs/operations.md`, with an upgrade note in the changelog.
+
+## Console: promote and impact
+
+- [ ] Promote to Protect (and back) from the policy page.
+- [ ] A rule's would-block impact where the promote decision is made, linked to its monitor records.

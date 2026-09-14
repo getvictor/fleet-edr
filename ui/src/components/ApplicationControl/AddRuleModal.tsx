@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  type Enforcement,
   createAppControlRule,
   type CreateAppControlRuleRequest,
 } from "../../api";
@@ -8,6 +9,7 @@ import { ReauthModal } from "../ReauthModal";
 import { Input, Select } from "../ui/Input";
 import { AppControlDialogShell } from "./AppControlDialogShell";
 import { applyAppControlSubmitError } from "./dialogErrors";
+import { EnforcementChoice } from "./EnforcementChoice";
 import "./ApplicationControl.scss";
 
 // AddRuleModalProps is the parent contract. open drives showModal() /
@@ -132,6 +134,7 @@ const errorMessageByCode = new Map<string, string>([
 export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModalProps) {
   const [ruleType, setRuleType] = useState("BINARY");
   const [identifier, setIdentifier] = useState("");
+  const [enforcement, setEnforcement] = useState<Enforcement | null>(null);
   const [severity, setSeverity] = useState("medium");
   const [customMsg, setCustomMsg] = useState("");
   const [customURL, setCustomURL] = useState("");
@@ -145,6 +148,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset tied to the open prop transition
     setRuleType("BINARY");
     setIdentifier("");
+    setEnforcement(null);
     setSeverity("medium");
     setCustomMsg("");
     setCustomURL("");
@@ -159,10 +163,11 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
   );
   const { call: callCreate, modal: reauthModal } = useReauthRetry(submitCreate);
 
-  const submitDisabled = busy || reason.trim().length === 0 || identifier.trim().length === 0;
+  const submitDisabled = busy || enforcement === null || reason.trim().length === 0 || identifier.trim().length === 0;
 
   async function handleSubmit(e: React.SyntheticEvent) {
     e.preventDefault();
+    // submitDisabled includes enforcement === null, and TypeScript narrows through the alias, so enforcement is non-null below.
     if (submitDisabled) return;
     const validation = validateIdentifier(ruleType, identifier);
     if (validation) {
@@ -190,6 +195,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
       const req: CreateAppControlRuleRequest = {
         rule_type: ruleType,
         identifier: normalizeIdentifier(ruleType, identifier),
+        enforcement,
         severity,
         reason: reason.trim(),
       };
@@ -212,7 +218,7 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
       onClose={onClose}
       titleId={DIALOG_TITLE_ID}
       title="Add rule"
-      subtitle="Block an executable on every assigned host. The rule fans out to enrolled agents on save."
+      subtitle="Block or detect an executable on every assigned host. The rule fans out to enrolled agents on save."
       formError={formError}
       busy={busy}
       submitDisabled={submitDisabled}
@@ -251,6 +257,8 @@ export function AddRuleModal({ open, policyID, onClose, onCreated }: AddRuleModa
         disabled={busy}
         autoFocus
       />
+
+      <EnforcementChoice name="add-rule-enforcement" value={enforcement} onChange={setEnforcement} disabled={busy} />
 
       <Select
         id="rule-severity"

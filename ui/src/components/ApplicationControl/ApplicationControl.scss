@@ -225,3 +225,32 @@
     opacity: 0.5;
   }
 }
+
+// EnforcementChoice: the required Detect / Protect choice in the add and paste-many dialogs.
+.app-control-enforcement {
+  display: flex;
+  flex-direction: column;
+  gap: $pad-xsmall;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.app-control-enforcement__option {
+  display: flex;
+  align-items: flex-start;
+  gap: $pad-small;
+  font-size: $x-small;
+  cursor: pointer;
+}
+
+.app-control-enforcement__label {
+  display: block;
+  font-weight: $bold;
+}
+
+.app-control-enforcement__help {
+  display: block;
+  font-size: $xx-small;
+  color: $ui-fleet-black-75;
+}

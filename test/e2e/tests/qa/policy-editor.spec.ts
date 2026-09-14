@@ -83,6 +83,7 @@ test.describe("application control policy editor", () => {
     // button. Default ruleType is BINARY, so the 64-char hex value validates immediately.
     await identifierField(page).fill(VALID_BINARY_IDENTIFIER);
     await reasonField(page).fill("qa e2e: stage + save");
+    await page.getByRole("radio", { name: /protect/i }).check();
 
     // Capture the POST so we can prove the wire+payload contract the spec calls out: rule_type, identifier,
     // reason all reach the server.
@@ -100,6 +101,7 @@ test.describe("application control policy editor", () => {
     expect(sent.rule_type).toBe("BINARY");
     expect(sent.identifier).toBe(VALID_BINARY_IDENTIFIER);
     expect(sent.reason).toBe("qa e2e: stage + save");
+    expect(sent.enforcement).toBe("PROTECT");
 
     // The DB now has one rule with the staged identifier on the seeded policy. Reading it back confirms the
     // server persisted (vs. the UI just optimistically rendering it).
@@ -127,15 +129,17 @@ test.describe("application control policy editor", () => {
     await expect(saveBtn).toBeDisabled();
 
     // Fill identifier ONLY. Reason is still empty → submit must remain disabled. AddRuleModal's submitDisabled
-    // is `busy || reason.trim().length === 0 || identifier.trim().length === 0`, so the spec invariant
+    // also requires an enforcement and a non-empty identifier, so the spec invariant
     // ("editor refuses to save and surfaces a visible error explaining the reason is required") is satisfied
     // by the disabled control + the operator-visible "Reason (required for audit log)" label.
     await identifierField(page).fill(VALID_BINARY_IDENTIFIER);
     await expect(saveBtn).toBeDisabled();
     await expect(reasonField(page)).toBeVisible();
 
-    // Fill the reason; the button must enable. Proves the disabled state was specifically the empty reason,
-    // not some other gate.
+    // Choose the enforcement first, so the last gate left is the reason: filling it must enable the button, which proves the
+    // disabled state was specifically the empty reason.
+    await page.getByRole("radio", { name: /detect/i }).check();
+    await expect(saveBtn).toBeDisabled();
     await reasonField(page).fill("any reason");
     await expect(saveBtn).toBeEnabled();
   });
@@ -150,6 +154,7 @@ test.describe("application control policy editor", () => {
     // validator at the top of handleSubmit catches it.
     await identifierField(page).fill("abc123"); // 6 chars, not 64
     await reasonField(page).fill("qa e2e: invalid hash");
+    await page.getByRole("radio", { name: /protect/i }).check();
 
     // Pin a response listener on the rules endpoint to prove no POST happens. The listener removes itself
     // after firing so a subsequent stage+save (in another test) doesn't double-fire it.

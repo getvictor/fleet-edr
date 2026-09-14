@@ -164,7 +164,7 @@ func TestAppControl_ListRulesAcrossPolicies_FilterDimensions(t *testing.T) {
 	}
 	for _, r := range rulesToSeed {
 		_, err := store.CreateRule(ctx, api.CreateRuleRequest{
-			PolicyID: r.policyID, RuleType: r.ruleType, Identifier: r.identifier,
+			PolicyID: r.policyID, RuleType: r.ruleType, Enforcement: api.EnforcementProtect, Identifier: r.identifier,
 			Severity: r.severity, Actor: "demo-admin", Reason: "seed",
 		})
 		require.NoError(t, err)
@@ -232,12 +232,12 @@ func TestAppControl_ListRulesAcrossPolicies_EnabledTriState(t *testing.T) {
 	require.NoError(t, err)
 
 	enabledRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID: defaultPolicy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("f", 64),
+		PolicyID: defaultPolicy.ID, RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("f", 64),
 		Severity: api.SeverityRuleHigh, Actor: "demo-admin", Reason: "seed enabled",
 	})
 	require.NoError(t, err)
 	disabledRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID: defaultPolicy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("9", 64),
+		PolicyID: defaultPolicy.ID, RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("9", 64),
 		Severity: api.SeverityRuleHigh, Actor: "demo-admin", Reason: "seed disabled",
 	})
 	require.NoError(t, err)
@@ -290,13 +290,14 @@ func TestAppControl_CreateRule_BinaryHappyPath(t *testing.T) {
 
 	msg := "Blocked by corporate policy"
 	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("a", 64),
-		Severity:   api.SeverityRuleMedium,
-		CustomMsg:  &msg,
-		Actor:      "demo-admin",
-		Reason:     "integration test",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("a", 64),
+		Severity:    api.SeverityRuleMedium,
+		CustomMsg:   &msg,
+		Actor:       "demo-admin",
+		Reason:      "integration test",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, p.ID, rule.PolicyID)
@@ -337,11 +338,12 @@ func TestAppControl_CreateRule_DuplicateRejected(t *testing.T) {
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	req := api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("b", 64),
-		Actor:      "demo-admin",
-		Reason:     "first create",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("b", 64),
+		Actor:       "demo-admin",
+		Reason:      "first create",
 	}
 	_, err = store.CreateRule(ctx, req)
 	require.NoError(t, err)
@@ -369,21 +371,23 @@ func TestAppControl_CreateRule_SameIdentifierDifferentTypeCoexist(t *testing.T) 
 	sharedIdentifier := strings.Repeat("a", 64) // valid for both BINARY and CERTIFICATE
 
 	binaryRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: sharedIdentifier,
-		Actor:      "demo-admin",
-		Reason:     "binary rule for shared identifier",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  sharedIdentifier,
+		Actor:       "demo-admin",
+		Reason:      "binary rule for shared identifier",
 	})
 	require.NoError(t, err)
 
 	// Same identifier string, different rule_type: must succeed because the unique key includes rule_type.
 	certRule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeCertificate,
-		Identifier: sharedIdentifier,
-		Actor:      "demo-admin",
-		Reason:     "certificate rule for the same identifier",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeCertificate,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  sharedIdentifier,
+		Actor:       "demo-admin",
+		Reason:      "certificate rule for the same identifier",
 	})
 	require.NoError(t, err, "same identifier under a different rule_type must NOT collide on the unique key")
 
@@ -455,11 +459,12 @@ func TestAppControl_CreateRule_PathPersistsCanonical(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-				PolicyID:   p.ID,
-				RuleType:   api.RuleTypePath,
-				Identifier: tc.in,
-				Actor:      "demo-admin",
-				Reason:     "PR #290 path canonical persist",
+				PolicyID:    p.ID,
+				RuleType:    api.RuleTypePath,
+				Enforcement: api.EnforcementProtect,
+				Identifier:  tc.in,
+				Actor:       "demo-admin",
+				Reason:      "PR #290 path canonical persist",
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, rule.Identifier)
@@ -491,11 +496,12 @@ func TestAppControl_CreateRule_AcceptsAllWiredTypes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(string(tc.rt)+"/"+tc.identifier, func(t *testing.T) {
 			rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-				PolicyID:   p.ID,
-				RuleType:   tc.rt,
-				Identifier: tc.identifier,
-				Actor:      "demo-admin",
-				Reason:     "all-wired acceptance",
+				PolicyID:    p.ID,
+				RuleType:    tc.rt,
+				Enforcement: api.EnforcementProtect,
+				Identifier:  tc.identifier,
+				Actor:       "demo-admin",
+				Reason:      "all-wired acceptance",
 			})
 			require.NoError(t, err)
 			assert.NotZero(t, rule.ID)
@@ -547,11 +553,12 @@ func TestAppControl_CreateRule_RejectsBadBinaryIdentifier(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := store.CreateRule(ctx, api.CreateRuleRequest{
-				PolicyID:   p.ID,
-				RuleType:   api.RuleTypeBinary,
-				Identifier: tc.id,
-				Actor:      "demo-admin",
-				Reason:     "should be rejected",
+				PolicyID:    p.ID,
+				RuleType:    api.RuleTypeBinary,
+				Enforcement: api.EnforcementProtect,
+				Identifier:  tc.id,
+				Actor:       "demo-admin",
+				Reason:      "should be rejected",
 			})
 			require.Error(t, err)
 			assert.ErrorIs(t, err, api.ErrAppControlInvalidIdentifier)
@@ -570,11 +577,12 @@ func TestAppControl_CreateRule_RequiresActorAndReason(t *testing.T) {
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	base := api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("f", 64),
-		Actor:      "demo-admin",
-		Reason:     "valid baseline",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("f", 64),
+		Actor:       "demo-admin",
+		Reason:      "valid baseline",
 	}
 
 	missingActor := base
@@ -597,11 +605,12 @@ func TestAppControl_CreateRule_UnknownPolicyMapsToNotFound(t *testing.T) {
 	store, _ := newAppControlStore(t)
 	ctx := t.Context()
 	_, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   9_999_999,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("e", 64),
-		Actor:      "demo-admin",
-		Reason:     "should hit FK constraint",
+		PolicyID:    9_999_999,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("e", 64),
+		Actor:       "demo-admin",
+		Reason:      "should hit FK constraint",
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
@@ -620,21 +629,23 @@ func TestAppControl_CreateRule_AtomicityOnVersionBumpFailure(t *testing.T) {
 	require.NoError(t, err)
 	// Happy path first so we know the rule WOULD insert.
 	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("d", 64),
-		Actor:      "demo-admin",
-		Reason:     "atomicity baseline",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("d", 64),
+		Actor:       "demo-admin",
+		Reason:      "atomicity baseline",
 	})
 	require.NoError(t, err)
 	// Re-insert the same row with a non-existent policy id; the FK fires before the version bump, so the transaction rolls back cleanly
 	// and no orphan row lands.
 	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   p.ID + 1_000_000,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("c", 64),
-		Actor:      "demo-admin",
-		Reason:     "should rollback cleanly",
+		PolicyID:    p.ID + 1_000_000,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("c", 64),
+		Actor:       "demo-admin",
+		Reason:      "should rollback cleanly",
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrAppControlPolicyNotFound)
@@ -653,12 +664,13 @@ func TestAppControl_UpdateRule_HappyPath(t *testing.T) {
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   p.ID,
-		RuleType:   api.RuleTypeBinary,
-		Identifier: strings.Repeat("d", 64),
-		Severity:   api.SeverityRuleMedium,
-		Actor:      "demo-admin",
-		Reason:     "fixture for update",
+		PolicyID:    p.ID,
+		RuleType:    api.RuleTypeBinary,
+		Enforcement: api.EnforcementProtect,
+		Identifier:  strings.Repeat("d", 64),
+		Severity:    api.SeverityRuleMedium,
+		Actor:       "demo-admin",
+		Reason:      "fixture for update",
 	})
 	require.NoError(t, err)
 	preVersion := p.Version + 1 // create bumped once
@@ -715,7 +727,7 @@ func TestAppControl_UpdateRule_RequiresAtLeastOneField(t *testing.T) {
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID: p.ID, RuleType: api.RuleTypeBinary,
+		PolicyID: p.ID, RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect,
 		Identifier: strings.Repeat("e", 64), Actor: "demo-admin", Reason: "fixture",
 	})
 	require.NoError(t, err)
@@ -736,7 +748,7 @@ func TestAppControl_DeleteRule_HappyPath(t *testing.T) {
 	p, err := store.GetPolicyByName(ctx, api.DefaultPolicyName)
 	require.NoError(t, err)
 	rule, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID: p.ID, RuleType: api.RuleTypeBinary,
+		PolicyID: p.ID, RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect,
 		Identifier: strings.Repeat("f", 64), Actor: "demo-admin", Reason: "fixture",
 	})
 	require.NoError(t, err)
@@ -865,7 +877,7 @@ func TestAppControl_DeletePolicy_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	// Add a rule so we can confirm the CASCADE.
 	_, err = store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID: policy.ID, RuleType: api.RuleTypeBinary,
+		PolicyID: policy.ID, RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect,
 		Identifier: strings.Repeat("9", 64), Actor: "demo-admin", Reason: "fixture",
 	})
 	require.NoError(t, err)
@@ -917,7 +929,7 @@ func TestAppControl_BulkUpsertRules_HappyPath_MixedInsertAndUpdate(t *testing.T)
 	require.NoError(t, err)
 	// Seed one BINARY rule with severity=medium so we can verify the upsert overwrites to high in the batch below.
 	preSeed, err := store.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID: p.ID, RuleType: api.RuleTypeBinary,
+		PolicyID: p.ID, RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect,
 		Identifier: strings.Repeat("a", 64), Severity: api.SeverityRuleMedium,
 		Actor: "demo-admin", Reason: "pre-seed",
 	})
@@ -928,9 +940,9 @@ func TestAppControl_BulkUpsertRules_HappyPath_MixedInsertAndUpdate(t *testing.T)
 	result, err := store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("a", 64), Severity: api.SeverityRuleHigh},
-			{RuleType: api.RuleTypeCDHash, Identifier: strings.Repeat("b", 40), Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeTeamID, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("a", 64), Severity: api.SeverityRuleHigh},
+			{RuleType: api.RuleTypeCDHash, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("b", 40), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeTeamID, Enforcement: api.EnforcementProtect, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
 		},
 		Actor:  "demo-admin",
 		Reason: "Q1 intel feed import",
@@ -962,8 +974,8 @@ func TestAppControl_BulkUpsertRules_Idempotent(t *testing.T) {
 	batch := api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("c", 64), Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeCDHash, Identifier: strings.Repeat("d", 40), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("c", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeCDHash, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("d", 40), Severity: api.SeverityRuleMedium},
 		},
 		Actor: "demo-admin", Reason: "first import",
 	}
@@ -999,9 +1011,9 @@ func TestAppControl_BulkUpsertRules_BadItemRejectsBatch(t *testing.T) {
 	_, err = store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("e", 64), Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeBinary, Identifier: "TOO-SHORT", Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeTeamID, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("e", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: "TOO-SHORT", Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeTeamID, Enforcement: api.EnforcementProtect, Identifier: "EQHXZ8M8AV", Severity: api.SeverityRuleMedium},
 		},
 		Actor: "demo-admin", Reason: "should fail atomically",
 	})
@@ -1052,8 +1064,8 @@ func TestAppControl_BulkUpsertRules_DuplicateKeyInBatch(t *testing.T) {
 	_, err = store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
 		PolicyID: p.ID,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleMedium},
-			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleHigh},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("7", 64), Severity: api.SeverityRuleHigh},
 		},
 		Actor: "demo-admin", Reason: "should reject the duplicate",
 	})
@@ -1072,9 +1084,10 @@ func TestAppControl_BulkUpsertRules_BatchSizeCap(t *testing.T) {
 	items := make([]api.BulkUpsertRuleItem, api.MaxBulkUpsertItems+1)
 	for i := range items {
 		items[i] = api.BulkUpsertRuleItem{
-			RuleType:   api.RuleTypeBinary,
-			Identifier: strings.Repeat("0", 60) + fmt.Sprintf("%04d", i),
-			Severity:   api.SeverityRuleMedium,
+			RuleType:    api.RuleTypeBinary,
+			Enforcement: api.EnforcementProtect,
+			Identifier:  strings.Repeat("0", 60) + fmt.Sprintf("%04d", i),
+			Severity:    api.SeverityRuleMedium,
 		}
 	}
 	_, err = store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
@@ -1092,7 +1105,7 @@ func TestAppControl_BulkUpsertRules_UnknownPolicyMapsToNotFound(t *testing.T) {
 	_, err := store.BulkUpsertRules(t.Context(), api.BulkUpsertRulesRequest{
 		PolicyID: 9_999_999,
 		Items: []api.BulkUpsertRuleItem{
-			{RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("f", 64), Severity: api.SeverityRuleMedium},
+			{RuleType: api.RuleTypeBinary, Enforcement: api.EnforcementProtect, Identifier: strings.Repeat("f", 64), Severity: api.SeverityRuleMedium},
 		},
 		Actor: "demo-admin", Reason: "stale policy id",
 	})

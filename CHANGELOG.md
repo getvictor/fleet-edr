@@ -6,6 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Upgrade notes (action required)
 
+- **Application-control API clients must name each rule's enforcement.** Creating a rule, and each item of a bulk upsert, now requires `enforcement`: `PROTECT` to block or `DETECT` to record without blocking. A request without it is refused. Add `"enforcement": "PROTECT"` to existing automation to keep its rules blocking.
 - **A third profile keeps users from turning off the agent.** `edr-login-items.mobileconfig` ships with this release and marks the Fleet EDR background items as managed, so they cannot be turned off in Login Items & Extensions (macOS 13 and later). Push it through your MDM with the other two profiles.
 - **Alerts are now deleted 180 days after their last triage activity.** Until now nothing deleted alerts. To keep them longer, or indefinitely as before, set `EDR_ALERT_RETENTION_DAYS` (0 keeps them forever) before upgrading: deletion starts as soon as the upgraded server starts, then repeats hourly.
 - **Subscribe webhook destinations to sensor health faults.** A host whose sensor cannot be restored no longer raises an alert, so a destination that learned about it through alert deliveries stops hearing about it until you tick **Sensor health fault** for it in Settings, Webhooks.
@@ -16,6 +17,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 - **A SigmaHQ threat-hunting rule for clipboard collection.** Runs of `pbpaste` are recorded in monitor mode, from SigmaHQ's threat-hunting rules, which are now vendored alongside its main macOS rules.
 - **SSO roles can follow identity provider groups.** Map IdP groups to EDR roles, and each SSO sign-in sets the operator's role to the most privileged role among their mapped groups, or the default role when none match. A role set by hand is replaced at the next sign-in, a group cannot grant super admin, and every change is audited. Set it in **Admin settings, Single sign-on**; see [Okta setup](docs/okta-setup.md#map-okta-groups-to-edr-roles).
 - **Watch more files for tampering.** In **Detection tuning**, add files or directories that every host records writes, renames, truncations and deletions of, on top of the sudoers files it always watches. A saved change reaches online hosts within seconds, and hosts that were offline or enroll later within minutes.
+- **Application-control rules can run in Detect mode.** A rule with enforcement `DETECT` lets a matching exec run and keeps a monitor record of the match, so you can see what a rule would block before promoting it to `PROTECT`. A `DETECT` rule never unblocks an exec another rule blocks. Every new rule asks for one or the other, in the console and the API, with no default. See [Detect mode](docs/operations.md#detect-mode).
 - **Monitor-mode matches can be read.** A match from a rule in monitor mode is now kept as a record carrying what an alert would: the process, techniques, and triggering events. Judge a rule for promotion from what it matched rather than from a count. The records stay out of the alert queue and webhooks, cannot be triaged, and are deleted after 7 days (`EDR_MONITOR_RETENTION_DAYS`).
 
 ### Changed
@@ -24,7 +26,6 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
-- **A Mac that needs a restart after an agent upgrade says so.** When the agent cannot reach the upgraded network extension because the previous version stays registered until the Mac restarts, the host's agent health now reports that a restart finishes the upgrade, instead of reporting the network extension as not activated.
 - **A renamed remote-access tool is detected by its signature.** A shipped rule that catches MeshAgent renamed to hide it could not run, because it reads the name the binary was compiled as and nothing supplied that. macOS keeps that name in the code signature, which a rename cannot change, so it is now read from there. One more of the shipped rule set runs: 67 of 69, up from 66.
 - **An application-control alert links to the policy that blocked.** Its title was plain text, so an analyst who saw `Application blocked: /usr/bin/curl` had no way to reach the rule that denied it. Detection alerts already linked to their rule documentation; these carry a policy rule rather than a catalog rule, so they now link to the policy that owns it.
 - **A long exclusion value no longer widens the exclusion table.** A path or glob longer than the Value column now wraps inside it, so the Reason, Expires and Created by columns stay on screen.

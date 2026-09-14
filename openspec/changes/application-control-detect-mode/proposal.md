@@ -19,9 +19,16 @@ The work lands in steps, extension first, so that a `DETECT` rule is never silen
 - The record's subject is the process that attempted the exec, as a block alert's is, so a record and the alert it becomes after promotion deduplicate the same way.
 - The two shared requirements in `server-detection-rules-engine` are restated identically in `sensor-recovery-as-host-health`, which is also in flight, so the release archive keeps both changes' text whichever it applies last.
 
+### Enforcement is a required choice
+
+- **Every rule names its enforcement; there is no default.** Rule create and every item of `rules:bulkUpsert` require `enforcement`, and a request without it is a 400. PROTECT blocks and DETECT only records, and a rule that silently took either would be wrong for the caller who meant the other: a PROTECT default turns a rule meant to be watched into one that blocks production, and a DETECT default turns a rule meant to stop a known-bad binary into one that only records it. CrowdStrike's IOC management and Microsoft Defender's custom indicators both make the action a required choice for the same reason. The archived design defaulted new rules to DETECT. API clients that omitted the field now get a 400, called out as an upgrade note.
+- **Update and re-upsert change it.** `PATCH /api/v1/app-control/rules/{id}` accepts `enforcement`, and a bulk upsert that updates an existing rule sets it. Any change bumps the policy version, reaches hosts, and is audited with the rule's enforcement.
+- **The console asks.** The Add rule and Paste many dialogs present Detect and Protect with neither selected, and saving waits for a choice.
+- The database column keeps its `DEFAULT 'PROTECT'`. Dropping it would not help: MySQL gives a `NOT NULL` ENUM column its first value when an insert omits it, default or not, so the store's validation is the guard.
+
 ## Out of scope for these steps
 
-- Setting enforcement from the API and the console, promoting a rule, and a rule's would-block impact in the console. The server still creates every rule as `PROTECT`, so no host reports a would-block match until those land.
+- Promoting a rule from the console, and a rule's would-block impact where the promote decision is made (executions and hosts it would have blocked, with a link to its monitor records). They come next.
 - The archived design's regular `exec` event with a `decision` field for a denied exec. A denied exec never replaces the process image, so an `exec` event for it would tell the graph builder the process now runs the blocked binary. It needs its own design.
 
 ## Notes for the release archive

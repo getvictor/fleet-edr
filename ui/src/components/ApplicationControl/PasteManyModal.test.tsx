@@ -80,12 +80,14 @@ describe("PasteManyModal", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /parse/i }));
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "import" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
 
     const select = screen.getByRole("combobox", { name: /^type for row 1/i });
     expect(select).toHaveValue("PATH");
     expect(screen.getByRole("button", { name: /save 1 rule/i })).toBeEnabled();
   });
 
+  // spec:web-ui/rule-forms-require-an-enforcement-choice/a-paste-applies-the-chosen-enforcement-to-every-row
   it("submits the bulk-upsert request and fires onUpserted on success", async () => {
     const bulkSpy = vi.spyOn(api, "bulkUpsertAppControlRules").mockResolvedValue(fakeResult);
     const onUpserted = vi.fn();
@@ -97,7 +99,12 @@ describe("PasteManyModal", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /parse/i }));
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "import" } });
-    fireEvent.click(screen.getByRole("button", { name: /save 2 rules/i }));
+    const save = screen.getByRole("button", { name: /save 2 rules/i });
+    expect(screen.getByRole("radio", { name: /detect/i })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /protect/i })).not.toBeChecked();
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /detect/i }));
+    fireEvent.click(save);
 
     await waitFor(() => {
       expect(bulkSpy).toHaveBeenCalledTimes(1);
@@ -105,8 +112,8 @@ describe("PasteManyModal", () => {
     });
     expect(bulkSpy).toHaveBeenCalledWith(7, {
       rules: [
-        { rule_type: "BINARY", identifier: "a".repeat(64), severity: "medium" },
-        { rule_type: "TEAMID", identifier: "EQHXZ8M8AV", severity: "medium" },
+        { rule_type: "BINARY", identifier: "a".repeat(64), enforcement: "DETECT", severity: "medium" },
+        { rule_type: "TEAMID", identifier: "EQHXZ8M8AV", enforcement: "DETECT", severity: "medium" },
       ],
       reason: "import",
     });
@@ -129,6 +136,7 @@ describe("PasteManyModal", () => {
     fireEvent.change(screen.getByLabelText(/identifiers/i), { target: { value: "a".repeat(64) } });
     fireEvent.click(screen.getByRole("button", { name: /parse/i }));
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "import" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save 1 rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/bulk item 1: identifier failed validation/);
