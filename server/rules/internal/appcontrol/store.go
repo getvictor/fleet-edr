@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -576,58 +577,70 @@ func validateUpdateRuleRequest(req api.UpdateRuleRequest) error {
 // UpdateRule applies a partial update to one rule row and bumps the parent policy's version atomically. PolicyID is read from the
 // existing row rather than carried on the request so a PATCH cannot inadvertently move a rule between policies; the auth-gated
 // REST handler runs separately. ErrAppControlRuleNotFound when the row is missing, ErrAppControlInvalidRequest on empty
-// actor/reason or a body with no mutable field, ErrAppControlInvalidSeverity when Severity is set to a bogus value.
+// actor/reason or a body with no mutable field, ErrAppControlInvalidSeverity when Severity is set to a bogus value. The bool reports
+// whether any field changed; when none did, the version is left alone.
 //
-// Concurrency: the UPDATE result's RowsAffected is gated to 1 so a concurrent DELETE between the SELECT and the UPDATE returns
-// ErrAppControlRuleNotFound rather than silently bumping the policy version (which would trigger a spurious snapshot fan-out).
-func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.ApplicationControlRule, error) {
+// Concurrency: the lookup locks the rule row, so a concurrent DELETE either completes first (the lookup finds nothing, and the result
+// is ErrAppControlRuleNotFound) or waits for this transaction, and the comparison with the request is made against the row as it is
+// written.
+func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.ApplicationControlRule, bool, error) {
 	if err := validateUpdateRuleRequest(req); err != nil {
-		return api.ApplicationControlRule{}, err
+		return api.ApplicationControlRule{}, false, err
 	}
 	setFragment, args, ok := buildRuleUpdateSetClause(req)
 	if !ok {
-		return api.ApplicationControlRule{}, fmt.Errorf("%w: at least one mutable field must be set on a PATCH", api.ErrAppControlInvalidRequest)
+		err := fmt.Errorf("%w: at least one mutable field must be set on a PATCH", api.ErrAppControlInvalidRequest)
+		return api.ApplicationControlRule{}, false, err
 	}
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf(errBeginTxFmt, err)
+		return api.ApplicationControlRule{}, false, fmt.Errorf(errBeginTxFmt, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Look up the existing row so we know which policy to bump and so we can return a 404 instead of silently updating zero rows.
-	var policyID int64
-	if err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, req.RuleID).Scan(&policyID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return api.ApplicationControlRule{}, api.ErrAppControlRuleNotFound
-		}
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol lookup rule for update: %w", err)
+	// Read the rule under a row lock: it names the policy to bump, and it is what the request is compared against. Whether anything
+	// changes is decided here rather than from the UPDATE's affected-row count, which reports changed or matched rows depending on
+	// the DSN's clientFoundRows. The UPDATE takes this same lock anyway, so taking it here adds no lock the transaction did not
+	// already hold, and keeps the rule-then-policy order it always had.
+	current, err := scanRuleRow(tx.QueryRowxContext(ctx, ruleByIDQuery+" FOR UPDATE", req.RuleID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return api.ApplicationControlRule{}, false, api.ErrAppControlRuleNotFound
+	}
+	if err != nil {
+		return api.ApplicationControlRule{}, false, fmt.Errorf("appcontrol lookup rule for update: %w", err)
+	}
+	// Nothing changes, so it is not a mutation: the policy version stays, which is what keeps the service from pushing an identical
+	// snapshot to every host and recording an audit event for a change that did not happen.
+	if !ruleUpdateChanges(current, req) {
+		return current, false, nil
 	}
 
 	args = append(args, req.RuleID)
-	updateSQL := "UPDATE app_control_rules SET " + setFragment + " WHERE id = ?"
-	res, err := tx.ExecContext(ctx, updateSQL, args...)
-	if err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol update rule: %w", err)
+	if _, err := tx.ExecContext(ctx, "UPDATE app_control_rules SET "+setFragment+" WHERE id = ?", args...); err != nil {
+		return api.ApplicationControlRule{}, false, fmt.Errorf("appcontrol update rule: %w", err)
 	}
-	// Concurrent delete race: the SELECT above passed but the UPDATE hit zero rows because another transaction removed the row
-	// between the two statements. Fail with ErrAppControlRuleNotFound so the caller sees a stable 404. Without this, the policy
-	// version bump below would still fire, triggering a spurious snapshot push to every agent.
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol update rule rows affected: %w", err)
-	}
-	if affected == 0 {
-		return api.ApplicationControlRule{}, api.ErrAppControlRuleNotFound
-	}
-	if _, err := tx.ExecContext(ctx, bumpPolicyVersion,
-		req.Actor, policyID); err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version on update: %w", err)
+	if _, err := tx.ExecContext(ctx, bumpPolicyVersion, req.Actor, current.PolicyID); err != nil {
+		return api.ApplicationControlRule{}, false, fmt.Errorf("appcontrol bump policy version on update: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return api.ApplicationControlRule{}, fmt.Errorf(errCommitTxFmt, err)
+		return api.ApplicationControlRule{}, false, fmt.Errorf(errCommitTxFmt, err)
 	}
-	return s.GetRuleByID(ctx, req.RuleID)
+	rule, err := s.GetRuleByID(ctx, req.RuleID)
+	return rule, true, err
+}
+
+// ruleUpdateChanges reports whether applying req would change any field of current. A field the request leaves out changes nothing.
+// custom_msg and custom_url are nullable, and a supplied empty string is stored as empty rather than NULL, so it differs from an
+// absent value. expires_at is compared at the column's microsecond precision, to which MySQL rounds a stored value.
+func ruleUpdateChanges(current api.ApplicationControlRule, req api.UpdateRuleRequest) bool {
+	return (req.Enabled != nil && *req.Enabled != current.Enabled) ||
+		(req.Severity != nil && *req.Severity != current.Severity) ||
+		(req.Enforcement != nil && *req.Enforcement != current.Enforcement) ||
+		(req.CustomMsg != nil && (current.CustomMsg == nil || *current.CustomMsg != *req.CustomMsg)) ||
+		(req.CustomURL != nil && (current.CustomURL == nil || *current.CustomURL != *req.CustomURL)) ||
+		(req.Comment != nil && *req.Comment != current.Comment) ||
+		(req.ExpiresAt != nil && (current.ExpiresAt == nil || !current.ExpiresAt.Equal(req.ExpiresAt.Round(time.Microsecond))))
 }
 
 // DeleteRule removes a rule row + bumps the parent policy's version atomically. Returns the parent policy_id so the service's
@@ -831,12 +844,14 @@ func (s *Store) getPolicyByID(ctx context.Context, id int64) (api.ApplicationCon
 	return p, nil
 }
 
-func (s *Store) getRuleByID(ctx context.Context, id int64) (api.ApplicationControlRule, error) {
-	const query = `SELECT id, policy_id, rule_type, identifier, action, enforcement, enabled,
+// ruleByIDQuery reads one rule in scanRuleRow's column order. UpdateRule appends FOR UPDATE to read it under a row lock.
+const ruleByIDQuery = `SELECT id, policy_id, rule_type, identifier, action, enforcement, enabled,
 		severity, source, source_ref, custom_msg, custom_url, comment, expires_at,
 		created_at, updated_at, created_by
 		FROM app_control_rules WHERE id = ?`
-	r, err := scanRuleRow(s.db.QueryRowxContext(ctx, query, id))
+
+func (s *Store) getRuleByID(ctx context.Context, id int64) (api.ApplicationControlRule, error) {
+	r, err := scanRuleRow(s.db.QueryRowxContext(ctx, ruleByIDQuery, id))
 	if err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol get rule: %w", err)
 	}

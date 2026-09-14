@@ -59,7 +59,7 @@ func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) { //n
 			return err
 		}},
 		{"update rule", func(ctx context.Context) error {
-			_, err := store.UpdateRule(ctx, api.UpdateRuleRequest{RuleID: seeded.ID, Severity: &severity, Actor: "usr_1", Reason: "r"})
+			_, _, err := store.UpdateRule(ctx, api.UpdateRuleRequest{RuleID: seeded.ID, Severity: &severity, Actor: "usr_1", Reason: "r"})
 			return err
 		}},
 		{"delete rule", func(ctx context.Context) error {
