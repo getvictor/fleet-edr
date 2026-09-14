@@ -13,7 +13,7 @@ const OPTIONS: readonly { value: Enforcement; label: string; help: string }[] = 
   {
     value: "DETECT",
     label: "Detect",
-    help: "Record each match without blocking it, to see what the rule would block before it blocks anything.",
+    help: "Block nothing and record the matches that run, to see what the rule would block. A Protect rule that also matches still blocks.",
   },
   { value: "PROTECT", label: "Protect", help: "Block the executable." },
 ];

@@ -1,5 +1,5 @@
-// AuthExecDeciderDetectTests pins what a DETECT rule does to an AUTH_EXEC: it lets the exec run and is reported as a would-block
-// match, and it never changes the verdict the snapshot's PROTECT rules and fallback posture reach on their own.
+// AuthExecDeciderDetectTests pins what a DETECT rule does to an AUTH_EXEC: it blocks nothing, is reported as a would-block match when
+// the exec is allowed, and never changes the verdict the snapshot's PROTECT rules and fallback posture reach on their own.
 
 @testable import EDRExtensionLogic
 import XCTest

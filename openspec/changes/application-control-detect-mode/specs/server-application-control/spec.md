@@ -6,7 +6,7 @@
 
 The system SHALL represent every rule as a row owned by exactly one policy and carrying: a `rule_type` from the set `{CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH}`; an `identifier` string whose format is determined by `rule_type`; an `action` constrained in this phase to `BLOCK`; an `enforcement` from `{PROTECT, DETECT}`, with no default; an `enabled` flag; a `severity` from `{low, medium, high, critical}` defaulting to `medium`; a `source` from `{admin, imported, intel}` defaulting to `admin`; an optional `source_ref`; an optional `custom_msg`; an optional `custom_url`; an optional `comment`; an optional `expires_at`; and timestamps and actor identity. The triple `(policy_id, rule_type, identifier)` SHALL be unique.
 
-A `PROTECT` rule denies an exec it matches. A `DETECT` rule lets the exec run, and the host reports the match so it is kept as a monitor record; a `DETECT` rule never changes the verdict another rule reaches. The changes from the prior requirement are that `DETECT` has a meaning, where before it was stored and no rule could be created with it, and that enforcement no longer defaults to `PROTECT`.
+A `PROTECT` rule denies an exec it matches. A `DETECT` rule blocks nothing: when the policy allows an exec it matches, the host reports the match so it is kept as a monitor record, and a `DETECT` rule never changes the verdict another rule reaches. The changes from the prior requirement are that `DETECT` has a meaning, where before it was stored and no rule could be created with it, and that enforcement no longer defaults to `PROTECT`.
 
 #### Scenario: Two rules in the same policy can target the same identifier under different types
 

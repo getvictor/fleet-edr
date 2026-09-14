@@ -8,7 +8,7 @@ import (
 )
 
 // ApplicationControlWouldBlock is the built-in pass-through rule that turns an `application_control_would_block` ingest event into a
-// monitor record. The extension emits that event when an exec matched a BLOCK rule whose enforcement is DETECT, and let the exec run.
+// monitor record. The extension emits that event when the policy allowed an exec that matched a BLOCK rule whose enforcement is DETECT.
 //
 // It is ApplicationControlBlock's twin: the same payload, gate and subject process, so its findings carry the matched app-control
 // rule's id and severity and the matched identifier. What differs is where they land. The rule declares monitor as its default mode,

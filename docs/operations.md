@@ -388,7 +388,7 @@ Two unconditional carve-outs run before any rule:
 
 ### Detect mode
 
-A rule's `enforcement` is `PROTECT` or `DETECT`. A `DETECT` rule does not block what it matches: the host reports the match, which the server keeps as a monitor record under the rule's id (`app_control:<id>`) with the rule's severity. Use it to see what a rule would block before it blocks anything, then promote the rule to `PROTECT`.
+A rule's `enforcement` is `PROTECT` or `DETECT`. A `DETECT` rule does not block what it matches: when the exec runs, the host reports the match, which the server keeps as a monitor record under the rule's id (`app_control:<id>`) with the rule's severity. Use it to see what a rule would block before it blocks anything, then promote the rule to `PROTECT`.
 
 - **A `DETECT` rule never weakens enforcement.** The verdict for an exec is the one the policy reaches without its `DETECT` rules, so a `PROTECT` rule anywhere in the precedence order still blocks, and the deadline-fallback posture below still applies. An exec that is blocked records no would-block match.
 - **Every matching exec is reported.** An allow that matched a `DETECT` rule is not cached by the kernel, so each exec of the binary is evaluated and reported again. Records deduplicate on the process and age out like any [monitor record](#monitor-records).

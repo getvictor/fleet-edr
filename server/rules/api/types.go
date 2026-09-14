@@ -184,7 +184,7 @@ const (
 // Registered non-detections and why:
 //
 //   - application_control_block and application_control_would_block are NonDetectionProjections. The decision was made on the host
-//     by the AUTH_EXEC walker; block renders a denied exec as an alert row, and would_block renders an exec a DETECT rule let run,
+//     by the AUTH_EXEC walker; block renders a denied exec as an alert row, and would_block renders an allowed exec a DETECT rule matched,
 //     declaring monitor so it is kept as a monitor record. Their findings borrow the matched app-control rule's id and severity
 //     from the event payload rather than carrying their own, which is why they are the two rules exempt from the
 //     Finding.Title == DisplayName invariant.
@@ -562,9 +562,10 @@ const (
 	ActionBlock Action = "BLOCK"
 )
 
-// Enforcement is the rule's audit-vs-enforce switch. A PROTECT rule denies a matching exec. A DETECT rule lets it run and the
-// extension reports it as an application_control_would_block event, which is kept as a monitor record, so an operator can see what a
-// rule would block before promoting it to PROTECT. A DETECT rule never changes the verdict another rule reaches.
+// Enforcement is the rule's audit-vs-enforce switch. A PROTECT rule denies a matching exec. A DETECT rule blocks nothing: when the
+// policy allows an exec it matches, the extension reports it as an application_control_would_block event, which is kept as a monitor
+// record, so an operator can see what a rule would block before promoting it to PROTECT. A DETECT rule never changes the verdict
+// another rule reaches.
 type Enforcement string
 
 const (

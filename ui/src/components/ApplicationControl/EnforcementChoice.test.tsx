@@ -20,7 +20,7 @@ describe("EnforcementChoice", () => {
   it("names each option by its label and describes it with its help", () => {
     const onChange = vi.fn();
     render(<EnforcementChoice name="choice" value={null} onChange={onChange} />);
-    expect(screen.getByRole("radio", { name: "Detect" })).toHaveAccessibleDescription(/record each match without blocking it/i);
+    expect(screen.getByRole("radio", { name: "Detect" })).toHaveAccessibleDescription(/block nothing and record the matches that run.*a protect rule that also matches still blocks/i);
     expect(screen.getByRole("radio", { name: "Protect" })).toHaveAccessibleDescription("Block the executable.");
 
     fireEvent.click(screen.getByText("Detect"));

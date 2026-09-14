@@ -4,7 +4,7 @@
 
 ### Requirement: Rule forms require an enforcement choice
 
-The application-control Add rule and Paste many dialogs SHALL ask for the rule's enforcement, Detect or Protect, and SHALL describe what each does: Detect lets the executable run and records each match, and Protect blocks it. Neither SHALL be preselected, and saving SHALL stay disabled until one is chosen, because the server requires it and either choice made by default is wrong for someone. Reopening a dialog SHALL clear the choice. A saved rule SHALL carry the enforcement chosen, applied to every row of a paste.
+The application-control Add rule and Paste many dialogs SHALL ask for the rule's enforcement, Detect or Protect, and SHALL describe what each does: Detect blocks nothing and records the matches that run, noting that a Protect rule that also matches still blocks, and Protect blocks. Neither SHALL be preselected, and saving SHALL stay disabled until one is chosen, because the server requires it and either choice made by default is wrong for someone. Reopening a dialog SHALL clear the choice. A saved rule SHALL carry the enforcement chosen, applied to every row of a paste.
 
 #### Scenario: Neither enforcement is preselected
 
