@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "file_rename", "file_truncate", "file_delete", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
+      "enum": ["exec", "fork", "exit", "open", "file_rename", "file_truncate", "file_delete", "network_connect", "dns_query", "application_control_block", "application_control_would_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
       "description": "Type of endpoint security event"
     },
     "platform": {
@@ -72,6 +72,10 @@
     {
       "if": { "properties": { "event_type": { "const": "application_control_block" } }, "required": ["event_type"] },
       "then": { "properties": { "payload": { "$ref": "#/definitions/application_control_block_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "application_control_would_block" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/application_control_would_block_payload" } } }
     },
     {
       "if": { "properties": { "event_type": { "const": "application_control_undecided" } }, "required": ["event_type"] },
@@ -354,6 +358,10 @@
         "policy_id": { "type": "integer" },
         "policy_version": { "type": "integer" }
       }
+    },
+    "application_control_would_block_payload": {
+      "description": "Emitted when AUTH_EXEC matched a BLOCK rule whose enforcement is DETECT and no PROTECT rule, so the exec ran. The shape is the application_control_block payload's: identifier is the value that matched the DETECT rule.",
+      "$ref": "#/definitions/application_control_block_payload"
     },
     "application_control_undecided_payload": {
       "type": "object",

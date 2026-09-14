@@ -173,7 +173,7 @@ final class ESFSubscriber: Sendable {
 
     /// AUTH_EXEC handler. Decision order: (1) platform-binary carve-out (#205) ALLOWs Apple system binaries with cache:true to
     /// avoid bricking the host on an admin-applied BINARY rule for launchd/xpcproxy/etc; (2) self-allow failsafe ALLOWs the
-    /// agent + extensions + host app uncached (team_id + bundle-id match); (3) decideAuthExec walks CDHASH → BINARY →
+    /// agent + extensions + host app uncached (team_id + bundle-id match); (3) evaluateAuthExec walks CDHASH → BINARY →
     /// CERTIFICATE → SIGNINGID → TEAMID → PATH (Phase B close-out, PR for #210). The platform-binary and self-allow ALLOWs
     /// respond inline (no I/O); everything past them runs on a bounded worker queue off the ES serial delivery thread so a slow
     /// hash cannot serialize other execs (#298). BINARY hashing stays bounded by msg.deadline (#208 close-out); on deadline /
@@ -255,17 +255,17 @@ final class ESFSubscriber: Sendable {
             )
         }
 
-        let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
+        let evaluation = evaluateAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
         // Cacheability is computed here, where the lazily-resolved identity state is still in scope: a decided ALLOW is only
         // pinned into the kernel cache when the BINARY hash was resolved and the leaf cert was warm (or no cert rules exist),
         // so a cold-miss allow is not cached and the next exec re-evaluates once the hash/cert fill (#209).
         let cacheable = authResultIsCacheable(
-            decision,
+            evaluation,
             hashOutcome: hashOutcome,
             leafCertResolved: tuple.leafCertSHA256 != nil,
             snapshotHasCertificateRules: !snapshot.certificateRules.isEmpty
         )
-        dispatchAuthDecision(decision, context: AuthDispatchContext(
+        dispatchAuthDecision(evaluation, context: AuthDispatchContext(
             message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path, cacheable: cacheable
         ))
     }
@@ -289,13 +289,13 @@ final class ESFSubscriber: Sendable {
     /// dispatchAuthDecision turns the pure-logic AuthDecision into the wire-level kernel response plus any event/notification
     /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable
     /// (AuthExecDeciderTests) and the wire dispatch stays one switch.
-    private func dispatchAuthDecision(_ decision: AuthDecision, context: AuthDispatchContext) {
+    private func dispatchAuthDecision(_ evaluation: AuthEvaluation, context: AuthDispatchContext) {
         // A fully resolved decided ALLOW is pinned into the kernel AUTH cache so a fork-exec storm of an allowed binary does
         // not re-enter the handler; the undecided fallbacks, cold-miss allows, and every DENY stay uncached. The flag was
         // computed in decideAndRespond (authResultIsCacheable, unit-tested in the no-ES target) where the hash/cert resolution
         // state was in scope; the cache stays correct because the store flushes it on every snapshot swap (#209).
         let cacheResult = context.cacheable
-        switch decision {
+        switch evaluation.decision {
         case .allow:
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
         case .allowWithUndecidedAudit(let reason):
@@ -312,7 +312,11 @@ final class ESFSubscriber: Sendable {
                 "AUTH_EXEC DENIED type=\(rule.ruleType, privacy: .public) id=\(matchedIdentifier, privacy: .private)"
             )
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
-            emitBlockEvent(context: context, rule: rule, matchedIdentifier: matchedIdentifier)
+            emitRuleMatchEvent(
+                eventType: "application_control_block",
+                context: context,
+                match: RuleMatch(rule: rule, matchedIdentifier: matchedIdentifier)
+            )
             emitBlockNotification(
                 target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
             )
@@ -320,6 +324,14 @@ final class ESFSubscriber: Sendable {
             logger.warning("AUTH_EXEC DENIED (undecided) reason=\(reason.rawValue, privacy: .public)")
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
             emitUndecidedEvent(context: context, verdict: "deny", reason: reason)
+        }
+        // A DETECT match rides on an allow, so the exec has already run by the time it is reported. There is no desktop
+        // notification: nothing was blocked, and the person at the Mac has nothing to act on.
+        if let match = evaluation.wouldBlock {
+            logger.info(
+                "AUTH_EXEC WOULD_BLOCK type=\(match.rule.ruleType, privacy: .public) id=\(match.matchedIdentifier, privacy: .private)"
+            )
+            emitRuleMatchEvent(eventType: "application_control_would_block", context: context, match: match)
         }
     }
 

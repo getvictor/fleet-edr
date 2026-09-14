@@ -30,6 +30,35 @@ struct ApplicationControlSnapshot {
     let certificateRules: [String: ApplicationControlRule] // 64 hex (leaf cert sha256)
     let teamIDRules: [String: ApplicationControlRule]      // 10 char TeamID
     let pathRules: [String: ApplicationControlRule]        // canonical absolute path
+    /// hasEnforcingBinaryRules is whether any BINARY rule is something other than a DETECT rule, which is what lets the deadline
+    /// fallback posture govern an unresolved hash (see evaluateAuthExec). Computed once per snapshot rather than per exec, so the
+    /// AUTH_EXEC path never scans the rule map.
+    let hasEnforcingBinaryRules: Bool
+
+    init(
+        policyID: Int64,
+        policyVersion: Int64,
+        policyEpoch: Int64,
+        deadlineFallback: FallbackPosture,
+        binaryRules: [String: ApplicationControlRule],
+        cdhashRules: [String: ApplicationControlRule],
+        signingIDRules: [String: ApplicationControlRule],
+        certificateRules: [String: ApplicationControlRule],
+        teamIDRules: [String: ApplicationControlRule],
+        pathRules: [String: ApplicationControlRule]
+    ) {
+        self.policyID = policyID
+        self.policyVersion = policyVersion
+        self.policyEpoch = policyEpoch
+        self.deadlineFallback = deadlineFallback
+        self.binaryRules = binaryRules
+        self.cdhashRules = cdhashRules
+        self.signingIDRules = signingIDRules
+        self.certificateRules = certificateRules
+        self.teamIDRules = teamIDRules
+        self.pathRules = pathRules
+        self.hasEnforcingBinaryRules = binaryRules.values.contains { !isDetectRule($0) }
+    }
 
     static let empty = ApplicationControlSnapshot(
         policyID: 0,

@@ -80,8 +80,9 @@ struct AuthTuple: Equatable, Sendable {
 /// of the kernel-cached platform-binary carve-out and the unconditional self-allow failsafe (both short-circuit before the
 /// decider runs).
 enum AuthDecision: Equatable, Sendable {
-    /// Allow the exec; the result IS pinned into the kernel AUTH cache (see authResultIsCacheable). Used when no rule matched
-    /// and the hash either was not needed (no BINARY rules) or returned a clean miss against the BINARY map. The verdict is a
+    /// Allow the exec; the result IS pinned into the kernel AUTH cache (see authResultIsCacheable) unless a DETECT rule
+    /// matched. Used when no PROTECT rule matched and the hash either was not needed (no BINARY rules) or returned a clean
+    /// miss against the BINARY map. The verdict is a
     /// pure function of the stable identity tuple and the active snapshot, and ApplicationControlStore flushes the kernel
     /// cache (es_clear_cache) on every snapshot swap, so a later rule update still takes effect on the next exec (#209).
     case allow
@@ -93,6 +94,22 @@ enum AuthDecision: Equatable, Sendable {
     /// Deny the exec and emit application_control_undecided with verdict=deny. Fires only under failClosed posture when the
     /// hash is unavailable. Separate from .deny because there is no actual matched rule, only the posture's verdict.
     case denyWithUndecidedAudit(reason: UndecidedReason)
+}
+
+/// RuleMatch is a snapshot rule together with the value from the exec's identity tuple that matched it: the CDHash that hit a
+/// CDHASH rule, the team id that hit a TEAMID rule, and so on.
+struct RuleMatch: Equatable, Sendable {
+    let rule: ApplicationControlRule
+    let matchedIdentifier: String
+}
+
+/// AuthEvaluation is the decider's whole answer for one AUTH_EXEC: the verdict the kernel receives, and the DETECT rule the
+/// exec matched, which the wire side reports as an application_control_would_block event. wouldBlock is set only when the
+/// verdict allows the exec. A DETECT rule records what enforcing it would have done, and an exec that is denied anyway has
+/// nothing of that kind to report.
+struct AuthEvaluation: Equatable, Sendable {
+    let decision: AuthDecision
+    let wouldBlock: RuleMatch?
 }
 
 /// authResultIsCacheable reports whether a decided AUTH_EXEC verdict may be pinned into the kernel's per-(dev,inode,mtime)
@@ -108,14 +125,15 @@ enum AuthDecision: Equatable, Sendable {
 /// cache and let the BINARY/CERTIFICATE block rule fire, so those stay uncached (issue #209). Concretely, `.allow` is
 /// cacheable only when the BINARY hash was computed or not needed AND (the snapshot has no CERTIFICATE rules OR the leaf cert
 /// was resolved). DENY and the undecided audit variants are never cached: DENY so removing a block rule takes effect on the
-/// next exec, undecided because the identity is not yet known.
+/// next exec, undecided because the identity is not yet known. An allow that matched a DETECT rule is never cached either: a
+/// cached verdict never reaches the handler again, so every later exec of the binary would go unreported.
 func authResultIsCacheable(
-    _ decision: AuthDecision,
+    _ evaluation: AuthEvaluation,
     hashOutcome: HashOutcome,
     leafCertResolved: Bool,
     snapshotHasCertificateRules: Bool
 ) -> Bool {
-    guard case .allow = decision else {
+    guard case .allow = evaluation.decision, evaluation.wouldBlock == nil else {
         return false
     }
     let hashResolved: Bool
@@ -128,55 +146,113 @@ func authResultIsCacheable(
     return hashResolved && (!snapshotHasCertificateRules || leafCertResolved)
 }
 
-/// decideAuthExec walks the precedence ladder against the active snapshot and returns the wire-level decision. Pure: no
-/// EndpointSecurity imports, no Darwin time calls, no logging side effects on the hot path. Drives the SwiftPM-test surface
-/// because ESFSubscriber.swift is excluded from the test target by Package.swift.
+/// evaluateAuthExec walks the precedence ladder against the active snapshot and returns the wire-level decision together with
+/// the DETECT rule the exec matched, if any. Pure: no EndpointSecurity imports, no Darwin time calls, no logging side effects
+/// on the hot path. Drives the SwiftPM-test surface because ESFSubscriber.swift is excluded from the test target by
+/// Package.swift.
 ///
 /// Precedence (Santa's order, every wire-enum rule type wired as of PR for #210):
 ///   CDHASH > BINARY > CERTIFICATE > SIGNINGID > TEAMID > PATH
 ///
-/// Each layer returns on first match. The BINARY layer is gated on hashOutcome: if .computed, walk the BINARY map; if
-/// .deadlineExceeded or .readFailed the walk CONTINUES through every lower-precedence layer first, because a definitive
-/// lower-precedence DENY dominates the BINARY layer's "could-have-fired" uncertainty (the operator's snapshot tells us the
-/// binary identifies as cert X / signing-id Y / team Z / path P; a block rule on any of those is a real verdict the kernel
-/// can act on). Only after every layer below BINARY produces no match does the snapshot's deadlineFallback posture apply to
-/// the unresolved BINARY decision. .notNeeded skips BINARY entirely and continues normally (snapshot has no BINARY rules so
-/// the fallback posture has nothing to govern).
+/// A PROTECT rule ends the walk with a deny. A DETECT rule does not end it: the first DETECT match in precedence order is
+/// recorded and the walk goes on, so a DETECT rule never weakens enforcement. The verdict for any exec is the verdict the
+/// snapshot would give with its DETECT rules removed; adding a DETECT rule for a binary that a lower-precedence PROTECT rule
+/// blocks leaves that binary blocked, and the fallback posture below still governs an unresolved BINARY hash. The posture applies
+/// only when a BINARY rule other than a DETECT one exists, because without the DETECT rules there would have been no hash to miss.
+///
+/// The BINARY layer is gated on hashOutcome: if .computed, walk the BINARY map; if .deadlineExceeded or .readFailed the walk
+/// CONTINUES through every lower-precedence layer first, because a definitive lower-precedence DENY dominates the BINARY
+/// layer's "could-have-fired" uncertainty (the operator's snapshot tells us the binary identifies as cert X / signing-id Y /
+/// team Z / path P; a block rule on any of those is a real verdict the kernel can act on). Only after every layer below BINARY
+/// produces no deny does the snapshot's deadlineFallback posture apply to the unresolved BINARY decision. .notNeeded skips
+/// BINARY entirely and continues normally (snapshot has no BINARY rules so the fallback posture has nothing to govern).
 ///
 /// PATH is the lowest-trust layer by design: paths are the most operator-spoofable identifier (symlinks, bind mounts, copies
 /// preserving content but changing the path string), so a deny higher in the ladder always wins. Santa places PATH last for
 /// the same reason; documenting this here so a future precedence reorder is a deliberate decision, not an accident.
 ///
 /// Posture flows from snapshot.deadlineFallback directly: this function does not take a separate posture parameter, so a
-/// caller cannot accidentally evaluate one snapshot's rule maps under a different fallback. (Previous signatures took the
-/// parameter explicitly; the round-trip through snapshot already pins the posture, so the parameter was a footgun.)
-func decideAuthExec(
+/// caller cannot accidentally evaluate one snapshot's rule maps under a different fallback.
+func evaluateAuthExec(
     tuple: AuthTuple,
     snapshot: ApplicationControlSnapshot,
     hashOutcome: HashOutcome
-) -> AuthDecision {
-    if let cdhash = tuple.cdhash, let rule = snapshot.cdhashRules[cdhash] {
-        return verdict(for: rule, identifier: cdhash)
+) -> AuthEvaluation {
+    var walk = PrecedenceWalk()
+    if let end = walk.consult(tuple.cdhash, in: snapshot.cdhashRules) {
+        return end
     }
-    if let binaryDecision = matchBinaryLayer(snapshot: snapshot, hashOutcome: hashOutcome) {
-        return binaryDecision
+    if let end = walk.consult(computedHash(hashOutcome), in: snapshot.binaryRules) {
+        return end
     }
-    if let lowerDecision = matchLowerLayers(tuple: tuple, snapshot: snapshot) {
-        return lowerDecision
+    if let end = walk.consult(tuple.leafCertSHA256, in: snapshot.certificateRules) {
+        return end
     }
-    if let reason = unresolvedBinaryReason(for: hashOutcome) {
-        return applyPosture(snapshot.deadlineFallback, reason: reason)
+    if let end = walk.consult(tuple.signingIDPrefixed, in: snapshot.signingIDRules) {
+        return end
     }
-    return .allow
+    if let end = walk.consult(tuple.teamID, in: snapshot.teamIDRules) {
+        return end
+    }
+    if let end = walk.consult(tuple.canonicalPath, in: snapshot.pathRules) {
+        return end
+    }
+    if let reason = unresolvedBinaryReason(for: hashOutcome), snapshot.hasEnforcingBinaryRules {
+        return walk.finish(applyPosture(snapshot.deadlineFallback, reason: reason))
+    }
+    return walk.finish(.allow)
 }
 
-/// matchBinaryLayer consults the BINARY map only when the hash is .computed; the .deadlineExceeded / .readFailed branches
-/// do NOT return here: they keep the walk going so a definitive lower-precedence DENY can dominate the BINARY layer's
-/// uncertainty. .notNeeded skips BINARY entirely and falls through to the lower layers without ever surfacing a posture.
-/// Returns nil when no BINARY rule matches (the walker continues); returns an AuthDecision only on a positive match.
-private func matchBinaryLayer(snapshot: ApplicationControlSnapshot, hashOutcome: HashOutcome) -> AuthDecision? {
-    if case .computed(let sha) = hashOutcome, let rule = snapshot.binaryRules[sha] {
-        return verdict(for: rule, identifier: sha)
+/// isDetectRule reports whether a rule is a BLOCK rule in DETECT, the kind of match that is recorded and never decides a verdict.
+///
+/// The posture consults it through hasEnforcingBinaryRules. The hash is computed whenever the snapshot has any BINARY rule, DETECT
+/// ones included, so a DETECT BINARY rule is what makes an unresolved hash possible at all. Without the check, a snapshot whose only
+/// BINARY rules are DETECT would fail closed on a slow hash, while the same snapshot without them skips the hash and allows: the
+/// DETECT rule would have changed the verdict.
+func isDetectRule(_ rule: ApplicationControlRule) -> Bool {
+    rule.action == ApplicationControlAction.block && rule.enforcement == ApplicationControlEnforcement.detect
+}
+
+/// PrecedenceWalk carries the one piece of state a walk accumulates: the first DETECT rule it matched.
+private struct PrecedenceWalk {
+    private var wouldBlock: RuleMatch?
+
+    /// consult looks one layer's tuple value up in that layer's rule map. It returns the evaluation when the match ends the walk
+    /// and nil when the walk goes on, which is the case for no match and for a DETECT match. Rules with an action other than
+    /// BLOCK, and any enforcement other than PROTECT or DETECT, are reserved values the server does not create; they end the
+    /// walk as "matched but does not deny", as they did before DETECT had a meaning.
+    mutating func consult(_ identifier: String?, in rules: [String: ApplicationControlRule]) -> AuthEvaluation? {
+        guard let identifier, let rule = rules[identifier] else {
+            return nil
+        }
+        if isDetectRule(rule) {
+            if wouldBlock == nil {
+                wouldBlock = RuleMatch(rule: rule, matchedIdentifier: identifier)
+            }
+            return nil
+        }
+        if rule.action == ApplicationControlAction.block && rule.enforcement == ApplicationControlEnforcement.protect {
+            return finish(.deny(rule: rule, matchedIdentifier: identifier))
+        }
+        return finish(.allow)
+    }
+
+    /// finish pairs the verdict with the recorded DETECT match, dropping the match when the verdict denies.
+    func finish(_ decision: AuthDecision) -> AuthEvaluation {
+        switch decision {
+        case .allow, .allowWithUndecidedAudit:
+            return AuthEvaluation(decision: decision, wouldBlock: wouldBlock)
+        case .deny, .denyWithUndecidedAudit:
+            return AuthEvaluation(decision: decision, wouldBlock: nil)
+        }
+    }
+}
+
+/// computedHash is the BINARY layer's lookup key: the hex SHA-256 when the hash was computed, and nil otherwise, which skips
+/// the layer. An unresolved hash is picked up again by unresolvedBinaryReason once every lower layer has been consulted.
+private func computedHash(_ hashOutcome: HashOutcome) -> String? {
+    if case .computed(let sha) = hashOutcome {
+        return sha
     }
     return nil
 }
@@ -193,26 +269,6 @@ private func unresolvedBinaryReason(for hashOutcome: HashOutcome) -> UndecidedRe
     case .computed, .notNeeded:
         return nil
     }
-}
-
-/// matchLowerLayers walks CERTIFICATE → SIGNINGID → TEAMID → PATH and returns the first matching verdict, or nil when no
-/// layer matches. PATH is intentionally last because filesystem paths are the most spoofable identifier (symlinks, bind
-/// mounts, copies preserving content but changing the path string); a deny higher in the ladder always wins. Extracted
-/// from decideAuthExec to keep that function under the cyclomatic_complexity budget SwiftLint enforces.
-private func matchLowerLayers(tuple: AuthTuple, snapshot: ApplicationControlSnapshot) -> AuthDecision? {
-    if let leafCert = tuple.leafCertSHA256, let rule = snapshot.certificateRules[leafCert] {
-        return verdict(for: rule, identifier: leafCert)
-    }
-    if let signingID = tuple.signingIDPrefixed, let rule = snapshot.signingIDRules[signingID] {
-        return verdict(for: rule, identifier: signingID)
-    }
-    if let teamID = tuple.teamID, let rule = snapshot.teamIDRules[teamID] {
-        return verdict(for: rule, identifier: teamID)
-    }
-    if let path = tuple.canonicalPath, let rule = snapshot.pathRules[path] {
-        return verdict(for: rule, identifier: path)
-    }
-    return nil
 }
 
 /// macOSPrivatePrefixes lists the absolute-path prefixes that macOS exposes as `/private/...` symlinks (the `/tmp`, `/var`,
@@ -259,17 +315,6 @@ func canonicalizePath(_ path: String) -> String? {
         }
     }
     return cleaned
-}
-
-/// verdict maps a matched rule to the wire-level decision. Non-PROTECT enforcements (DETECT) and non-BLOCK actions (ALLOW,
-/// SILENT_BLOCK) are no-ops in v0.1.0: the precedence walker treats them as "matched but does not deny." DETECT semantics
-/// arrive in the follow-on add-application-control-detect-mode change, which extends this helper to emit a detection event
-/// alongside the ALLOW.
-private func verdict(for rule: ApplicationControlRule, identifier: String) -> AuthDecision {
-    if rule.action == ApplicationControlAction.block && rule.enforcement == ApplicationControlEnforcement.protect {
-        return .deny(rule: rule, matchedIdentifier: identifier)
-    }
-    return .allow
 }
 
 /// applyPosture is the BINARY-layer fallback when the hash could not be obtained. The three postures encode the operator's

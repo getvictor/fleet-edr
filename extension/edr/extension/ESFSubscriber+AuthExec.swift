@@ -73,16 +73,16 @@ extension ESFSubscriber {
         )
     }
 
-    /// emitBlockEvent serializes an application_control_block event for the
-    /// just-denied AUTH_EXEC and hands it to the upload pipeline via
-    /// onEvent. Called after the DENY response so the kernel is already
-    /// unblocked; the JSON encode + XPC handoff happen off the callback's
-    /// deadline.
-    func emitBlockEvent(
+    /// emitRuleMatchEvent serializes the event for an AUTH_EXEC that matched a rule and hands it to the upload pipeline via
+    /// onEvent: application_control_block for a PROTECT rule that denied the exec, application_control_would_block for a DETECT
+    /// rule that let it run. The two share one payload shape. Called after the kernel response, so the JSON encode and XPC
+    /// handoff happen off the callback's deadline.
+    func emitRuleMatchEvent(
+        eventType: String,
         context: AuthDispatchContext,
-        rule: ApplicationControlRule,
-        matchedIdentifier: String
+        match: RuleMatch
     ) {
+        let rule = match.rule
         let target = context.target
         let snapshot = context.snapshot
         let pid = audit_token_to_pid(target.audit_token)
@@ -92,7 +92,7 @@ extension ESFSubscriber {
             path: path,
             ruleID: rule.ruleID,
             ruleType: rule.ruleType,
-            identifier: matchedIdentifier,
+            identifier: match.matchedIdentifier,
             severity: rule.severity,
             customMsg: rule.customMsg,
             customURL: rule.customURL,
@@ -100,7 +100,7 @@ extension ESFSubscriber {
             policyVersion: snapshot.policyVersion
         )
         let kernelTimeNs = kernelEventTimeNs(context.message.pointee.time)
-        if let data = serializer.serialize(eventType: "application_control_block", payload: payload, kernelTimeNs: kernelTimeNs) {
+        if let data = serializer.serialize(eventType: eventType, payload: payload, kernelTimeNs: kernelTimeNs) {
             onEvent?(data)
         }
     }

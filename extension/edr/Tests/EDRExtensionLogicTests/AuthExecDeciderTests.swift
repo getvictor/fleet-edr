@@ -90,7 +90,7 @@ final class AuthExecDeciderTests: XCTestCase {
     }
 
     func testCDHashNonProtectEnforcementAllows() {
-        // DETECT enforcement is the v0.1.x lift-and-detect mode; it must NOT deny in v0.1.0.
+        // A DETECT rule never denies; AuthExecDeciderDetectTests covers the would-block match it reports.
         let rule = makeRule(
             ruleType: ApplicationControlRuleType.cdhash,
             identifier: "cdhashvalue",
