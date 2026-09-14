@@ -13,6 +13,15 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
+// advancePolicyEpoch moves a policy's updated_at strictly past its previous value on every mutation. Hosts receive updated_at as
+// policy_epoch and order snapshots by epoch first, then version, so an epoch that went backwards would have a newer policy refused
+// until the clock caught up. The column's own ON UPDATE CURRENT_TIMESTAMP(6) gives no such guarantee across a step back in the
+// database clock; this does, and it is what the watched-path set does for the same reason.
+const advancePolicyEpoch = "updated_at = GREATEST(NOW(6), updated_at + INTERVAL 1 MICROSECOND)"
+
+// bumpPolicyVersion records a mutation of a policy's rules: the next version, who made it, and an epoch past the previous one.
+const bumpPolicyVersion = "UPDATE app_control_policies SET version = version + 1, updated_by = ?, " + advancePolicyEpoch + " WHERE id = ?"
+
 // Error-message format strings shared by every state-changing store method. Extracted to constants so Sonar's duplicate-literal rule
 // (go:S1192) stays quiet AND so a wording change here propagates uniformly across CreateRule / UpdateRule / DeleteRule / CreatePolicy
 // / UpdatePolicy / DeletePolicy. Each is a fmt.Errorf format string for wrapping api.ErrAppControlInvalidRequest.
@@ -467,9 +476,7 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	// Bump the policy version so the agent sees a fresh value on its next snapshot apply. The application-control fan-out also keys on
 	// this for at-most-once dispatch in the follow-on REST handler task; lifting it into the same transaction as the insert keeps the
 	// "version changes imply snapshot changes" contract atomic.
-	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies
-		SET version = version + 1, updated_by = ?
-		WHERE id = ?`, req.Actor, req.PolicyID); err != nil {
+	if _, err := tx.ExecContext(ctx, bumpPolicyVersion, req.Actor, req.PolicyID); err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -601,7 +608,7 @@ func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.
 	if affected == 0 {
 		return api.ApplicationControlRule{}, api.ErrAppControlRuleNotFound
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies SET version = version + 1, updated_by = ? WHERE id = ?`,
+	if _, err := tx.ExecContext(ctx, bumpPolicyVersion,
 		req.Actor, policyID); err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version on update: %w", err)
 	}
@@ -648,7 +655,7 @@ func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int6
 	if affected == 0 {
 		return 0, api.ErrAppControlRuleNotFound
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies SET version = version + 1, updated_by = ? WHERE id = ?`,
+	if _, err := tx.ExecContext(ctx, bumpPolicyVersion,
 		req.Actor, policyID); err != nil {
 		return 0, fmt.Errorf("appcontrol bump policy version on delete: %w", err)
 	}
@@ -736,7 +743,7 @@ func (s *Store) UpdatePolicy(ctx context.Context, req api.UpdatePolicyRequest) (
 	if len(setClauses) == 0 {
 		return api.ApplicationControlPolicy{}, fmt.Errorf("%w: at least one mutable field must be set on a PATCH", api.ErrAppControlInvalidRequest)
 	}
-	setClauses = append(setClauses, "version = version + 1", "updated_by = ?")
+	setClauses = append(setClauses, "version = version + 1", "updated_by = ?", advancePolicyEpoch)
 	args = append(args, req.Actor, req.PolicyID)
 	updateSQL := "UPDATE app_control_policies SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
 	res, err := tx.ExecContext(ctx, updateSQL, args...)
@@ -1110,7 +1117,7 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies SET version = version + 1, updated_by = ? WHERE id = ?`,
+	if _, err := tx.ExecContext(ctx, bumpPolicyVersion,
 		req.Actor, req.PolicyID); err != nil {
 		return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: bump policy version: %w", err)
 	}

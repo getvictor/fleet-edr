@@ -89,7 +89,9 @@ func upsertRuleAndBumpPolicy(ctx context.Context, db dbExecQuerier, policyID int
 	affected, err := res.RowsAffected()
 	if err != nil || affected != 0 {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE app_control_policies SET version = version + 1 WHERE id = ?`, policyID); err != nil {
+			// Forced past the previous update time, as the server does, because hosts order snapshots by epoch first.
+			`UPDATE app_control_policies SET version = version + 1,
+				updated_at = GREATEST(NOW(6), updated_at + INTERVAL 1 MICROSECOND) WHERE id = ?`, policyID); err != nil {
 			return 0, fmt.Errorf("bump demo app-control policy version: %w", err)
 		}
 	}

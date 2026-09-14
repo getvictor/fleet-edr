@@ -30,7 +30,7 @@ Note on verification: this scenario pins the event's SHAPE, which is what the ex
 
 The system extension SHALL accept a watched-path set from the server, delivered by the agent, and SHALL make it part of the sensitive target set on the running file-tamper client without a restart. A set is a `version`, an optional `epoch` (the set's server update time in Unix microseconds), and a list of `paths` entries, each an absolute `path` and a `match` of `literal` (exactly that file) or `prefix` (every path starting with it).
 
-The extension SHALL apply a set only when its `version` or its `epoch` is ahead of the last set it accepted, and SHALL otherwise leave the active and persisted sets unchanged. Commands can reach the host out of order, so without this an older set delivered late would replace a newer one; `epoch` keeps ordering sets after a server database restore sends `version` backwards.
+The extension SHALL apply a set only when it is ahead of the last set it accepted, ordered by `epoch` and then by `version`, and SHALL otherwise leave the active and persisted sets unchanged. Commands can reach the host out of order, so without this an older set delivered late would replace a newer one. The server forces each set's `epoch` past the one in its database, so `epoch` orders every set it issues across a step back in the database clock, and across a server database restore that sends `version` backwards once the clock is past the epochs issued before the restore; a restore whose database clock is still behind them delays new sets until it passes them, as ordering on either axis did; `version` breaks a tie, which is what orders sets from a server that sends no `epoch`; every server that pushes this set sends one. A set issued before a restore, still on its way to the host when a set is saved since, is therefore older and is not applied, even though its `version` is higher. This is the rule application control uses for its policy snapshots, and the two SHALL keep one rule.
 
 The built-in paths SHALL stay watched whatever set is pushed: a pushed set adds to them and cannot remove them, because the shipped sudoers detections depend on them. An empty pushed set SHALL therefore leave exactly the built-in paths watched.
 
@@ -63,6 +63,12 @@ Note on verification: decoding, the combination with the built-in paths, the mut
 - **WHEN** a set arrives that is behind on both version and epoch, or is the same set again
 - **THEN** the active set and the persisted set are unchanged
 - **AND** a set whose version is behind but whose epoch is ahead, as after a server database restore, is applied
+
+#### Scenario: A pre-restore set is refused
+
+- **GIVEN** the extension has accepted a set saved after a server database restore, whose version is lower than before the restore
+- **WHEN** a set issued before the restore arrives, with a higher version and an earlier epoch
+- **THEN** the active set and the persisted set are unchanged
 
 #### Scenario: A prefix at the top of the filesystem is not watched
 

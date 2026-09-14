@@ -38,9 +38,30 @@ final class ApplicationControlStoreResyncTests: AppControlStoreTestCase {
         XCTAssertNil(snapshot.binaryRules["pre-restore"], "the stale ruleset is gone; enforcement is no longer frozen")
     }
 
-    // The gate rejects only when BOTH axes are <= current. A snapshot that is older on version AND epoch is a genuine
-    // duplicate / out-of-order replay (e.g. the newest-first command batch delivering an older entry after a newer one) and
-    // must not regress the active ruleset.
+    // A snapshot that was already on its way to the host when the server's database was restored carries the higher pre-restore
+    // version and an epoch older than the snapshot the operator saved since. Ordered by epoch first, it is older, and must not put
+    // the pre-restore ruleset back.
+    // spec:extension-application-control/snapshot-is-the-source-of-truth-for-decisions/a-pre-restore-snapshot-is-refused
+    func testApplyRejectsAHigherVersionWithAnOlderEpoch() {
+        let store = makeStore()
+        store.apply(rawJSON: document(
+            policyID: 1, version: 2,
+            rules: [RuleSpec(type: "BINARY", identifier: "saved-since-restore", ruleID: "new")],
+            epoch: 2_000
+        ))
+        store.apply(rawJSON: document(
+            policyID: 1, version: 25,
+            rules: [RuleSpec(type: "BINARY", identifier: "in-flight-before-restore", ruleID: "old")],
+            epoch: 1_500
+        ))
+        let snapshot = store.currentSnapshot()
+        XCTAssertEqual(snapshot.policyVersion, 2, "a higher version with an older epoch is not newer")
+        XCTAssertNil(snapshot.binaryRules["in-flight-before-restore"])
+        XCTAssertNotNil(snapshot.binaryRules["saved-since-restore"])
+    }
+
+    // A snapshot that is older on version AND epoch is a duplicate / out-of-order replay (e.g. the newest-first command batch
+    // delivering an older entry after a newer one) and must not regress the active ruleset.
     func testApplyRejectsSnapshotOlderOnBothAxes() {
         let store = makeStore()
         store.apply(rawJSON: document(
