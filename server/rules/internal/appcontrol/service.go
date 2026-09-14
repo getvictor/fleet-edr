@@ -690,11 +690,12 @@ type bulkUpsertAuditArgs struct {
 // contained. Payload shape adds rules_inserted + rules_updated + rules_total alongside the fan-out fields so the SIEM can
 // answer "how many rules did this import affect" without per-row joins.
 func (s *Service) recordBulkUpsertAudit(ctx context.Context, args bulkUpsertAuditArgs) {
-	// The touched rules' enforcement, counted, because a bulk upsert can set or change it on every rule it names and the single
-	// event would otherwise not say which way the batch moved them.
+	// The enforcement the batch applied, counted, because a bulk upsert can set or change it on every rule it names and the single
+	// event would otherwise not say which way the batch moved them. Counted from the request's items, which is what the batch wrote,
+	// rather than from the rules read back after commit, which a mutation committed in between could already have changed.
 	var protect, detect int
-	for _, rule := range args.Result.Rules {
-		if rule.Enforcement == api.EnforcementDetect {
+	for _, item := range args.Req.Items {
+		if item.Enforcement == api.EnforcementDetect {
 			detect++
 		} else {
 			protect++

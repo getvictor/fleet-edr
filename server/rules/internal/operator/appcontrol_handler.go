@@ -336,6 +336,8 @@ type presentEnforcement struct {
 
 func (e *presentEnforcement) UnmarshalJSON(data []byte) error {
 	e.present = true
+	// Reset first: a body naming the field twice decodes both, and the last one must win, so a null after a valid value is a null.
+	e.raw = ""
 	if string(data) == "null" {
 		return nil
 	}

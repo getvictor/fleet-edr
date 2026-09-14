@@ -118,6 +118,33 @@ func TestAppControlREST_UpdateRule_PromotesEnforcement(t *testing.T) {
 	assert.Equal(t, identityapi.AuditAppControlRuleUpdate, last.Action)
 	assert.Equal(t, "PROTECT", last.Payload["enforcement"])
 	assert.Equal(t, "a week of would-block records, all expected", last.Payload["reason"])
+
+	// The same enforcement again changes no column, which the driver reports as zero rows affected; that must still succeed rather
+	// than read as the rule having been deleted.
+	again := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/"+i64(created.ID), map[string]any{
+		"enforcement": "PROTECT", "reason": "confirming the promotion",
+	})
+	defer again.Body.Close()
+	assert.Equal(t, http.StatusOK, again.StatusCode, "a PATCH to the enforcement a rule already has is not a 404")
+}
+
+// A body naming enforcement twice decodes both members and the last one wins, so a valid value followed by null is a null and is
+// refused rather than applying the value before it.
+func TestAppControlREST_UpdateRule_LastEnforcementMemberWins(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a"})
+	ruleID := seedRule(t, r, r.defaultPolicyID(t), strings.Repeat("6", 64))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, r.srv.URL+"/api/v1/app-control/rules/"+i64(ruleID),
+		strings.NewReader(`{"enforcement":"DETECT","enforcement":null,"reason":"duplicate member"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	stored, err := r.rules.ApplicationControlStore().GetRuleByID(t.Context(), ruleID)
+	require.NoError(t, err)
+	assert.Equal(t, rulesapi.EnforcementProtect, stored.Enforcement)
 }
 
 // spec:server-application-control/rule-enforcement-is-required-and-changeable/a-rule-created-without-an-enforcement-is-rejected
