@@ -23,7 +23,7 @@ import (
 // TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack puts each policy's updated_at an hour ahead of the database clock, which is
 // what a host holds after the clock steps back, and runs every kind of policy mutation. Hosts order snapshots by epoch first, so an
 // epoch taken from the clock alone would go backwards here and the new snapshot would be refused.
-func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) {
+func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) { //nolint:tparallel // subtests share one policy row
 	t.Parallel()
 	db := full.Open(t)
 	rules, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{DB: db, Logger: slog.Default(), AuthZ: allowAllAuthZ{}})
@@ -75,13 +75,15 @@ func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) {
 			return err
 		}},
 	}
-	// Sequential: every mutation moves the same policy row, and each step starts by pushing it ahead of the clock again.
+	// Sequential subtests: every mutation moves the same policy row, and each starts by pushing it ahead of the clock again.
 	for _, m := range mutations {
-		ahead := policyUpdatedAtAheadOfClock(ctx, t, db, policy.ID)
-		require.NoError(t, m.mutate(ctx), m.name)
-		after, err := store.GetPolicyByID(ctx, policy.ID)
-		require.NoError(t, err)
-		assert.Truef(t, after.UpdatedAt.After(ahead), "%s: the epoch must move past %s, got %s", m.name, ahead, after.UpdatedAt)
+		t.Run(m.name, func(t *testing.T) { //nolint:paralleltest // sequential on one policy row, see above
+			ahead := policyUpdatedAtAheadOfClock(ctx, t, db, policy.ID)
+			require.NoError(t, m.mutate(ctx))
+			after, err := store.GetPolicyByID(ctx, policy.ID)
+			require.NoError(t, err)
+			assert.Truef(t, after.UpdatedAt.After(ahead), "the epoch must move past %s, got %s", ahead, after.UpdatedAt)
+		})
 	}
 }
 

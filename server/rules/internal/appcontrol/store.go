@@ -476,9 +476,7 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	// Bump the policy version so the agent sees a fresh value on its next snapshot apply. The application-control fan-out also keys on
 	// this for at-most-once dispatch in the follow-on REST handler task; lifting it into the same transaction as the insert keeps the
 	// "version changes imply snapshot changes" contract atomic.
-	if _, err := tx.ExecContext(ctx, `UPDATE app_control_policies
-		SET version = version + 1, updated_by = ?, `+advancePolicyEpoch+`
-		WHERE id = ?`, req.Actor, req.PolicyID); err != nil {
+	if _, err := tx.ExecContext(ctx, bumpPolicyVersion, req.Actor, req.PolicyID); err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol bump policy version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

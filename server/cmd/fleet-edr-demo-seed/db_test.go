@@ -711,6 +711,14 @@ func insertDemoPolicy(t *testing.T, db dbExecQuerier, version int64) {
 	require.NoError(t, err)
 }
 
+func policyUpdatedAt(t *testing.T, db dbExecQuerier) time.Time {
+	t.Helper()
+	var at time.Time
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT updated_at FROM app_control_policies WHERE id = ?`, appControlPolicyID).Scan(&at))
+	return at
+}
+
 func policyVersion(t *testing.T, db dbExecQuerier) int64 {
 	t.Helper()
 	var v int64
@@ -762,15 +770,24 @@ func TestSeedAppControlRule_BumpsThePolicyVersionOnceRuleActuallyChanges(t *test
 	ctx := t.Context()
 	insertDemoPolicy(t, db, 4)
 
-	_, err := seedAppControlRule(ctx, db, discardLogger())
+	// The policy's update time is put ahead of the database clock, as after a clock step back: hosts order snapshots by epoch
+	// first, so the seeder must move it forward rather than take the clock's time.
+	_, err := db.ExecContext(ctx, `UPDATE app_control_policies SET updated_at = NOW(6) + INTERVAL 1 HOUR WHERE id = ?`, appControlPolicyID)
+	require.NoError(t, err)
+	ahead := policyUpdatedAt(t, db)
+
+	_, err = seedAppControlRule(ctx, db, discardLogger())
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), policyVersion(t, db), "inserting the rule is a snapshot change and moves the version")
+	advanced := policyUpdatedAt(t, db)
+	assert.True(t, advanced.After(ahead), "and moves the epoch past its previous value, got %s after %s", advanced, ahead)
 
 	// The seeder re-runs on every container start. A version that climbs on each restart would report snapshot changes that
 	// did not happen, which is the same lie as not bumping at all, pointed the other way.
 	_, err = seedAppControlRule(ctx, db, discardLogger())
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), policyVersion(t, db), "a re-run that changes nothing must not move the version")
+	assert.Equal(t, advanced, policyUpdatedAt(t, db), "nor the epoch")
 
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx,
