@@ -166,6 +166,7 @@ describe("PolicyDetail", () => {
     });
     expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
     const dialog = await waitFor(() => openModal(/move rule to detect/i));
+    expect(dialog.textContent).toMatch(/stops blocking .* and keeps a record of each match instead/);
     fireEvent.change(within(dialog).getByLabelText(/reason \(required for audit log\)/i), { target: { value: "too noisy" } });
     fireEvent.click(within(dialog).getByRole("button", { name: /move to detect/i }));
 

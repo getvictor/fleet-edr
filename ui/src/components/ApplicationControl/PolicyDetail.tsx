@@ -346,8 +346,8 @@ function enforcementDescription(rule: ApplicationControlRule, impact: WouldBlock
   if (!isDetect(rule)) {
     return (
       <>
-        Detect stops blocking <code>{ident}</code>: matching executables run, and each match is kept as a record. The agents pick it
-        up on the next snapshot.
+        In Detect, this rule stops blocking <code>{ident}</code> and keeps a record of each match instead. Another Protect rule that
+        matches still blocks it. The agents pick it up on the next snapshot.
       </>
     );
   }
