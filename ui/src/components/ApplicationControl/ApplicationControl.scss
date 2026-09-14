@@ -234,6 +234,11 @@
   margin: 0;
   padding: 0;
   border: 0;
+
+  legend {
+    padding: 0;
+    margin-bottom: $pad-xsmall;
+  }
 }
 
 .app-control-enforcement__option {

@@ -89,6 +89,25 @@ describe("PolicyDetail", () => {
     expect(screen.getByRole("button", { name: "Delete" })).not.toBeDisabled();
   });
 
+  // spec:web-ui/the-policy-rules-table-shows-each-rule-s-enforcement/a-rule-s-enforcement-is-visible-in-the-list
+  it("shows each rule's enforcement in its row", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({
+        rules: [
+          makeRule({ id: 1, identifier: "a".repeat(64), enforcement: "DETECT" }),
+          makeRule({ id: 2, identifier: "b".repeat(64), enforcement: "PROTECT" }),
+        ],
+      }),
+    );
+    renderPolicyDetailAt("/app-control/policies/7");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Default" })).toBeInTheDocument();
+    });
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    const enforcementCell = (row: HTMLElement) => within(row).getAllByRole("cell")[2].textContent;
+    expect(rows.map(enforcementCell)).toEqual(["Detect", "Protect"]);
+  });
+
   // PolicyDetail mounts the modals as siblings. Each modal renders a <dialog> that, even when closed in JSDOM, keeps its
   // children in the DOM, so RTL queries against `screen` match labels in closed dialogs too. Scope to the dialog addressed by
   // its accessible name AND require its `open` attribute to be set so a test that fires the action but doesn't actually open

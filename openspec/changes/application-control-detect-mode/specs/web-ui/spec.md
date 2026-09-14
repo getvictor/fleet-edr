@@ -19,3 +19,13 @@ The application-control Add rule and Paste many dialogs SHALL ask for the rule's
 - **GIVEN** an operator previewing a paste of several identifiers with a reason entered
 - **WHEN** they choose Detect and save
 - **THEN** every rule in the bulk upsert carries `enforcement=DETECT`
+
+### Requirement: The policy rules table shows each rule's enforcement
+
+The application-control policy page SHALL show each rule's enforcement in its rules table, as Detect or Protect, so an operator reading the list can tell which rules block and which only record.
+
+#### Scenario: A rule's enforcement is visible in the list
+
+- **GIVEN** a policy with a Detect rule and a Protect rule
+- **WHEN** an operator opens the policy page
+- **THEN** each rule's row shows its enforcement
