@@ -6,7 +6,7 @@ The network extension SHALL accept an inbound XPC dictionary message with `type 
 
 As with `application_control.update`, this requirement owns only the transport. What the document means and how it is persisted and applied are specified by `extension-network-response`.
 
-A message whose `data` field is absent, or present and empty, SHALL be rejected without changing the containment state and without closing the connection.
+A message whose `data` field is absent, or present and empty, or larger than 16384 bytes, SHALL be rejected without changing the containment state and without closing the connection.
 
 #### Scenario: The agent pushes a containment update
 
@@ -21,3 +21,10 @@ A message whose `data` field is absent, or present and empty, SHALL be rejected 
 - **THEN** the extension rejects the message
 - **AND** the containment state is unchanged
 - **AND** the connection stays open and continues to serve events
+
+#### Scenario: An oversized network_containment.update is rejected
+
+- **GIVEN** a validated agent connection is open to the network extension
+- **WHEN** the agent sends a `network_containment.update` message whose `data` is larger than 16384 bytes
+- **THEN** the extension rejects the message
+- **AND** the containment state is unchanged

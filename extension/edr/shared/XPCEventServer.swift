@@ -118,8 +118,11 @@ enum XPCInboundDispatch: Equatable {
     case applyApplicationControl(Data)
     /// `type = watched_paths.update` with non-empty `data`: pass the bytes to the onWatchedPaths hook.
     case applyWatchedPaths(Data)
-    /// `type = network_containment.update` with non-empty `data`: pass the bytes to the onNetworkContainment hook.
+    /// `type = network_containment.update` with non-empty `data` within networkContainmentMaxBytes: pass the bytes to the
+    /// onNetworkContainment hook.
     case applyNetworkContainment(Data)
+    /// `type = network_containment.update` larger than networkContainmentMaxBytes: ignore + leave the containment state untouched.
+    case rejectOversized
     /// A recognised update type with missing or empty `data`: ignore + leave the active policy, watched set or containment state
     /// untouched.
     /// Distinct from .ignore so the operator-visible log line can be specific.
@@ -128,6 +131,10 @@ enum XPCInboundDispatch: Equatable {
     /// new types without breaking older extensions.
     case ignore
 }
+
+/// networkContainmentMaxBytes bounds a network_containment.update. The largest document the agent sends, sixteen IPv6 addresses, is
+/// under a kilobyte; the bound keeps a faulty peer from making the extension decode and hold arbitrarily large payloads.
+let networkContainmentMaxBytes = 16_384
 
 /// dispatchInbound classifies an inbound `(type, data)` pair into an XPCInboundDispatch. Pure function so every
 /// extension-xpc-server scenario (hello, application_control.update with + without data, unknown future type) is
@@ -145,6 +152,7 @@ func dispatchInbound(type: String?, data: Data?) -> XPCInboundDispatch {
         return .applyWatchedPaths(data)
     case XPCMessageType.networkContainmentUpdate:
         guard let data, !data.isEmpty else { return .rejectMissingData }
+        guard data.count <= networkContainmentMaxBytes else { return .rejectOversized }
         return .applyNetworkContainment(data)
     default:
         return .ignore
@@ -346,6 +354,8 @@ final class XPCEventServer {
             onWatchedPaths?(data)
         case .applyNetworkContainment(let data):
             onNetworkContainment?(data)
+        case .rejectOversized:
+            log.error("network_containment.update larger than \(networkContainmentMaxBytes, privacy: .public) bytes refused")
         case .rejectMissingData:
             // Only a recognised type reaches this case, so the value is one of ours rather than peer-chosen text.
             log.error("\(typeStr ?? "(none)", privacy: .public) missing 'data'")

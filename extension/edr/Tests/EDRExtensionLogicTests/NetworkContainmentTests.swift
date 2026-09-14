@@ -89,10 +89,10 @@ final class NetworkContainmentTests: XCTestCase {
         XCTAssertEqual(rules, [
             LifelineRule(address: "203.0.113.7", prefix: 32, port: 8443, transport: .tcp, direction: .outbound),
             LifelineRule(address: "2001:db8::7", prefix: 128, port: 8443, transport: .tcp, direction: .outbound),
-            LifelineRule(address: "0.0.0.0", prefix: 0, port: 67, transport: .udp, direction: .any),
+            LifelineRule(address: "0.0.0.0", prefix: 0, port: 67, localPort: 68, transport: .udp, direction: .any),
             LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .udp, direction: .any),
             LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .tcp, direction: .any),
-            LifelineRule(address: "::", prefix: 0, port: 547, transport: .udp, direction: .any),
+            LifelineRule(address: "::", prefix: 0, port: 547, localPort: 546, transport: .udp, direction: .any),
             LifelineRule(address: "::", prefix: 0, port: 53, transport: .udp, direction: .any),
             LifelineRule(address: "::", prefix: 0, port: 53, transport: .tcp, direction: .any)
         ])
@@ -155,11 +155,98 @@ final class NetworkContainmentTests: XCTestCase {
 
     // spec:extension-network-response/the-extension-reports-containment-status/the-status-says-whether-containment-was-applied
     func testStatusWireShape() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         let failed = NetworkContainmentStatus(contained: true, version: 3, epoch: 100, applied: false, error: "filter not running")
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(failed)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), ["contained", "version", "epoch", "applied", "error"])
-        XCTAssertEqual(object["applied"] as? Bool, false)
-        XCTAssertEqual(object["error"] as? String, "filter not running")
+        XCTAssertEqual(String(bytes: try encoder.encode(failed), encoding: .utf8),
+                       #"{"applied":false,"contained":true,"epoch":100,"error":"filter not running","version":3}"#)
+        let applied = NetworkContainmentStatus(contained: false, version: 4, epoch: 100, applied: true, error: nil)
+        XCTAssertEqual(String(bytes: try encoder.encode(applied), encoding: .utf8),
+                       #"{"applied":true,"contained":false,"epoch":100,"version":4}"#, "no error key when it applied")
         XCTAssertEqual(NetworkContainmentStatus.eventType, "ne_containment_status")
+    }
+
+    // MARK: ordering shared with the other pushed documents
+
+    func testPushOrderIsEpochThenVersion() {
+        XCTAssertLessThan(PushOrder(epoch: 1, version: 9), PushOrder(epoch: 2, version: 1))
+        XCTAssertLessThan(PushOrder(epoch: 2, version: 1), PushOrder(epoch: 2, version: 2))
+        XCTAssertEqual(PushOrder(epoch: 2, version: 2), PushOrder(epoch: 2, version: 2))
+        XCTAssertFalse(PushOrder(epoch: 2, version: 2) < PushOrder(epoch: 2, version: 2))
+    }
+}
+
+/// Tests for the ordering bookkeeping behind applying containment filter settings: the event orders a restarting or busy filter can
+/// produce, which the controller itself cannot be driven through outside a live network extension.
+final class ContainmentSequencerTests: XCTestCase {
+    private final class Filter {}
+
+    private func applied(_ decision: ContainmentSequencer<Filter>.ApplyDecision) -> Filter? {
+        if case .apply(let filter) = decision { return filter }
+        return nil
+    }
+
+    func testAStartThatEnforcesTheCurrentStateIsReported() {
+        let sequencer = ContainmentSequencer<Filter>()
+        let filter = Filter()
+        XCTAssertEqual(sequencer.started(filter, startupEnforcesCurrent: true), .report)
+        XCTAssertEqual(ContainmentSequencer<Filter>().started(filter, startupEnforcesCurrent: false), .apply)
+    }
+
+    func testNoFilterMeansNothingIsApplied() {
+        let sequencer = ContainmentSequencer<Filter>()
+        guard case .noFilter = sequencer.requestApply() else { return XCTFail("expected no filter") }
+    }
+
+    // spec:extension-network-response/the-extension-reports-containment-status/updates-in-quick-succession-apply-in-order
+    func testARequestWhileAnApplyIsInFlightIsAppliedAfterItAndOnlyTheLastIsReported() {
+        let sequencer = ContainmentSequencer<Filter>()
+        let filter = Filter()
+        _ = sequencer.started(filter, startupEnforcesCurrent: true)
+        let first = applied(sequencer.requestApply())
+        XCTAssertTrue(first === filter)
+        guard case .deferred = sequencer.requestApply() else { return XCTFail("a second apply must wait for the first") }
+        let outcome = sequencer.completed(filter)
+        XCTAssertFalse(outcome.report, "the first result is superseded by the request that waited")
+        XCTAssertTrue(outcome.applyAgain)
+        XCTAssertTrue(applied(sequencer.requestApply()) === filter)
+        let last = sequencer.completed(filter)
+        XCTAssertTrue(last.report)
+        XCTAssertFalse(last.applyAgain)
+    }
+
+    // spec:extension-network-response/the-extension-reports-containment-status/a-stopped-filter-s-result-is-not-reported
+    func testAStoppedFiltersResultIsNotReportedAndItsReplacementGetsTheState() {
+        let sequencer = ContainmentSequencer<Filter>()
+        let old = Filter()
+        _ = sequencer.started(old, startupEnforcesCurrent: true)
+        XCTAssertTrue(applied(sequencer.requestApply()) === old)
+        sequencer.stopped(old)
+        let replacement = Filter()
+        XCTAssertEqual(sequencer.started(replacement, startupEnforcesCurrent: true), .wait, "an apply to the old filter is in flight")
+        let outcome = sequencer.completed(old)
+        XCTAssertFalse(outcome.report, "the old filter's result does not describe the host")
+        XCTAssertTrue(outcome.applyAgain, "the replacement is given the current state")
+        XCTAssertTrue(applied(sequencer.requestApply()) === replacement)
+    }
+
+    func testAStartCompletionAfterItsFiltersStopIsIgnored() {
+        let sequencer = ContainmentSequencer<Filter>()
+        let old = Filter()
+        let replacement = Filter()
+        _ = sequencer.started(replacement, startupEnforcesCurrent: true)
+        sequencer.stopped(old)
+        XCTAssertEqual(sequencer.started(old, startupEnforcesCurrent: true), .ignore)
+        XCTAssertTrue(applied(sequencer.requestApply()) === replacement, "the running filter is still the replacement")
+    }
+
+    func testAResultAfterTheFilterStoppedWithNoReplacementAppliesNothing() {
+        let sequencer = ContainmentSequencer<Filter>()
+        let filter = Filter()
+        _ = sequencer.started(filter, startupEnforcesCurrent: true)
+        _ = sequencer.requestApply()
+        sequencer.stopped(filter)
+        XCTAssertEqual(sequencer.completed(filter).report, false)
+        guard case .noFilter = sequencer.requestApply() else { return XCTFail("no filter is running") }
     }
 }

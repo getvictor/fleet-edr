@@ -177,6 +177,14 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: payload), .applyNetworkContainment(payload))
     }
 
+    // spec:extension-xpc-server/inbound-network-containment-update/an-oversized-network-containment-update-is-rejected
+    func testNetworkContainmentUpdateOverTheBoundIsRejected() {
+        let atTheBound = Data(repeating: 0x20, count: networkContainmentMaxBytes)
+        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: atTheBound), .applyNetworkContainment(atTheBound))
+        let over = Data(repeating: 0x20, count: networkContainmentMaxBytes + 1)
+        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: over), .rejectOversized)
+    }
+
     // spec:extension-xpc-server/inbound-network-containment-update/a-network-containment-update-with-no-data-is-rejected
     func testNetworkContainmentUpdateWithoutDataDispatchesToRejectMissingData() {
         XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: nil), .rejectMissingData)

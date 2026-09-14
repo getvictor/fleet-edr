@@ -15,11 +15,13 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
     let serverPort: UInt16
     let serverAddresses: [String]
 
-    /// supersedes reports whether this update should replace `current`, ordered by epoch, then version. Commands can reach the host
-    /// out of order, and a delayed release applied over a newer containment would free a host an operator just contained.
+    var order: PushOrder { PushOrder(epoch: epoch, version: version) }
+
+    /// supersedes reports whether this update should replace `current`, in PushOrder. Commands can reach the host out of order, and a
+    /// delayed release applied over a newer containment would free a host an operator just contained.
     func supersedes(_ current: NetworkContainmentUpdate?) -> Bool {
         guard let current else { return true }
-        return (epoch, version) > (current.epoch, current.version)
+        return order > current.order
     }
 
     /// refreshesLifeline reports whether this update is the current containment with a different server endpoint. The agent re-resolves
@@ -27,13 +29,13 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
     /// at the same epoch and version is accepted when only the lifeline moved.
     func refreshesLifeline(_ current: NetworkContainmentUpdate?) -> Bool {
         guard let current else { return false }
-        return (epoch, version) == (current.epoch, current.version) && contained == current.contained
+        return order == current.order && contained == current.contained
             && (serverPort != current.serverPort || serverAddresses != current.serverAddresses)
     }
 }
 
 /// LifelineRule is one flow a contained host may still carry, in the terms of an NENetworkRule: a remote address and prefix, a remote
-/// port (0 for any), a transport, and a direction.
+/// port (0 for any), a local port when the flow must come from one, a transport, and a direction.
 struct LifelineRule: Equatable, Sendable {
     enum Transport: Sendable { case tcp, udp }
     enum Direction: Sendable { case outbound, any }
@@ -41,8 +43,18 @@ struct LifelineRule: Equatable, Sendable {
     let address: String
     let prefix: Int
     let port: UInt16
+    let localPort: UInt16?
     let transport: Transport
     let direction: Direction
+
+    init(address: String, prefix: Int, port: UInt16, localPort: UInt16? = nil, transport: Transport, direction: Direction) {
+        self.address = address
+        self.prefix = prefix
+        self.port = port
+        self.localPort = localPort
+        self.transport = transport
+        self.direction = direction
+    }
 }
 
 /// NetworkContainment is the pure half of host network containment (#948): decoding a containment document and deciding what a
@@ -58,7 +70,9 @@ enum NetworkContainment {
 
     /// The ports and prefixes of the lifeline beyond the server itself.
     private static let dhcpServerPort: UInt16 = 67
+    private static let dhcpClientPort: UInt16 = 68
     private static let dhcpv6ServerPort: UInt16 = 547
+    private static let dhcpv6ClientPort: UInt16 = 546
     private static let dnsPort: UInt16 = 53
     private static let ipv4HostPrefix = 32
     private static let ipv6HostPrefix = 128
@@ -99,18 +113,19 @@ enum NetworkContainment {
     }
 
     /// lifeline is every flow a contained host keeps, and nothing for a host that is not contained. It is TCP to each server address on
-    /// the server port, which carries the agent's uploads, commands and the release itself. It is DHCP (UDP 67, and 547 for DHCPv6):
-    /// measured, a lease renewal during containment otherwise loses the host's address, and with it the route to the server. And it is
-    /// DNS (TCP and UDP 53): every lookup on the host passes through this extension's DNS proxy, whose own forwards are subject to these
-    /// settings, so without it the agent cannot resolve the server name.
+    /// the server port, which carries the agent's uploads, commands and the release itself. It is DHCP, between the client port (68,
+    /// or 546 for DHCPv6) and the server port (67, or 547): measured, a lease renewal during containment otherwise loses the host's
+    /// address, and with it the route to the server. Requiring the client port, which only a privileged process can bind, keeps the
+    /// rule from carrying arbitrary UDP to port 67. And it is DNS (TCP and UDP 53): every lookup on the host passes through this
+    /// extension's DNS proxy, whose own forwards are subject to these settings, so without it the agent cannot resolve the server name.
     static func lifeline(for update: NetworkContainmentUpdate) -> [LifelineRule] {
         guard update.contained else { return [] }
         var rules = update.serverAddresses.map { address in
             LifelineRule(address: address, prefix: isIPv6(address) ? ipv6HostPrefix : ipv4HostPrefix, port: update.serverPort,
                          transport: .tcp, direction: .outbound)
         }
-        for (any, dhcp) in [("0.0.0.0", dhcpServerPort), ("::", dhcpv6ServerPort)] {
-            rules.append(LifelineRule(address: any, prefix: 0, port: dhcp, transport: .udp, direction: .any))
+        for (any, server, client) in [("0.0.0.0", dhcpServerPort, dhcpClientPort), ("::", dhcpv6ServerPort, dhcpv6ClientPort)] {
+            rules.append(LifelineRule(address: any, prefix: 0, port: server, localPort: client, transport: .udp, direction: .any))
             rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .udp, direction: .any))
             rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .tcp, direction: .any))
         }
@@ -201,5 +216,74 @@ final class NetworkContainmentStore: Sendable {
             logger.error("network containment not applied, persist failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
+    }
+}
+
+/// ContainmentSequencer is NetworkContainmentController's bookkeeping for applying filter settings, kept free of NetworkExtension so its
+/// orderings are unit-testable. The controller calls it on its serial queue and performs the applies it asks for.
+///
+/// One apply is in flight at a time, and a request while one is in flight is deferred until it completes, so settings never take
+/// effect out of order. A filter's start completion is ignored once that filter has stopped, and a completion from a filter other than
+/// the running one is not reported, since it no longer describes the host. Stopped filters are held weakly, so a new filter that reuses
+/// a released one's address is not mistaken for it.
+final class ContainmentSequencer<Filter: AnyObject> {
+    enum StartDecision: Equatable {
+        /// The filter had already stopped; nothing changes.
+        case ignore
+        /// The startup settings enforce the current state; report it as applied.
+        case report
+        /// The current state differs from what started, or startup failed; apply it now.
+        case apply
+        /// An apply is in flight; the current state is applied to this filter when it completes.
+        case wait
+    }
+
+    enum ApplyDecision {
+        case apply(Filter)
+        /// An apply is in flight; this request is applied when it completes.
+        case deferred
+        /// No filter is running; the state is applied when one starts.
+        case noFilter
+    }
+
+    private weak var running: Filter?
+    private let stopped = NSHashTable<Filter>.weakObjects()
+    private var applying = false
+    private var reapply = false
+
+    func started(_ filter: Filter, startupEnforcesCurrent: Bool) -> StartDecision {
+        guard !stopped.contains(filter) else { return .ignore }
+        running = filter
+        if applying {
+            reapply = true
+            return .wait
+        }
+        return startupEnforcesCurrent ? .report : .apply
+    }
+
+    func stopped(_ filter: Filter) {
+        stopped.add(filter)
+        if running === filter {
+            running = nil
+        }
+    }
+
+    func requestApply() -> ApplyDecision {
+        guard !applying else {
+            reapply = true
+            return .deferred
+        }
+        guard let filter = running else { return .noFilter }
+        applying = true
+        reapply = false
+        return .apply(filter)
+    }
+
+    /// completed records that an apply to filter finished. report says whether its result describes the host now; applyAgain says
+    /// whether a request made while it was in flight needs the current state applied. A replacement filter that started meanwhile is
+    /// one such request, since started defers to the apply in flight.
+    func completed(_ filter: Filter) -> (report: Bool, applyAgain: Bool) {
+        applying = false
+        return (filter === running && !reapply, reapply)
     }
 }

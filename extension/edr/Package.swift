@@ -95,6 +95,9 @@ let package = Package(
                 "extension/ApplicationControlStore.swift",
                 // AtomicFile.swift is the atomic write every persisted store uses, in both extensions. Pure Foundation.
                 "shared/AtomicFile.swift",
+                // PushOrder.swift is the one definition of how a pushed document is ordered (epoch, then version), shared by the
+                // application-control snapshot, the watched-path set and the network containment state.
+                "shared/PushOrder.swift",
                 "extension/AuthExecDecider.swift",
                 // CDHashHex.swift holds the CDHash-to-hex helper and the Hardened Runtime flag test. It carried an
                 // EndpointSecurity import that nothing in it used (the only es_ references are in comments), so it moves

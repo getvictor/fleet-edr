@@ -12,18 +12,19 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 /// stopped or restarting. Not contained, the settings are the ones the filter has always used: every flow is handed to handleNewFlow
 /// and allowed after its telemetry is emitted. While contained the filter therefore records no network_connect events.
 ///
-/// Updates arrive on the XPC server's queue and providers start on the framework's threads, so every transition runs on one serial
-/// queue. An apply that completes after a newer one was issued is not reported, so the status always describes the latest settings.
+/// Updates arrive on the XPC server's queue and providers start and stop on the framework's threads, so every transition runs on one
+/// serial queue. Applies are serialized as well: one is in flight at a time, and an update that arrives meanwhile is applied when it
+/// completes, so settings can never take effect out of order. A result from a filter that has since stopped or been replaced is not
+/// reported, since it no longer describes the host. ContainmentSequencer holds that bookkeeping.
 final class NetworkContainmentController: @unchecked Sendable {
     static let shared = NetworkContainmentController()
 
     private let store = NetworkContainmentStore()
     private let queue = DispatchQueue(label: "com.fleetdm.edr.networkcontainment")
-    /// Guarded by queue.
-    private weak var provider: NEFilterDataProvider?
-    private var generation = 0
-    private var status: NetworkContainmentStatus?
     private let serializer = NetworkEventSerializer()
+    // Everything below is guarded by queue.
+    private let sequencer = ContainmentSequencer<NEFilterDataProvider>()
+    private var status: NetworkContainmentStatus?
 
     /// baselineSettings are the filter's settings when the host is not contained.
     static func baselineSettings() -> NEFilterSettings {
@@ -37,29 +38,26 @@ final class NetworkContainmentController: @unchecked Sendable {
     }
 
     /// providerStarted records the running content filter and the state its startup settings enforced. When an update was accepted
-    /// while the filter was starting, the newer state is applied now.
+    /// while the filter was starting, or an apply is still in flight, the current state is applied to it.
     func providerStarted(_ filter: NEFilterDataProvider, applied: NetworkContainmentUpdate?, error: Error?) {
         queue.async {
-            self.provider = filter
-            guard error == nil, self.store.current == applied else {
-                self.applyLocked()
+            switch self.sequencer.started(filter, startupEnforcesCurrent: error == nil && self.store.current == applied) {
+            case .ignore, .wait:
                 return
+            case .apply:
+                self.applyLocked()
+            case .report:
+                if let applied {
+                    self.status = Self.status(for: applied, applied: true, error: nil)
+                    self.publishLocked()
+                }
             }
-            self.status = NetworkContainmentStatus(
-                contained: applied?.contained ?? false, version: applied?.version ?? 0, epoch: applied?.epoch ?? 0, applied: true,
-                error: nil
-            )
-            self.publishLocked()
         }
     }
 
     /// providerStopped forgets the filter, so an update received while it is down is persisted and applied at its next start.
     func providerStopped(_ filter: NEFilterDataProvider) {
-        queue.async {
-            if self.provider === filter {
-                self.provider = nil
-            }
-        }
+        queue.async { self.sequencer.stopped(filter) }
     }
 
     /// receive handles a `network_containment.update` from the agent.
@@ -86,37 +84,46 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     private func applyLocked() {
         let update = store.current
-        guard let provider else {
-            status = NetworkContainmentStatus(
-                contained: update?.contained ?? false, version: update?.version ?? 0, epoch: update?.epoch ?? 0, applied: false,
-                error: "content filter is not running"
-            )
-            publishLocked()
+        switch sequencer.requestApply() {
+        case .deferred:
             return
-        }
-        generation += 1
-        let issued = generation
-        let settings = update.map(Self.settings(for:)) ?? Self.baselineSettings()
-        provider.apply(settings) { error in
-            self.queue.async {
-                guard issued == self.generation else { return }
-                if let error {
-                    logger.error("network containment settings not applied: \(error.localizedDescription, privacy: .public)")
+        case .noFilter:
+            if let update {
+                status = Self.status(for: update, applied: false, error: "content filter is not running")
+                publishLocked()
+            }
+        case .apply(let target):
+            target.apply(update.map(Self.settings(for:)) ?? Self.baselineSettings()) { error in
+                self.queue.async {
+                    if let error {
+                        logger.error("network containment settings not applied: \(error.localizedDescription, privacy: .public)")
+                    }
+                    let outcome = self.sequencer.completed(target)
+                    if outcome.report, let update {
+                        self.status = Self.status(for: update, applied: error == nil, error: error?.localizedDescription)
+                        self.publishLocked()
+                    }
+                    if outcome.applyAgain {
+                        self.applyLocked()
+                    }
                 }
-                self.status = NetworkContainmentStatus(
-                    contained: update?.contained ?? false, version: update?.version ?? 0, epoch: update?.epoch ?? 0,
-                    applied: error == nil, error: error?.localizedDescription
-                )
-                self.publishLocked()
             }
         }
     }
 
+    /// publishLocked sends the status. Nothing is sent before a containment state exists, so a host that has never been contained
+    /// sends no status an agent without containment support would upload as telemetry. An agent that connects before the filter has
+    /// started is told the persisted state as not yet applied.
     private func publishLocked() {
-        guard let status, let data = serializer.serialize(eventType: NetworkContainmentStatus.eventType, payload: status) else {
+        guard let current = status ?? store.current.map({ Self.status(for: $0, applied: false, error: "content filter has not started") }),
+              let data = serializer.serialize(eventType: NetworkContainmentStatus.eventType, payload: current) else {
             return
         }
         XPCServer.shared.send(data: data)
+    }
+
+    private static func status(for update: NetworkContainmentUpdate, applied: Bool, error: String?) -> NetworkContainmentStatus {
+        NetworkContainmentStatus(contained: update.contained, version: update.version, epoch: update.epoch, applied: applied, error: error)
     }
 
     /// settings turns a containment state into filter settings: the lifeline allowed and everything else dropped when contained, the
@@ -129,10 +136,11 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     private static func networkRule(for rule: LifelineRule) -> NENetworkRule {
         let port = NWEndpoint.Port(rawValue: rule.port) ?? .any
+        let local = rule.localPort.map { NWEndpoint.hostPort(host: NWEndpoint.Host(rule.address), port: NWEndpoint.Port(rawValue: $0) ?? .any) }
         return NENetworkRule(
             remoteNetworkEndpoint: NWEndpoint.hostPort(host: NWEndpoint.Host(rule.address), port: port),
             remotePrefix: rule.prefix,
-            localNetworkEndpoint: nil,
+            localNetworkEndpoint: local,
             localPrefix: 0,
             protocol: rule.transport == .tcp ? .TCP : .UDP,
             direction: rule.direction == .outbound ? .outbound : .any

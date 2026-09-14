@@ -26,9 +26,9 @@ The work lands in steps, producer before consumer.
 ### Network extension (this step)
 
 - **Containment is enforced by filter settings.** Contained, the content filter's settings allow the lifeline and drop everything else, which the operating system enforces without consulting the provider. Not contained, the settings are the telemetry settings the filter already uses.
-- **The lifeline** is TCP to each EDR server address on the server port, DHCP (UDP 67, and 547 for DHCPv6), and DNS (TCP and UDP 53). Loopback is never filtered.
+- **The lifeline** is TCP to each EDR server address on the server port, DHCP from the client port to the server port (UDP 68 to 67, and 546 to 547 for DHCPv6; only a privileged process can bind the client port), and DNS (TCP and UDP 53). Loopback is never filtered. Until the DNS proxy step lands, DNS to any address stays open on a contained host; that step lands before any operator can contain a host.
 - **The state is persisted and ordered.** A `network_containment.update` from the agent carries the server's version and epoch, whether the host is contained, and the server endpoint the agent resolved. The extension persists it before applying it, applies it as the first settings of a starting filter, orders updates by epoch then version, and accepts an update at the same version that only moves the server endpoint, so the agent can refresh the addresses of a contained host. A containment with no usable lifeline is refused whole.
-- **The extension reports containment status** (contained, version, epoch, whether it applied) to the agent after each change and on every agent hello.
+- **The extension reports containment status** (contained, version, epoch, whether it applied) to the agent after each change and on every agent hello, and sends nothing on a host that has never received a containment update, so an agent without containment support uploads no stray control events. Filter applies run one at a time, so settings never take effect out of order.
 - While contained, the filter records no `network_connect` events: dropped flows never reach the provider.
 
 ### Later steps

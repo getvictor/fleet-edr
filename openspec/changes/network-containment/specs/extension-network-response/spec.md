@@ -2,13 +2,13 @@
 
 ### Requirement: Containment is enforced by the operating system
 
-The network extension SHALL enforce host network containment as content-filter settings whose default action drops every flow the lifeline does not allow, so the operating system enforces it without consulting the provider: new and established connections to other destinations are cut, and containment stays in force while the provider is stopped or restarting. A contained host SHALL keep a lifeline of TCP to each EDR server address it was given on the server port, DHCP (UDP 67, and UDP 547 for DHCPv6), and DNS (TCP and UDP 53); loopback is not filtered. A host that is not contained SHALL have the filter's telemetry settings, which hand every flow to the provider.
+The network extension SHALL enforce host network containment as content-filter settings whose default action drops every flow the lifeline does not allow, so the operating system enforces it without consulting the provider: new and established connections to other destinations are cut, and containment stays in force while the provider is stopped or restarting. A contained host SHALL keep a lifeline of TCP to each EDR server address it was given on the server port, DHCP between the client and server ports (UDP 68 to 67, and UDP 546 to 547 for DHCPv6), and DNS (TCP and UDP 53); loopback is not filtered. A host that is not contained SHALL have the filter's telemetry settings, which hand every flow to the provider.
 
 #### Scenario: A contained host keeps only the lifeline
 
 - **GIVEN** a containment naming an EDR server address and port
 - **WHEN** the extension builds the filter rules for it
-- **THEN** the rules allow TCP to that address on that port, DHCP and DNS, and nothing else
+- **THEN** the rules allow TCP to that address on that port, DHCP from the client port to the server port, and DNS, and nothing else
 
 #### Scenario: Releasing a host restores the telemetry settings
 
@@ -46,10 +46,22 @@ The network extension SHALL persist an accepted containment update before applyi
 
 ### Requirement: The extension reports containment status
 
-The network extension SHALL report its containment status to the agent as an `ne_containment_status` control event carrying whether the host is contained, the version and epoch of the state it holds, whether the content filter applied it, and the error when it did not. It SHALL report after every change and whenever an agent completes the hello handshake.
+The network extension SHALL report its containment status to the agent as an `ne_containment_status` control event carrying whether the host is contained, the version and epoch of the state it holds, whether the content filter applied it, and the error when it did not. It SHALL report after every change and whenever an agent completes the hello handshake, including before the content filter has started, when it reports the persisted state as not applied. A host that has never received a containment update SHALL send no status. Filter settings SHALL be applied one at a time, so a later update never takes effect before an earlier one, and a result from a filter that has since stopped SHALL NOT be reported.
 
 #### Scenario: The status says whether containment was applied
 
 - **GIVEN** the extension has applied, or failed to apply, a containment
 - **WHEN** it reports its status
 - **THEN** the event carries contained, version, epoch, applied and, on failure, the error
+
+#### Scenario: Updates in quick succession apply in order
+
+- **GIVEN** filter settings are being applied for one containment update
+- **WHEN** a newer update is accepted before that apply completes
+- **THEN** the newer settings are applied after it, and only the newer state is reported
+
+#### Scenario: A stopped filter's result is not reported
+
+- **GIVEN** filter settings are being applied to a content filter
+- **WHEN** that filter stops and a replacement starts before the apply completes
+- **THEN** the completed apply is not reported, and the replacement is given the current state

@@ -39,7 +39,7 @@ struct WatchedPathsUpdate: Equatable {
     /// (ApplicationControlStore.apply).
     func supersedes(_ current: WatchedPathsUpdate?) -> Bool {
         guard let current else { return true }
-        return (epoch, version) > (current.epoch, current.version)
+        return PushOrder(epoch: epoch, version: version) > PushOrder(epoch: current.epoch, version: current.version)
     }
 }
 

@@ -273,7 +273,8 @@ final class ApplicationControlStore {
         // by value, so currentSnapshot() never observes a half-applied state.
         let prior: ApplicationControlSnapshot? = lock.withLock { current in
             let samePolicy = snapshot.policyID == current.policyID
-            let ahead = (snapshot.policyEpoch, snapshot.policyVersion) > (current.policyEpoch, current.policyVersion)
+            let ahead = PushOrder(epoch: snapshot.policyEpoch, version: snapshot.policyVersion)
+                > PushOrder(epoch: current.policyEpoch, version: current.policyVersion)
             // Stale / duplicate / out-of-order: same policy and not ahead. Skip the swap so a replayed older snapshot can't
             // regress the active ruleset and the disk write doesn't fire for a no-op. A different policy_id always falls
             // through to acceptance (the host was retargeted to another policy).
