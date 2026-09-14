@@ -82,6 +82,49 @@ func TestWorkflow_ThePullRequestIsOpenedWithTheAppToken(t *testing.T) {
 	assert.Equal(t, "${{ steps.push.outputs.pr_url }}", issue.Env["PR_URL"])
 }
 
+// TestWorkflow_CIRunsTheCatalogTestsOnTheSyncPullRequest runs test.yml's change detection over the files a sync pull request changes.
+// That pull request touches only rule files and generated docs, and the Go test jobs must still run, since the catalog tests that pin
+// the import counts are the check the synced rules have to pass.
+func TestWorkflow_CIRunsTheCatalogTestsOnTheSyncPullRequest(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../../.github/workflows/test.yml")
+	require.NoError(t, err)
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []workflowStep `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &wf))
+	var script string
+	for _, s := range wf.Jobs["changes"].Steps {
+		if s.ID == "detect" {
+			script = s.Run
+		}
+	}
+	require.NotEmpty(t, script, "no detect step in test.yml")
+
+	for name, files := range map[string]string{
+		"a sync pull request": "server/rules/internal/catalog/imported/process_creation/proc_creation_macos_new.yml\n" +
+			"server/rules/internal/catalog/imported/MANIFEST.sha256\ndocs/detection-rules.md\ndocs/attack-navigator-layer.json",
+		"a change to the sync workflow alone": ".github/workflows/sigma-upstream-sync.yml",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRunner(t, t.TempDir())
+			writeExecutable(t, filepath.Join(r.temp, "bin", "gh"), "#!/usr/bin/env bash\nprintf '"+files+"\\n'\n")
+			maps.Copy(r.env, map[string]string{"EVENT_NAME": "pull_request", "PR_NUMBER": "1", "REPO": "getvictor/fleet-edr"})
+			//nolint:gosec // runs this repository's own workflow script, which is what is under test
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", script)
+			for k, v := range r.env {
+				cmd.Env = append(cmd.Env, k+"="+v)
+			}
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(out))
+			assert.Contains(t, strings.Split(r.read("out"), "\n"), "go=true", string(out))
+		})
+	}
+}
+
 // stepScript returns the run script of the step with the given id, or, for the step without one, the given name.
 func stepScript(t *testing.T, key string) string {
 	t.Helper()
