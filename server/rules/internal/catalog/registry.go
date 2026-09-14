@@ -34,6 +34,7 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 		&SudoersTamper{Exclusions: resolver},
 		&SudoersDestroyed{Exclusions: resolver},
 		&ApplicationControlBlock{},
+		&ApplicationControlWouldBlock{},
 		&DNSC2Beacon{},
 		&SensorTamper{},
 		&SensorRecoveryFailed{},

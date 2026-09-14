@@ -36,16 +36,17 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"sudoers_tamper":          {api.ExclusionMatchPathGlob},
 		// Same surface as sudoers_tamper and for the same reason: the tunable subject is the acting process, since a
 		// configuration manager that rewrites a fragment by deleting and recreating it is the shape an operator excludes.
-		"sudoers_destroyed":             {api.ExclusionMatchPathGlob},
-		"privilege_launchd_plist_write": {api.ExclusionMatchTeamID},
-		"dyld_insert":                   {},
-		"shell_from_office":             {},
-		"osascript_network_exec":        {},
-		"credential_keychain_dump":      {},
-		"application_control_block":     {},
-		"dns_c2_beacon":                 {},
-		"sensor_tamper":                 {},
-		"sensor_recovery_failed":        {},
+		"sudoers_destroyed":               {api.ExclusionMatchPathGlob},
+		"privilege_launchd_plist_write":   {api.ExclusionMatchTeamID},
+		"dyld_insert":                     {},
+		"shell_from_office":               {},
+		"osascript_network_exec":          {},
+		"credential_keychain_dump":        {},
+		"application_control_block":       {},
+		"application_control_would_block": {},
+		"dns_c2_beacon":                   {},
+		"sensor_tamper":                   {},
+		"sensor_recovery_failed":          {},
 	}
 
 	// Scoped to the rules this project authors, whose exclusion surface is a design decision someone made and should have to

@@ -296,7 +296,7 @@ func TestHandler_ExportRule_NotFound(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	for _, id := range []string{"application_control_block", "sensor_recovery_failed", "no_such_rule"} {
+	for _, id := range []string{"application_control_block", "application_control_would_block", "sensor_recovery_failed", "no_such_rule"} {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)

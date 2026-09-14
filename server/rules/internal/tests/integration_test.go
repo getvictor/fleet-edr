@@ -232,7 +232,7 @@ func TestContentService_ActiveRules(t *testing.T) {
 			extra = append(extra, id)
 		}
 	}
-	assert.ElementsMatch(t, []string{"application_control_block", "sensor_recovery_failed"}, extra,
+	assert.ElementsMatch(t, []string{"application_control_block", "application_control_would_block", "sensor_recovery_failed"}, extra,
 		"the engine must evaluate exactly the catalog plus the registered non-detections")
 	require.Len(t, rules, len(catalogIDs)+len(extra))
 }

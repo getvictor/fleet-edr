@@ -47,6 +47,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"sudoers_tamper",
 		"sudoers_destroyed",
 		"application_control_block",
+		"application_control_would_block",
 		"dns_c2_beacon",
 		"sensor_tamper",
 		"sensor_recovery_failed",
@@ -172,11 +173,12 @@ func TestAll_ThreadsExclusionResolver(t *testing.T) {
 	assert.Same(t, res, byID["sudoers_tamper"].(*SudoersTamper).Exclusions)
 }
 
-// Compile-time proof that the two non-detections satisfy the optional interface. A rule that stops implementing it silently
+// Compile-time proof that the non-detections satisfy the optional interface. A rule that stops implementing it silently
 // rejoins the operator-facing catalog, which is a documentation and ATT&CK-coverage change rather than a build failure, so the
 // assertion is worth stating rather than relying on the runtime test below alone.
 var (
 	_ api.NonDetection = (*ApplicationControlBlock)(nil)
+	_ api.NonDetection = (*ApplicationControlWouldBlock)(nil)
 	_ api.NonDetection = (*SensorRecoveryFailed)(nil)
 )
 
@@ -194,6 +196,8 @@ func TestAll_NonDetectionClassification(t *testing.T) {
 	wantNonDetections := map[string]api.NonDetectionKind{
 		// The AUTH_EXEC walker already decided on the host; this renders that decision as an alert row.
 		"application_control_block": api.NonDetectionProjection,
+		// The same decision for a DETECT rule, which let the exec run; it is kept as a monitor record.
+		"application_control_would_block": api.NonDetectionProjection,
 		// Reports our own automatic repair giving up. Both documented causes are faults in our software.
 		"sensor_recovery_failed": api.NonDetectionHealth,
 	}
