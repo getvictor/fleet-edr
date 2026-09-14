@@ -1018,7 +1018,7 @@ func (s *Store) collectExistingBulkKeys(ctx context.Context, tx *sqlx.Tx, policy
 
 // fetchBulkUpsertRows is the single-SELECT post-state fetch that replaces the previous N×SELECT refetch loop (Gemini HIGH on
 // PR #190). Returns the rules indexed by (rule_type, identifier) key so the caller can re-order them to the request's order.
-func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items []api.BulkUpsertRuleItem) (map[string]api.ApplicationControlRule, error) {
+func (s *Store) fetchBulkUpsertRows(ctx context.Context, tx *sqlx.Tx, policyID int64, items []api.BulkUpsertRuleItem) (map[string]api.ApplicationControlRule, error) {
 	if len(items) == 0 {
 		return map[string]api.ApplicationControlRule{}, nil
 	}
@@ -1034,7 +1034,7 @@ func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items [
 		created_at, updated_at, created_by
 		FROM app_control_rules
 		WHERE policy_id = ? AND (rule_type, identifier) IN (` + strings.Join(placeholders, ", ") + ")"
-	rows, err := s.db.QueryxContext(ctx, query, args...)
+	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol bulk upsert: refetch: %w", err)
 	}
@@ -1066,7 +1066,9 @@ func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items [
 //
 // Insert/update classification snapshots the existing (policy_id, rule_type, identifier) keys with one SELECT inside the
 // same txn (no N×SELECT preflight), then classifies each item by checking the snapshot. The post-state row set is fetched
-// with one SELECT after commit (no N×SELECT refetch); rows are returned in the original request order.
+// with one SELECT in the same txn before commit (no N×SELECT refetch), so a failed read rolls the batch back rather than
+// reporting an error for a change already committed, which the service would then neither fan out nor audit. Rows are returned
+// in the original request order.
 func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequest) (api.BulkUpsertResult, error) {
 	if err := validateBulkUpsertRequest(req); err != nil {
 		return api.BulkUpsertResult{}, err
@@ -1148,13 +1150,10 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 		req.Actor, req.PolicyID); err != nil {
 		return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: bump policy version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return api.BulkUpsertResult{}, fmt.Errorf(errCommitTxFmt, err)
-	}
 
 	// Post-upsert state: one SELECT replaces the N×SELECT refetch. Build the response in the original request order so
 	// indexable consumers (paste-many UI showing line-by-line) line up with the operator's input.
-	postMap, err := s.fetchBulkUpsertRows(ctx, req.PolicyID, req.Items)
+	postMap, err := s.fetchBulkUpsertRows(ctx, tx, req.PolicyID, req.Items)
 	if err != nil {
 		return api.BulkUpsertResult{}, err
 	}
@@ -1165,6 +1164,9 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 			return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: refetch missed key %s/%s", item.RuleType, item.Identifier)
 		}
 		rules = append(rules, rule)
+	}
+	if err := tx.Commit(); err != nil {
+		return api.BulkUpsertResult{}, fmt.Errorf(errCommitTxFmt, err)
 	}
 	return api.BulkUpsertResult{Inserted: inserted, Updated: updated, Rules: rules}, nil
 }
