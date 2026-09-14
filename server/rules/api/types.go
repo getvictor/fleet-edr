@@ -177,7 +177,7 @@ const (
 // adversary claim misleads on all three counts, and in the ATT&CK case inflates a coverage figure that is read during procurement.
 //
 // Where its findings are RECORDED follows the kind (issue #778). A projection renders a decision already made about activity on the
-// host, so its findings are recorded as a detection's are, in the mode the rule runs in: an alert-mode projection's findings are
+// host, so, like a detection's findings, its findings follow the mode the rule runs in: an alert-mode projection's findings are
 // worked in the same queue as detections, and a monitor-mode projection's are kept as monitor records. A health signal reports a
 // fault in our own software, so its findings are recorded as host health episodes and never as alerts.
 //
@@ -339,6 +339,12 @@ func AlertOriginOf(r Rule) string {
 func IsHealthSignal(r Rule) bool {
 	nd, ok := r.(NonDetection)
 	return ok && nd.NonDetectionKind() == NonDetectionHealth
+}
+
+// IsProjection reports whether r declares itself a projection of a decision made elsewhere.
+func IsProjection(r Rule) bool {
+	nd, ok := r.(NonDetection)
+	return ok && nd.NonDetectionKind() == NonDetectionProjection
 }
 
 // AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.

@@ -657,6 +657,9 @@ func (e *Engine) evaluateRule(
 	// Read from the rule, once per batch, for the same reason: the DECLARATION decides where findings are recorded, not anything
 	// the finding itself carries.
 	isHealthRule := rulesapi.IsHealthSignal(rule)
+	// A projection's findings carry the id of the rule that made the decision (app_control:<id>), not the projection's own, and that
+	// is the rule an operator judges from the match counts, so its monitor matches are counted under the finding's rule id.
+	isProjection := rulesapi.IsProjection(rule)
 	// Attribution rides the alert the rule produces (issue #765). Read from the RULE, never from the finding, so that a rule
 	// cannot credit someone else for its match or drop the credit entirely: the Detection Rule License obligation the imported
 	// corpus carries would otherwise be satisfied only by rules that chose to satisfy it.
@@ -681,7 +684,7 @@ func (e *Engine) evaluateRule(
 	// flag that already gates the alert log and edr.alerts.created, so it is correct by construction rather than by test, and that
 	// is worth knowing rather than assuming.
 	for _, f := range findings {
-		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, isHealthRule, f, techniques, origin, tally)
+		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, isHealthRule, isProjection, f, techniques, origin, tally)
 		if err != nil {
 			span.RecordError(err)
 			return err
@@ -732,7 +735,7 @@ func evaluate(
 // It reports what happened to the finding, so the caller can annotate its span with what was actually raised rather than with what
 // the rule returned.
 func (e *Engine) routeFinding(
-	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, isHealthRule bool, f api.Finding,
+	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, isHealthRule, isProjection bool, f api.Finding,
 	techniques []string, origin string, tally *batchTally,
 ) (routeOutcome, error) {
 	mode, severityOverride := ruleDefault, ""
@@ -763,7 +766,13 @@ func (e *Engine) routeFinding(
 		// every `id` on every host, and the log line itself is emitted again whenever a batch is retried, unlike the record, whose
 		// write deduplicates. The counter is the medium built for a high-frequency per-rule signal, and the record (issue #994) is
 		// what lets an operator read what the rule matched before promoting it.
-		tally.addMonitorMatch(ruleID, f.HostID, f.Severity)
+		// Mode is resolved under the evaluated rule's id above; the count goes to the rule an operator promotes, which for a projection
+		// is the one its finding names.
+		countedRuleID := ruleID
+		if isProjection {
+			countedRuleID = f.RuleID
+		}
+		tally.addMonitorMatch(countedRuleID, f.HostID, f.Severity)
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 		e.keepMonitorRecord(tally, isHealthRule, f, techniques, origin)
