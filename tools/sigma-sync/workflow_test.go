@@ -66,8 +66,14 @@ func TestWorkflow_ThePullRequestIsOpenedWithTheAppToken(t *testing.T) {
 	assert.Equal(t, "${{ vars.SIGMA_SYNC_APP_CLIENT_ID }}", token.With["client-id"])
 	assert.Equal(t, "${{ secrets.SIGMA_SYNC_APP_PRIVATE_KEY }}", token.With["private-key"])
 	assert.Equal(t, "steps.sync.outputs.changed == 'true'", token.If)
-	assert.Equal(t, "write", token.With["permission-contents"])
-	assert.Equal(t, "write", token.With["permission-pull-requests"])
+	// Exactly these two, so a scope added later has to change this test too.
+	scopes := map[string]string{}
+	for input, value := range token.With {
+		if strings.HasPrefix(input, "permission-") {
+			scopes[input] = value
+		}
+	}
+	assert.Equal(t, map[string]string{"permission-contents": "write", "permission-pull-requests": "write"}, scopes)
 	assert.Equal(t, "${{ steps.app-token.outputs.token }}", push.Env["GH_TOKEN"])
 	assert.Equal(t, "${{ github.token }}", issue.Env["GH_TOKEN"])
 	assert.Equal(t, "${{ steps.sync.outputs.differs }}", issue.Env["DIFFERS"])
