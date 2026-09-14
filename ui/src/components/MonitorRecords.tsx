@@ -50,7 +50,7 @@ export function MonitorRecords() {
       {/* Stated on the page rather than left to the Observed column's note, because this is where the two numbers meet: an operator
           arriving from a count of 40 and finding 3 records will otherwise read the difference as lost data. */}
       {ruleId.startsWith(APP_CONTROL_RULE_PREFIX) ? (
-        // An application-control rule's records are the executables it let run in Detect mode. The detection wording below talks
+        // An application-control rule's records are the executables that ran while it was in Detect mode. The detection wording below talks
         // about monitor mode and an Observed column this rule has neither of.
         <p className="monitor-records__explanation">
           What this application-control rule would have blocked while it ran in Detect mode, newest first. Each executable ran. These

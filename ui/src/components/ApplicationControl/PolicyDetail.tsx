@@ -346,7 +346,7 @@ function enforcementDescription(rule: ApplicationControlRule, impact: WouldBlock
   if (!isDetect(rule)) {
     return (
       <>
-        In Detect, this rule stops blocking <code>{ident}</code> and keeps a record of each match instead. Another Protect rule that
+        In Detect, this rule stops blocking <code>{ident}</code> and keeps a record of each match that runs. Another Protect rule that
         matches still blocks it. The agents pick it up on the next snapshot.
       </>
     );

@@ -32,7 +32,7 @@ The application-control policy page SHALL show each rule's enforcement in its ru
 
 ### Requirement: A Detect rule can be promoted with its impact in view
 
-The policy page SHALL let an operator promote a Detect rule to Protect, and move a Protect rule back to Detect, from the rule's row. Either change SHALL ask for a reason before it is saved. For an operator who may read detection tuning, where the match counts are served, each Detect rule's row and its promote dialog SHALL state what the rule would have blocked in the counted window, as runs and hosts or as no matches, and SHALL link to the rule's monitor records. For an operator who may not, the figure SHALL be left out rather than shown as zero. The monitor-records page for an application-control rule SHALL explain its records as executables the rule let run in Detect mode.
+The policy page SHALL let an operator promote a Detect rule to Protect, and move a Protect rule back to Detect, from the rule's row. Either change SHALL ask for a reason before it is saved. For an operator who may read detection tuning, where the match counts are served, each Detect rule's row and its promote dialog SHALL state what the rule would have blocked in the counted window, as runs and hosts or as no matches, and SHALL link to the rule's monitor records. For an operator who may not, the figure SHALL be left out rather than shown as zero. The monitor-records page for an application-control rule SHALL explain its records as executables that ran while the rule was in Detect mode, which it would have blocked.
 
 #### Scenario: Promoting shows what the rule would have blocked
 
