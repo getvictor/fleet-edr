@@ -13,7 +13,7 @@ const OPTIONS: readonly { value: Enforcement; label: string; help: string }[] = 
   {
     value: "DETECT",
     label: "Detect",
-    help: "Let the executable run and keep a record of each match, to see what the rule would block before it blocks anything.",
+    help: "Record each match without blocking it, to see what the rule would block before it blocks anything.",
   },
   { value: "PROTECT", label: "Protect", help: "Block the executable." },
 ];
@@ -25,23 +25,34 @@ export function EnforcementChoice({ name, value, onChange, disabled }: Enforceme
   return (
     <fieldset className="app-control-enforcement" disabled={disabled}>
       <legend className="field__label">Enforcement</legend>
-      {OPTIONS.map((option) => (
-        <label key={option.value} className="app-control-enforcement__option">
-          <input
-            type="radio"
-            name={name}
-            value={option.value}
-            checked={value === option.value}
-            onChange={() => {
-              onChange(option.value);
-            }}
-          />
-          <span>
-            <span className="app-control-enforcement__label">{option.label}</span>
-            <span className="app-control-enforcement__help">{option.help}</span>
-          </span>
-        </label>
-      ))}
+      {OPTIONS.map((option) => {
+        // The option's name is its label alone and the help is its description, so a screen reader announces "Detect" rather than
+        // the whole sentence as the radio's name.
+        const id = `${name}-${option.value.toLowerCase()}`;
+        return (
+          <div key={option.value} className="app-control-enforcement__option">
+            <input
+              id={id}
+              type="radio"
+              name={name}
+              value={option.value}
+              checked={value === option.value}
+              aria-describedby={`${id}-help`}
+              onChange={() => {
+                onChange(option.value);
+              }}
+            />
+            <span>
+              <label htmlFor={id} className="app-control-enforcement__label">
+                {option.label}
+              </label>
+              <span id={`${id}-help`} className="app-control-enforcement__help">
+                {option.help}
+              </span>
+            </span>
+          </div>
+        );
+      })}
     </fieldset>
   );
 }

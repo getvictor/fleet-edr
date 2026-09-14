@@ -246,12 +246,12 @@
   align-items: flex-start;
   gap: $pad-small;
   font-size: $x-small;
-  cursor: pointer;
 }
 
 .app-control-enforcement__label {
   display: block;
   font-weight: $bold;
+  cursor: pointer;
 }
 
 .app-control-enforcement__help {
