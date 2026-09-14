@@ -52,8 +52,8 @@ func (r *ApplicationControlWouldBlock) Techniques() []string { return []string{}
 func (r *ApplicationControlWouldBlock) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Keeps every exec a DETECT application-control rule would have blocked as a monitor record.",
-		Description: "When an exec matches a BLOCK rule whose enforcement is DETECT, and no PROTECT rule, the extension lets it run and " +
+		Summary: "Keeps each allowed exec a DETECT application-control rule matched as a monitor record.",
+		Description: "When the policy allows an exec that matches a BLOCK rule whose enforcement is DETECT, the extension " +
 			"emits an `application_control_would_block` event. This built-in rule keeps each one as a monitor record under the " +
 			"matched rule's id, with that rule's severity, so an operator can read what the rule matches before promoting it to " +
 			"PROTECT. Records deduplicate on the process, like any monitor record.",
