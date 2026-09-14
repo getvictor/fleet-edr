@@ -29,13 +29,15 @@ type workflowStep struct {
 // TestWorkflow_ThePullRequestIsOpenedWithTheAppToken pins the credential wiring the tests of the step scripts cannot see. The App's
 // client id and key are stored in the sigma-sync environment, not the repository, so a job that stopped naming it would read an empty
 // client id. The push step must use the App's token, since a pull request opened with the workflow's own token starts no CI. And the
-// token is minted only when there is something to push.
+// token is minted only when there is something to push, with write access to contents and pull requests. The tracking issue step
+// reads the push step's outputs through its env, which the script tests set directly.
 func TestWorkflow_ThePullRequestIsOpenedWithTheAppToken(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(workflowPath)
 	require.NoError(t, err)
 	type step struct {
 		ID   string            `yaml:"id"`
+		Name string            `yaml:"name"`
 		If   string            `yaml:"if"`
 		With map[string]string `yaml:"with"`
 		Env  map[string]string `yaml:"env"`
@@ -51,17 +53,27 @@ func TestWorkflow_ThePullRequestIsOpenedWithTheAppToken(t *testing.T) {
 	assert.Equal(t, "sigma-sync", job.Environment)
 	steps := map[string]step{}
 	for _, s := range job.Steps {
-		if s.ID != "" {
-			steps[s.ID] = s
+		key := s.ID
+		if key == "" {
+			key = s.Name
 		}
+		steps[key] = s
 	}
-	token, push := steps["app-token"], steps["push"]
+	token, push, issue := steps["app-token"], steps["push"], steps["Open, update or close the tracking issue"]
 	require.NotEmpty(t, token.ID, "no app-token step")
 	require.NotEmpty(t, push.ID, "no push step")
+	require.NotEmpty(t, issue.Name, "no tracking issue step")
 	assert.Equal(t, "${{ vars.SIGMA_SYNC_APP_CLIENT_ID }}", token.With["client-id"])
 	assert.Equal(t, "${{ secrets.SIGMA_SYNC_APP_PRIVATE_KEY }}", token.With["private-key"])
 	assert.Equal(t, "steps.sync.outputs.changed == 'true'", token.If)
+	assert.Equal(t, "write", token.With["permission-contents"])
+	assert.Equal(t, "write", token.With["permission-pull-requests"])
 	assert.Equal(t, "${{ steps.app-token.outputs.token }}", push.Env["GH_TOKEN"])
+	assert.Equal(t, "${{ github.token }}", issue.Env["GH_TOKEN"])
+	assert.Equal(t, "${{ steps.sync.outputs.differs }}", issue.Env["DIFFERS"])
+	assert.Equal(t, "${{ steps.sync.outputs.changed }}", issue.Env["CHANGED"])
+	assert.Equal(t, "${{ steps.push.outputs.open_pr }}", issue.Env["OPEN_PR"])
+	assert.Equal(t, "${{ steps.push.outputs.pr_url }}", issue.Env["PR_URL"])
 }
 
 // stepScript returns the run script of the step with the given id, or, for the step without one, the given name.
