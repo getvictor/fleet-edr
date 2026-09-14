@@ -28,44 +28,39 @@ func TestRuleUpdateChanges(t *testing.T) {
 	// The same instant with sub-microsecond digits MySQL would round away, in another zone.
 	sameExpiry := expires.Add(400 * time.Nanosecond).In(time.FixedZone("CDT", -5*60*60))
 
+	withoutExpiry := current
+	withoutExpiry.ExpiresAt = nil
+	withURL := current
+	withURL.CustomURL = &url
+	otherURL := "https://example.com/other"
+
 	cases := []struct {
-		name string
-		req  api.UpdateRuleRequest
-		want bool
+		name    string
+		current api.ApplicationControlRule
+		req     api.UpdateRuleRequest
+		want    bool
 	}{
-		{"every supplied field at its current value", api.UpdateRuleRequest{
+		{"every supplied field at its current value", current, api.UpdateRuleRequest{
 			Enabled: &enabled, Severity: &medium, Enforcement: &protect, CustomMsg: &sameMsg, Comment: &sameComment, ExpiresAt: &sameExpiry,
 		}, false},
-		{"no field supplied", api.UpdateRuleRequest{}, false},
-		{"enabled flipped", api.UpdateRuleRequest{Enabled: &disabled}, true},
-		{"severity raised", api.UpdateRuleRequest{Severity: &high}, true},
-		{"enforcement moved to detect", api.UpdateRuleRequest{Enforcement: &detect}, true},
-		{"custom message changed", api.UpdateRuleRequest{CustomMsg: &otherMsg}, true},
-		{"custom URL set where there was none", api.UpdateRuleRequest{CustomURL: &url}, true},
-		{"empty custom URL where there was none", api.UpdateRuleRequest{CustomURL: &empty}, true},
-		{"comment changed", api.UpdateRuleRequest{Comment: &otherComment}, true},
-		{"expiry moved", api.UpdateRuleRequest{ExpiresAt: &laterExpiry}, true},
-		{"one unchanged field beside a changed one", api.UpdateRuleRequest{Enforcement: &protect, Severity: &high}, true},
+		{"no field supplied", current, api.UpdateRuleRequest{}, false},
+		{"enabled flipped", current, api.UpdateRuleRequest{Enabled: &disabled}, true},
+		{"severity raised", current, api.UpdateRuleRequest{Severity: &high}, true},
+		{"enforcement moved to detect", current, api.UpdateRuleRequest{Enforcement: &detect}, true},
+		{"custom message changed", current, api.UpdateRuleRequest{CustomMsg: &otherMsg}, true},
+		{"custom URL set where there was none", current, api.UpdateRuleRequest{CustomURL: &url}, true},
+		{"empty custom URL where there was none", current, api.UpdateRuleRequest{CustomURL: &empty}, true},
+		{"custom URL changed from one value to another", withURL, api.UpdateRuleRequest{CustomURL: &otherURL}, true},
+		{"custom URL at its current value", withURL, api.UpdateRuleRequest{CustomURL: &url}, false},
+		{"comment changed", current, api.UpdateRuleRequest{Comment: &otherComment}, true},
+		{"expiry moved", current, api.UpdateRuleRequest{ExpiresAt: &laterExpiry}, true},
+		{"expiry set on a rule that had none", withoutExpiry, api.UpdateRuleRequest{ExpiresAt: &expires}, true},
+		{"one unchanged field beside a changed one", current, api.UpdateRuleRequest{Enforcement: &protect, Severity: &high}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, ruleUpdateChanges(current, tc.req))
+			assert.Equal(t, tc.want, ruleUpdateChanges(tc.current, tc.req))
 		})
 	}
-
-	t.Run("an expiry set on a rule that had none", func(t *testing.T) {
-		t.Parallel()
-		noExpiry := current
-		noExpiry.ExpiresAt = nil
-		assert.True(t, ruleUpdateChanges(noExpiry, api.UpdateRuleRequest{ExpiresAt: &expires}))
-	})
-	t.Run("a custom URL changed from one value to another", func(t *testing.T) {
-		t.Parallel()
-		withURL := current
-		withURL.CustomURL = &url
-		other := "https://example.com/other"
-		assert.True(t, ruleUpdateChanges(withURL, api.UpdateRuleRequest{CustomURL: &other}))
-		assert.False(t, ruleUpdateChanges(withURL, api.UpdateRuleRequest{CustomURL: &url}))
-	})
 }
