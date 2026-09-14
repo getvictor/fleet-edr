@@ -152,10 +152,19 @@ describe("PolicyDetail", () => {
 
   it("moves a Protect rule back to Detect", async () => {
     vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 9, enforcement: "PROTECT" })] }));
+    // Counts left over from when the rule ran in Detect mode: a Protect rule blocks, so its row states no would-block figure.
+    const countsSpy = vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({
+      counts: [{ rule_id: "app_control:9", matches: 5, hosts: 2, last_seen: "2026-09-14T00:00:00Z" }],
+      days: 7,
+    });
     const updateSpy = vi.spyOn(api, "updateAppControlRule").mockResolvedValue(makeRule({ id: 9, enforcement: "DETECT" }));
 
     renderPolicyDetailAt("/app-control/policies/7");
     fireEvent.click(await screen.findByRole("button", { name: "Move to Detect" }));
+    await waitFor(() => {
+      expect(countsSpy).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
     const dialog = await waitFor(() => openModal(/move rule to detect/i));
     fireEvent.change(within(dialog).getByLabelText(/reason \(required for audit log\)/i), { target: { value: "too noisy" } });
     fireEvent.click(within(dialog).getByRole("button", { name: /move to detect/i }));
@@ -174,6 +183,18 @@ describe("PolicyDetail", () => {
     expect(await screen.findByRole("button", { name: "Promote" })).toBeInTheDocument();
     expect(countsSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(/would-block|would have blocked/i)).toBeNull();
+  });
+
+  it("keeps the rules usable when the match counts cannot be read", async () => {
+    const countsSpy = vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("counts unavailable"));
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
+
+    renderPolicyDetailAt("/app-control/policies/7");
+    fireEvent.click(await screen.findByRole("button", { name: "Promote" }));
+    const dialog = await waitFor(() => openModal(/promote rule to protect/i));
+    expect(countsSpy).toHaveBeenCalled();
+    expect(dialog.textContent).not.toMatch(/would have blocked|would-block/i);
+    expect(screen.queryByRole("link", { name: /would have blocked|would-block/i })).toBeNull();
   });
 
   // PolicyDetail mounts the modals as siblings. Each modal renders a <dialog> that, even when closed in JSDOM, keeps its

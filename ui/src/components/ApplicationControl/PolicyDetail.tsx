@@ -95,8 +95,9 @@ export function PolicyDetail() {
   }, [policyID]);
 
   // What each Detect rule would have blocked, read from the monitor-match counts. Only for an operator who may read detection
-  // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. A failed read leaves the
-  // figure out rather than failing the page, since the rules are still usable without it.
+  // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. Read once per visit: a
+  // rule edit on this page does not change what was counted. A failed read leaves the figure out rather than failing the page,
+  // since the rules are still usable without it.
   const canReadMatchCounts = useCan()(PermissionAction.DetectionConfigRead);
   const [impact, setImpact] = useState<WouldBlockImpact | null>(null);
   useEffect(() => {
@@ -107,10 +108,10 @@ export function PolicyDetail() {
         if (!cancelled) setImpact(wouldBlockImpactFrom(result.counts, result.days));
       })
       .catch(() => {
-        if (!cancelled) setImpact(null);
+        // The figure stays out.
       });
     return () => { cancelled = true; };
-  }, [canReadMatchCounts, refreshKey]);
+  }, [canReadMatchCounts]);
 
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
