@@ -169,43 +169,63 @@ func TestApplicationControlBlock_TableDriven(t *testing.T) {
 	}
 }
 
-// TestApplicationControlWouldBlock_MapsOnlyWouldBlockEvents pins what separates the would-block projection from the block one: it
-// consumes only its own event type, reads as an exec that ran, and declares monitor so the engine keeps its findings as records.
-func TestApplicationControlWouldBlock_MapsOnlyWouldBlockEvents(t *testing.T) {
+// TestApplicationControlProjections_MapOnlyTheirOwnEvents pins what separates the would-block projection from the block one when both
+// see the same batch: each consumes only its own event type, reads as the decision it records, and declares the mode that decides
+// where its findings land.
+func TestApplicationControlProjections_MapOnlyTheirOwnEvents(t *testing.T) {
 	t.Parallel()
-	customMsg := "Tool is not allowed"
 	payload, err := json.Marshal(map[string]any{
 		"pid": 100, "path": "/usr/local/bin/tool", "rule_id": "app_control:43", "rule_type": "TEAMID",
-		"identifier": "EQHXZ8M8AV", "severity": "high", "custom_msg": customMsg, "policy_id": 11, "policy_version": 4,
+		"identifier": "EQHXZ8M8AV", "severity": "high", "custom_msg": "Tool is not allowed", "policy_id": 11, "policy_version": 4,
 	})
 	require.NoError(t, err)
-	gr := &stubBlockGraphReader{exists: true, procID: 99}
 	events := []api.Event{
 		{EventID: "evt-block", HostID: "host-a", TimestampNs: 1000, EventType: "application_control_block", Payload: payload},
 		{EventID: "evt-would-block", HostID: "host-a", TimestampNs: 1001, EventType: "application_control_would_block", Payload: payload},
 	}
-
-	wouldBlock := &ApplicationControlWouldBlock{}
-	findings, err := wouldBlock.Evaluate(t.Context(), events, gr)
-	require.NoError(t, err)
-	require.Len(t, findings, 1, "the would-block rule ignores block events")
-	got := findings[0]
-	assert.Equal(t, "app_control:43", got.RuleID)
-	assert.Equal(t, api.AlertSourceApplicationControl, got.Source)
-	assert.Equal(t, "high", got.Severity)
-	assert.Equal(t, "Application would be blocked: tool", got.Title)
-	assert.Equal(t, "Allowed by a DETECT TEAMID rule for EQHXZ8M8AV", got.Description,
-		"the custom message is written for a denied exec, so a record of one that ran does not use it")
-	assert.Equal(t, int64(99), got.ProcessID)
-	assert.Equal(t, []string{"evt-would-block"}, got.EventIDs)
-	assert.Equal(t, api.DetectionRuleModeMonitor, api.DefaultModeOf(wouldBlock))
-	assert.Equal(t, []string{"application_control_would_block"}, wouldBlock.Doc().EventTypes)
-
-	blockFindings, err := (&ApplicationControlBlock{}).Evaluate(t.Context(), events, gr)
-	require.NoError(t, err)
-	require.Len(t, blockFindings, 1, "and the block rule ignores would-block events")
-	assert.Equal(t, []string{"evt-block"}, blockFindings[0].EventIDs)
-	assert.Equal(t, api.DetectionRuleModeAlert, api.DefaultModeOf(&ApplicationControlBlock{}))
+	cases := []struct {
+		name      string
+		rule      api.Rule
+		wantEvent string
+		wantTitle string
+		wantDesc  string
+		wantMode  api.DetectionRuleMode
+	}{
+		{
+			name:      "block projection alerts on block events only",
+			rule:      &ApplicationControlBlock{},
+			wantEvent: "evt-block",
+			wantTitle: "Application blocked: tool",
+			wantDesc:  "Tool is not allowed",
+			wantMode:  api.DetectionRuleModeAlert,
+		},
+		{
+			// The custom message is written for a denied exec, so a record of one that ran does not use it.
+			name:      "would-block projection keeps monitor records of would-block events only",
+			rule:      &ApplicationControlWouldBlock{},
+			wantEvent: "evt-would-block",
+			wantTitle: "Application would be blocked: tool",
+			wantDesc:  "Allowed by a DETECT TEAMID rule for EQHXZ8M8AV",
+			wantMode:  api.DetectionRuleModeMonitor,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			findings, err := tc.rule.Evaluate(t.Context(), events, &stubBlockGraphReader{exists: true, procID: 99})
+			require.NoError(t, err)
+			require.Len(t, findings, 1)
+			got := findings[0]
+			assert.Equal(t, []string{tc.wantEvent}, got.EventIDs)
+			assert.Equal(t, "app_control:43", got.RuleID)
+			assert.Equal(t, api.AlertSourceApplicationControl, got.Source)
+			assert.Equal(t, "high", got.Severity)
+			assert.Equal(t, tc.wantTitle, got.Title)
+			assert.Equal(t, tc.wantDesc, got.Description)
+			assert.Equal(t, int64(99), got.ProcessID)
+			assert.Equal(t, tc.wantMode, api.DefaultModeOf(tc.rule))
+		})
+	}
 }
 
 // TestApplicationControlBlock_GraphReaderError surfaces the distinct failure mode where the GraphReader itself returns an error (DB
