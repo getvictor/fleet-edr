@@ -464,9 +464,13 @@ func (s *Service) UpdateRule(ctx context.Context, req api.UpdateRuleRequest, act
 	if actor == nil {
 		return api.ApplicationControlRule{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
 	}
-	rule, err := s.store.UpdateRule(ctx, req)
+	rule, changed, err := s.store.UpdateRule(ctx, req)
 	if err != nil {
 		return api.ApplicationControlRule{}, err
+	}
+	// A request that changed nothing is not a mutation: hosts already hold this rule, and there is no change to audit.
+	if !changed {
+		return rule, nil
 	}
 	policy, payload, composeErr := s.buildSnapshotPayload(ctx, rule.PolicyID)
 	if composeErr != nil {

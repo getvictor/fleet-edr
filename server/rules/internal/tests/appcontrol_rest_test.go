@@ -831,6 +831,58 @@ func TestAppControlREST_UpdateRule_HappyPath_FansOutAndAudits(t *testing.T) {
 	assert.Equal(t, 2, last.Payload["fanout_hosts"])
 }
 
+// TestAppControlREST_UpdateRule_UnchangedIsNotAMutation pins #1052: a PATCH whose fields equal the rule's current values used to
+// return 404, because the driver reports changed rows and zero read as a concurrent delete. It now returns the rule and does
+// nothing else, while a PATCH that changes one of its fields is still a mutation.
+func TestAppControlREST_UpdateRule_UnchangedIsNotAMutation(t *testing.T) { //nolint:tparallel // its subtests run in order on one rule
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a", "host-b"})
+	policyID := r.defaultPolicyID(t)
+	ruleID := seedRule(t, r, policyID, strings.Repeat("5", 64))
+
+	policyVersion := func() int64 {
+		resp := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+i64(policyID), nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var policy rulesapi.ApplicationControlPolicy
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&policy))
+		return policy.Version
+	}
+	patch := func(body map[string]any) (int, rulesapi.ApplicationControlRule) {
+		resp := r.do(t, http.MethodPatch, "/api/v1/app-control/rules/"+i64(ruleID), body)
+		defer resp.Body.Close()
+		var rule rulesapi.ApplicationControlRule
+		if resp.StatusCode == http.StatusOK {
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&rule))
+		}
+		return resp.StatusCode, rule
+	}
+
+	// spec:server-application-control/an-unchanged-rule-update-is-not-a-mutation/an-unchanged-update-returns-the-rule
+	t.Run("an unchanged update returns the rule and changes nothing", func(t *testing.T) {
+		version, commands, events := policyVersion(), len(r.inserter.snapshot()), len(r.audit.snapshot())
+		status, rule := patch(map[string]any{"enforcement": "PROTECT", "severity": "medium", "enabled": true, "reason": "retry"})
+		require.Equal(t, http.StatusOK, status)
+		assert.Equal(t, ruleID, rule.ID)
+		assert.Equal(t, rulesapi.EnforcementProtect, rule.Enforcement)
+		assert.Equal(t, version, policyVersion(), "the policy version must not advance")
+		assert.Len(t, r.inserter.snapshot(), commands, "no snapshot is fanned out")
+		assert.Len(t, r.audit.snapshot(), events, "no audit event is recorded")
+	})
+
+	// spec:server-application-control/an-unchanged-rule-update-is-not-a-mutation/changing-one-field-is-a-mutation
+	t.Run("an update that changes one of its fields is a mutation", func(t *testing.T) {
+		version, commands, events := policyVersion(), len(r.inserter.snapshot()), len(r.audit.snapshot())
+		status, rule := patch(map[string]any{"enforcement": "PROTECT", "severity": "high", "reason": "raise severity"})
+		require.Equal(t, http.StatusOK, status)
+		assert.Equal(t, rulesapi.SeverityRuleHigh, rule.Severity)
+		assert.Equal(t, version+1, policyVersion())
+		assert.Len(t, r.inserter.snapshot(), commands+2, "one snapshot per host")
+		require.Len(t, r.audit.snapshot(), events+1)
+		assert.Equal(t, identityapi.AuditAppControlRuleUpdate, r.audit.snapshot()[events].Action)
+	})
+}
+
 // TestAppControlREST_UpdateRule_NotFound: a PATCH on a missing rule maps the typed sentinel to HTTP 404 with the rule_not_found
 // error code.
 func TestAppControlREST_UpdateRule_NotFound(t *testing.T) {

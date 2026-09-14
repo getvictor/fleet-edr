@@ -243,7 +243,7 @@ func TestAppControl_ListRulesAcrossPolicies_EnabledTriState(t *testing.T) {
 	require.NoError(t, err)
 	// Flip disabledRule to disabled via UpdateRule (CreateRule always inserts enabled=true).
 	disabledFlag := false
-	_, err = store.UpdateRule(ctx, api.UpdateRuleRequest{
+	_, _, err = store.UpdateRule(ctx, api.UpdateRuleRequest{
 		RuleID: disabledRule.ID, Enabled: &disabledFlag,
 		Actor: "demo-admin", Reason: "disable for filter test",
 	})
@@ -679,7 +679,7 @@ func TestAppControl_UpdateRule_HappyPath(t *testing.T) {
 	sev := api.SeverityRuleHigh
 	msg := "Blocked by policy v2"
 	comment := "raised severity after incident review"
-	updated, err := store.UpdateRule(ctx, api.UpdateRuleRequest{
+	updated, changed, err := store.UpdateRule(ctx, api.UpdateRuleRequest{
 		RuleID:    rule.ID,
 		Enabled:   &enabled,
 		Severity:  &sev,
@@ -689,6 +689,7 @@ func TestAppControl_UpdateRule_HappyPath(t *testing.T) {
 		Reason:    "PATCH coverage",
 	})
 	require.NoError(t, err)
+	assert.True(t, changed, "fields were set to new values")
 	assert.False(t, updated.Enabled, "enabled flips off")
 	assert.Equal(t, api.SeverityRuleHigh, updated.Severity)
 	if assert.NotNil(t, updated.CustomMsg) {
@@ -707,7 +708,7 @@ func TestAppControl_UpdateRule_NotFound(t *testing.T) {
 	t.Parallel()
 	store, _ := newAppControlStore(t)
 	enabled := false
-	_, err := store.UpdateRule(t.Context(), api.UpdateRuleRequest{
+	_, _, err := store.UpdateRule(t.Context(), api.UpdateRuleRequest{
 		RuleID:  9_999_999,
 		Enabled: &enabled,
 		Actor:   "demo-admin",
@@ -732,7 +733,7 @@ func TestAppControl_UpdateRule_RequiresAtLeastOneField(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.UpdateRule(ctx, api.UpdateRuleRequest{
+	_, _, err = store.UpdateRule(ctx, api.UpdateRuleRequest{
 		RuleID: rule.ID, Actor: "demo-admin", Reason: "no fields",
 	})
 	require.Error(t, err)

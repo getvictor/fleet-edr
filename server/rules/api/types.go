@@ -904,9 +904,10 @@ type ApplicationControlStore interface {
 	// GetRuleByID returns the rule row (or ErrAppControlRuleNotFound). The REST PATCH/DELETE paths use it to look up the policy_id
 	// the row belongs to before mutating, so the snapshot fan-out targets the right policy.
 	GetRuleByID(ctx context.Context, ruleID int64) (ApplicationControlRule, error)
-	// UpdateRule applies a partial update to an existing rule + bumps the parent policy's version. Returns the post-update row.
+	// UpdateRule applies a partial update to an existing rule + bumps the parent policy's version. Returns the post-update row and
+	// whether any field changed; a request that sets every field to its current value changes nothing and leaves the version as it was.
 	// ErrAppControlRuleNotFound when the rule does not exist; ErrAppControlInvalidRequest when actor/reason are empty.
-	UpdateRule(ctx context.Context, req UpdateRuleRequest) (ApplicationControlRule, error)
+	UpdateRule(ctx context.Context, req UpdateRuleRequest) (rule ApplicationControlRule, changed bool, err error)
 	// DeleteRule removes the rule + bumps the parent policy's version. Returns the parent policy_id so the service can compose the
 	// post-delete snapshot the agents see. ErrAppControlRuleNotFound when the rule does not exist.
 	DeleteRule(ctx context.Context, req DeleteRuleRequest) (policyID int64, err error)
