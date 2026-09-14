@@ -148,9 +148,10 @@ func newRules(t *testing.T) *rulesbootstrap.Rules {
 
 // TestCatalog_ListShape locks in registration order + documentation completeness for every DETECTION.
 //
-// The catalog surface reports detections only, so the two registered non-detections are deliberately absent here:
-// application_control_block (a projection of the host's own AUTH_EXEC decision) and sensor_recovery_failed (a health signal about
-// our agent). TestContentService_ActiveRules below asserts they are still registered and evaluated.
+// The catalog surface reports detections only, so the three registered non-detections are deliberately absent here:
+// application_control_block and application_control_would_block (projections of the host's own AUTH_EXEC decision) and
+// sensor_recovery_failed (a health signal about our agent). TestContentService_ActiveRules below asserts they are still registered
+// and evaluated.
 func TestCatalog_ListShape(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)

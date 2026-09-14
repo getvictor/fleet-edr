@@ -387,8 +387,8 @@ const (
 	// AlertSourceDetection is the source for findings produced by catalog rules. The default for engine.persistFinding when a Finding
 	// leaves the field blank, since every catalog rule was "detection" before the source column was introduced.
 	AlertSourceDetection = "detection"
-	// AlertSourceApplicationControl is the source for alerts
-	// produced by an application_control_block ingest event.
+	// AlertSourceApplicationControl is the source for rows raised from an application-control decision on the host: alerts for an
+	// application_control_block event, and monitor records for an application_control_would_block event.
 	AlertSourceApplicationControl = "application_control"
 )
 

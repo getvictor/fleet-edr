@@ -324,7 +324,7 @@ const UnknownOrigin = "unknown upstream"
 // software, so crediting this project for it is accurate. This is the same Projection-not-Health split the #519 title invariant
 // makes, for the same underlying reason.
 func AlertOriginOf(r Rule) string {
-	if nd, ok := r.(NonDetection); ok && nd.NonDetectionKind() == NonDetectionProjection {
+	if IsProjection(r) {
 		return ""
 	}
 	return OriginOf(r)

@@ -157,8 +157,7 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	require.NoError(t, err, "rule.Evaluate")
 
 	// Computed once per case rather than per finding: it is a property of the RULE, not of anything it produced.
-	nd, isNonDetection := rule.(rulesapi.NonDetection)
-	isProjection := isNonDetection && nd.NonDetectionKind() == rulesapi.NonDetectionProjection
+	isProjection := rulesapi.IsProjection(rule)
 
 	require.Len(t, findings, len(c.ExpectedFindings),
 		"finding count mismatch: expected %d, got %d",
