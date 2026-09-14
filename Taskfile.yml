@@ -471,6 +471,10 @@ tasks:
       # ./test/scale/... is included so M12's per-PR smoke (5 hosts x 5s
       # against integration.Setup) runs on every push. Wall-clock cost is
       # ~5s, dominated by the smoke's own load lane.
+      #
+      # ./tools/... is included because no other CI lane runs those tests, and some are the only evidence for behaviour a spec
+      # names: the Sigma upstream sync workflow's step scripts are exercised only by tools/sigma-sync's tests. The tools' own code
+      # is not in -coverpkg, so it adds nothing to the denominator, but a tool test that calls server code counts toward its coverage.
       # -timeout=20m, not the 10m every other lane uses. This lane runs the DB-backed integration suites, and
       # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all six bounded contexts'
       # schemas per test) under -race. Measured on CI: ~250s typical, against a 600s ceiling. That is only 2.4x headroom
@@ -479,7 +483,7 @@ tasks:
       # so the binary was still making progress rather than deadlocked. A ceiling that fires on a slow neighbour is not
       # protecting anything, it just produces failures someone reruns. 20m is ~4.7x the measured median and still bounded,
       # so a genuine hang fails in a reasonable time. Unit-only lanes keep 10m; a hung unit test should fail fast.
-      - go test -race -count=1 -timeout=20m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/... ./test/scale/...
+      - go test -race -count=1 -timeout=20m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/... ./test/scale/... ./tools/...
       - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:

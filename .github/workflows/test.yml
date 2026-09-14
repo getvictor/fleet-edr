@@ -85,7 +85,12 @@ jobs:
           # purpose: extension-only PRs should land in Sonar+Codecov so the
           # Swift sources go through reliability/security/maintainability
           # gates, but should NOT fire the server/UI test jobs or Playwright.
-          GO_PATTERN='\.go$|(^|/)go\.(mod|sum)$|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
+          # The Sigma upstream sync workflow is in GO_PATTERN because its step scripts are tested by tools/sigma-sync, which
+          # parses the workflow file: a PR changing only that file must still run those tests. The vendored Sigma corpus is in it
+          # because the pull request the sync opens changes only rule files and generated docs, and the catalog tests pinning the
+          # import counts are what make a person read a new rule before merging it.
+          GO_PATTERN='\.go$|(^|/)go\.(mod|sum)$|^Taskfile\.yml$|^\.github/workflows/(test|sigma-upstream-sync)\.yml$'
+          GO_PATTERN="$GO_PATTERN|^server/rules/internal/catalog/imported/"
           UI_PATTERN='^ui/|^Taskfile\.yml$|^\.github/workflows/test\.yml$'
           ANY_EXTRA_PATTERN='^sonar-project\.properties$|^\.github/workflows/test\.yml$|^extension/'
           # E2E_PATTERN exists because the Playwright suite and its orchestration are not covered by the two language patterns.
