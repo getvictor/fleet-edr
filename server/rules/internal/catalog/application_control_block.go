@@ -109,31 +109,26 @@ type ruleMatchRendering struct {
 }
 
 // evaluateRuleMatchEvents turns each accepted event of the rendering's type into a Finding, as documented on
-// ApplicationControlBlock.Evaluate.
+// ApplicationControlBlock.Evaluate. The per-event loop and its retry handling are evalEachEvent's.
 func evaluateRuleMatchEvents(
 	ctx context.Context, events []api.Event, gr api.GraphReader, rendering ruleMatchRendering,
 ) ([]api.Finding, error) {
-	var findings []api.Finding
-	var miss pendingMiss
-	for _, evt := range events {
+	findings, err := evalEachEvent(ctx, events, gr, func(ctx context.Context, evt api.Event, gr api.GraphReader) (*api.Finding, error) {
 		if evt.EventType != rendering.eventType {
-			continue
+			return nil, nil
 		}
 		var p applicationControlBlockPayload
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
-			continue
+			return nil, nil
 		}
 		if p.RuleID == "" || p.Severity == "" {
-			continue
+			return nil, nil
 		}
 		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
-		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fmt.Errorf("%s: %w", rendering.eventType, fatal))
+		if err != nil || proc == nil {
+			return nil, err
 		}
-		if proc == nil {
-			continue
-		}
-		findings = append(findings, api.Finding{
+		return &api.Finding{
 			HostID:      evt.HostID,
 			RuleID:      p.RuleID,
 			Source:      api.AlertSourceApplicationControl,
@@ -142,10 +137,10 @@ func evaluateRuleMatchEvents(
 			Description: rendering.description(p),
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},
-		})
-	}
-	if miss.err != nil {
-		return findings, fmt.Errorf("%s: %w", rendering.eventType, miss.err)
+		}, nil
+	})
+	if err != nil {
+		return findings, fmt.Errorf("%s: %w", rendering.eventType, err)
 	}
 	return findings, nil
 }

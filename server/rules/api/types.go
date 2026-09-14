@@ -183,13 +183,11 @@ const (
 //
 // Registered non-detections and why:
 //
-//   - application_control_block is a NonDetectionProjection. The blocking decision was made on the host by the AUTH_EXEC walker;
-//     this rule renders it as an alert row. Its findings borrow the matched app-control rule's id and severity from the event
-//     payload rather than carrying its own, which is why it is also the one rule exempt from the Finding.Title == DisplayName
-//     invariant.
-//   - application_control_would_block is a NonDetectionProjection too, of the same decision for a DETECT rule that let the exec
-//     run. It declares monitor, so its findings are kept as monitor records rather than alerts, and like application_control_block
-//     it borrows the matched rule's id and severity.
+//   - application_control_block and application_control_would_block are NonDetectionProjections. The decision was made on the host
+//     by the AUTH_EXEC walker; block renders a denied exec as an alert row, and would_block renders an exec a DETECT rule let run,
+//     declaring monitor so it is kept as a monitor record. Their findings borrow the matched app-control rule's id and severity
+//     from the event payload rather than carrying their own, which is why they are the two rules exempt from the
+//     Finding.Title == DisplayName invariant.
 //   - sensor_recovery_failed is a NonDetectionHealth. It reports that our own automatic repair of a stopped capture provider gave
 //     up, and both documented causes are faults in our software rather than adversary action.
 type NonDetection interface {

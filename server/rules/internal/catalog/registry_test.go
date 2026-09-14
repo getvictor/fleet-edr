@@ -134,9 +134,9 @@ func authored(r api.Rule) bool {
 // surface can never silently diverge from the canonical name again. It also enforces that the canonical name is a clean human-readable
 // label, not the old "<name> (parenthetical implementation detail)" form whose detail belongs in Summary. The finding-title half of the
 // invariant (Finding.Title == DisplayName) is enforced for fixture-replayed rules by server/detection/testkit Replay and by each
-// rule's positive-detection test. The one rule it cannot hold for, application_control_block, is exempt because it is a
-// NonDetectionProjection rather than by name: its findings carry the matched app-control rule's id and severity from the payload,
-// so there is no rule-level title for them to equal. TestAll_NonDetectionClassification below pins that set, so the exemption can
+// rule's positive-detection test. The two rules it cannot hold for, application_control_block and application_control_would_block,
+// are exempt because they are NonDetectionProjections rather than by name: their findings carry the matched app-control rule's id
+// and severity from the payload, so there is no rule-level title for them to equal. TestAll_NonDetectionClassification below pins that set, so the exemption can
 // never be widened by adding a name to a list.
 func TestAll_CanonicalDisplayName(t *testing.T) {
 	t.Parallel()
