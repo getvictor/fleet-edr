@@ -19,9 +19,9 @@ struct ApplicationControlSnapshot {
     let policyID: Int64
     let policyVersion: Int64
     // policyEpoch is the policy's server-assigned updated_at in Unix microseconds (0 when the payload omits it: a pre-fix
-    // server, or a snapshot persisted before this field existed). It is the restore-surviving companion to policyVersion: a
-    // server DB restore regresses policyVersion but the next mutation stamps a wall-clock updated_at that is strictly greater
-    // than any pre-restore epoch, so the gate re-syncs on this axis instead of freezing. See apply(rawJSON:) and #322.
+    // server, or a snapshot persisted before this field existed). It is the first ordering key: a server DB restore regresses
+    // policyVersion, and the next mutation stamps an updated_at past the restored one, which re-syncs the host once the database
+    // clock is past any epoch the restore lost. See apply(rawJSON:) and #322.
     let policyEpoch: Int64
     let deadlineFallback: FallbackPosture
     let binaryRules: [String: ApplicationControlRule]      // identifier (file SHA-256) -> rule
@@ -255,11 +255,12 @@ final class ApplicationControlStore {
     ///
     /// Recency gate: for the same policy_id the snapshot is accepted only when it is ahead of the active one, ordered by
     /// policy_epoch and then policy_version. The epoch is the policy's updated_at in microseconds, which the server forces past
-    /// its previous value on every mutation, so it orders every snapshot the server has issued and keeps moving forward after a
-    /// database restore regresses the version (#322). The version breaks a tie, which is what orders snapshots from a server that
-    /// sends no epoch. Anything not ahead is a duplicate or out-of-order replay and is ignored. A version regression accepted
-    /// because the epoch is ahead is the restore signature: it is logged above Info and reported as an
-    /// `application_control_resync` event. The watched-path set is ordered the same way (WatchedPathsUpdate.supersedes).
+    /// the value in its database on every mutation, so it orders every snapshot that database issues, across a step back in its
+    /// clock too. After a database restore regresses the version, the next snapshot is ahead once the database clock is past any
+    /// epoch the restore lost (#322). The version breaks a tie, which is what orders snapshots from a server that sends no epoch.
+    /// Anything not ahead is a duplicate or out-of-order replay and is ignored. A version regression accepted because the epoch is
+    /// ahead is the restore signature: it is logged above Info and reported as an `application_control_resync` event. The
+    /// watched-path set is ordered the same way (WatchedPathsUpdate.supersedes).
     func apply(rawJSON data: Data) {
         guard let document = decodeDocument(data) else {
             logger.error("application_control.update missing or malformed; ignoring")

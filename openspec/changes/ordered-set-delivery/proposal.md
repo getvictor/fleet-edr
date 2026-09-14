@@ -1,6 +1,6 @@
 # One ordering for pushed sets: epoch, then version
 
-Issue #1018. The extension receives two kinds of set from the server: an application-control policy snapshot and the watched-path set. Commands reach a host out of order, so the extension keeps the newest set by comparing a `version`, which the server increments, and an `epoch`, the set's update time, which survives a database restore that sends versions backwards.
+Issue #1018. The extension receives two kinds of set from the server: an application-control policy snapshot and the watched-path set. Commands reach a host out of order, so the extension keeps the newest set by comparing a `version`, which the server increments, and an `epoch`, the set's update time, which keeps ordering sets after a database restore sends versions backwards once the database clock is past the epochs the restore lost.
 
 Both sets were accepted when either value was ahead. That is not a total order, and it left one stated exception: a set already on its way to a host when the database is restored, arriving after a set saved since, is ahead on version and was applied, putting the pre-restore rules back until the next change.
 

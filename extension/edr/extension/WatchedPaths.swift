@@ -30,9 +30,9 @@ struct WatchedPathsUpdate: Equatable {
     let skipped: Int
 
     /// supersedes reports whether this update should replace `current`, the last one accepted. Sets are ordered by epoch, then by
-    /// version: the server forces each update time past the one before, so epoch orders every set it has issued, and it keeps
-    /// moving forward after a database restore sends version backwards. Version breaks a tie, which is what orders sets from a
-    /// server that sends no epoch. An update that is not ahead is a delayed or duplicate delivery, and applying it would put an
+    /// version: the server forces each update time past the one in its database, so epoch orders every set that database issues,
+    /// and after a restore sends version backwards the next set is ahead once the database clock is past any epoch the restore
+    /// lost. Version breaks a tie, which is what orders sets from a server that sends no epoch. An update that is not ahead is a delayed or duplicate delivery, and applying it would put an
     /// older set back over a newer one. Commands can reach the agent out of order (a poll returns pending commands newest first,
     /// and the poll and the control stream can overlap), so this is the gate that keeps the newest set in force. Application
     /// control orders its snapshots the same way (ApplicationControlStore.apply).

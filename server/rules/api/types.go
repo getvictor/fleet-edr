@@ -971,9 +971,9 @@ type SetApplicationControlPayload struct {
 	PolicyVersion int64 `json:"policy_version"`
 	// PolicyEpoch is the policy's server-assigned updated_at in Unix microseconds (0 when the policy carries no timestamp). It is the
 	// extension's first ordering key: it accepts a snapshot only when (PolicyEpoch, PolicyVersion) is ahead of the one it holds. The
-	// store forces updated_at past its previous value on every mutation, so the epoch never goes backwards, and a server DB restore
-	// that regresses PolicyVersion still re-syncs hosts because the operator's next mutation stamps a time later than any
-	// pre-restore epoch. A pre-fix server leaves this 0 on every push, which orders snapshots by version alone. See #322.
+	// store forces updated_at past the value in its database on every mutation, so the epoch never goes backwards within that
+	// database. After a server DB restore regresses PolicyVersion, the next mutation re-syncs hosts once the database clock is past
+	// any epoch the restore lost. A pre-fix server leaves this 0 on every push, which orders snapshots by version alone. See #322.
 	PolicyEpoch int64 `json:"policy_epoch"`
 	// DeadlineFallback governs the extension's verdict when AUTH_EXEC cannot compute a BINARY rule SHA-256 within the kernel
 	// deadline budget. Always populated by MarshalSetApplicationControlPayload (DefaultFallbackPosture when the upstream policy

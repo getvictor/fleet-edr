@@ -35,8 +35,8 @@ type WatchedPath struct {
 //
 // The extension applies a set only when it is ahead of the last one it accepted, ordered by epoch and then version, because
 // commands can reach a host out of order. Epoch is what keeps that ordering true after a database restore sends version backwards:
-// the next change is stamped with a later time than anything before the restore. Application control orders policy_epoch the
-// same way.
+// the next change is stamped past the restored update time, which is ahead of the host once the database clock is past any epoch
+// the restore lost. Application control orders policy_epoch the same way.
 type SetWatchedPathsPayload struct {
 	Version int64         `json:"version"`
 	Epoch   int64         `json:"epoch"`
