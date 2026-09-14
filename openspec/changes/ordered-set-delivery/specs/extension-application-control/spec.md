@@ -14,8 +14,8 @@ The change from the prior requirement is the ordering: a snapshot ahead on eithe
 
 #### Scenario: An incoming snapshot replaces the prior one atomically
 
-- **GIVEN** the extension is already running with an applied snapshot at version `V`
-- **WHEN** it receives a new snapshot at version `V+1`
+- **GIVEN** the extension is already running with an applied snapshot at version `V` and epoch `E`
+- **WHEN** it receives a new snapshot at version `V+1` with an epoch later than `E`
 - **THEN** the in-memory snapshot is the `V+1` snapshot immediately after acceptance
 - **AND** the on-disk file reflects the same version
 - **AND** no exec is evaluated against a partial snapshot during the swap
