@@ -29,7 +29,7 @@ The work lands in steps, extension first, so that a `DETECT` rule is never silen
 ### Console: promote with the impact in view
 
 - **Promote and move back from the rule's row.** A Detect rule's row offers **Promote**, a Protect rule's **Move to Detect**, each confirmed with a reason.
-- **The evidence sits next to the decision.** Each Detect rule's row, and its promote dialog, say what it would have blocked in the counted window (runs and hosts, or no matches), linked to its monitor records. The counts come from the monitor-match counter, now keyed by the application-control rule. They are served to operators who can read detection tuning; for anyone else the figure is left out rather than shown as zero.
+- **The evidence sits next to the decision.** Each Detect rule's row, and its promote dialog, say what it would have blocked in the counted window (runs and hosts, or nothing recorded, which is not shown as zero), linked to its monitor records. The counts come from the monitor-match counter, now keyed by the application-control rule. They are served to operators who can read detection tuning; for anyone else the figure is left out rather than shown as zero.
 - The monitor-records page explains an application-control rule's records as executables it would have blocked.
 
 ## Out of scope for these steps

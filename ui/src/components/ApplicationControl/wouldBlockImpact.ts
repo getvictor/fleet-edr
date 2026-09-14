@@ -26,11 +26,11 @@ function plural(n: number, word: string): string {
 }
 
 // describeWouldBlock says what a DETECT rule would have blocked in the counted window, for the rules table and the promote dialog.
-// A rule absent from the counts matched nothing that was counted, which is stated rather than left blank so an operator does not
-// read a quiet rule as missing data.
+// A rule absent from the counts reads "Nothing recorded", not zero: absence can also mean the rule is newer than the window or was
+// in Protect for part of it, and a rule read as quiet is the one that gets promoted. The detection tuning table draws the same line.
 export function describeWouldBlock(impact: WouldBlockImpact, ruleID: number): string {
   const row = impact.byRule.get(appControlRuleID(ruleID));
   const window = plural(impact.days, "day");
-  if (!row) return `No would-block matches in ${window}`;
+  if (!row) return `Nothing recorded in ${window}`;
   return `Would have blocked ${plural(row.matches, "run")} on ${plural(row.hosts, "host")} in ${window}`;
 }

@@ -166,7 +166,9 @@ describe("PolicyDetail", () => {
     });
     expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
     const dialog = await waitFor(() => openModal(/move rule to detect/i));
-    expect(dialog.textContent).toMatch(/stops blocking .* and keeps a record of each match that runs\. another protect rule that matches still blocks it/i);
+    expect(dialog.textContent).toMatch(
+      /stops blocking .* and keeps a record of each match that runs\. another protect rule that matches still blocks it/i,
+    );
     fireEvent.change(within(dialog).getByLabelText(/reason \(required for audit log\)/i), { target: { value: "too noisy" } });
     fireEvent.click(within(dialog).getByRole("button", { name: /move to detect/i }));
 
@@ -184,6 +186,54 @@ describe("PolicyDetail", () => {
     expect(await screen.findByRole("button", { name: "Promote" })).toBeInTheDocument();
     expect(countsSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(/would-block|would have blocked/i)).toBeNull();
+  });
+
+  it("stops showing the impact when a permission refresh revokes detection tuning", async () => {
+    vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({
+      counts: [{ rule_id: "app_control:7", matches: 12, hosts: 3, last_seen: "2026-09-14T00:00:00Z" }],
+      days: 7,
+    });
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
+    const tree = (permissions?: readonly string[]) => (
+      <PermissionsContext.Provider value={permissions}>
+        <MemoryRouter initialEntries={["/app-control/policies/7"]}>
+          <Routes>
+            <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </PermissionsContext.Provider>
+    );
+
+    const { rerender } = render(tree());
+    expect(await screen.findByRole("link", { name: /would have blocked 12 runs/i })).toBeVisible();
+    rerender(tree([PermissionAction.AppControlRead]));
+    expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    const dialog = await waitFor(() => openModal(/promote rule to protect/i));
+    expect(dialog.textContent).not.toMatch(/would have blocked/i);
+  });
+
+  it("says a disabled rule blocks or records nothing until it is enabled", async () => {
+    vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
+      makePolicy({
+        rules: [
+          makeRule({ id: 7, identifier: "DETECTTEAM", rule_type: "TEAMID", enforcement: "DETECT", enabled: false }),
+          makeRule({ id: 8, identifier: "PROTECTTEA", rule_type: "TEAMID", enforcement: "PROTECT", enabled: false }),
+        ],
+      }),
+    );
+
+    renderPolicyDetailAt("/app-control/policies/7");
+    fireEvent.click(await screen.findByRole("button", { name: "Promote" }));
+    const promote = await waitFor(() => openModal(/promote rule to protect/i));
+    expect(promote.textContent).toContain("This rule is disabled. Once it is enabled, Protect blocks DETECTTEAM on every assigned host.");
+    fireEvent.click(within(promote).getByRole("button", { name: /cancel/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Move to Detect" }));
+    const demote = await waitFor(() => openModal(/move rule to detect/i));
+    expect(demote.textContent).toContain(
+      "This rule is disabled. Once it is enabled, Detect keeps a record of each match of PROTECTTEA that runs.",
+    );
   });
 
   it("keeps the rules usable when the match counts cannot be read", async () => {

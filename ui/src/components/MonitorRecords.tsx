@@ -55,7 +55,7 @@ export function MonitorRecords() {
         <p className="monitor-records__explanation">
           What this application-control rule would have blocked while it ran in Detect mode, newest first. Each executable ran. These
           are not alerts: nobody was notified and there is nothing to triage. The same process running a matching executable again
-          adds no record, so there can be fewer records than the would-block count on the policy page, which counts every run. Records
+          adds no record, so there can be fewer records than the would-block count on the policy page, which counts runs. Records
           also age out on the server&apos;s monitor-record retention window, 7 days by default.
         </p>
       ) : (

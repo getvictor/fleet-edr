@@ -11,8 +11,8 @@ describe("wouldBlockImpact", () => {
     expect(describeWouldBlock(impact, 8)).toBe("Would have blocked 1 run on 1 host in 7 days");
   });
 
-  it("says a rule with no counted matches matched nothing, in the window the server reported", () => {
-    expect(describeWouldBlock(wouldBlockImpactFrom([], 1), 9)).toBe("No would-block matches in 1 day");
+  it("says nothing was recorded for a rule absent from the counts, rather than zero, in the window the server reported", () => {
+    expect(describeWouldBlock(wouldBlockImpactFrom([], 1), 9)).toBe("Nothing recorded in 1 day");
   });
 
   it("names rules the way their records do", () => {

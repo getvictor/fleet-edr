@@ -97,7 +97,8 @@ export function PolicyDetail() {
   // What each Detect rule would have blocked, read from the monitor-match counts. Only for an operator who may read detection
   // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. Read once per visit: a
   // rule edit on this page does not change what was counted. A failed read leaves the figure out rather than failing the page,
-  // since the rules are still usable without it.
+  // since the rules are still usable without it. The figure is shown only while the permission holds, so counts read before a
+  // permission refresh revoked it are not left on screen.
   const canReadMatchCounts = useCan()(PermissionAction.DetectionConfigRead);
   const [impact, setImpact] = useState<WouldBlockImpact | null>(null);
   useEffect(() => {
@@ -112,6 +113,7 @@ export function PolicyDetail() {
       });
     return () => { cancelled = true; };
   }, [canReadMatchCounts]);
+  const shownImpact = canReadMatchCounts ? impact : null;
 
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
@@ -243,7 +245,7 @@ export function PolicyDetail() {
               ) : (
                 <RulesTable
                   rules={visibleRules}
-                  impact={impact}
+                  impact={shownImpact}
                   onEnforcement={(rule) => { setActiveModal({ kind: "confirm-enforcement", rule }); }}
                   onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
                   onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
@@ -295,7 +297,7 @@ export function PolicyDetail() {
         key={confirmRule ? `confirm-${String(confirmKind)}-${String(confirmRule.id)}` : "confirm-closed"}
         open={confirmRule !== null}
         title={confirmTitleFor(activeModal)}
-        description={confirmDescriptionFor(activeModal, impact)}
+        description={confirmDescriptionFor(activeModal, shownImpact)}
         confirmLabel={confirmLabelFor(activeModal)}
         confirmVariant={activeModal.kind === "confirm-delete" ? "alert" : "primary"}
         reasonPlaceholder={confirmReasonPlaceholderFor(activeModal)}
@@ -340,20 +342,29 @@ function otherEnforcement(rule: ApplicationControlRule): Enforcement {
 }
 
 // enforcementDescription is the promote / demote dialog's explanation. Promoting states the rule's counted would-block matches, the
-// evidence the decision rests on, and links to the records behind them.
+// evidence the decision rests on, and links to the records behind them. A disabled rule does nothing in either mode until it is
+// enabled, and the change leaves it disabled, so the copy says so rather than promising a block or a record.
 function enforcementDescription(rule: ApplicationControlRule, impact: WouldBlockImpact | null): React.ReactNode {
   const ident = rule.identifier;
   if (!isDetect(rule)) {
-    return (
+    return rule.enabled ? (
       <>
         In Detect, this rule stops blocking <code>{ident}</code> and keeps a record of each match that runs. Another Protect rule that
         matches still blocks it. The agents pick it up on the next snapshot.
+      </>
+    ) : (
+      <>
+        This rule is disabled. Once it is enabled, Detect keeps a record of each match of <code>{ident}</code> that runs.
       </>
     );
   }
   return (
     <>
-      Protect blocks <code>{ident}</code> on every assigned host from the next snapshot.
+      {rule.enabled ? (
+        <>Protect blocks <code>{ident}</code> on every assigned host from the next snapshot.</>
+      ) : (
+        <>This rule is disabled. Once it is enabled, Protect blocks <code>{ident}</code> on every assigned host.</>
+      )}
       {impact && (
         <>
           {" "}{describeWouldBlock(impact, rule.id)}.{" "}
