@@ -26,6 +26,35 @@ type workflowStep struct {
 	Run  string `yaml:"run"`
 }
 
+// TestWorkflow_TheAppKeyIsReadFromTheMainOnlyEnvironment pins where the App credentials come from. They are stored in the sigma-sync
+// environment, not the repository, so a job that stopped naming it would read an empty client id and fail at the first upstream change.
+func TestWorkflow_TheAppKeyIsReadFromTheMainOnlyEnvironment(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	var wf struct {
+		Jobs map[string]struct {
+			Environment string `yaml:"environment"`
+			Steps       []struct {
+				ID   string            `yaml:"id"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &wf))
+	job := wf.Jobs["sync"]
+	assert.Equal(t, "sigma-sync", job.Environment)
+	var with map[string]string
+	for _, s := range job.Steps {
+		if s.ID == "app-token" {
+			with = s.With
+		}
+	}
+	require.NotNil(t, with, "no app-token step")
+	assert.Equal(t, "${{ vars.SIGMA_SYNC_APP_CLIENT_ID }}", with["client-id"])
+	assert.Equal(t, "${{ secrets.SIGMA_SYNC_APP_PRIVATE_KEY }}", with["private-key"])
+}
+
 // stepScript returns the run script of the step with the given id, or, for the step without one, the given name.
 func stepScript(t *testing.T, key string) string {
 	t.Helper()
@@ -54,15 +83,19 @@ type runner struct {
 	env  map[string]string
 }
 
-// ghStub records each call in gh.log and answers the two list queries from FAKE_ISSUE and FAKE_PR. ON_PR_LIST, when set, is run as
-// the pull request query is answered, to stage something happening on GitHub in that moment.
+// ghStub records each call in gh.log and answers the two list queries from FAKE_ISSUE and FAKE_PR, and pr create with createdPR.
+// ON_PR_LIST, when set, is run as the pull request query is answered, to stage something happening on GitHub in that moment.
 const ghStub = `#!/usr/bin/env bash
 echo "gh $*" >> "$RUNNER_TEMP/gh.log"
 case "$1 $2" in
   "issue list") printf '%s' "${FAKE_ISSUE:-}" ;;
   "pr list") if [ -n "${ON_PR_LIST:-}" ]; then bash -c "$ON_PR_LIST" >&2; fi; printf '%s' "${FAKE_PR:-}" ;;
+  "pr create") echo "` + createdPR + `" ;;
 esac
 `
+
+// createdPR is the pull request URL the gh stub reports creating.
+const createdPR = "https://github.com/getvictor/fleet-edr/pull/1000"
 
 func newRunner(t *testing.T, dir string) *runner {
 	t.Helper()
@@ -115,14 +148,25 @@ func (r *runner) read(name string) string {
 
 const issueStep = "Open, update or close the tracking issue"
 
-// issueRunner prepares the issue step as a run that found differences would leave it: the tool's report and the test output.
+// issueRunner prepares the later steps as a run that found differences would leave them: the tool's report and the test output, and,
+// when the corpus changed, the catalog test section the report step writes from them. It runs in dir, a scratch directory unless a
+// test needs a repository.
 func issueRunner(t *testing.T, env map[string]string, testOutput string) *runner {
 	t.Helper()
-	r := newRunner(t, t.TempDir())
+	return reportRunner(t, t.TempDir(), env, testOutput)
+}
+
+func reportRunner(t *testing.T, dir string, env map[string]string, testOutput string) *runner {
+	t.Helper()
+	r := newRunner(t, dir)
 	report := "Upstream: SigmaHQ/sigma at c0ffee.\n\n## Changed rules\n"
 	require.NoError(t, os.WriteFile(filepath.Join(r.temp, "report.md"), []byte(report), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(r.temp, "tests.txt"), []byte(testOutput), 0o600))
 	maps.Copy(r.env, env)
+	if r.env["CHANGED"] == "true" {
+		out, err := r.run("report")
+		require.NoError(t, err, out)
+	}
 	return r
 }
 
@@ -146,26 +190,43 @@ func TestWorkflow_AMatchingCorpusClosesTheTrackingIssue(t *testing.T) {
 	})
 }
 
-// spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-reach-a-review-branch-and-the-report
-func TestWorkflow_ChangesAreReportedWithAPullRequestLink(t *testing.T) {
+// spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-open-a-pull-request
+func TestWorkflow_ChangesOpenAPullRequest(t *testing.T) {
 	t.Parallel()
-	r := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "0"}, "ok\n")
-	out, err := r.run(issueStep)
+	remote, work := syncRepos(t)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "server/rules/internal/catalog/imported/rule.yml"), []byte("title: new\n"), 0o600))
+	r := reportRunner(t, work, map[string]string{"CHANGED": "true", "TEST_EXIT": "0"}, "ok\n")
+	out, err := r.run("push")
 	require.NoError(t, err, out)
-	assert.Contains(t, r.read("gh.log"), "gh issue create --repo getvictor/fleet-edr --title Vendored Sigma rules differ from upstream")
-	body := r.read("issue.md")
+	assert.Equal(t, "title: new\n", gitOut(t, remote, "show", "sigma-sync/upstream:server/rules/internal/catalog/imported/rule.yml"))
+	calls := r.read("gh.log")
+	assert.Contains(t, calls, "gh pr create --repo getvictor/fleet-edr --base main --head sigma-sync/upstream "+
+		"--title Sync vendored Sigma rules with upstream --body-file")
+	assert.Contains(t, r.read("out"), "pr_url="+createdPR)
+	body := r.read("pr.md")
 	assert.Contains(t, body, "## Changed rules")
-	assert.Contains(t, body, "(https://github.com/getvictor/fleet-edr/compare/main...sigma-sync/upstream?expand=1)")
 	assert.Contains(t, body, "`go test ./server/rules/internal/catalog/` passes.")
 	assert.Contains(t, body, "actions/runs/7")
 
-	t.Run("an open issue is updated in place", func(t *testing.T) {
+	t.Run("and an open tracking issue is closed with a link to it", func(t *testing.T) {
 		t.Parallel()
-		r := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "0", "FAKE_ISSUE": "34"}, "ok\n")
-		out, err := r.run(issueStep)
+		issue := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "0", "PR_URL": createdPR,
+			"FAKE_ISSUE": "34"}, "ok\n")
+		out, err := issue.run(issueStep)
 		require.NoError(t, err, out)
-		assert.Contains(t, r.read("gh.log"), "gh issue edit 34 ")
-		assert.NotContains(t, r.read("gh.log"), "issue create")
+		calls := issue.read("gh.log")
+		assert.Contains(t, calls, "gh issue close 34 --repo getvictor/fleet-edr --comment Opened "+createdPR+" with these changes.")
+		assert.NotContains(t, calls, "issue create")
+		assert.NotContains(t, calls, "issue edit")
+	})
+
+	t.Run("with no issue open, nothing is filed", func(t *testing.T) {
+		t.Parallel()
+		issue := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "0", "PR_URL": createdPR}, "ok\n")
+		out, err := issue.run(issueStep)
+		require.NoError(t, err, out)
+		assert.NotContains(t, issue.read("gh.log"), "gh issue close")
+		assert.NotContains(t, issue.read("gh.log"), "gh issue create")
 	})
 }
 
@@ -177,7 +238,6 @@ func TestWorkflow_AWithdrawalAloneIsReportedWithoutABranch(t *testing.T) {
 	require.NoError(t, err, out)
 	body := r.read("issue.md")
 	assert.Contains(t, body, "No vendored file changes: upstream withdrew a rule")
-	assert.NotContains(t, body, "Open the pull request")
 	assert.NotContains(t, body, "## Catalog tests")
 }
 
@@ -192,6 +252,7 @@ func TestWorkflow_APullRequestUnderReviewIsLeftAlone(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.Contains(t, r.read("out"), "open_pr="+openPR)
 	assert.Empty(t, gitOut(t, remote, "branch", "--list", "sigma-sync/upstream"), "nothing is pushed while a pull request is open")
+	assert.NotContains(t, r.read("gh.log"), "pr create", "and no second pull request is opened")
 
 	issue := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "1", "OPEN_PR": openPR},
 		"--- FAIL: TestLoadImported_TheWholeUpstreamCorpus (0.10s)\n")
@@ -199,12 +260,11 @@ func TestWorkflow_APullRequestUnderReviewIsLeftAlone(t *testing.T) {
 	require.NoError(t, err, out)
 	body := issue.read("issue.md")
 	assert.Contains(t, body, "is already open, "+openPR+", and this run left it alone")
-	assert.NotContains(t, body, "Open the pull request")
 	assert.Contains(t, body, "--- FAIL: TestLoadImported_TheWholeUpstreamCorpus",
 		"the test result is reported even when the branch is left alone")
 }
 
-// spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-reach-a-review-branch-and-the-report
+// spec:server-detection-rules-engine/upstream-drift-is-checked-weekly/upstream-changes-open-a-pull-request
 //
 // With no pull request open, the push step commits the corpus and generated docs to the sync branch, creating it or replacing the
 // job's previous commit on it.
@@ -224,7 +284,7 @@ func TestWorkflow_PushesTheSyncBranch(t *testing.T) { //nolint:tparallel // its 
 		t.Run(step.name, func(t *testing.T) { //nolint:paralleltest // sequential on shared repositories, see above
 			rule := step.rule
 			require.NoError(t, os.WriteFile(filepath.Join(work, "server/rules/internal/catalog/imported/rule.yml"), []byte(rule), 0o600))
-			r := newRunner(t, work)
+			r := reportRunner(t, work, map[string]string{"CHANGED": "true", "TEST_EXIT": "0"}, "ok\n")
 			out, err := r.run("push")
 			require.NoError(t, err, out)
 			assert.Equal(t, rule, gitOut(t, remote, "show", "sigma-sync/upstream:server/rules/internal/catalog/imported/rule.yml"))
@@ -278,14 +338,12 @@ exit 0
 	require.NoError(t, err)
 	assert.Equal(t, "# Detection rules\n", string(docs), "a generator that failed does not leave a truncated file for the branch")
 
-	issue := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "1"}, r.read("tests.txt"))
-	out, err = issue.run(issueStep)
-	require.NoError(t, err, out)
-	assert.Contains(t, issue.read("issue.md"), "panic: catalog: load imported")
+	reported := issueRunner(t, map[string]string{"CHANGED": "true", "TEST_EXIT": "1"}, r.read("tests.txt"))
+	assert.Contains(t, reported.read("tests-section.md"), "panic: catalog: load imported", "the pull request carries the failure")
 }
 
-// The issue shows the failure lines, or the end of the output when there are none, and a long failure cannot break the step.
-func TestWorkflow_TheIssueCarriesTheFailingOutput(t *testing.T) {
+// The test section shows the failure lines, or the end of the output when there are none, and a long failure cannot break the step.
+func TestWorkflow_TheReportCarriesTheFailingOutput(t *testing.T) {
 	t.Parallel()
 	block := func(body string) string {
 		_, after, found := strings.Cut(body, "```text\n")
@@ -307,20 +365,16 @@ func TestWorkflow_TheIssueCarriesTheFailingOutput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "1"}, tc.output)
-			out, err := r.run(issueStep)
-			require.NoError(t, err, out)
-			assert.Equal(t, tc.want, block(r.read("issue.md")))
+			r := issueRunner(t, map[string]string{"CHANGED": "true", "TEST_EXIT": "1"}, tc.output)
+			assert.Equal(t, tc.want, block(r.read("tests-section.md")))
 		})
 	}
 
 	t.Run("5000 failure lines are cut to 60 without a broken pipe", func(t *testing.T) {
 		t.Parallel()
-		r := issueRunner(t, map[string]string{"DIFFERS": "true", "CHANGED": "true", "TEST_EXIT": "1"},
+		r := issueRunner(t, map[string]string{"CHANGED": "true", "TEST_EXIT": "1"},
 			strings.Repeat("    --- FAIL: TestCase (0.00s)\n", 5000))
-		out, err := r.run(issueStep)
-		require.NoError(t, err, out)
-		assert.Equal(t, 60, strings.Count(block(r.read("issue.md")), "\n"))
+		assert.Equal(t, 60, strings.Count(block(r.read("tests-section.md")), "\n"))
 	})
 }
 

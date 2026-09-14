@@ -33,7 +33,7 @@ Bringing the corpus up to date SHALL copy new, changed and moved rules byte-for-
 
 ### Requirement: Upstream drift is checked weekly
 
-A scheduled job SHALL compare the vendored corpus with upstream every week, and on demand, always from the main branch. When the corpus matches upstream it SHALL change nothing and close its open tracking issue, if there is one. When upstream differs, the job SHALL bring a copy of main up to date, regenerate the generated rule reference, run the catalog tests, and commit the result to a single review branch. It SHALL keep one open tracking issue carrying the comparison report, the test result, and a link to open a pull request from that branch. It SHALL NOT push to main, merge, or open the pull request itself. A failure to regenerate or to pass the tests SHALL be reported in the issue rather than stop the job, and a regeneration that fails SHALL leave the generated files as they were committed. The job SHALL NOT update a review branch that has an open pull request, nor one that changed after the job checked it, so a reviewer's commits are never overwritten. A difference that is only a withdrawn rule changes no file, so it SHALL be reported in the issue without a branch update.
+A scheduled job SHALL compare the vendored corpus with upstream every week, and on demand, always from the main branch. When the corpus matches upstream it SHALL change nothing and close its open tracking issue, if there is one. When upstream differs, the job SHALL bring a copy of main up to date, regenerate the generated rule reference, run the catalog tests, commit the result to a single review branch, and open a pull request from that branch carrying the comparison report and the catalog test result. It SHALL open the pull request with a credential whose pull requests start CI, because CI is what makes a person update the pinned counts after reading a new rule. It SHALL NOT push to main or merge. A failure to regenerate or to pass the tests SHALL be reported in the pull request rather than stop the job, and a regeneration that fails SHALL leave the generated files as they were committed. The job SHALL NOT update a review branch that has an open pull request, nor one that changed after the job checked it, so a reviewer's commits are never overwritten. It SHALL keep one open tracking issue for what no pull request carries: a difference that is only a withdrawn rule, which changes no file, and changes found while a pull request from the branch is open, reported with that run's test result. It SHALL close that issue when it opens a pull request.
 
 #### Scenario: A matching corpus changes nothing and closes the report
 
@@ -41,12 +41,13 @@ A scheduled job SHALL compare the vendored corpus with upstream every week, and 
 - **WHEN** the weekly job runs
 - **THEN** no branch is pushed and the tracking issue is closed
 
-#### Scenario: Upstream changes reach a review branch and the report
+#### Scenario: Upstream changes open a pull request
 
 - **GIVEN** an upstream rule that differs from its vendored copy, and no open pull request from the review branch
 - **WHEN** the weekly job runs
 - **THEN** the review branch carries the upstream bytes and the regenerated rule reference
-- **AND** the tracking issue carries the report, the catalog test result, and a link that opens the pull request
+- **AND** a pull request from the branch carries the report and the catalog test result
+- **AND** an open tracking issue is closed with a link to that pull request
 
 #### Scenario: A withdrawal alone is reported without a branch change
 
@@ -65,4 +66,4 @@ A scheduled job SHALL compare the vendored corpus with upstream every week, and 
 
 - **GIVEN** an upstream change that makes the rule reference fail to regenerate or the catalog tests fail
 - **WHEN** the weekly job runs
-- **THEN** the review branch is still pushed, without a generated file the failure truncated, and the tracking issue carries the failing output
+- **THEN** the review branch is still pushed, without a generated file the failure truncated, and the pull request carries the failing output
