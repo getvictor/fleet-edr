@@ -26,9 +26,14 @@ The work lands in steps, extension first, so that a `DETECT` rule is never silen
 - **The console asks.** The Add rule and Paste many dialogs present Detect and Protect with neither selected, and saving waits for a choice.
 - The database column keeps its `DEFAULT 'PROTECT'`. Dropping it would not help: MySQL gives a `NOT NULL` ENUM column its first value when an insert omits it, default or not, so the store's validation is the guard.
 
+### Console: promote with the impact in view
+
+- **Promote and move back from the rule's row.** A Detect rule's row offers **Promote**, a Protect rule's **Move to Detect**, each confirmed with a reason.
+- **The evidence sits next to the decision.** Each Detect rule's row, and its promote dialog, say what it would have blocked in the counted window (runs and hosts, or nothing recorded, which is not shown as zero), linked to its monitor records. The counts come from the monitor-match counter, now keyed by the application-control rule. They are served to operators who can read detection tuning; for anyone else the figure is left out rather than shown as zero.
+- The monitor-records page explains an application-control rule's records as executables it would have blocked.
+
 ## Out of scope for these steps
 
-- Promoting a rule from the console, and a rule's would-block impact where the promote decision is made (executions and hosts it would have blocked, with a link to its monitor records). They come next.
 - The archived design's regular `exec` event with a `decision` field for a denied exec. A denied exec never replaces the process image, so an `exec` event for it would tell the graph builder the process now runs the blocked binary. It needs its own design.
 
 ## Notes for the release archive

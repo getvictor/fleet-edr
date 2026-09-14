@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
-import { listAlerts } from "../api";
+import { APP_CONTROL_RULE_PREFIX, listAlerts } from "../api";
 import type { Alert } from "../types";
 import { Badge } from "./ui/Badge";
 import { severityBadgeVariant } from "./ui/severity";
@@ -49,12 +49,23 @@ export function MonitorRecords() {
       <PageHeader title="Monitor records" subtitle={<code className="monitor-records__rule-id">{ruleId}</code>} />
       {/* Stated on the page rather than left to the Observed column's note, because this is where the two numbers meet: an operator
           arriving from a count of 40 and finding 3 records will otherwise read the difference as lost data. */}
-      <p className="monitor-records__explanation">
-        What this rule matched while it ran in monitor mode, newest first. These are not alerts: nobody was notified and there is
-        nothing to triage. A rule matching the same process again adds no record, so there can be fewer records than the rule&apos;s
-        Observed count, which counts every match. Records also age out on the server&apos;s monitor-record retention window, 7 days by
-        default, which can be set shorter or longer than the Observed window.
-      </p>
+      {ruleId.startsWith(APP_CONTROL_RULE_PREFIX) ? (
+        // An application-control rule's records are the executables that ran while it was in Detect mode. The detection wording below talks
+        // about monitor mode and an Observed column this rule has neither of.
+        <p className="monitor-records__explanation">
+          What this application-control rule would have blocked while it ran in Detect mode, newest first. Each executable ran. These
+          are not alerts: nobody was notified and there is nothing to triage. The same process running a matching executable again
+          adds no record, so there can be fewer records than the would-block count on the policy page, which counts runs. Records
+          also age out on the server&apos;s monitor-record retention window, 7 days by default.
+        </p>
+      ) : (
+        <p className="monitor-records__explanation">
+          What this rule matched while it ran in monitor mode, newest first. These are not alerts: nobody was notified and there is
+          nothing to triage. A rule matching the same process again adds no record, so there can be fewer records than the rule&apos;s
+          Observed count, which counts every match. Records also age out on the server&apos;s monitor-record retention window, 7 days
+          by default, which can be set shorter or longer than the Observed window.
+        </p>
+      )}
       {records === null && error === null && <EmptyState>Loading monitor records...</EmptyState>}
       {error !== null && <EmptyState>Monitor records could not be loaded: {error}</EmptyState>}
       {records?.length === 0 && (

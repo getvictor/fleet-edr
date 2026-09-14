@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
+  type Enforcement,
   getAppControlPolicy,
   deleteAppControlRule,
+  listDetectionRuleMatchCounts,
   updateAppControlRule,
 } from "../../api";
+import { PermissionAction, useCan } from "../../permissions-core";
 import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
@@ -15,6 +18,7 @@ import { AddRuleModal } from "./AddRuleModal";
 import { EditRuleModal } from "./EditRuleModal";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { PasteManyModal } from "./PasteManyModal";
+import { appControlRuleID, describeWouldBlock, wouldBlockImpactFrom, type WouldBlockImpact } from "./wouldBlockImpact";
 import {
   applyRulesFilter,
   distinctRuleTypes,
@@ -35,7 +39,8 @@ type ActiveModal =
   | { kind: "paste-many" }
   | { kind: "edit"; rule: ApplicationControlRule }
   | { kind: "confirm-delete"; rule: ApplicationControlRule }
-  | { kind: "confirm-toggle"; rule: ApplicationControlRule };
+  | { kind: "confirm-toggle"; rule: ApplicationControlRule }
+  | { kind: "confirm-enforcement"; rule: ApplicationControlRule };
 
 // truncateIdentifier renders the leading 16 chars of a SHA-256
 // identifier so the rules table stays scannable without dropping the
@@ -88,6 +93,32 @@ export function PolicyDetail() {
   useEffect(() => {
     setFilter(EMPTY_RULES_FILTER); // eslint-disable-line react-hooks/set-state-in-effect -- reset on prop change
   }, [policyID]);
+
+  // What each Detect rule would have blocked, read from the monitor-match counts. Only for an operator who may read detection
+  // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. Read once per visit: a
+  // rule edit on this page does not change what was counted. A failed read leaves the figure out rather than failing the page,
+  // since the rules are still usable without it.
+  const canReadMatchCounts = useCan()(PermissionAction.DetectionConfigRead);
+  const [impact, setImpact] = useState<WouldBlockImpact | null>(null);
+  useEffect(() => {
+    if (!canReadMatchCounts) return;
+    let cancelled = false;
+    listDetectionRuleMatchCounts()
+      .then((result) => {
+        if (!cancelled) setImpact(wouldBlockImpactFrom(result.counts, result.days));
+      })
+      .catch(() => {
+        // The figure stays out.
+      });
+    return () => {
+      cancelled = true;
+      // Cleared whenever access changes, so a read made under an earlier grant is not shown while a read after access is restored is
+      // pending, or once it fails.
+      setImpact(null);
+    };
+  }, [canReadMatchCounts]);
+  // Gated during render as well, because the cleanup above runs only after the render that revokes access has committed.
+  const shownImpact = canReadMatchCounts ? impact : null;
 
   useEffect(() => {
     if (!Number.isFinite(policyID)) return;
@@ -170,12 +201,12 @@ export function PolicyDetail() {
 
   // confirmRule extracts the rule from a confirm-* modal kind so the JSX below stays terse; returns null for non-confirm
   // modals (the ConfirmActionModal won't render its content in that case).
-  const confirmKind = activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle"
-    ? activeModal.kind
-    : null;
-  const confirmRule = activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle"
-    ? activeModal.rule
-    : null;
+  const confirmModal =
+    activeModal.kind === "confirm-delete" || activeModal.kind === "confirm-toggle" || activeModal.kind === "confirm-enforcement"
+      ? activeModal
+      : null;
+  const confirmKind = confirmModal?.kind ?? null;
+  const confirmRule = confirmModal?.rule ?? null;
 
   return (
     <>
@@ -219,6 +250,8 @@ export function PolicyDetail() {
               ) : (
                 <RulesTable
                   rules={visibleRules}
+                  impact={shownImpact}
+                  onEnforcement={(rule) => { setActiveModal({ kind: "confirm-enforcement", rule }); }}
                   onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
                   onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
                   onDelete={(rule) => { setActiveModal({ kind: "confirm-delete", rule }); }}
@@ -269,7 +302,7 @@ export function PolicyDetail() {
         key={confirmRule ? `confirm-${String(confirmKind)}-${String(confirmRule.id)}` : "confirm-closed"}
         open={confirmRule !== null}
         title={confirmTitleFor(activeModal)}
-        description={confirmDescriptionFor(activeModal)}
+        description={confirmDescriptionFor(activeModal, shownImpact)}
         confirmLabel={confirmLabelFor(activeModal)}
         confirmVariant={activeModal.kind === "confirm-delete" ? "alert" : "primary"}
         reasonPlaceholder={confirmReasonPlaceholderFor(activeModal)}
@@ -283,6 +316,8 @@ export function PolicyDetail() {
               enabled: !confirmRule.enabled,
               reason,
             });
+          } else if (activeModal.kind === "confirm-enforcement") {
+            await updateAppControlRule(confirmRule.id, { enforcement: otherEnforcement(confirmRule), reason });
           }
           closeModal();
           refresh();
@@ -295,12 +330,52 @@ export function PolicyDetail() {
 // confirmTitleFor + the three sibling helpers shape the per-action copy passed into the shared ConfirmActionModal. Keeping the
 // switch outside the component body so the modal can stay generic and the per-action vocabulary lives next to the dispatch.
 function confirmTitleFor(active: ActiveModal): string {
+  if (active.kind === "confirm-enforcement") return isDetect(active.rule) ? "Promote rule to Protect" : "Move rule to Detect";
   if (active.kind === "confirm-delete") return "Delete rule";
   if (active.kind === "confirm-toggle") return active.rule.enabled ? "Disable rule" : "Enable rule";
   return "";
 }
 
-function confirmDescriptionFor(active: ActiveModal): React.ReactNode {
+// isDetect and otherEnforcement name the two sides of the enforcement switch once, so the row action, the dialog copy and the PATCH
+// cannot disagree about which way a click moves the rule.
+function isDetect(rule: ApplicationControlRule): boolean {
+  return rule.enforcement === "DETECT";
+}
+
+function otherEnforcement(rule: ApplicationControlRule): Enforcement {
+  return isDetect(rule) ? "PROTECT" : "DETECT";
+}
+
+// enforcementDescription is the promote / demote dialog's explanation. It says what the new mode makes this rule do, not whether the
+// rule is live: whether it is enabled, unexpired, or reached past the platform and self-allow carve-outs is the same before and after
+// the change, and the page is not the authority on any of them. Promoting also states the rule's counted would-block matches, the
+// evidence the decision rests on, and links to the records behind them.
+function enforcementDescription(rule: ApplicationControlRule, impact: WouldBlockImpact | null): React.ReactNode {
+  const ident = rule.identifier;
+  if (!isDetect(rule)) {
+    return (
+      <>
+        Detect makes this rule record the executables it matches for <code>{ident}</code> that run, instead of blocking them. Another
+        Protect rule that matches still blocks. Hosts receive the change with the next snapshot.
+      </>
+    );
+  }
+  return (
+    <>
+      Protect makes this rule block the executables it matches for <code>{ident}</code>, instead of recording them. Hosts receive the
+      change with the next snapshot.
+      {impact && (
+        <>
+          {" "}{describeWouldBlock(impact, rule.id)}.{" "}
+          <Link to={`/rules/${encodeURIComponent(appControlRuleID(rule.id))}/monitor-records`}>Review the records</Link>
+        </>
+      )}
+    </>
+  );
+}
+
+function confirmDescriptionFor(active: ActiveModal, impact: WouldBlockImpact | null): React.ReactNode {
+  if (active.kind === "confirm-enforcement") return enforcementDescription(active.rule, impact);
   if (active.kind !== "confirm-delete" && active.kind !== "confirm-toggle") return "";
   const ident = active.rule.identifier;
   if (active.kind === "confirm-delete") {
@@ -329,12 +404,16 @@ function confirmDescriptionFor(active: ActiveModal): React.ReactNode {
 }
 
 function confirmLabelFor(active: ActiveModal): string {
+  if (active.kind === "confirm-enforcement") return isDetect(active.rule) ? "Promote to Protect" : "Move to Detect";
   if (active.kind === "confirm-delete") return "Delete rule";
   if (active.kind === "confirm-toggle") return active.rule.enabled ? "Disable rule" : "Enable rule";
   return "Confirm";
 }
 
 function confirmReasonPlaceholderFor(active: ActiveModal): string {
+  if (active.kind === "confirm-enforcement") {
+    return isDetect(active.rule) ? "Why is this rule ready to block?" : "Why should this rule stop blocking?";
+  }
   if (active.kind === "confirm-delete") return "Why are you deleting this rule?";
   if (active.kind === "confirm-toggle") {
     return active.rule.enabled
@@ -346,12 +425,14 @@ function confirmReasonPlaceholderFor(active: ActiveModal): string {
 
 interface RulesTableProps {
   readonly rules: ApplicationControlRule[];
+  readonly impact: WouldBlockImpact | null;
+  readonly onEnforcement: (rule: ApplicationControlRule) => void;
   readonly onEdit: (rule: ApplicationControlRule) => void;
   readonly onToggle: (rule: ApplicationControlRule) => void;
   readonly onDelete: (rule: ApplicationControlRule) => void;
 }
 
-function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
+function RulesTable({ rules, impact, onEnforcement, onEdit, onToggle, onDelete }: RulesTableProps) {
   return (
     <Table>
       <thead>
@@ -377,9 +458,16 @@ function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
             <td>
               {/* Detect reads differently from Protect at a glance: a Detect rule blocks nothing, which is the one fact an operator
                   scanning the list most needs before assuming a binary is stopped. */}
-              <Badge variant={rule.enforcement === "DETECT" ? "neutral" : "info"}>
-                {rule.enforcement === "DETECT" ? "Detect" : "Protect"}
+              <Badge variant={isDetect(rule) ? "neutral" : "info"}>
+                {isDetect(rule) ? "Detect" : "Protect"}
               </Badge>
+              {isDetect(rule) && impact && (
+                <div className="app-control__row-secondary">
+                  <Link to={`/rules/${encodeURIComponent(appControlRuleID(rule.id))}/monitor-records`}>
+                    {describeWouldBlock(impact, rule.id)}
+                  </Link>
+                </div>
+              )}
             </td>
             <td>
               <Badge variant={severityBadgeVariant(rule.severity)}>
@@ -391,6 +479,13 @@ function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
             <td className="app-control__row-actions">
               {/* Edit / Disable / Delete each open a modal that prompts for an audit reason before firing the PATCH / DELETE
                   endpoint server-side. The handlers live on PolicyDetail so refresh-on-success is wired in one place. */}
+              <Button
+                variant="text-link"
+                size="small"
+                onClick={() => { onEnforcement(rule); }}
+              >
+                {isDetect(rule) ? "Promote" : "Move to Detect"}
+              </Button>
               <Button
                 variant="text-link"
                 size="small"

@@ -74,6 +74,20 @@ describe("MonitorRecords", () => {
     expect(explanation).toHaveTextContent(/retention window, 7 days by default/);
   });
 
+  // spec:web-ui/a-detect-rule-can-be-promoted-with-its-impact-in-view/app-control-records-read-as-would-block-runs
+  it("explains an application-control rule's records as executables it would have blocked", async () => {
+    const listSpy = vi.spyOn(api, "listAlerts").mockResolvedValue([
+      makeRecord({ rule_id: "app_control:7", source: "application_control", origin: "", title: "Application would be blocked: tool" }),
+    ]);
+    renderPage("app_control:7");
+
+    await screen.findByRole("table");
+    expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ disposition: "monitor", rule_id: "app_control:7" }));
+    const explanation = screen.getByText(/would have blocked while it ran in Detect mode/);
+    expect(explanation).toBeVisible();
+    expect(explanation).not.toHaveTextContent(/Observed/);
+  });
+
   // spec:web-ui/monitor-records-are-reachable-from-the-observed-count/a-monitor-record-offers-no-triage
   it("offers no triage on the list", async () => {
     vi.spyOn(api, "listAlerts").mockResolvedValue([makeRecord()]);
