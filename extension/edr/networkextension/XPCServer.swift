@@ -2,9 +2,9 @@ import Foundation
 import os.log
 
 /// The network extension's XPC server: a shared XPCEventServer (see shared/XPCEventServer.swift) bound to the network
-/// extension's app-group Mach service. It has no inbound control messages (unlike the security extension's
-/// application_control.update), so onApplicationControl is nil. NetworkFilter + DNSProxyProvider broadcast events via
-/// XPCServer.shared.send; main.swift starts the listener via XPCServer.shared.start.
+/// extension's app-group Mach service. Its one inbound control message is network_containment.update, handed to
+/// NetworkContainmentController. NetworkFilter + DNSProxyProvider broadcast events via XPCServer.shared.send; main.swift
+/// starts the listener via XPCServer.shared.start.
 ///
 /// The service name MUST be the app-group NEMachServiceName: that is the only Mach service launchd registers for a
 /// NetworkExtension sysext. A team-prefixed name (the kind the security extension vends via NSEndpointSecurityMachServiceName)
@@ -14,7 +14,8 @@ import os.log
 enum XPCServer {
     static let shared = XPCEventServer(
         serviceName: "group.com.fleetdm.edr.networkextension",
-        logger: Logger(subsystem: "com.fleetdm.edr.networkextension", category: "XPCServer")
+        logger: Logger(subsystem: "com.fleetdm.edr.networkextension", category: "XPCServer"),
+        onNetworkContainment: { NetworkContainmentController.shared.receive($0) }
     )
 }
 

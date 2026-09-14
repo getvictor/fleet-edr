@@ -171,6 +171,18 @@ final class XPCServerLogicTests: XCTestCase {
         XCTAssertEqual(dispatchInbound(type: "watched_paths.update", data: Data()), .rejectMissingData)
     }
 
+    // spec:extension-xpc-server/inbound-network-containment-update/the-agent-pushes-a-containment-update
+    func testNetworkContainmentUpdateWithDataDispatchesToApplyNetworkContainment() {
+        let payload = Data(#"{"version":2,"contained":false}"#.utf8)
+        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: payload), .applyNetworkContainment(payload))
+    }
+
+    // spec:extension-xpc-server/inbound-network-containment-update/a-network-containment-update-with-no-data-is-rejected
+    func testNetworkContainmentUpdateWithoutDataDispatchesToRejectMissingData() {
+        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: nil), .rejectMissingData)
+        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: Data()), .rejectMissingData)
+    }
+
     // MARK: Requirement: Hello handshake and reply
 
     // spec:extension-xpc-server/hello-handshake-and-reply/the-agent-sends-a-hello-after-connecting

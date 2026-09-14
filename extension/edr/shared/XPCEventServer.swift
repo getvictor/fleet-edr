@@ -53,6 +53,7 @@ enum XPCMessageType {
     static let helloAck = "hello-ack"
     static let applicationControlUpdate = "application_control.update"
     static let watchedPathsUpdate = "watched_paths.update"
+    static let networkContainmentUpdate = "network_containment.update"
 }
 
 /// Cap on the no-peer buffer. ~10k events at ~500B each = ~5MB of memory in the worst case, which is fine for an
@@ -117,8 +118,10 @@ enum XPCInboundDispatch: Equatable {
     case applyApplicationControl(Data)
     /// `type = watched_paths.update` with non-empty `data`: pass the bytes to the onWatchedPaths hook.
     case applyWatchedPaths(Data)
-    /// `type = application_control.update` or `watched_paths.update` with missing or empty `data`: ignore + leave the active
-    /// policy or watched set untouched.
+    /// `type = network_containment.update` with non-empty `data`: pass the bytes to the onNetworkContainment hook.
+    case applyNetworkContainment(Data)
+    /// A recognised update type with missing or empty `data`: ignore + leave the active policy, watched set or containment state
+    /// untouched.
     /// Distinct from .ignore so the operator-visible log line can be specific.
     case rejectMissingData
     /// Unknown type, or no `type` field at all: log + ignore. Connection stays open; forward-compat agents can introduce
@@ -140,6 +143,9 @@ func dispatchInbound(type: String?, data: Data?) -> XPCInboundDispatch {
     case XPCMessageType.watchedPathsUpdate:
         guard let data, !data.isEmpty else { return .rejectMissingData }
         return .applyWatchedPaths(data)
+    case XPCMessageType.networkContainmentUpdate:
+        guard let data, !data.isEmpty else { return .rejectMissingData }
+        return .applyNetworkContainment(data)
     default:
         return .ignore
     }
@@ -150,8 +156,8 @@ func dispatchInbound(type: String?, data: Data?) -> XPCInboundDispatch {
 ///
 /// Shared by the security extension AND the network extension. Each extension instantiates one with its own service
 /// name + logger; the security extension also passes `onApplicationControl` and `onWatchedPaths` hooks to apply inbound
-/// app-control policy and the file-tamper client's watched set, while the network extension passes neither (it has no
-/// inbound control messages). Both get the identical hello-ack
+/// app-control policy and the file-tamper client's watched set, while the network extension passes `onNetworkContainment`
+/// to apply host network containment. Both get the identical hello-ack
 /// handshake, pending buffer, and peer code-signing. Single-sourcing the handshake means it can no longer drift between
 /// the two extensions (the network extension previously lacked the handshake entirely; see the hello-ack fix).
 ///
@@ -171,6 +177,9 @@ final class XPCEventServer {
     /// Inbound watched-path handler. The security extension wires this to the file-tamper client; nil in the network
     /// extension, for the same reason as onApplicationControl.
     private let onWatchedPaths: ((Data) -> Void)?
+    /// Inbound network containment handler. The network extension wires this to NetworkContainmentController; nil in the
+    /// security extension, which has no content filter to apply it to.
+    private let onNetworkContainment: ((Data) -> Void)?
     /// Called each time a peer completes the hello handshake. The network extension uses it to re-broadcast current
     /// provider liveness (issue #649): that state is level-triggered, not an event, so an agent that connects after the
     /// providers started must be told the current state rather than waiting for a transition that may never come.
@@ -193,12 +202,14 @@ final class XPCEventServer {
         serviceName: String,
         logger: Logger,
         onApplicationControl: ((Data) -> Void)? = nil,
-        onWatchedPaths: ((Data) -> Void)? = nil
+        onWatchedPaths: ((Data) -> Void)? = nil,
+        onNetworkContainment: ((Data) -> Void)? = nil
     ) {
         self.serviceName = serviceName
         self.log = logger
         self.onApplicationControl = onApplicationControl
         self.onWatchedPaths = onWatchedPaths
+        self.onNetworkContainment = onNetworkContainment
     }
 
     func start(onPeerConnected: (() -> Void)? = nil) {
@@ -333,6 +344,8 @@ final class XPCEventServer {
             onApplicationControl?(data)
         case .applyWatchedPaths(let data):
             onWatchedPaths?(data)
+        case .applyNetworkContainment(let data):
+            onNetworkContainment?(data)
         case .rejectMissingData:
             // Only a recognised type reaches this case, so the value is one of ours rather than peer-chosen text.
             log.error("\(typeStr ?? "(none)", privacy: .public) missing 'data'")

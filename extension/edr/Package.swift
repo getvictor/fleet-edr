@@ -85,6 +85,7 @@ let package = Package(
                 "networkextension/DNSProxyTypes.swift",
                 "networkextension/NetworkEventSerializer.swift",
                 "networkextension/NetworkFilter.swift",
+                "networkextension/NetworkContainmentController.swift",
                 "networkextension/XPCServer.swift",
                 "networkextension/ProviderStatusReporter.swift",
                 "com.fleetdm.edr.notify.plist"
@@ -92,8 +93,8 @@ let package = Package(
             sources: [
                 "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
-                // AtomicFile.swift is the atomic write both persisted stores use. Pure Foundation.
-                "extension/AtomicFile.swift",
+                // AtomicFile.swift is the atomic write every persisted store uses, in both extensions. Pure Foundation.
+                "shared/AtomicFile.swift",
                 "extension/AuthExecDecider.swift",
                 // CDHashHex.swift holds the CDHash-to-hex helper and the Hardened Runtime flag test. It carried an
                 // EndpointSecurity import that nothing in it used (the only es_ references are in comments), so it moves
@@ -122,6 +123,10 @@ let package = Package(
                 // NetworkPayloads.swift holds the NetworkConnect/DNSQuery Codable structs (no NetworkExtension import, no
                 // EventEnvelope) so their pidversion wire shape is unit-testable here (issue #403, Copilot review).
                 "networkextension/NetworkPayloads.swift",
+                // NetworkContainment.swift is host network containment's pure half (#948): decoding a containment document,
+                // ordering updates, the lifeline a contained host keeps, the reported status, and the persisted store. No
+                // NetworkExtension import; NetworkContainmentController applies it as filter settings.
+                "networkextension/NetworkContainment.swift",
                 // DNSForwardPolicy.swift decides HOW a claimed flow is forwarded, keeping our forward out of another
                 // provider's tunnel (issue #656). Declining such flows is NOT viable: returning false from handleNewFlow
                 // kills the flow rather than handing it back to the OS. Pure Foundation with the entitlement probe
