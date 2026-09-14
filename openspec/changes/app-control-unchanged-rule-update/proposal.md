@@ -8,7 +8,8 @@ Issue #1052. `PATCH /api/v1/app-control/rules/{id}` returned 404 `application_co
 
 - **An update that changes nothing succeeds** with 200 and the rule as it is.
 - **It is not a mutation.** The policy version does not advance, no `set_application_control` command is enqueued, and no audit event is recorded, because nothing changed: hosts already hold the rule, and there is no change to attribute.
-- **A rule deleted concurrently still reads as not found.** The update locks the rule row when it looks it up, so the affected-row count distinguishes the two cases. The update already took that lock; taking it at the lookup adds no lock and keeps the rule-then-policy order single-rule mutations have always used.
+- **Whether anything changes is decided by comparing the request with the rule.** The update reads the rule under a row lock and compares each supplied field with its current value, rather than reading the `UPDATE`'s affected-row count, which reports changed or matched rows depending on the DSN's `clientFoundRows`. A rule deleted concurrently still reads as not found. The update already took that row lock; taking it at the lookup adds no lock and keeps the rule-then-policy order single-rule mutations have always used.
+- **The audit requirement names the exception.** "Rule lifecycle audit events" is restated so a rule update that changes nothing is not one of the updates it requires an event for.
 
 ## Out of scope
 

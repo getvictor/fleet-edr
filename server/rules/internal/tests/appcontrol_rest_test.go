@@ -858,29 +858,41 @@ func TestAppControlREST_UpdateRule_UnchangedIsNotAMutation(t *testing.T) { //nol
 		return resp.StatusCode, rule
 	}
 
-	// spec:server-application-control/an-unchanged-rule-update-is-not-a-mutation/an-unchanged-update-returns-the-rule
-	t.Run("an unchanged update returns the rule and changes nothing", func(t *testing.T) {
-		version, commands, events := policyVersion(), len(r.inserter.snapshot()), len(r.audit.snapshot())
-		status, rule := patch(map[string]any{"enforcement": "PROTECT", "severity": "medium", "enabled": true, "reason": "retry"})
-		require.Equal(t, http.StatusOK, status)
-		assert.Equal(t, ruleID, rule.ID)
-		assert.Equal(t, rulesapi.EnforcementProtect, rule.Enforcement)
-		assert.Equal(t, version, policyVersion(), "the policy version must not advance")
-		assert.Len(t, r.inserter.snapshot(), commands, "no snapshot is fanned out")
-		assert.Len(t, r.audit.snapshot(), events, "no audit event is recorded")
-	})
-
-	// spec:server-application-control/an-unchanged-rule-update-is-not-a-mutation/changing-one-field-is-a-mutation
-	t.Run("an update that changes one of its fields is a mutation", func(t *testing.T) {
-		version, commands, events := policyVersion(), len(r.inserter.snapshot()), len(r.audit.snapshot())
-		status, rule := patch(map[string]any{"enforcement": "PROTECT", "severity": "high", "reason": "raise severity"})
-		require.Equal(t, http.StatusOK, status)
-		assert.Equal(t, rulesapi.SeverityRuleHigh, rule.Severity)
-		assert.Equal(t, version+1, policyVersion())
-		assert.Len(t, r.inserter.snapshot(), commands+2, "one snapshot per host")
-		require.Len(t, r.audit.snapshot(), events+1)
-		assert.Equal(t, identityapi.AuditAppControlRuleUpdate, r.audit.snapshot()[events].Action)
-	})
+	// In order: the first case leaves the seeded rule as it is, the second changes it.
+	cases := []struct {
+		name         string
+		body         map[string]any
+		wantSeverity rulesapi.Severity
+		wantMutation bool
+	}{
+		// spec:server-application-control/an-unchanged-rule-update-is-not-a-mutation/an-unchanged-update-returns-the-rule
+		{"an unchanged update returns the rule and changes nothing",
+			map[string]any{"enforcement": "PROTECT", "severity": "medium", "enabled": true, "reason": "retry"},
+			rulesapi.SeverityRuleMedium, false},
+		// spec:server-application-control/an-unchanged-rule-update-is-not-a-mutation/changing-one-field-is-a-mutation
+		{"an update that changes one of its fields is a mutation",
+			map[string]any{"enforcement": "PROTECT", "severity": "high", "reason": "raise severity"},
+			rulesapi.SeverityRuleHigh, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			version, commands, events := policyVersion(), len(r.inserter.snapshot()), len(r.audit.snapshot())
+			status, rule := patch(tc.body)
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, ruleID, rule.ID)
+			assert.Equal(t, tc.wantSeverity, rule.Severity)
+			if !tc.wantMutation {
+				assert.Equal(t, version, policyVersion(), "the policy version must not advance")
+				assert.Len(t, r.inserter.snapshot(), commands, "no snapshot is fanned out")
+				assert.Len(t, r.audit.snapshot(), events, "no audit event is recorded")
+				return
+			}
+			assert.Equal(t, version+1, policyVersion())
+			assert.Len(t, r.inserter.snapshot(), commands+2, "one snapshot per host")
+			require.Len(t, r.audit.snapshot(), events+1)
+			assert.Equal(t, identityapi.AuditAppControlRuleUpdate, r.audit.snapshot()[events].Action)
+		})
+	}
 }
 
 // TestAppControlREST_UpdateRule_NotFound: a PATCH on a missing rule maps the typed sentinel to HTTP 404 with the rule_not_found

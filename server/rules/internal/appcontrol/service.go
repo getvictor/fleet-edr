@@ -457,9 +457,10 @@ func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, evt
 	}
 }
 
-// UpdateRule wires PATCH /api/v1/app-control/rules/{id}: validates the actor + reason, applies the partial update through the
-// store, recomposes the post-update snapshot, fans it out, and emits the application_control.rule_update audit row. Validation
-// errors propagate untouched so the handler can errors.Is on the shared IsApplicationControlValidationError set.
+// UpdateRule wires PATCH /api/v1/app-control/rules/{id}: validates the actor + reason and applies the partial update through the
+// store. When the update changed a field, it recomposes the post-update snapshot, fans it out, and emits the
+// application_control.rule_update audit row; an update that changed nothing returns the rule with none of those side effects.
+// Validation errors propagate untouched so the handler can errors.Is on the shared IsApplicationControlValidationError set.
 func (s *Service) UpdateRule(ctx context.Context, req api.UpdateRuleRequest, actor *identityapi.Actor) (api.ApplicationControlRule, error) {
 	if actor == nil {
 		return api.ApplicationControlRule{}, fmt.Errorf(errSvcActorRequiredFmt, api.ErrAppControlInvalidRequest)
