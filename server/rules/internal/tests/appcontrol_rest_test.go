@@ -245,10 +245,11 @@ func TestAppControlREST_GetPolicy_IncludesRules(t *testing.T) {
 	create := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "demo dry-run",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "demo dry-run",
 		})
 	defer create.Body.Close()
 	require.Equal(t, http.StatusCreated, create.StatusCode)
@@ -279,11 +280,12 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"severity":   rulesapi.SeverityRuleMedium,
-			"custom_msg": "Blocked by corporate policy",
-			"reason":     "demo recording",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"severity":    rulesapi.SeverityRuleMedium,
+			"custom_msg":  "Blocked by corporate policy",
+			"reason":      "demo recording",
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -351,10 +353,11 @@ func TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments(t *t
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "overlap fan-out coverage",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "overlap fan-out coverage",
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -400,10 +403,11 @@ func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "exercise the failure branch",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "exercise the failure branch",
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode,
@@ -432,10 +436,11 @@ func TestAppControlREST_CreateRule_AuditCarriesIdentityReasonAndDiff(t *testing.
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": identifier,
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "block known-bad binary from incident IR-1234",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  identifier,
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "block known-bad binary from incident IR-1234",
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -485,10 +490,11 @@ func TestAppControlREST_CreateRule_ServiceAccountIsAttributed(t *testing.T) {
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": identifier,
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "service account blocks a known-bad binary",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  identifier,
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "service account blocks a known-bad binary",
 		})
 	defer resp.Body.Close()
 	rawBody, err := io.ReadAll(resp.Body)
@@ -531,10 +537,11 @@ func TestAppControlREST_CreateRule_RejectsDuplicate(t *testing.T) {
 	r := newAppControlRig(t, []string{"host-a"})
 	policyID := r.defaultPolicyID(t)
 	body := map[string]any{
-		"rule_type":  rulesapi.RuleTypeBinary,
-		"identifier": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-		"severity":   rulesapi.SeverityRuleMedium,
-		"reason":     "first create",
+		"rule_type":   rulesapi.RuleTypeBinary,
+		"enforcement": "PROTECT",
+		"identifier":  "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		"severity":    rulesapi.SeverityRuleMedium,
+		"reason":      "first create",
 	}
 	first := r.do(t, http.MethodPost, "/api/v1/app-control/policies/"+i64(policyID)+"/rules", body)
 	first.Body.Close()
@@ -563,10 +570,11 @@ func TestAppControlREST_CreateRule_BadIdentifierIs400(t *testing.T) {
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "not-a-real-hash",
-			"severity":   rulesapi.SeverityRuleMedium,
-			"reason":     "expecting 400",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "not-a-real-hash",
+			"severity":    rulesapi.SeverityRuleMedium,
+			"reason":      "expecting 400",
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -634,7 +642,7 @@ func TestAppControlREST_CreateRule_InvalidPolicyID(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	resp := r.do(t, http.MethodPost, "/api/v1/app-control/policies/abc/rules",
-		map[string]any{"rule_type": rulesapi.RuleTypeBinary, "identifier": "x", "reason": "y"})
+		map[string]any{"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": "x", "reason": "y"})
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	var body map[string]string
@@ -672,7 +680,7 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	policy, err := store.GetPolicyByName(t.Context(), rulesapi.DefaultPolicyName)
 	require.NoError(t, err)
 	body, err := json.Marshal(map[string]any{
-		"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("a", 64),
+		"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": strings.Repeat("a", 64),
 		"reason": "no actor on ctx", "severity": rulesapi.SeverityRuleMedium,
 	})
 	require.NoError(t, err)
@@ -737,7 +745,7 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	policy, err := store.GetPolicyByName(t.Context(), rulesapi.DefaultPolicyName)
 	require.NoError(t, err)
 	body, _ := json.Marshal(map[string]any{
-		"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("e", 64),
+		"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": strings.Repeat("e", 64),
 		"reason": "lister fails", "severity": rulesapi.SeverityRuleHigh,
 	})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -773,10 +781,11 @@ func seedRule(t *testing.T, r *appControlRig, policyID int64, identifier string)
 	resp := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": identifier,
-			"severity":   rulesapi.SeverityRuleMedium,
-			"reason":     "seed for mutation test",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  identifier,
+			"severity":    rulesapi.SeverityRuleMedium,
+			"reason":      "seed for mutation test",
 		})
 	defer resp.Body.Close()
 	require.Equalf(t, http.StatusCreated, resp.StatusCode, "seed rule POST failed: status %d", resp.StatusCode)
@@ -1183,9 +1192,9 @@ func TestAppControlREST_BulkUpsertRules_HappyPath(t *testing.T) {
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules:bulkUpsert",
 		map[string]any{
 			"rules": []map[string]any{
-				{"rule_type": "BINARY", "identifier": strings.Repeat("1", 64), "severity": "medium"},
-				{"rule_type": "CDHASH", "identifier": strings.Repeat("2", 40), "severity": "medium"},
-				{"rule_type": "TEAMID", "identifier": "EQHXZ8M8AV", "severity": "high"},
+				{"rule_type": "BINARY", "enforcement": "PROTECT", "identifier": strings.Repeat("1", 64), "severity": "medium"},
+				{"rule_type": "CDHASH", "enforcement": "PROTECT", "identifier": strings.Repeat("2", 40), "severity": "medium"},
+				{"rule_type": "TEAMID", "enforcement": "PROTECT", "identifier": "EQHXZ8M8AV", "severity": "high"},
 			},
 			"reason": "bulk REST test",
 		})
@@ -1223,8 +1232,8 @@ func TestAppControlREST_BulkUpsertRules_BadItem(t *testing.T) {
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules:bulkUpsert",
 		map[string]any{
 			"rules": []map[string]any{
-				{"rule_type": "BINARY", "identifier": strings.Repeat("3", 64), "severity": "medium"},
-				{"rule_type": "BINARY", "identifier": "too-short", "severity": "medium"},
+				{"rule_type": "BINARY", "enforcement": "PROTECT", "identifier": strings.Repeat("3", 64), "severity": "medium"},
+				{"rule_type": "BINARY", "enforcement": "PROTECT", "identifier": "too-short", "severity": "medium"},
 			},
 			"reason": "should fail atomically",
 		})
@@ -1252,7 +1261,7 @@ func TestAppControlREST_BulkUpsertRules_UnknownPolicy(t *testing.T) {
 		"/api/v1/app-control/policies/9999999/rules:bulkUpsert",
 		map[string]any{
 			"rules": []map[string]any{
-				{"rule_type": "BINARY", "identifier": strings.Repeat("4", 64), "severity": "medium"},
+				{"rule_type": "BINARY", "enforcement": "PROTECT", "identifier": strings.Repeat("4", 64), "severity": "medium"},
 			},
 			"reason": "should be 404",
 		})
@@ -1273,7 +1282,7 @@ func TestAppControlREST_BulkUpsertRules_InvalidPolicyID(t *testing.T) {
 		"/api/v1/app-control/policies/not-a-number/rules:bulkUpsert",
 		map[string]any{
 			"rules": []map[string]any{
-				{"rule_type": "BINARY", "identifier": strings.Repeat("5", 64), "severity": "medium"},
+				{"rule_type": "BINARY", "enforcement": "PROTECT", "identifier": strings.Repeat("5", 64), "severity": "medium"},
 			},
 			"reason": "x",
 		})
@@ -1296,7 +1305,7 @@ func TestAppControlREST_BulkUpsertRules_Idempotent(t *testing.T) {
 	policyID := r.defaultPolicyID(t)
 	batch := map[string]any{
 		"rules": []map[string]any{
-			{"rule_type": "BINARY", "identifier": strings.Repeat("6", 64), "severity": "medium"},
+			{"rule_type": "BINARY", "enforcement": "PROTECT", "identifier": strings.Repeat("6", 64), "severity": "medium"},
 		},
 		"reason": "first import",
 	}
@@ -1337,10 +1346,11 @@ func TestAppControlREST_ListRulesAcrossPolicies_HappyPath(t *testing.T) {
 		create := r.do(t, http.MethodPost,
 			"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 			map[string]any{
-				"rule_type":  rulesapi.RuleTypeBinary,
-				"identifier": ident,
-				"severity":   rulesapi.SeverityRuleHigh,
-				"reason":     "seed " + i64(int64(i)),
+				"rule_type":   rulesapi.RuleTypeBinary,
+				"enforcement": "PROTECT",
+				"identifier":  ident,
+				"severity":    rulesapi.SeverityRuleHigh,
+				"reason":      "seed " + i64(int64(i)),
 			})
 		require.Equal(t, http.StatusCreated, create.StatusCode)
 		create.Body.Close()
@@ -1370,8 +1380,14 @@ func TestAppControlREST_ListRulesAcrossPolicies_Filters(t *testing.T) {
 	policyID := r.defaultPolicyID(t)
 	// Seed: one BINARY high + one CDHASH medium so each filter dimension has a unique target.
 	for _, body := range []map[string]any{
-		{"rule_type": rulesapi.RuleTypeBinary, "identifier": strings.Repeat("a", 64), "severity": rulesapi.SeverityRuleHigh, "reason": "binary seed"},
-		{"rule_type": rulesapi.RuleTypeCDHash, "identifier": strings.Repeat("c", 40), "severity": rulesapi.SeverityRuleMedium, "reason": "cdhash seed"},
+		{
+			"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": strings.Repeat("a", 64),
+			"severity": rulesapi.SeverityRuleHigh, "reason": "binary seed",
+		},
+		{
+			"rule_type": rulesapi.RuleTypeCDHash, "enforcement": "PROTECT", "identifier": strings.Repeat("c", 40),
+			"severity": rulesapi.SeverityRuleMedium, "reason": "cdhash seed",
+		},
 	} {
 		create := r.do(t, http.MethodPost, "/api/v1/app-control/policies/"+i64(policyID)+"/rules", body)
 		require.Equal(t, http.StatusCreated, create.StatusCode)
@@ -1458,7 +1474,7 @@ func TestAppControlREST_ListRulesAcrossPolicies_Pagination(t *testing.T) {
 		create := r.do(t, http.MethodPost,
 			"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 			map[string]any{
-				"rule_type": rulesapi.RuleTypeBinary, "identifier": ident,
+				"rule_type": rulesapi.RuleTypeBinary, "enforcement": "PROTECT", "identifier": ident,
 				"severity": rulesapi.SeverityRuleHigh, "reason": "pagination seed",
 			})
 		require.Equal(t, http.StatusCreated, create.StatusCode)
@@ -1696,11 +1712,12 @@ func TestAppControlREST_ListPolicies_CarriesRuleCount(t *testing.T) {
 	create := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"severity":   "high",
-			"actor":      "tester",
-			"reason":     "pin the list rule count",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"severity":    "high",
+			"actor":       "tester",
+			"reason":      "pin the list rule count",
 		})
 	defer create.Body.Close()
 	require.Equal(t, http.StatusCreated, create.StatusCode)
@@ -1724,10 +1741,11 @@ func TestAppControlREST_GetRule(t *testing.T) {
 	create := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "single-rule read fixture",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "single-rule read fixture",
 		})
 	require.Equal(t, http.StatusCreated, create.StatusCode)
 	var created rulesapi.ApplicationControlRule
@@ -1791,10 +1809,11 @@ func TestAppControlREST_GetRule_ReadPermissionDenied(t *testing.T) {
 	create := r.do(t, http.MethodPost,
 		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
 		map[string]any{
-			"rule_type":  rulesapi.RuleTypeBinary,
-			"identifier": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-			"severity":   rulesapi.SeverityRuleHigh,
-			"reason":     "denied-read fixture",
+			"rule_type":   rulesapi.RuleTypeBinary,
+			"enforcement": "PROTECT",
+			"identifier":  "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			"severity":    rulesapi.SeverityRuleHigh,
+			"reason":      "denied-read fixture",
 		})
 	require.Equal(t, http.StatusCreated, create.StatusCode)
 	var created rulesapi.ApplicationControlRule

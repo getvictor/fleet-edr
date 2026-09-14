@@ -8,7 +8,7 @@ import (
 )
 
 // ApplicationControlWouldBlock is the built-in pass-through rule that turns an `application_control_would_block` ingest event into a
-// monitor record. The extension emits that event when an exec matched a BLOCK rule whose enforcement is DETECT, and let the exec run.
+// monitor record. The extension emits that event when the policy allowed an exec that matched a BLOCK rule whose enforcement is DETECT.
 //
 // It is ApplicationControlBlock's twin: the same payload, gate and subject process, so its findings carry the matched app-control
 // rule's id and severity and the matched identifier. What differs is where they land. The rule declares monitor as its default mode,
@@ -52,8 +52,8 @@ func (r *ApplicationControlWouldBlock) Techniques() []string { return []string{}
 func (r *ApplicationControlWouldBlock) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Keeps every exec a DETECT application-control rule would have blocked as a monitor record.",
-		Description: "When an exec matches a BLOCK rule whose enforcement is DETECT, and no PROTECT rule, the extension lets it run and " +
+		Summary: "Keeps each allowed exec a DETECT application-control rule matched as a monitor record.",
+		Description: "When the policy allows an exec that matches a BLOCK rule whose enforcement is DETECT, the extension " +
 			"emits an `application_control_would_block` event. This built-in rule keeps each one as a monitor record under the " +
 			"matched rule's id, with that rule's severity, so an operator can read what the rule matches before promoting it to " +
 			"PROTECT. Records deduplicate on the process, like any monitor record.",

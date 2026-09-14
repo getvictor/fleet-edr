@@ -101,7 +101,7 @@ build_target() {
 post_block_rule() {
   local rule_type="$1" identifier="$2" label="$3" rid
   rid=$(rest POST "/api/v1/app-control/policies/$POLICY_ID/rules" \
-    "{\"rule_type\":\"$rule_type\",\"identifier\":\"$identifier\",\"severity\":\"high\",\"custom_msg\":\"L5 app-control-block $label\",\"reason\":\"uat app-control $label coverage\"}" \
+    "{\"rule_type\":\"$rule_type\",\"identifier\":\"$identifier\",\"enforcement\":\"PROTECT\",\"severity\":\"high\",\"custom_msg\":\"L5 app-control-block $label\",\"reason\":\"uat app-control $label coverage\"}" \
     | jq -r '.id')
   [[ -n "$rid" && "$rid" != "null" ]] || uat_fail app-control-block "$label: rule create did not return an id"
   # NOTE: this runs in the command-substitution subshell of probe_block; the RULE_IDS append for cleanup is done by the

@@ -181,7 +181,8 @@ struct ApplicationControlUndecidedPayload: Codable, Sendable {
 }
 
 /// ApplicationControlBlockPayload is the wire shape of the event the extension emits when an AUTH_EXEC matches a rule:
-/// `application_control_block` when a PROTECT rule denied it, and `application_control_would_block` when a DETECT rule let it run.
+/// `application_control_block` when a PROTECT rule denied it, and `application_control_would_block` when the policy allowed it and
+/// a DETECT rule matched.
 /// The server's `application_control_block` catalog rule decodes this payload and maps it to an alert with
 /// `source='application_control'`. Field names match the Go decode struct in
 /// `server/rules/internal/catalog/application_control_block.go`.

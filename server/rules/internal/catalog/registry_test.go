@@ -196,7 +196,7 @@ func TestAll_NonDetectionClassification(t *testing.T) {
 	wantNonDetections := map[string]api.NonDetectionKind{
 		// The AUTH_EXEC walker already decided on the host; this renders that decision as an alert row.
 		"application_control_block": api.NonDetectionProjection,
-		// The same decision for a DETECT rule, which let the exec run; it is kept as a monitor record.
+		// The same match for a DETECT rule, on an exec the policy allowed; it is kept as a monitor record.
 		"application_control_would_block": api.NonDetectionProjection,
 		// Reports our own automatic repair giving up. Both documented causes are faults in our software.
 		"sensor_recovery_failed": api.NonDetectionHealth,

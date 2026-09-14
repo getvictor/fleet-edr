@@ -358,6 +358,7 @@ function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
         <tr>
           <th>Type</th>
           <th>Identifier</th>
+          <th>Enforcement</th>
           <th>Severity</th>
           <th>Custom message</th>
           <th>Last modified</th>
@@ -372,6 +373,13 @@ function RulesTable({ rules, onEdit, onToggle, onDelete }: RulesTableProps) {
             </td>
             <td title={rule.identifier} className="app-control__identifier">
               {truncateIdentifier(rule.identifier)}
+            </td>
+            <td>
+              {/* Detect reads differently from Protect at a glance: a Detect rule blocks nothing, which is the one fact an operator
+                  scanning the list most needs before assuming a binary is stopped. */}
+              <Badge variant={rule.enforcement === "DETECT" ? "neutral" : "info"}>
+                {rule.enforcement === "DETECT" ? "Detect" : "Protect"}
+              </Badge>
             </td>
             <td>
               <Badge variant={severityBadgeVariant(rule.severity)}>

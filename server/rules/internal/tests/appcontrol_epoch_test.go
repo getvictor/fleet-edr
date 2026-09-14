@@ -36,10 +36,12 @@ func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) { //n
 	require.NoError(t, err)
 	seeded, err := store.CreateRule(ctx, api.CreateRuleRequest{
 		PolicyID: policy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("1", 64), Actor: "usr_1", Reason: "fixture",
+		Enforcement: api.EnforcementProtect,
 	})
 	require.NoError(t, err)
 	toDelete, err := store.CreateRule(ctx, api.CreateRuleRequest{
 		PolicyID: policy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("2", 64), Actor: "usr_1", Reason: "fixture",
+		Enforcement: api.EnforcementProtect,
 	})
 	require.NoError(t, err)
 
@@ -52,6 +54,7 @@ func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) { //n
 		{"create rule", func(ctx context.Context) error {
 			_, err := store.CreateRule(ctx, api.CreateRuleRequest{
 				PolicyID: policy.ID, RuleType: api.RuleTypeBinary, Identifier: strings.Repeat("3", 64), Actor: "usr_1", Reason: "r",
+				Enforcement: api.EnforcementProtect,
 			})
 			return err
 		}},
@@ -66,7 +69,9 @@ func TestAppControl_PolicyEpochAdvancesWhenTheClockStepsBack(t *testing.T) { //n
 		{"bulk upsert", func(ctx context.Context) error {
 			_, err := store.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{
 				PolicyID: policy.ID, Actor: "usr_1", Reason: "r",
-				Items: []api.BulkUpsertRuleItem{{RuleType: api.RuleTypeTeamID, Identifier: "EQHXZ8M8AV"}},
+				Items: []api.BulkUpsertRuleItem{
+					{RuleType: api.RuleTypeTeamID, Enforcement: api.EnforcementProtect, Identifier: "EQHXZ8M8AV"},
+				},
 			})
 			return err
 		}},

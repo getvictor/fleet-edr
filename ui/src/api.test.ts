@@ -380,7 +380,7 @@ describe("unauthorized handler signalling", () => {
     stubFetch(null, 401);
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);
-    await expect(createAppControlRule(1, { rule_type: "team_id", identifier: "ABCDE12345", reason: "test" })).rejects.toBeInstanceOf(
+    await expect(createAppControlRule(1, { rule_type: "team_id", identifier: "ABCDE12345", enforcement: "PROTECT", reason: "test" })).rejects.toBeInstanceOf(
       Unauthorized401Error,
     );
     expect(onUnauthorized).toHaveBeenCalledTimes(1);

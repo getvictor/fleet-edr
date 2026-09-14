@@ -114,7 +114,7 @@ Tell an app-control DENY apart from an AMFI kill by the extension log line `AUTH
 
 ```sh
 curl -sk -X POST https://localhost:8088/api/v1/app-control/policies/1/rules -H "Cookie: edr_session=..." -H "X-Csrf-Token: ..." \
-  --data '{"rule_type":"CDHASH","identifier":"<cdhash>","reason":"RC QA"}'
+  --data '{"rule_type":"CDHASH","identifier":"<cdhash>","enforcement":"PROTECT","reason":"RC QA"}'
 ```
 
 Adding a rule bumps the policy version and fans out a `set_application_control` command. Watch `commander set_application_control ... policy_version=N` in the agent log and `applied app control snapshot: ... version=N ... rules=K` in the extension log to confirm propagation.

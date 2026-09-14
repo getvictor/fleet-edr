@@ -360,7 +360,7 @@
       }
     },
     "application_control_would_block_payload": {
-      "description": "Emitted when AUTH_EXEC matched a BLOCK rule whose enforcement is DETECT and no PROTECT rule, so the exec ran. The shape is the application_control_block payload's: identifier is the value that matched the DETECT rule.",
+      "description": "Emitted when AUTH_EXEC matched a BLOCK rule whose enforcement is DETECT and the policy allowed the exec, so it ran. The shape is the application_control_block payload's: identifier is the value that matched the DETECT rule.",
       "$ref": "#/definitions/application_control_block_payload"
     },
     "application_control_undecided_payload": {

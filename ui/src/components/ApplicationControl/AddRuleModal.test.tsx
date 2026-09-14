@@ -70,7 +70,7 @@ describe("AddRuleModal", () => {
   });
 
   // spec:web-ui/add-rule-modal-validates-the-identifier-for-its-type/submission-is-blocked-until-an-audit-reason-is-entered
-  it("disables Save until both identifier and reason are populated", () => {
+  it("disables Save until identifier, enforcement and reason are all set", () => {
     render(
       <AddRuleModal
         open
@@ -88,6 +88,8 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: "demo" },
     });
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     expect(save).not.toBeDisabled();
   });
 
@@ -107,6 +109,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: "demo" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/BINARY identifier/i);
@@ -136,6 +139,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: "demo" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/64 hex characters/i);
@@ -172,6 +176,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: "uppercase normalisation" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalled();
@@ -200,6 +205,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/more info url/i), {
       target: { value: "javascript:alert(1)" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/http or https/i);
@@ -230,6 +236,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/custom message/i), {
       target: { value: "Blocked by corp policy" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalledTimes(1);
@@ -264,6 +271,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: "demo" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/already exists/i);
@@ -288,10 +296,36 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: "demo" },
     });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/server message/i);
     });
+  });
+
+  // spec:web-ui/rule-forms-require-an-enforcement-choice/neither-enforcement-is-preselected
+  it("preselects neither enforcement, sends the one chosen, and clears it on reopen", async () => {
+    const createSpy = vi.spyOn(api, "createAppControlRule").mockResolvedValue(makeRule({ enforcement: "DETECT" }));
+    const { rerender } = render(
+      <AddRuleModal open policyID={3} onClose={() => undefined} onCreated={() => undefined} />,
+    );
+    const detect = screen.getByRole("radio", { name: /detect/i });
+    const protect = screen.getByRole("radio", { name: /protect/i });
+    expect(detect).not.toBeChecked();
+    expect(protect).not.toBeChecked();
+
+    fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "e".repeat(64) } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "watch before blocking" } });
+    fireEvent.click(detect);
+    fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(3, expect.objectContaining({ enforcement: "DETECT" }));
+    });
+
+    rerender(<AddRuleModal open={false} policyID={3} onClose={() => undefined} onCreated={() => undefined} />);
+    rerender(<AddRuleModal open policyID={3} onClose={() => undefined} onCreated={() => undefined} />);
+    expect(screen.getByRole("radio", { name: /detect/i })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /save rule/i })).toBeDisabled();
   });
 
   it("invokes onClose when the Cancel button is clicked", () => {
@@ -318,6 +352,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "TEAMID" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "EQHXZ8M8AV" } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block this team" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
@@ -335,6 +370,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "TEAMID" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "eqhxz8m8av" } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/TEAMID must be 10 uppercase/i);
@@ -352,6 +388,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "CDHASH" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "C".repeat(40) } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block this CDHash" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       // CDHASH identifiers normalize to lowercase before submission.
@@ -374,6 +411,7 @@ describe("AddRuleModal", () => {
       target: { value: "EQHXZ8M8AV:com.google.Chrome" },
     });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block chrome" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
@@ -395,6 +433,7 @@ describe("AddRuleModal", () => {
       target: { value: "platform:com.apple.curl" },
     });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block platform curl" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
@@ -414,6 +453,7 @@ describe("AddRuleModal", () => {
       target: { value: "EQHXZ8M8AVcom.google.Chrome" },
     });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/SIGNINGID must look like/i);
@@ -445,6 +485,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "CERTIFICATE" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "D".repeat(64) } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "revoked leaf cert" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       // CERTIFICATE shares BINARY's 64-hex shape and normalizes to lowercase before submission.
@@ -463,6 +504,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "CERTIFICATE" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "abc123" } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/CERTIFICATE identifier must be 64 hex/i);
@@ -481,6 +523,7 @@ describe("AddRuleModal", () => {
     // The client sends the operator's literal absolute path; the server's NormalizeIdentifier canonicalizes /tmp -> /private/tmp.
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "/tmp/dropper" } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "block dropper path" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalledWith(1, expect.objectContaining({
@@ -498,6 +541,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "PATH" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "usr/local/bin/foo" } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/PATH must be an absolute path/i);
@@ -513,6 +557,7 @@ describe("AddRuleModal", () => {
     fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "PATH" } });
     fireEvent.change(screen.getByLabelText(/identifier/i), { target: { value: "/var/foo/../../etc/sudoers" } });
     fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("radio", { name: /protect/i }));
     fireEvent.click(screen.getByRole("button", { name: /save rule/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/must not contain `\.\.`/i);

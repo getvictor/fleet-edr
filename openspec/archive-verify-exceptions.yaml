@@ -61,13 +61,13 @@
   covered_by: extension-application-control/precedence-walk
   reason: >-
     Intact; the archived restatement is the stale side. It lists CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH, while
-    canonical and AuthExecDecider.matchLowerLayers both put CERTIFICATE before SIGNINGID.
+    canonical and AuthExecDecider.evaluateAuthExec both put CERTIFICATE before SIGNINGID.
 
 - requirement: extension-application-control/deadline-fallback-posture
   covered_by: extension-application-control/deadline-fallback-posture
   reason: >-
     Intact; the archived restatement is the stale side. It says the BINARY layer's uncertainty dominates anything the lower
-    layers would say, while canonical and decideAuthExec both consult every lower layer first so a definitive lower-precedence
+    layers would say, while canonical and evaluateAuthExec both consult every lower layer first so a definitive lower-precedence
     DENY wins.
 
 - requirement: extension-application-control/lazy-signing-info-fetch-is-non-blocking
@@ -193,49 +193,64 @@
 
 # ---------------------------------------------------------------------------------------------------------------------------
 # Application control Detect mode: 2026-06-02-add-application-control-detect-mode specified an enforcement mode that was
-# archived and never built. Verified rather than assumed: `would_block` and a `DETECT` enforcement value appear nowhere in
-# server/, the UI has no enforcement selector, no promote-to-protect action and no subtype chip, and ui/src/api.ts still
-# describes the field in the future tense ("Phase B's Detect-mode change will layer an `enforcement` field").
+# archived and never built. #929 is building it now, as the in-flight change `application-control-detect-mode`, with two
+# deliberate departures from the archived text: would-block matches are kept as monitor records rather than alerts with a
+# subtype, and a new rule's enforcement is a required choice rather than defaulting to DETECT.
 #
-# Restoring any of these would put requirements in the canonical tree for behaviour the product does not have, which breaks
-# the traceability gate (nothing to test) and is how a spec stops being trusted. Tracked as a feature instead.
+# These entries stay tracked_by until that change is archived: covered_by must name a canonical requirement, and the new
+# requirements are not canonical yet. At the archive, each entry below moves to covered_by its replacement or is removed
+# with the departure recorded, as its reason says.
 # ---------------------------------------------------------------------------------------------------------------------------
 
 - requirement: server-application-control/default-detect-on-rule-creation
   tracked_by: "#929"
-  reason: New rules defaulting to DETECT is part of the unbuilt Detect mode.
+  reason: >-
+    Replaced by a required choice: application-control-detect-mode requires every new rule to name its enforcement, with no
+    default (server-application-control "Rule enforcement is required and changeable").
 
 - requirement: server-application-control/patch-endpoint-for-rule-enforcement-change
   tracked_by: "#929"
-  reason: The PATCH endpoint that promotes a rule to PROTECT is part of the unbuilt Detect mode.
+  reason: >-
+    Built in application-control-detect-mode (server-application-control "Rule enforcement is required and changeable");
+    moves to covered_by at its archive.
 
 - requirement: server-application-control/per-rule-enforcement-detect-honors-a-log-only-contract
   tracked_by: "#929"
-  reason: The log-only enforcement contract is the core of the unbuilt Detect mode.
+  reason: >-
+    Built in application-control-detect-mode (extension-application-control "Detect-mode rules report would-block matches");
+    moves to covered_by at its archive.
 
 - requirement: server-detection-rules-engine/alert-subtype-distinguishes-block-from-would-block
   tracked_by: "#929"
-  reason: Alert subtypes exist only under the unbuilt Detect mode; no subtype is persisted or served.
+  reason: >-
+    Replaced: application-control-detect-mode keeps would-block matches as monitor records, not alerts with a subtype, so no
+    subtype is persisted.
 
 - requirement: server-detection-rules-engine/would-block-events-map-to-alerts-with-subtype-would-block
   tracked_by: "#929"
-  reason: "There is no would-block event to map: the endpoint never emits one."
+  reason: >-
+    Replaced: application-control-detect-mode maps would-block events to monitor records (server-detection-rules-engine
+    "Registered rule catalog").
 
 - requirement: web-ui/add-rule-modal-carries-an-enforcement-selector
   tracked_by: "#929"
-  reason: The add-rule modal has no enforcement control, because there is no enforcement mode to select.
+  reason: >-
+    Built in application-control-detect-mode (web-ui "Rule forms require an enforcement choice"); moves to covered_by at its
+    archive.
 
 - requirement: web-ui/alerts-list-distinguishes-block-vs-would-block-subtypes
   tracked_by: "#929"
-  reason: The alerts list renders no subtype chip; nothing carries a subtype.
+  reason: Replaced by monitor records, which the alerts list does not show; nothing carries a subtype.
 
 - requirement: web-ui/alerts-list-filters-by-subtype
   tracked_by: "#929"
-  reason: The alerts list has no subtype filter, for the same reason.
+  reason: Replaced by monitor records, for the same reason.
 
 - requirement: web-ui/policy-detail-surfaces-enforcement-and-offers-promote-to-protect
   tracked_by: "#929"
-  reason: The policy detail shows no enforcement column and offers no promote action.
+  reason: >-
+    Partly built in application-control-detect-mode: the policy page shows each rule's enforcement (web-ui "The policy rules
+    table shows each rule's enforcement"); promoting from the page is the change's remaining step.
 
 # ---------------------------------------------------------------------------------------------------------------------------
 # Text that differs from the archived restatement only because the canonical tree was edited AFTER archiving, by a rename or

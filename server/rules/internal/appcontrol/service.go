@@ -408,6 +408,7 @@ func (s *Service) emitAudit(
 		"rule_type":      string(rule.RuleType),
 		"identifier":     rule.Identifier,
 		"severity":       string(rule.Severity),
+		"enforcement":    string(rule.Enforcement),
 		"reason":         req.Reason,
 		"fanout_hosts":   fanoutHosts,
 		"fanout_failed":  fanoutFailed,
@@ -535,8 +536,8 @@ type ruleMutationAuditArgs struct {
 }
 
 // recordRuleMutationAudit is the per-op audit emitter for rule mutations (update + delete). Payload shape matches the create
-// flow's so SIEM dashboards can filter on the same key set across all three actions. Takes a struct (S107) so adding new fields
-// in Phase B's Detect-mode change (e.g. enforcement_before / enforcement_after) doesn't extend a positional argument list.
+// flow's so SIEM dashboards can filter on the same key set across all three actions. Takes a struct (S107) so a new field doesn't
+// extend a positional argument list.
 func (s *Service) recordRuleMutationAudit(ctx context.Context, args ruleMutationAuditArgs) {
 	payload := map[string]any{
 		"policy_id":      args.Rule.PolicyID,
@@ -544,6 +545,7 @@ func (s *Service) recordRuleMutationAudit(ctx context.Context, args ruleMutation
 		"rule_type":      string(args.Rule.RuleType),
 		"identifier":     args.Rule.Identifier,
 		"severity":       string(args.Rule.Severity),
+		"enforcement":    string(args.Rule.Enforcement),
 		"reason":         args.Reason,
 		"fanout_hosts":   args.FanoutHosts,
 		"fanout_failed":  args.FanoutFailed,
@@ -688,7 +690,19 @@ type bulkUpsertAuditArgs struct {
 // contained. Payload shape adds rules_inserted + rules_updated + rules_total alongside the fan-out fields so the SIEM can
 // answer "how many rules did this import affect" without per-row joins.
 func (s *Service) recordBulkUpsertAudit(ctx context.Context, args bulkUpsertAuditArgs) {
+	// The enforcement the batch applied, counted, because a bulk upsert can set or change it on every rule it names and the single
+	// event would otherwise not say which way the batch moved them. Counted from the request's items, which are what the batch wrote.
+	var protect, detect int
+	for _, item := range args.Req.Items {
+		if item.Enforcement == api.EnforcementDetect {
+			detect++
+		} else {
+			protect++
+		}
+	}
 	payload := map[string]any{
+		"rules_protect":  protect,
+		"rules_detect":   detect,
 		"policy_id":      args.Req.PolicyID,
 		"policy_version": args.PolicyVersion,
 		"rules_inserted": args.Result.Inserted,

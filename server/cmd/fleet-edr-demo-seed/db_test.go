@@ -793,6 +793,16 @@ func TestSeedAppControlRule_BumpsThePolicyVersionOnceRuleActuallyChanges(t *test
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID).Scan(&count))
 	assert.Equal(t, 1, count, "and must not duplicate the rule")
+
+	// A rule an operator moved to Detect is put back to Protect, because the seeded alert reports a block.
+	_, err = db.ExecContext(ctx, `UPDATE app_control_rules SET enforcement = 'DETECT' WHERE policy_id = ?`, appControlPolicyID)
+	require.NoError(t, err)
+	_, err = seedAppControlRule(ctx, db, discardLogger())
+	require.NoError(t, err)
+	var enforcement string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT enforcement FROM app_control_rules WHERE policy_id = ?`, appControlPolicyID).Scan(&enforcement))
+	assert.Equal(t, "PROTECT", enforcement, "a re-seed restores the enforcement the fabricated block needs")
 }
 
 // A rule hung off a policy id nothing else knows about would recreate the same disconnect one level down, so the seeder does

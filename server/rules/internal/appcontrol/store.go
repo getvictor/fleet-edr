@@ -432,6 +432,9 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	if err := ValidateSeverity(req.Severity); err != nil {
 		return api.ApplicationControlRule{}, err
 	}
+	if err := ValidateEnforcement(req.Enforcement); err != nil {
+		return api.ApplicationControlRule{}, err
+	}
 	severity := req.Severity
 	if severity == "" {
 		severity = api.SeverityRuleMedium
@@ -454,9 +457,9 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 
 	const insert = `INSERT INTO app_control_rules
 		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
-		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?, ?, ?)`
+		VALUES (?, ?, ?, 'BLOCK', ?, 1, ?, 'admin', ?, ?, ?, ?)`
 	res, err := tx.ExecContext(ctx, insert,
-		req.PolicyID, req.RuleType, persistIdentifier, severity,
+		req.PolicyID, req.RuleType, persistIdentifier, req.Enforcement, severity,
 		req.CustomMsg, req.CustomURL, req.Comment, req.Actor,
 	)
 	if err != nil {
@@ -504,8 +507,8 @@ func (s *Store) GetRuleByID(ctx context.Context, id int64) (api.ApplicationContr
 // Returns (clauseFragment, args, ok); ok is false when the caller sent zero mutable fields. The caller maps that to
 // ErrAppControlInvalidRequest at the top level.
 func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
-	setClauses := make([]string, 0, 6)
-	args := make([]any, 0, 7)
+	setClauses := make([]string, 0, 7)
+	args := make([]any, 0, 8)
 	if req.Enabled != nil {
 		setClauses = append(setClauses, "enabled = ?")
 		enabledInt := 0
@@ -517,6 +520,10 @@ func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
 	if req.Severity != nil {
 		setClauses = append(setClauses, "severity = ?")
 		args = append(args, *req.Severity)
+	}
+	if req.Enforcement != nil {
+		setClauses = append(setClauses, "enforcement = ?")
+		args = append(args, *req.Enforcement)
 	}
 	if req.CustomMsg != nil {
 		setClauses = append(setClauses, "custom_msg = ?")
@@ -540,8 +547,8 @@ func buildRuleUpdateSetClause(req api.UpdateRuleRequest) (string, []any, bool) {
 	return strings.Join(setClauses, ", "), args, true
 }
 
-// validateUpdateRuleRequest covers the up-front guards: actor + reason required, severity (if present) must be a non-empty
-// enum value. Extracted so UpdateRule's body stays linear and Sonar's cognitive-complexity rule (S3776) does not fire.
+// validateUpdateRuleRequest covers the up-front guards: actor + reason required, severity and enforcement (if present) must be
+// non-empty enum values. Extracted so UpdateRule's body stays linear and Sonar's cognitive-complexity rule (S3776) does not fire.
 func validateUpdateRuleRequest(req api.UpdateRuleRequest) error {
 	if strings.TrimSpace(req.Actor) == "" {
 		return fmt.Errorf(errActorRequiredFmt, api.ErrAppControlInvalidRequest)
@@ -556,6 +563,11 @@ func validateUpdateRuleRequest(req api.UpdateRuleRequest) error {
 		// ValidateSeverity accepts "" as "use default"; on UPDATE the operator must send a concrete value or omit the field.
 		if strings.TrimSpace(string(*req.Severity)) == "" {
 			return fmt.Errorf("%w: severity must be a non-empty enum value when present on a PATCH", api.ErrAppControlInvalidSeverity)
+		}
+	}
+	if req.Enforcement != nil {
+		if err := ValidateEnforcement(*req.Enforcement); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -913,11 +925,8 @@ func normalizeBulkUpsertItems(items []api.BulkUpsertRuleItem) ([]api.BulkUpsertR
 	return out, nil
 }
 
-// validateBulkUpsertItems runs the per-item shape checks AND the in-batch duplicate-key guard. CodeRabbit on PR #190 flagged a
-// duplicate key in the same batch as a count-correctness bug: without this guard, the second occurrence of the same
-// (rule_type, identifier) tuple would be classified as Insert because the preflight only sees pre-batch state.
+// validateBulkUpsertItems runs the per-item shape checks.
 func validateBulkUpsertItems(items []api.BulkUpsertRuleItem) error {
-	seen := make(map[string]int, len(items))
 	for i, item := range items {
 		if err := ValidateRuleType(item.RuleType); err != nil {
 			return fmt.Errorf(errBulkItemFmt, i, err)
@@ -928,6 +937,21 @@ func validateBulkUpsertItems(items []api.BulkUpsertRuleItem) error {
 		if err := ValidateSeverity(item.Severity); err != nil {
 			return fmt.Errorf(errBulkItemFmt, i, err)
 		}
+		if err := ValidateEnforcement(item.Enforcement); err != nil {
+			return fmt.Errorf(errBulkItemFmt, i, err)
+		}
+	}
+	return nil
+}
+
+// rejectDuplicateBulkKeys is the in-batch duplicate-key guard, run on canonical identifiers. CodeRabbit on PR #190 flagged a
+// duplicate key in the same batch as a count-correctness bug: without this guard, the second occurrence of the same
+// (rule_type, identifier) tuple would be classified as Insert because the preflight only sees pre-batch state. It runs after
+// PATH canonicalisation because two spellings of one path (`/tmp/foo` and `/private/tmp/foo`) are one rule: the upsert would
+// otherwise apply both, and the later item would silently overwrite the earlier one's enforcement and severity.
+func rejectDuplicateBulkKeys(items []api.BulkUpsertRuleItem) error {
+	seen := make(map[string]int, len(items))
+	for i, item := range items {
 		key := bulkItemKey(item.RuleType, item.Identifier)
 		if prev, dup := seen[key]; dup {
 			return fmt.Errorf("%w: bulk item %d duplicates the (rule_type, identifier) of item %d",
@@ -994,7 +1018,7 @@ func (s *Store) collectExistingBulkKeys(ctx context.Context, tx *sqlx.Tx, policy
 
 // fetchBulkUpsertRows is the single-SELECT post-state fetch that replaces the previous N×SELECT refetch loop (Gemini HIGH on
 // PR #190). Returns the rules indexed by (rule_type, identifier) key so the caller can re-order them to the request's order.
-func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items []api.BulkUpsertRuleItem) (map[string]api.ApplicationControlRule, error) {
+func (s *Store) fetchBulkUpsertRows(ctx context.Context, tx *sqlx.Tx, policyID int64, items []api.BulkUpsertRuleItem) (map[string]api.ApplicationControlRule, error) {
 	if len(items) == 0 {
 		return map[string]api.ApplicationControlRule{}, nil
 	}
@@ -1010,7 +1034,7 @@ func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items [
 		created_at, updated_at, created_by
 		FROM app_control_rules
 		WHERE policy_id = ? AND (rule_type, identifier) IN (` + strings.Join(placeholders, ", ") + ")"
-	rows, err := s.db.QueryxContext(ctx, query, args...)
+	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol bulk upsert: refetch: %w", err)
 	}
@@ -1042,7 +1066,9 @@ func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items [
 //
 // Insert/update classification snapshots the existing (policy_id, rule_type, identifier) keys with one SELECT inside the
 // same txn (no N×SELECT preflight), then classifies each item by checking the snapshot. The post-state row set is fetched
-// with one SELECT after commit (no N×SELECT refetch); rows are returned in the original request order.
+// with one SELECT in the same txn before commit (no N×SELECT refetch), so a failed read rolls the batch back rather than
+// reporting an error for a change already committed, which the service would then neither fan out nor audit. Rows are returned
+// in the original request order.
 func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequest) (api.BulkUpsertResult, error) {
 	if err := validateBulkUpsertRequest(req); err != nil {
 		return api.BulkUpsertResult{}, err
@@ -1054,10 +1080,12 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 	// matches what the extension's AUTH_EXEC walker computes from the exec target's path. Without this, a paste-many import
 	// of `/tmp/foo` lands as `/tmp/foo` in the DB but the extension queries `/private/tmp/foo` and the rule silently never
 	// fires (Gemini PR #290). Replaces both req.Items + the working slice so collectExistingBulkKeys + the INSERT loop both
-	// see canonical identifiers; the in-batch duplicate guard already ran on raw input so two canonical-form duplicates
-	// (e.g. `/tmp/foo` and `/private/tmp/foo` pasted in the same batch) collide as expected at the DB unique-key gate.
+	// see canonical identifiers, and so the duplicate guard below treats two spellings of one path as the same rule.
 	normalized, err := normalizeBulkUpsertItems(req.Items)
 	if err != nil {
+		return api.BulkUpsertResult{}, err
+	}
+	if err := rejectDuplicateBulkKeys(normalized); err != nil {
 		return api.BulkUpsertResult{}, err
 	}
 	req.Items = normalized
@@ -1088,8 +1116,9 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 
 	const upsert = `INSERT INTO app_control_rules
 		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
-		VALUES (?, ?, ?, 'BLOCK', 'PROTECT', 1, ?, 'admin', ?, ?, ?, ?)
+		VALUES (?, ?, ?, 'BLOCK', ?, 1, ?, 'admin', ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
+			enforcement = VALUES(enforcement),
 			severity = VALUES(severity),
 			custom_msg = VALUES(custom_msg),
 			custom_url = VALUES(custom_url),
@@ -1102,7 +1131,7 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 			severity = api.SeverityRuleMedium
 		}
 		if _, err := tx.ExecContext(ctx, upsert,
-			req.PolicyID, item.RuleType, item.Identifier, severity,
+			req.PolicyID, item.RuleType, item.Identifier, item.Enforcement, severity,
 			item.CustomMsg, item.CustomURL, item.Comment, req.Actor,
 		); err != nil {
 			if isForeignKeyViolation(err) {
@@ -1121,13 +1150,10 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 		req.Actor, req.PolicyID); err != nil {
 		return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: bump policy version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return api.BulkUpsertResult{}, fmt.Errorf(errCommitTxFmt, err)
-	}
 
 	// Post-upsert state: one SELECT replaces the N×SELECT refetch. Build the response in the original request order so
 	// indexable consumers (paste-many UI showing line-by-line) line up with the operator's input.
-	postMap, err := s.fetchBulkUpsertRows(ctx, req.PolicyID, req.Items)
+	postMap, err := s.fetchBulkUpsertRows(ctx, tx, req.PolicyID, req.Items)
 	if err != nil {
 		return api.BulkUpsertResult{}, err
 	}
@@ -1138,6 +1164,9 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 			return api.BulkUpsertResult{}, fmt.Errorf("appcontrol bulk upsert: refetch missed key %s/%s", item.RuleType, item.Identifier)
 		}
 		rules = append(rules, rule)
+	}
+	if err := tx.Commit(); err != nil {
+		return api.BulkUpsertResult{}, fmt.Errorf(errCommitTxFmt, err)
 	}
 	return api.BulkUpsertResult{Inserted: inserted, Updated: updated, Rules: rules}, nil
 }

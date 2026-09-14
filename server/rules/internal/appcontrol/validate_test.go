@@ -227,3 +227,31 @@ func TestValidateSeverity(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEnforcement(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		e    api.Enforcement
+		ok   bool
+	}{
+		{"empty rejected (no default)", "", false},
+		{"protect ok", api.EnforcementProtect, true},
+		{"detect ok", api.EnforcementDetect, true},
+		{"unknown rejected", api.Enforcement("AUDIT"), false},
+		{"lowercase rejected", api.Enforcement("detect"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := appcontrol.ValidateEnforcement(tc.e)
+			if tc.ok {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.ErrorIs(t, err, api.ErrAppControlInvalidEnforcement)
+			assert.True(t, api.IsApplicationControlValidationError(err), "the REST handlers map it to 400")
+		})
+	}
+}

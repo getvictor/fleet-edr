@@ -71,6 +71,7 @@ describe("createAppControlRule", () => {
     const got = await createAppControlRule(1, {
       rule_type: "BINARY",
       identifier: "a".repeat(64),
+      enforcement: "PROTECT",
       reason: "demo",
     });
     expect(got).toMatchObject({ id: 99 });
@@ -83,6 +84,7 @@ describe("createAppControlRule", () => {
       createAppControlRule(1, {
         rule_type: "BINARY",
         identifier: "a".repeat(64),
+        enforcement: "PROTECT",
         reason: "demo",
       }),
     ).rejects.toBeInstanceOf(Unauthorized401Error);
@@ -98,6 +100,7 @@ describe("createAppControlRule", () => {
       await createAppControlRule(1, {
         rule_type: "BINARY",
         identifier: "a".repeat(64),
+        enforcement: "PROTECT",
         reason: "demo",
       });
       throw new Error("should have thrown");
@@ -117,6 +120,7 @@ describe("createAppControlRule", () => {
       createAppControlRule(1, {
         rule_type: "BINARY",
         identifier: "a".repeat(64),
+        enforcement: "PROTECT",
         reason: "demo",
       }),
     ).rejects.toThrow(/API error/);
@@ -218,9 +222,9 @@ describe("bulkUpsertAppControlRules", () => {
     const fetchMock = mockFetch(fakeResult, 200);
     const got = await bulkUpsertAppControlRules(7, {
       rules: [
-        { rule_type: "BINARY", identifier: "a".repeat(64) },
-        { rule_type: "BINARY", identifier: "b".repeat(64) },
-        { rule_type: "TEAMID", identifier: "EQHXZ8M8AV" },
+        { rule_type: "BINARY", identifier: "a".repeat(64), enforcement: "PROTECT" },
+        { rule_type: "BINARY", identifier: "b".repeat(64), enforcement: "PROTECT" },
+        { rule_type: "TEAMID", identifier: "EQHXZ8M8AV", enforcement: "PROTECT" },
       ],
       reason: "import from spreadsheet",
     });
@@ -245,7 +249,7 @@ describe("bulkUpsertAppControlRules", () => {
     try {
       await bulkUpsertAppControlRules(1, {
         rules: [
-          { rule_type: "BINARY", identifier: "not-hex" },
+          { rule_type: "BINARY", identifier: "not-hex", enforcement: "PROTECT" },
         ],
         reason: "x",
       });

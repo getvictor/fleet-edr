@@ -379,12 +379,22 @@ If a host has been offline for >30 days and you expect it to be permanently gone
 
 ## Application control
 
-Application Control enforces operator-managed policies (named, versioned, audited) containing typed rules. The AUTH_EXEC handler in the system extension consults the active snapshot on every exec and denies the first matching rule with `action=BLOCK` and `enforcement=PROTECT`. Precedence is CDHASH → BINARY → SIGNINGID → TEAMID. CERTIFICATE and PATH rules are accepted by the REST surface but not yet enforced by the extension.
+Application Control enforces operator-managed policies (named, versioned, audited) containing typed rules. The AUTH_EXEC handler in the system extension consults the active snapshot on every exec and denies the first matching rule with `action=BLOCK` and `enforcement=PROTECT`. Precedence is CDHASH → BINARY → CERTIFICATE → SIGNINGID → TEAMID → PATH.
 
 Two unconditional carve-outs run before any rule:
 
 1. **Platform-binary carve-out.** If the kernel sets `target.is_platform_binary` (launchd, xpcproxy, fseventsd, kextd, sysextd, WindowServer, etc.) the handler returns ALLOW with the kernel cache pinned. An admin who pastes the SHA-256 of `/sbin/launchd` into a BINARY rule will NOT brick the host: the carve-out fires before the snapshot walk.
 2. **Self-allow failsafe.** The agent / extensions / host app (matched by both Fleet's team_id and the exhaustive Fleet bundle-id allowlist) ALLOW unconditionally. A misconfigured rule cannot block the EDR itself.
+
+### Detect mode
+
+A rule's `enforcement` is `PROTECT` or `DETECT`. A `DETECT` rule does not block what it matches: when the exec runs, the host reports the match, which the server keeps as a monitor record under the rule's id (`app_control:<id>`) with the rule's severity. Use it to see what a rule would block before it blocks anything, then promote the rule to `PROTECT`.
+
+- **A `DETECT` rule never weakens enforcement.** The verdict for an exec is the one the policy reaches without its `DETECT` rules, so a `PROTECT` rule anywhere in the precedence order still blocks, and the deadline-fallback posture below still applies. An exec that is blocked records no would-block match.
+- **Every matching exec is reported.** An allow that matched a `DETECT` rule is not cached by the kernel, so each exec of the binary is evaluated and reported again. Records deduplicate on the process and age out like any [monitor record](#monitor-records).
+- **The records are not alerts.** They stay out of the alert queue and webhook deliveries, like the monitor records of detection rules. There is no desktop notification on the Mac, since nothing was blocked.
+
+Every rule names its enforcement; there is no default. Choose it in the **Add rule** and **Paste many** dialogs, or send `enforcement` when you create rules through the API (`POST /api/v1/app-control/policies/{id}/rules`, and on each item of `rules:bulkUpsert`). A request without it is refused with a 400. Change it with `PATCH /api/v1/app-control/rules/{id}` and a `reason`; re-upserting a rule also updates it. The change is audited and reaches hosts like any other rule change.
 
 ### BINARY rules and the deadline-fallback posture
 

@@ -177,13 +177,14 @@ func (h *AppControlHandler) handleGetPolicy(w http.ResponseWriter, r *http.Reque
 // fields (PolicyID comes from the URL, Actor from the actor on ctx). Keeping the JSON struct local to the handler so the public
 // api.CreateRule Request stays a pure server-internal contract that catalog tests keep using without HTTP scaffolding.
 type createRuleRequest struct {
-	RuleType   api.RuleType `json:"rule_type"`
-	Identifier string       `json:"identifier"`
-	CustomMsg  *string      `json:"custom_msg,omitempty"`
-	CustomURL  *string      `json:"custom_url,omitempty"`
-	Comment    string       `json:"comment,omitempty"`
-	Severity   api.Severity `json:"severity,omitempty"`
-	Reason     string       `json:"reason"`
+	RuleType    api.RuleType    `json:"rule_type"`
+	Identifier  string          `json:"identifier"`
+	Enforcement api.Enforcement `json:"enforcement"`
+	CustomMsg   *string         `json:"custom_msg,omitempty"`
+	CustomURL   *string         `json:"custom_url,omitempty"`
+	Comment     string          `json:"comment,omitempty"`
+	Severity    api.Severity    `json:"severity,omitempty"`
+	Reason      string          `json:"reason"`
 }
 
 func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Request) {
@@ -212,15 +213,16 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rule, err := h.svc.CreateRule(ctx, api.CreateRuleRequest{
-		PolicyID:   policyID,
-		RuleType:   req.RuleType,
-		Identifier: req.Identifier,
-		CustomMsg:  req.CustomMsg,
-		CustomURL:  req.CustomURL,
-		Comment:    req.Comment,
-		Severity:   req.Severity,
-		Actor:      actorIdentifierFromContext(ctx),
-		Reason:     req.Reason,
+		PolicyID:    policyID,
+		RuleType:    req.RuleType,
+		Identifier:  req.Identifier,
+		Enforcement: req.Enforcement,
+		CustomMsg:   req.CustomMsg,
+		CustomURL:   req.CustomURL,
+		Comment:     req.Comment,
+		Severity:    req.Severity,
+		Actor:       actorIdentifierFromContext(ctx),
+		Reason:      req.Reason,
 	}, actor)
 	if err != nil {
 		h.writeCreateRuleError(ctx, w, err, policyID)
@@ -280,17 +282,19 @@ func (h *AppControlHandler) writePolicyMutationError(ctx context.Context, w http
 	}
 }
 
-// updateRuleRequest is the PATCH wire shape. Every mutable field is a pointer so a JSON omit / null is distinguishable from an
-// explicit zero (e.g. clearing custom_msg by sending ""). Phase B's Detect-mode change layers an Enforcement field on top of this
-// struct; for Phase A the field is unsupported (the schema column carries it, the handler doesn't accept it).
+// updateRuleRequest is the PATCH wire shape. Every mutable field is a pointer so an omitted field (nil) is distinguishable from an
+// explicit zero (e.g. clearing custom_msg by sending ""); encoding/json also decodes an explicit null to nil. Enforcement is the
+// exception: it records that the field was present, so an explicit null is refused like any other value that is not PROTECT or
+// DETECT rather than read as "leave it unchanged".
 type updateRuleRequest struct {
-	Enabled   *bool         `json:"enabled,omitempty"`
-	Severity  *api.Severity `json:"severity,omitempty"`
-	CustomMsg *string       `json:"custom_msg,omitempty"`
-	CustomURL *string       `json:"custom_url,omitempty"`
-	Comment   *string       `json:"comment,omitempty"`
-	ExpiresAt *time.Time    `json:"expires_at,omitempty"`
-	Reason    string        `json:"reason"`
+	Enabled     *bool              `json:"enabled,omitempty"`
+	Severity    *api.Severity      `json:"severity,omitempty"`
+	Enforcement presentEnforcement `json:"enforcement"`
+	CustomMsg   *string            `json:"custom_msg,omitempty"`
+	CustomURL   *string            `json:"custom_url,omitempty"`
+	Comment     *string            `json:"comment,omitempty"`
+	ExpiresAt   *time.Time         `json:"expires_at,omitempty"`
+	Reason      string             `json:"reason"`
 }
 
 // handleGetRule serves GET /api/v1/app-control/rules/{id}: one rule, including the policy that owns it.
@@ -323,6 +327,33 @@ func (h *AppControlHandler) handleGetRule(w http.ResponseWriter, r *http.Request
 	writeJSON(ctx, h.logger, w, http.StatusOK, rule)
 }
 
+// presentEnforcement is a PATCH enforcement field that remembers whether the request carried it. UnmarshalJSON runs only for a
+// field that is present, including an explicit null, so an absent field stays unset.
+type presentEnforcement struct {
+	present bool
+	raw     api.Enforcement
+}
+
+func (e *presentEnforcement) UnmarshalJSON(data []byte) error {
+	e.present = true
+	// Reset first: a body naming the field twice decodes both, and the last one must win, so a null after a valid value is a null.
+	e.raw = ""
+	if string(data) == "null" {
+		return nil
+	}
+	return json.Unmarshal(data, &e.raw)
+}
+
+// value is the enforcement to apply: nil when the request left the field out, and otherwise what it sent, with a null reaching
+// the store as an empty value that its validation refuses.
+func (e presentEnforcement) value() *api.Enforcement {
+	if !e.present {
+		return nil
+	}
+	v := e.raw
+	return &v
+}
+
 func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
@@ -348,15 +379,16 @@ func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rule, err := h.svc.UpdateRule(ctx, api.UpdateRuleRequest{
-		RuleID:    ruleID,
-		Enabled:   req.Enabled,
-		Severity:  req.Severity,
-		CustomMsg: req.CustomMsg,
-		CustomURL: req.CustomURL,
-		Comment:   req.Comment,
-		ExpiresAt: req.ExpiresAt,
-		Actor:     actorIdentifierFromContext(ctx),
-		Reason:    req.Reason,
+		RuleID:      ruleID,
+		Enabled:     req.Enabled,
+		Severity:    req.Severity,
+		Enforcement: req.Enforcement.value(),
+		CustomMsg:   req.CustomMsg,
+		CustomURL:   req.CustomURL,
+		Comment:     req.Comment,
+		ExpiresAt:   req.ExpiresAt,
+		Actor:       actorIdentifierFromContext(ctx),
+		Reason:      req.Reason,
 	}, actor)
 	if err != nil {
 		h.writeRuleMutationError(ctx, w, "update rule", err, ruleID)
@@ -557,12 +589,13 @@ func parsePolicyID(r *http.Request) (int64, bool) { return parsePositiveInt64Pat
 // fields so the operator can explicitly clear them by sending an empty string (the JSON shape that maps to *string is
 // distinguishable from "field omitted").
 type bulkUpsertItem struct {
-	RuleType   api.RuleType `json:"rule_type"`
-	Identifier string       `json:"identifier"`
-	Severity   api.Severity `json:"severity,omitempty"`
-	CustomMsg  *string      `json:"custom_msg,omitempty"`
-	CustomURL  *string      `json:"custom_url,omitempty"`
-	Comment    string       `json:"comment,omitempty"`
+	RuleType    api.RuleType    `json:"rule_type"`
+	Identifier  string          `json:"identifier"`
+	Enforcement api.Enforcement `json:"enforcement"`
+	Severity    api.Severity    `json:"severity,omitempty"`
+	CustomMsg   *string         `json:"custom_msg,omitempty"`
+	CustomURL   *string         `json:"custom_url,omitempty"`
+	Comment     string          `json:"comment,omitempty"`
 }
 
 // bulkUpsertRulesRequest is the POST /rules:bulkUpsert envelope. Reason is required for the audit row that fires once
@@ -603,12 +636,13 @@ func (h *AppControlHandler) handleBulkUpsertRules(w http.ResponseWriter, r *http
 	items := make([]api.BulkUpsertRuleItem, 0, len(req.Rules))
 	for _, raw := range req.Rules {
 		items = append(items, api.BulkUpsertRuleItem{
-			RuleType:   raw.RuleType,
-			Identifier: raw.Identifier,
-			Severity:   raw.Severity,
-			CustomMsg:  raw.CustomMsg,
-			CustomURL:  raw.CustomURL,
-			Comment:    raw.Comment,
+			RuleType:    raw.RuleType,
+			Identifier:  raw.Identifier,
+			Enforcement: raw.Enforcement,
+			Severity:    raw.Severity,
+			CustomMsg:   raw.CustomMsg,
+			CustomURL:   raw.CustomURL,
+			Comment:     raw.Comment,
 		})
 	}
 	result, err := h.svc.BulkUpsertRules(ctx, api.BulkUpsertRulesRequest{

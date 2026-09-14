@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bulkUpsertAppControlRules,
+  type Enforcement,
   MAX_BULK_UPSERT_ITEMS,
   type BulkUpsertAppControlRuleItem,
   type BulkUpsertAppControlRulesRequest,
@@ -11,6 +12,7 @@ import { ReauthModal } from "../ReauthModal";
 import { Input, Select } from "../ui/Input";
 import { AppControlDialogShell } from "./AppControlDialogShell";
 import { applyAppControlSubmitError } from "./dialogErrors";
+import { EnforcementChoice } from "./EnforcementChoice";
 import { PASTE_MANY_RULE_TYPES, parsePasteInput, type PasteInference } from "./pasteInference";
 import "./ApplicationControl.scss";
 
@@ -79,6 +81,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
   const [phase, setPhase] = useState<"paste" | "preview">("paste");
   const [rawInput, setRawInput] = useState("");
   const [rows, setRows] = useState<PasteRow[]>([]);
+  const [enforcement, setEnforcement] = useState<Enforcement | null>(null);
   const [severity, setSeverity] = useState("medium");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,6 +94,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
     setPhase("paste");
     setRawInput("");
     setRows([]);
+    setEnforcement(null);
     setSeverity("medium");
     setReason("");
     setBusy(false);
@@ -116,7 +120,8 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
     if (open && phase === "paste") pasteRef.current?.focus();
   }, [open, phase]);
 
-  const submitDisabled = busy || phase !== "preview" || rows.length === 0 || unresolvedCount > 0 || reason.trim().length === 0;
+  const submitDisabled =
+    busy || phase !== "preview" || rows.length === 0 || unresolvedCount > 0 || enforcement === null || reason.trim().length === 0;
 
   function handleParse(e: React.SyntheticEvent) {
     e.preventDefault();
@@ -154,6 +159,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
       handleParse(e);
       return;
     }
+    // submitDisabled includes enforcement === null, and TypeScript narrows through the alias, so enforcement is non-null below.
     if (submitDisabled) return;
     setFormError(null);
     setBusy(true);
@@ -161,6 +167,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
       const items: BulkUpsertAppControlRuleItem[] = rows.map((r) => ({
         rule_type: r.ruleType ?? "",
         identifier: r.identifier,
+        enforcement,
         severity,
       }));
       const result = await callBulk({ rules: items, reason: reason.trim() });
@@ -286,6 +293,8 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
               </tbody>
             </table>
           </div>
+
+          <EnforcementChoice name="paste-many-enforcement" value={enforcement} onChange={setEnforcement} disabled={busy} />
 
           <Select
             id="paste-many-severity"
