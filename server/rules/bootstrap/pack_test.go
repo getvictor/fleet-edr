@@ -88,7 +88,7 @@ func TestPackExcludesNonDetections(t *testing.T) {
 	t.Parallel()
 
 	got := committedFiles(t)
-	for _, id := range []string{"application_control_block", "sensor_recovery_failed"} {
+	for _, id := range []string{"application_control_block", "application_control_would_block", "sensor_recovery_failed"} {
 		assert.NotContains(t, got, id, "%s is a non-detection and must not be exported as a rule", id)
 	}
 }

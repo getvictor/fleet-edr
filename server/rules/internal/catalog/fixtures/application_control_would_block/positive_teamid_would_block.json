@@ -1,0 +1,16 @@
+{
+  "events": [
+    {"event_id": "acwb-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4710, "parent_pid": 1}},
+    {"event_id": "acwb-shell", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4710, "ppid": 1, "path": "/bin/zsh", "args": ["zsh", "-c", "/usr/local/bin/tool"], "uid": 501, "gid": 20}},
+    {"event_id": "acwb-would-block", "host_id": "fixture-host", "timestamp_ns": 1200, "event_type": "application_control_would_block",
+     "payload": {"pid": 4710, "path": "/usr/local/bin/tool", "rule_id": "app_control:43", "rule_type": "TEAMID",
+                 "identifier": "EQHXZ8M8AV", "severity": "medium", "policy_id": 11, "policy_version": 4}},
+    {"event_id": "acwb-exec", "host_id": "fixture-host", "timestamp_ns": 1250, "event_type": "exec",
+     "payload": {"pid": 4710, "ppid": 1, "path": "/usr/local/bin/tool", "args": ["tool"], "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "app_control:43", "severity": "medium", "event_ids": ["acwb-would-block"]}
+  ]
+}

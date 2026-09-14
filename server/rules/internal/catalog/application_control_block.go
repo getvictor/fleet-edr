@@ -93,63 +93,78 @@ type applicationControlBlockPayload struct {
 // timestamp_ns, plus host pinning) and never unmarshals or schema-validates the payload, so a malformed
 // application_control_block payload reaches this rule intact and is dropped here or nowhere.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
-	var findings []api.Finding
-	var miss pendingMiss
-	for _, evt := range events {
-		if evt.EventType != applicationControlBlockEventType {
-			continue
+	return evaluateRuleMatchEvents(ctx, events, gr, ruleMatchRendering{
+		eventType:   applicationControlBlockEventType,
+		title:       blockAlertTitle,
+		description: blockAlertDescription,
+	})
+}
+
+// ruleMatchRendering is what separates the two application-control projections: the event type each consumes and how a matched
+// rule reads in the row it raises. The payload, the gate on it, and the subject process are shared.
+type ruleMatchRendering struct {
+	eventType   string
+	title       func(applicationControlBlockPayload) string
+	description func(applicationControlBlockPayload) string
+}
+
+// evaluateRuleMatchEvents turns each accepted event of the rendering's type into a Finding, as documented on
+// ApplicationControlBlock.Evaluate. The per-event loop and its retry handling are evalEachEvent's.
+func evaluateRuleMatchEvents(
+	ctx context.Context, events []api.Event, gr api.GraphReader, rendering ruleMatchRendering,
+) ([]api.Finding, error) {
+	findings, err := evalEachEvent(ctx, events, gr, func(ctx context.Context, evt api.Event, gr api.GraphReader) (*api.Finding, error) {
+		if evt.EventType != rendering.eventType {
+			return nil, nil
 		}
 		var p applicationControlBlockPayload
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
-			continue
+			return nil, nil
 		}
 		if p.RuleID == "" || p.Severity == "" {
-			continue
+			return nil, nil
 		}
 		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
-		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fmt.Errorf("application control block: %w", fatal))
+		if err != nil || proc == nil {
+			return nil, err
 		}
-		if proc == nil {
-			continue
-		}
-		findings = append(findings, api.Finding{
+		return &api.Finding{
 			HostID:      evt.HostID,
 			RuleID:      p.RuleID,
 			Source:      api.AlertSourceApplicationControl,
 			Severity:    p.Severity,
-			Title:       blockAlertTitle(p),
-			Description: blockAlertDescription(p),
+			Title:       rendering.title(p),
+			Description: rendering.description(p),
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},
-		})
-	}
-	if miss.err != nil {
-		return findings, fmt.Errorf("application control block: %w", miss.err)
+		}, nil
+	})
+	if err != nil {
+		return findings, fmt.Errorf("%s: %w", rendering.eventType, err)
 	}
 	return findings, nil
 }
 
-// blockAlertTitle renders the alert headline shown in the alerts
-// list. Prefers the binary basename so a row like
-// "Application blocked: Calculator" beats one that drowns the
-// column in a full path.
-//
-// Uses `path.Base` (Unix-only, forward-slash) rather than
-// `path/filepath.Base` (host-OS dependent). Agent paths are always
-// macOS Unix-style; if the server ever ran on Windows, filepath would
-// keep the full string under host=Windows because backslash is the
-// separator there. path.Base is the correct semantic for the
-// known-Unix input here, not just a cross-platform optimization.
+// blockAlertTitle renders the alert headline shown in the alerts list: "Application blocked: Calculator".
 func blockAlertTitle(p applicationControlBlockPayload) string {
-	name := path.Base(p.Path)
+	return titleWithBinaryName("Application blocked", p.Path)
+}
+
+// titleWithBinaryName appends the binary's base name to a headline, falling back to the whole path and then to the headline alone.
+// The basename keeps a row like "Application blocked: Calculator" from drowning the column in a full path.
+//
+// Uses `path.Base` (Unix-only, forward-slash) rather than `path/filepath.Base` (host-OS dependent). Agent paths are always macOS
+// Unix-style; if the server ever ran on Windows, filepath would keep the full string under host=Windows because backslash is the
+// separator there. path.Base is the correct semantic for the known-Unix input here, not just a cross-platform optimization.
+func titleWithBinaryName(headline, binaryPath string) string {
+	name := path.Base(binaryPath)
 	if name == "" || name == "." || name == "/" {
-		name = p.Path
+		name = binaryPath
 	}
 	if name == "" {
-		return "Application blocked"
+		return headline
 	}
-	return "Application blocked: " + name
+	return headline + ": " + name
 }
 
 // blockAlertDescription prefers the operator's custom message (the `custom_msg` the rule was created with) so admins can author the

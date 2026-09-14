@@ -157,8 +157,9 @@ type Rule interface {
 type NonDetectionKind string
 
 const (
-	// NonDetectionProjection is a registered rule that projects a decision the agent already made into the alert stream rather than
-	// detecting anything. It carries no detection logic to inspect and makes no claim about adversary behaviour.
+	// NonDetectionProjection is a registered rule that projects a decision the agent already made into the alert stream, or into
+	// monitor records, rather than detecting anything. It carries no detection logic to inspect and makes no claim about adversary
+	// behaviour.
 	NonDetectionProjection NonDetectionKind = "projection"
 	// NonDetectionHealth is a registered rule whose subject is our own agent's operational state rather than activity on the host.
 	// A person still needs to act on it, but it is a statement about the sensor, not about an adversary.
@@ -176,15 +177,17 @@ const (
 // adversary claim misleads on all three counts, and in the ATT&CK case inflates a coverage figure that is read during procurement.
 //
 // Where its findings are RECORDED follows the kind (issue #778). A projection renders a decision already made about activity on the
-// host, so its findings persist as alerts and are worked in the same queue as detections. A health signal reports a fault in our own
-// software, so its findings are recorded as host health episodes and never as alerts.
+// host, so, like a detection's findings, its findings follow the mode the rule runs in: an alert-mode projection's findings are
+// worked in the same queue as detections, and a monitor-mode projection's are kept as monitor records. A health signal reports a
+// fault in our own software, so its findings are recorded as host health episodes and never as alerts.
 //
 // Registered non-detections and why:
 //
-//   - application_control_block is a NonDetectionProjection. The blocking decision was made on the host by the AUTH_EXEC walker;
-//     this rule renders it as an alert row. Its findings borrow the matched app-control rule's id and severity from the event
-//     payload rather than carrying its own, which is why it is also the one rule exempt from the Finding.Title == DisplayName
-//     invariant.
+//   - application_control_block and application_control_would_block are NonDetectionProjections. The decision was made on the host
+//     by the AUTH_EXEC walker; block renders a denied exec as an alert row, and would_block renders an exec a DETECT rule let run,
+//     declaring monitor so it is kept as a monitor record. Their findings borrow the matched app-control rule's id and severity
+//     from the event payload rather than carrying their own, which is why they are the two rules exempt from the
+//     Finding.Title == DisplayName invariant.
 //   - sensor_recovery_failed is a NonDetectionHealth. It reports that our own automatic repair of a stopped capture provider gave
 //     up, and both documented causes are faults in our software rather than adversary action.
 type NonDetection interface {
@@ -311,16 +314,17 @@ const UnknownOrigin = "unknown upstream"
 // AlertOriginOf returns the attribution to stamp on an alert r raises, which is NOT always r's own origin.
 //
 // A NonDetectionProjection renders a decision someone else already made, and its findings deliberately carry that other party's
-// rule id rather than the projection's own: application_control_block copies the matched app-control policy's id off the event
-// payload. Stamping this project's name onto such an alert would state that we authored an operator's blocklist entry, which is
-// false, and there is no third party to credit in its place either. So a projection's alerts carry no attribution, and the
-// display surfaces render nothing, which is the same thing they already do for an alert raised before attribution existed.
+// rule id rather than the projection's own: application_control_block and application_control_would_block copy the matched
+// app-control policy's id off the event payload. Stamping this project's name onto such an alert would state that we authored an
+// operator's blocklist entry, which is false, and there is no third party to credit in its place either. So a projection's alerts
+// carry no attribution, and the display surfaces render nothing, which is the same thing they already do for an alert raised
+// before attribution existed.
 //
 // Every other rule genuinely authors what it raises, health signals included: sensor_recovery_failed reports a failure in OUR
 // software, so crediting this project for it is accurate. This is the same Projection-not-Health split the #519 title invariant
 // makes, for the same underlying reason.
 func AlertOriginOf(r Rule) string {
-	if nd, ok := r.(NonDetection); ok && nd.NonDetectionKind() == NonDetectionProjection {
+	if IsProjection(r) {
 		return ""
 	}
 	return OriginOf(r)
@@ -335,6 +339,12 @@ func AlertOriginOf(r Rule) string {
 func IsHealthSignal(r Rule) bool {
 	nd, ok := r.(NonDetection)
 	return ok && nd.NonDetectionKind() == NonDetectionHealth
+}
+
+// IsProjection reports whether r declares itself a projection of a decision made elsewhere.
+func IsProjection(r Rule) bool {
+	nd, ok := r.(NonDetection)
+	return ok && nd.NonDetectionKind() == NonDetectionProjection
 }
 
 // AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.

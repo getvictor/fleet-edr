@@ -169,6 +169,37 @@ func TestEngine_ProjectionFindingStillTakesTheAlertPath(t *testing.T) {
 	assert.Empty(t, rec.episodes, "a projection is not a health episode")
 }
 
+// spec:server-detection-rules-engine/registered-rule-catalog/a-would-block-match-is-kept-as-a-monitor-record
+//
+// TestEngine_ProjectionMonitorMatchIsCountedUnderTheFindingsRule pins which rule a projection's monitor match is counted under. The
+// mode comes from the projection (it declares monitor), but the finding names the application-control rule that matched, and the match
+// counts exist so an operator can judge that rule before promoting it. Counting under the projection's own id would pool every
+// would-block match of every rule into one number nobody can act on.
+func TestEngine_ProjectionMonitorMatchIsCountedUnderTheFindingsRule(t *testing.T) {
+	t.Parallel()
+	finding := api.Finding{HostID: "h1", RuleID: "app_control:7", Severity: "high", Title: "Application would be blocked: tool"}
+	e := New(nil, discardLogger())
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&monitorProjectionRule{
+		projectionRule: projectionRule{stubRule: stubRule{id: "application_control_would_block"}, finding: finding},
+	}}})
+
+	tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+	require.NoError(t, err)
+	require.Len(t, tally, 1)
+	assert.Equal(t, "app_control:7", tally[0].RuleID)
+	assert.Equal(t, "h1", tally[0].HostID)
+	assert.Equal(t, 1, tally[0].Count)
+}
+
+// monitorProjectionRule is a projection that declares monitor, as application_control_would_block does.
+type monitorProjectionRule struct {
+	projectionRule
+}
+
+func (r *monitorProjectionRule) DefaultMode() rulesapi.DetectionRuleMode {
+	return rulesapi.DetectionRuleModeMonitor
+}
+
 // TestEngine_HealthFindingWithNoRecorderIsDropped pins the deliberate absence of a fallback. An engine wired without a recorder
 // must record nothing rather than put the finding back in the alert queue: the reason it left is that it makes no claim about an
 // adversary, and an unwired dependency does not make it one.
