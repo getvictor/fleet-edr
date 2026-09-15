@@ -18,6 +18,8 @@ import type {
   Alert,
   AlertDetail,
   Command,
+  ContainmentChange,
+  ContainmentState,
   ApplicationControlPolicy,
   ApplicationControlRule,
 } from "./types";
@@ -996,6 +998,39 @@ export async function createCommand(hostId: string, commandType: string, payload
 
 export async function getCommand(id: number): Promise<Command> {
   return fetchJSON<Command>(`/commands/${String(id)}`);
+}
+
+// getHostContainment reads a host's network containment state and its delivery (#948).
+export async function getHostContainment(hostId: string): Promise<ContainmentState> {
+  return fetchJSON<ContainmentState>(`/hosts/${encodeURIComponent(hostId)}/containment`);
+}
+
+// containmentErrorMessages turns the containment change's typed refusals into what the operator can do about them. The server counts
+// the reason's limit in Unicode characters, which a text input's maxLength does not, so the limit is reported here rather than
+// enforced by the input.
+const containmentErrorMessages = new Map<string, string>([
+  ["reason_required", "Give a reason for the audit log."],
+  ["reason_too_long", "The reason is too long: keep it to 1024 characters."],
+  ["body_too_large", "The reason is too long: keep it to 1024 characters."],
+  ["host_not_found", "This host is no longer enrolled, so its containment cannot be changed."],
+]);
+
+// setHostContainment contains or releases a host. The server requires host.isolate, a recent authentication, and a reason; wrap it in
+// useReauthRetry. A refusal throws an Error whose message says what to do about it.
+export async function setHostContainment(hostId: string, contained: boolean, reason: string): Promise<ContainmentChange> {
+  return typedMutationEndpoint(
+    "POST",
+    `/hosts/${encodeURIComponent(hostId)}/containment`,
+    { contained, reason },
+    (res) => res.json() as Promise<ContainmentChange>,
+    (code, message) => new Error(containmentErrorMessages.get(code) ?? message),
+  );
+}
+
+// listContainment reads every host with a containment state, for the host list's badges.
+export async function listContainment(): Promise<ContainmentState[]> {
+  const body = await fetchJSON<{ items: ContainmentState[] }>("/containment");
+  return body.items;
 }
 
 // --- SSO / OIDC configuration (issue #375) --------------------------------------

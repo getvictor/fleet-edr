@@ -46,13 +46,19 @@ The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `containe
 
 ### Requirement: The containment state is readable
 
-The server SHALL expose `GET /api/hosts/{host_id}/containment`, authorized as `host.read` on that host, returning the desired state (contained, version, epoch, reason, actor and updated time) and its delivery: the host's latest `set_network_containment` command with its id, status and result, and whether that command carries the current version and epoch. A host that has never had a containment state SHALL be returned not contained at version 0 with no delivery.
+The server SHALL expose `GET /api/hosts/{host_id}/containment`, authorized as `host.read` on that host, returning the desired state (contained, version, epoch, reason, actor and updated time) and its delivery: the host's latest `set_network_containment` command with its id, status and result, and whether that command carries the current version and epoch. A host that has never had a containment state SHALL be returned not contained at version 0 with no delivery. `GET /api/containment`, authorized as `host.read`, SHALL return every host that has a containment state, released ones included, each with its delivery, so the host list can mark them.
 
 #### Scenario: A contained host shows its state and delivery
 
 - **GIVEN** a host contained at version 1 whose command is pending
 - **WHEN** an operator holding `host.read` reads its containment
 - **THEN** the response carries `contained` true, version 1, the reason and actor, and a delivery naming the command, its pending status, and that it carries the current state
+
+#### Scenario: The host list shows every host with a state
+
+- **GIVEN** one contained host and one host that was contained and then released
+- **WHEN** an operator holding `host.read` lists containment
+- **THEN** both hosts are returned with their state and delivery, and hosts never contained are not
 
 #### Scenario: A host never contained has no state
 

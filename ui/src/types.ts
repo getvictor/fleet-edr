@@ -302,6 +302,35 @@ export interface AlertDetail extends Alert {
   event_ids: string[];
 }
 
+// ContainmentDelivery mirrors server/response/api.ContainmentDelivery: a host's latest set_network_containment command, and whether it
+// carries the host's current state.
+export interface ContainmentDelivery {
+  command_id: number;
+  status: string;
+  result?: Record<string, unknown>;
+  current: boolean;
+}
+
+// ContainmentState mirrors server/response/api.ContainmentState: a host's desired network containment (#948). A host never contained
+// is version 0 with no delivery.
+export interface ContainmentState {
+  host_id: string;
+  contained: boolean;
+  version: number;
+  epoch: number;
+  reason?: string;
+  updated_by?: string;
+  updated_at?: string;
+  delivery?: ContainmentDelivery;
+}
+
+// ContainmentChange mirrors server/response/api.ContainmentChange: the state after a change request and the command queued for it.
+export interface ContainmentChange {
+  state: ContainmentState;
+  changed: boolean;
+  command_id?: number;
+}
+
 export interface Command {
   id: number;
   host_id: string;

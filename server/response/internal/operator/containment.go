@@ -21,6 +21,7 @@ const containmentBodyCap = 16 << 10
 
 // ContainmentService is the host containment surface the operator routes serve.
 type ContainmentService interface {
+	List(ctx context.Context) ([]api.ContainmentState, error)
 	Get(ctx context.Context, hostID string) (api.ContainmentState, error)
 	Set(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, hostID string, contained bool, reason string) (
 		api.ContainmentChange, error)
@@ -46,6 +47,7 @@ func NewContainmentHandler(svc ContainmentService, authz identityapi.AuthZ, logg
 
 // RegisterRoutes wires the containment routes. The caller wraps them in the session and CSRF middleware.
 func (h *ContainmentHandler) RegisterRoutes(mux httpserver.Router) {
+	mux.HandleFunc("GET /api/containment", h.handleList)
 	mux.HandleFunc("GET /api/hosts/{host_id}/containment", h.handleGet)
 	mux.HandleFunc("POST /api/hosts/{host_id}/containment", h.handleSet)
 }
@@ -53,6 +55,22 @@ func (h *ContainmentHandler) RegisterRoutes(mux httpserver.Router) {
 type containmentRequest struct {
 	Contained *bool  `json:"contained"`
 	Reason    string `json:"reason"`
+}
+
+// handleList returns every host with a containment state, for the host list's badges. Authorized as host.read over hosts, as the host
+// list itself is.
+func (h *ContainmentHandler) handleList(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead, identityapi.Resource{Type: "host"}) {
+		return
+	}
+	states, err := h.svc.List(ctx)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "list containment", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string][]api.ContainmentState{"items": states})
 }
 
 func (h *ContainmentHandler) handleGet(w http.ResponseWriter, r *http.Request) {

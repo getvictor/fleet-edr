@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import "./HostHeader.scss";
 import { getHostDetail, getHostHealth } from "../api";
 import type { HostDetail, HostHealth, HostHealthEpisode } from "../types";
+import { HostContainment } from "./HostContainment";
 import { PageHeader } from "./ui/PageHeader";
 import { CopyButton } from "./ui/CopyButton";
 import { HealthBadge } from "./ui/HealthBadge";
@@ -80,6 +81,7 @@ export function HostHeader({ hostId, actions }: HostHeaderProps) {
         </span>
       )}
       {detail && <HostDetailsPopover detail={detail} />}
+      <HostContainment key={hostId} hostId={hostId} />
     </span>
   );
 

@@ -23,6 +23,7 @@ func TestRegister_classifiesRoutesByTier(t *testing.T) {
 		// Enrollment is rare + load-bearing, so it is intentionally NOT high-volume; it falls to Full (100%).
 		{"POST /api/enroll", tracing.TierFull},
 		{"GET /api/hosts", tracing.TierStandard},
+		{"GET /api/containment", tracing.TierStandard},
 		{"GET /api/alerts", tracing.TierStandard},
 		{"GET /api/settings/tracing", tracing.TierStandard},
 		{"GET /livez", tracing.TierDrop},

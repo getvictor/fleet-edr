@@ -33,6 +33,13 @@
 - [x] Refuse `isolate` and `set_network_containment` on the generic command endpoint.
 - [x] Dev server and VM: contain and release edr-dev through the API.
 
+## Console
+
+- [x] `GET /api/containment` for the host list.
+- [x] Containment badge and Contain host / Release host with a reason on the host header, polling while a change is on its way.
+- [x] Containment badges on the host list.
+- [x] Chrome: contain and release edr-dev from the host page.
+
 ## Later steps
 
-- [ ] Console actions and state.
+- [ ] L5 system test on edr-qa, operator guide and CHANGELOG.

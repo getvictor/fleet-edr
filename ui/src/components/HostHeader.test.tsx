@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach, onTestFinished } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 import { HostHeader } from "./HostHeader";
@@ -35,6 +35,11 @@ function renderHeader(hostId: string) {
     </MemoryRouter>,
   );
 }
+
+beforeEach(() => {
+  // The header's containment control reads its own state; these tests are about the rest of the header.
+  vi.spyOn(api, "getHostContainment").mockResolvedValue({ host_id: "", contained: false, version: 0, epoch: 0 });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -517,3 +522,48 @@ describe("HostHeader agent health", () => {
     expect(screen.getAllByText("5m ago").length).toBeGreaterThan(0);
   });
 });
+
+// The header keys its containment control by host, so moving to another host on the same route closes an open confirmation instead
+// of letting it act on the host now shown.
+describe("HostHeader containment across hosts", () => {
+  it("starts the containment control over when the host changes", async () => {
+    const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+    const close = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+    onTestFinished(() => {
+      for (const [name, descriptor] of [["showModal", showModal], ["close", close]] as const) {
+        if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
+        else Reflect.deleteProperty(HTMLDialogElement.prototype, name);
+      }
+    });
+    HTMLDialogElement.prototype.showModal = function showModalStandIn() {
+      this.open = true;
+    };
+    HTMLDialogElement.prototype.close = function closeStandIn() {
+      this.open = false;
+    };
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detailFixture());
+    vi.spyOn(api, "getHostHealth").mockRejectedValue(new Error("unused"));
+    const set = vi.spyOn(api, "setHostContainment");
+    const { rerender } = render(
+      <MemoryRouter>
+        <HostHeader hostId="HOST-A" />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Contain host" }));
+    // The control sits in the page heading, where a dialog is not allowed, so its confirmation is rendered outside it.
+    expect(screen.getByRole("dialog", { name: "Contain this host?" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Contain this host?" }).closest("h1")).toBeNull();
+    expect(within(screen.getByRole("heading", { level: 1 })).getByRole("button", { name: "Contain host" })).toBeVisible();
+
+    rerender(
+      <MemoryRouter>
+        <HostHeader hostId="HOST-B" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Contain this host?" })).toBeNull();
+    });
+    expect(set).not.toHaveBeenCalled();
+  });
+});
+
