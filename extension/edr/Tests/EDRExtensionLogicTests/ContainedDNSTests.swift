@@ -34,8 +34,26 @@ final class ContainedDNSTests: XCTestCase {
 
     // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/the-server-s-name-still-resolves
     func testTheServersNameIsForwardedWhateverItsCase() {
-        XCTAssertEqual(ContainedDNS.decision(for: query(name("edr.example.com")), containment: contained), .forward)
-        XCTAssertEqual(ContainedDNS.decision(for: query(name("EDR.Example.COM")), containment: contained), .forward)
+        for spelling in ["edr.example.com", "EDR.Example.COM"] {
+            guard case .forwardToSystemResolver(let refused) = ContainedDNS.decision(for: query(name(spelling)), containment: contained)
+            else {
+                return XCTFail("\(spelling) is the server's name")
+            }
+            XCTAssertEqual(refused.prefix(4), Data([0x12, 0x34, 0x81, 0x85]),
+                           "the refusal kept for a host with no configured resolver answers this query")
+        }
+    }
+
+    // A contained host's allowed lookup goes to a configured resolver: the one the client asked when it is configured, otherwise the
+    // first configured one, and none when the host has none.
+    func testAnAllowedLookupGoesToAConfiguredResolver() {
+        let system = ["192.168.64.1", "fd00::1"]
+        XCTAssertEqual(ContainedDNS.systemResolver(for: "192.168.64.1", systemServers: system), "192.168.64.1")
+        XCTAssertEqual(ContainedDNS.systemResolver(for: "fd00:0:0:0:0:0:0:1", systemServers: system), "fd00:0:0:0:0:0:0:1",
+                       "the client's spelling of a configured resolver is kept")
+        XCTAssertEqual(ContainedDNS.systemResolver(for: "1.1.1.1", systemServers: system), "192.168.64.1", "an address the client chose")
+        XCTAssertEqual(ContainedDNS.systemResolver(for: nil, systemServers: system), "192.168.64.1")
+        XCTAssertNil(ContainedDNS.systemResolver(for: "1.1.1.1", systemServers: []))
     }
 
     // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/any-other-name-is-refused-locally
@@ -75,7 +93,9 @@ final class ContainedDNSTests: XCTestCase {
             ("shorter than a header", Data([0x12, 0x34, 0x01])),
             ("a question past the end", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 10, 0x61])),
             ("a question without its type and class", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0x61, 0, 0x00])),
-            ("a compression pointer", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0xC0, 0x0C, 0, 1, 0, 1]))
+            ("a compression pointer", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0xC0, 0x0C, 0, 1, 0, 1])),
+            ("a reserved label type", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0x40] + [UInt8](repeating: 0x61, count: 64)
+                + [0, 0, 1, 0, 1]))
         ]
         for (why, datagram) in cases {
             XCTAssertEqual(ContainedDNS.decision(for: datagram, containment: contained), .drop, why)

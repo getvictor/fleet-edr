@@ -12,8 +12,9 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 /// Uses the modern `Network.NWEndpoint`-based NEAppProxyFlow APIs (macOS 15+);
 /// the legacy `NWHostEndpoint` surface is deprecated and emits build warnings.
 ///
-/// Safety: The proxy forwards all datagrams unchanged. Parsing is best-effort
-/// and only used for telemetry. If parsing fails, forwarding still succeeds.
+/// Safety: The proxy forwards datagrams unchanged, and parsing for telemetry is best-effort: if it fails, forwarding still succeeds.
+/// The exception is a contained host (#948), where ContainedDNS decides each query: an allowed name is forwarded to a configured
+/// resolver, any other query is answered REFUSED locally, a malformed datagram is dropped, and DNS over TCP is closed.
 ///
 /// The system keeps THIS extension's own outbound connections out of the proxy chain, so our own forward cannot loop back
 /// into us. That guarantee does not extend to a second network extension that is itself a resolver, which is what issue
@@ -35,7 +36,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     /// startProxy so the first flow already has a snapshot to match against.
     private let interfaces = InterfaceSnapshot()
     /// Resolver list for the failover decision, read through a short-lived cache over one dynamic-store session.
-    private let resolvers = SystemResolverCache()
+    let resolvers = SystemResolverCache()
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         interfaces.start()
@@ -155,11 +156,13 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 case .forward:
                     self.forwardUDPDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
                                                               flow: flow, ctx: ctx, route: route, isFailover: false))
+                case .forwardToSystemResolver(let refused):
+                    self.forwardContainedDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
+                                                                    flow: flow, ctx: ctx, route: route, isFailover: false),
+                                                  refused: refused)
                 case .answer(let refused):
                     // A contained host resolves only the server's name (#948); anything else is refused locally.
-                    flow.writeDatagrams([(refused, endpoint)]) { writeError in
-                        writeError.map { logger.error("Failed to write a contained host's refused answer: \($0.localizedDescription)") }
-                    }
+                    Self.answerLocally(refused, to: endpoint, on: flow)
                 case .drop:
                     continue
                 }
@@ -170,7 +173,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    private func forwardUDPDatagram(_ request: UDPForwardRequest) {
+    func forwardUDPDatagram(_ request: UDPForwardRequest) {
         // Forward to the intended DNS server. The system excludes this extension's own connections from the DNS proxy
         // chain, so OUR forward cannot loop back into us. That guarantee does not extend to another network-extension
         // provider's flows, which is what `route.routing` exists to handle: those are forwarded off tunnel interfaces so
@@ -242,11 +245,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     private func handleTCPFlow(_ flow: NEAppProxyTCPFlow, ctx: FlowContext, routing: DNSForwardPolicy.Routing) {
         // DNS over TCP is not resolved on a contained host (#948): the proxy restricts names per UDP query, and the lifeline's lookups
         // are UDP. A stub resolver whose answer was truncated falls back to TCP and gets no answer instead.
-        guard !NetworkContainmentController.shared.isContained else {
-            flow.closeReadWithError(nil)
-            flow.closeWriteWithError(nil)
-            return
-        }
+        guard !Self.closeIfContained(flow, connection: nil) else { return }
         let upstreamEndpoint = flow.remoteFlowEndpoint
         let pinned = boundInterface(for: flow)
 
@@ -312,10 +311,11 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 return
             }
 
+            guard !Self.closeIfContained(flow, connection: connection) else { return }
+
             // TCP DNS has a 2-byte length prefix; emit telemetry on the query portion.
             if let data, data.count > DNSProxy.tcpLengthPrefixBytes {
-                let queryData = data.suffix(from: DNSProxy.tcpLengthPrefixBytes)
-                self.emitDNSTelemetry(datagram: Data(queryData), ctx: ctx, proto: "tcp")
+                self.emitDNSTelemetry(datagram: Data(data.suffix(from: DNSProxy.tcpLengthPrefixBytes)), ctx: ctx, proto: "tcp")
             }
 
             connection.send(content: data, completion: .contentProcessed { sendError in
