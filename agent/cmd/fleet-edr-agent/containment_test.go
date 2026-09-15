@@ -49,6 +49,7 @@ func TestNewContainment(t *testing.T) {
 	// lifeline address is its canonical form.
 	literal := &config.Config{ServerURL: "https://[2001:0db8::0001]:8443", NetXPCService: cfg.NetXPCService}
 	literalMgr, literalDial := newContainment(literal, send, record, slog.Default())
+	require.NotNil(t, literalMgr)
 	literalMgr.Observe(t.Context(), containment.Status{Contained: true, Version: 1, Applied: true})
 	_, _ = literalDial(t.Context(), "tcp", "[2001:0db8::0001]:8443")
 	assert.Equal(t, []string{"[2001:db8::1]:8443"}, dialed)

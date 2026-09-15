@@ -86,11 +86,12 @@ func TargetFor(serverURL string, proxy func(*http.Request) (*url.URL, error)) (T
 		port = httpPort
 	}
 	if p := u.Port(); p != "" {
-		n, perr := strconv.Atoi(p)
-		if perr != nil {
+		// The extension refuses a lifeline port outside 1 to 65535, so a URL naming one yields no target rather than a refused containment.
+		n, perr := strconv.ParseUint(p, 10, 16)
+		if perr != nil || n == 0 {
 			return Target{}, fmt.Errorf("server URL %q has an invalid port", serverURL)
 		}
-		port = n
+		port = int(n)
 	}
 	return Target{Host: u.Hostname(), Port: port}, nil
 }

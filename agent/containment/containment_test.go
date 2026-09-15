@@ -115,6 +115,9 @@ func TestTargetFor(t *testing.T) {
 			Target{"edr.example.com", 443}, false},
 		{"no host", "https:///path", nil, Target{}, true},
 		{"a bad port", "https://edr.example.com:port", nil, Target{}, true},
+		{"a port above 65535", "https://edr.example.com:65536", nil, Target{}, true},
+		{"port zero", "https://edr.example.com:0", nil, Target{}, true},
+		{"the highest port", "https://edr.example.com:65535", nil, Target{"edr.example.com", 65535}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,7 +357,7 @@ func TestObserve_AHeldStateFromAnotherEpochIsRefreshed(t *testing.T) {
 func TestApply_TheLifelineIsCappedAtSixteenAddresses(t *testing.T) {
 	t.Parallel()
 	m, ext, res := newTestManager(t, serverTarget, applies)
-	var addrs []string
+	addrs := make([]string, 0, 20)
 	for i := range 20 {
 		addrs = append(addrs, netip.AddrFrom4([4]byte{203, 0, 113, byte(i + 1)}).String())
 	}
