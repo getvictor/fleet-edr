@@ -50,9 +50,15 @@ final class NetworkContainmentController: @unchecked Sendable {
                 return
             }
             switch self.sequencer.started(filter, startupEnforcesCurrent: self.store.current == applied) {
-            case .ignore, .wait:
+            case .ignore:
                 return
+            case .wait:
+                // The held state is applied to this filter when the apply in flight completes.
+                self.tracker.pending()
+                self.publishLocked()
             case .apply:
+                self.tracker.pending()
+                self.publishLocked()
                 self.applyLocked()
             case .report:
                 self.tracker.confirmed(applied)
@@ -82,7 +88,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 self.publishLocked()
                 return
             }
-            self.tracker.accepted()
+            self.tracker.pending()
             logger.info("""
             network containment update accepted: contained=\(update.contained, privacy: .public) \
             version=\(update.version, privacy: .public) epoch=\(update.epoch, privacy: .public)
@@ -148,9 +154,10 @@ final class NetworkContainmentController: @unchecked Sendable {
     }
 
     private static func networkRule(for rule: LifelineRule) -> NENetworkRule {
-        let port = NWEndpoint.Port(rawValue: rule.port) ?? .any
+        // The ports are nonzero: the server port is validated when the document is decoded and the DHCP and DNS ports are constants.
+        let port = NWEndpoint.Port(integerLiteral: rule.port)
         let local = rule.localPort.map {
-            NWEndpoint.hostPort(host: NWEndpoint.Host(rule.address), port: NWEndpoint.Port(rawValue: $0) ?? .any)
+            NWEndpoint.hostPort(host: NWEndpoint.Host(rule.address), port: NWEndpoint.Port(integerLiteral: $0))
         }
         return NENetworkRule(
             remoteNetworkEndpoint: NWEndpoint.hostPort(host: NWEndpoint.Host(rule.address), port: port),

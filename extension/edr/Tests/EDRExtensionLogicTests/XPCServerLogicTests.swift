@@ -179,10 +179,12 @@ final class XPCServerLogicTests: XCTestCase {
 
     // spec:extension-xpc-server/inbound-network-containment-update/an-oversized-network-containment-update-is-rejected
     func testNetworkContainmentUpdateOverTheBoundIsRejected() {
-        let atTheBound = Data(repeating: 0x20, count: networkContainmentMaxBytes)
-        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: atTheBound), .applyNetworkContainment(atTheBound))
-        let over = Data(repeating: 0x20, count: networkContainmentMaxBytes + 1)
-        XCTAssertEqual(dispatchInbound(type: "network_containment.update", data: over), .rejectOversized)
+        XCTAssertEqual(networkContainmentMaxBytes, 16_384)
+        XCTAssertFalse(isOversizedInbound(type: "network_containment.update", dataLength: networkContainmentMaxBytes))
+        XCTAssertTrue(isOversizedInbound(type: "network_containment.update", dataLength: networkContainmentMaxBytes + 1))
+        // The bound is the containment update's alone: policy documents are larger and are not refused by it.
+        XCTAssertFalse(isOversizedInbound(type: "application_control.update", dataLength: networkContainmentMaxBytes + 1))
+        XCTAssertFalse(isOversizedInbound(type: nil, dataLength: networkContainmentMaxBytes + 1))
     }
 
     // spec:extension-xpc-server/inbound-network-containment-update/a-network-containment-update-with-no-data-is-rejected

@@ -183,6 +183,15 @@ final class NetworkContainmentTests: XCTestCase {
         tracker.confirmed(held)
         XCTAssertEqual(tracker.status(held: held),
                        NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil))
+
+        tracker.failed("content filter is not running")
+        tracker.pending()
+        XCTAssertEqual(tracker.status(held: held),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil),
+                       "a filter that started and has yet to apply the held state is pending, not failed")
+        tracker.confirmed(held)
+        tracker.pending()
+        XCTAssertEqual(tracker.status(held: held).applied, false, "a filter that has yet to apply the held state is not confirmed by the last")
     }
 
     // spec:extension-network-response/the-extension-reports-containment-status/a-failed-apply-is-not-reported-as-applied
@@ -195,7 +204,7 @@ final class NetworkContainmentTests: XCTestCase {
                        NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false,
                                                 error: "content filter is not running"),
                        "a replacement filter that failed to apply the same state is not confirmed by its predecessor")
-        tracker.accepted()
+        tracker.pending()
         XCTAssertNil(tracker.status(held: contained(version: 5)).error, "a new update starts without the earlier state's error")
         tracker.confirmed(contained(version: 5))
         XCTAssertEqual(tracker.status(held: contained(version: 5)).applied, true)

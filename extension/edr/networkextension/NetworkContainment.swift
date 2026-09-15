@@ -304,8 +304,10 @@ struct ContainmentStatusTracker {
     private(set) var applied: NetworkContainmentUpdate?
     private(set) var error: String?
 
-    /// accepted notes a newly accepted update: whatever went wrong before concerned an earlier state.
-    mutating func accepted() {
+    /// pending notes that the held state is about to be applied, because an update was accepted or a filter started: an earlier
+    /// failure or confirmation concerned an earlier state or filter.
+    mutating func pending() {
+        applied = nil
         error = nil
     }
 
