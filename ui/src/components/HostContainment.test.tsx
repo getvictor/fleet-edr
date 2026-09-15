@@ -126,7 +126,7 @@ describe("HostContainment", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(9000);
     });
-    expect(read.mock.calls.length).toBe(reads);
+    expect(read.mock.calls).toHaveLength(reads);
   });
 
   // spec:web-ui/host-network-containment-in-the-console/a-contained-host-can-be-released
