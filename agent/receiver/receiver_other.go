@@ -57,6 +57,9 @@ func (r *Receiver) SendApplicationControl(payload []byte) error { return ErrUnsu
 // SendWatchedPaths always returns ErrUnsupported on non-darwin platforms, for the same reason as SendApplicationControl.
 func (r *Receiver) SendWatchedPaths(payload []byte) error { return ErrUnsupported }
 
+// SendNetworkContainment always returns ErrUnsupported on non-darwin platforms, for the same reason as SendApplicationControl.
+func (r *Receiver) SendNetworkContainment(payload []byte) error { return ErrUnsupported }
+
 // Ping always returns ErrUnsupported on non-darwin platforms. The
 // timeout argument is accepted but unused; preserving the signature lets
 // the heartbeat loop in main.go compile.

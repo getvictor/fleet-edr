@@ -27,14 +27,15 @@ import (
 type stubConnector struct {
 	script stubScript
 
-	mu              sync.Mutex
-	connected       atomic.Bool
-	disconnected    atomic.Bool
-	pingCalls       atomic.Int64
-	sentPayloads    [][]byte
-	watchedPayloads [][]byte
-	events          chan Event
-	errs            chan int
+	mu                  sync.Mutex
+	connected           atomic.Bool
+	disconnected        atomic.Bool
+	pingCalls           atomic.Int64
+	sentPayloads        [][]byte
+	watchedPayloads     [][]byte
+	containmentPayloads [][]byte
+	events              chan Event
+	errs                chan int
 }
 
 // stubScript declares a single connector's lifecycle.
@@ -110,6 +111,16 @@ func (s *stubConnector) SendWatchedPaths(payload []byte) error {
 		return s.script.sendErr
 	}
 	s.watchedPayloads = append(s.watchedPayloads, append([]byte(nil), payload...))
+	return nil
+}
+
+func (s *stubConnector) SendNetworkContainment(payload []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.script.sendErr != nil {
+		return s.script.sendErr
+	}
+	s.containmentPayloads = append(s.containmentPayloads, append([]byte(nil), payload...))
 	return nil
 }
 
@@ -496,6 +507,8 @@ func TestDispatcher_SendDuringActiveConnection(t *testing.T) {
 	require.NoError(t, d.SendApplicationControl(payload))
 	watched := []byte(`{"version":1,"paths":[]}`)
 	require.NoError(t, d.SendWatchedPaths(watched))
+	containment := []byte(`{"version":1,"contained":false}`)
+	require.NoError(t, d.SendNetworkContainment(containment))
 
 	cancel()
 	<-done
@@ -506,6 +519,7 @@ func TestDispatcher_SendDuringActiveConnection(t *testing.T) {
 	require.Equal(t, [][]byte{payload}, built[0].sentPayloads)
 	// Each push reaches the connector through its own method, so the extension receives it under its own message type.
 	require.Equal(t, [][]byte{watched}, built[0].watchedPayloads)
+	require.Equal(t, [][]byte{containment}, built[0].containmentPayloads)
 }
 
 // spec:agent-xpc-receiver/outbound-policy-push-routed-to-active-connection/policy-push-while-disconnected
@@ -520,15 +534,18 @@ func TestDispatcher_SendWhileDisconnected(t *testing.T) {
 	err := d.SendApplicationControl([]byte("x"))
 	require.ErrorIs(t, err, ErrNoConnector)
 	require.ErrorIs(t, d.SendWatchedPaths([]byte("x")), ErrNoConnector)
+	require.ErrorIs(t, d.SendNetworkContainment([]byte("x")), ErrNoConnector)
 
 	// And after Set + Clear, we should be back to ErrNoConnector.
 	c := newStubConnector(stubScript{})
 	d.Set(c)
 	require.NoError(t, d.SendApplicationControl([]byte("y")))
 	require.NoError(t, d.SendWatchedPaths([]byte("y")))
+	require.NoError(t, d.SendNetworkContainment([]byte("y")))
 	d.Clear()
 	require.ErrorIs(t, d.SendApplicationControl([]byte("z")), ErrNoConnector)
 	require.ErrorIs(t, d.SendWatchedPaths([]byte("z")), ErrNoConnector)
+	require.ErrorIs(t, d.SendNetworkContainment([]byte("z")), ErrNoConnector)
 }
 
 // spec:agent-xpc-receiver/clean-shutdown-on-context-cancellation/agent-receives-sigterm

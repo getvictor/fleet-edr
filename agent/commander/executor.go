@@ -71,7 +71,9 @@ type Executor struct {
 	// one command. Nil disables the check (single-transport callers and most tests); see InFlight for why liveness is tracked here
 	// rather than in the durable ledger.
 	inFlight *InFlight
-	logger   *slog.Logger
+	// containment applies set_network_containment. Nil (the default) reports those commands failed.
+	containment NetworkContainment
+	logger      *slog.Logger
 }
 
 // NewExecutor builds an Executor. sender may be nil (set_application_control and set_watched_paths then report failed with a clear reason);
@@ -88,6 +90,12 @@ func NewExecutor(sender ExtensionSender, ledger Ledger, logger *slog.Logger) *Ex
 // production agent runs two transports, so tests and single-transport paths leave it nil.
 func (e *Executor) SetInFlight(f *InFlight) {
 	e.inFlight = f
+}
+
+// SetContainment wires the network containment applier. Optional for the same reason as SetGeneration: only the macOS production agent
+// has a network extension to contain with.
+func (e *Executor) SetContainment(c NetworkContainment) {
+	e.containment = c
 }
 
 // SetGeneration installs the live process-generation registry used to pin kill_process to the operator-selected generation (issue #627).
@@ -207,6 +215,8 @@ func (e *Executor) run(ctx context.Context, cmd Command) (status string, result 
 		return e.runSetApplicationControl(ctx, cmd)
 	case "set_watched_paths":
 		return e.runSetWatchedPaths(ctx, cmd)
+	case "set_network_containment":
+		return e.runSetNetworkContainment(ctx, cmd)
 	default:
 		return StatusFailed, marshalResult("unknown command type: " + cmd.CommandType)
 	}
@@ -325,6 +335,22 @@ func (e *Executor) runSetWatchedPaths(ctx context.Context, cmd Command) (string,
 	e.logger.InfoContext(ctx, "commander set_watched_paths", "cmd_id", cmd.ID, "edr.watched_paths.version", payload.Version,
 		"edr.watched_paths.count", len(paths))
 	result, _ := json.Marshal(map[string]any{"version": payload.Version, "paths": len(paths)})
+	return StatusCompleted, result
+}
+
+// runSetNetworkContainment contains or releases the host (#948). Unlike the application-control and watched-path pushes it completes only
+// once the network extension confirms it applied the state, because the console reports a host as contained on the strength of this
+// result.
+func (e *Executor) runSetNetworkContainment(ctx context.Context, cmd Command) (string, json.RawMessage) {
+	if e.containment == nil {
+		return StatusFailed, marshalResult("network containment is not supported on this host")
+	}
+	result, err := e.containment.Apply(ctx, []byte(cmd.Payload))
+	if err != nil {
+		e.logger.WarnContext(ctx, "commander set_network_containment failed", "cmd_id", cmd.ID, "err", err)
+		return StatusFailed, marshalResult(err.Error())
+	}
+	e.logger.InfoContext(ctx, "commander set_network_containment", "cmd_id", cmd.ID, "result", string(result))
 	return StatusCompleted, result
 }
 

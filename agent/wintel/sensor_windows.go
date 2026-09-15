@@ -207,6 +207,13 @@ var ErrWatchedPathsUnsupported = errors.New("wintel: watched file paths are not 
 // SendWatchedPaths is unsupported on the driverless sensor.
 func (s *Sensor) SendWatchedPaths(_ []byte) error { return ErrWatchedPathsUnsupported }
 
+// ErrNetworkContainmentUnsupported is returned by SendNetworkContainment: host network containment is enforced by the macOS network
+// extension's content filter, which has no counterpart on the driverless sensor.
+var ErrNetworkContainmentUnsupported = errors.New("wintel: network containment is not supported on the driverless Windows sensor")
+
+// SendNetworkContainment is unsupported on the driverless sensor.
+func (s *Sensor) SendNetworkContainment(_ []byte) error { return ErrNetworkContainmentUnsupported }
+
 // Disconnect tears the sensor down and waits for the ProcessTrace goroutine to exit, so a subsequent Connect never overlaps a
 // still-draining session. Order is load-bearing: CloseTrace is what actually unblocks a blocked ProcessTrace (it returns
 // ERROR_CTX_CLOSE_PENDING and tells ProcessTrace to drain its buffers and return), so Close MUST run before the wait. Waiting first

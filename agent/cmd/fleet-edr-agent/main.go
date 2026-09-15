@@ -29,6 +29,7 @@ import (
 	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/commandledger"
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/containment"
 	"github.com/fleetdm/edr/agent/controlclient"
 	"github.com/fleetdm/edr/agent/enrich"
 	"github.com/fleetdm/edr/agent/enrollment"
@@ -133,6 +134,12 @@ func run() error {
 
 	logAgentStart(ctx, logger, cfg)
 
+	// Created before enrollment because every server connection, the token refresh included, dials through the containment manager:
+	// a contained host reaches the server only through its lifeline. neDispatcher is the manager's route to the network extension,
+	// published by that extension's receiver loop below.
+	neDispatcher := receiver.NewDispatcher()
+	containmentMgr, serverDial := newContainment(cfg, neDispatcher.SendNetworkContainment, baseServerDial(), logger)
+
 	tokenProvider, err := enrollment.Ensure(ctx, enrollment.Options{
 		ServerURL:         cfg.ServerURL,
 		EnrollSecret:      cfg.EnrollSecret,
@@ -141,6 +148,7 @@ func run() error {
 		AllowInsecure:     cfg.AllowInsecure,
 		HostIDOverride:    cfg.HostIDOverride,
 		AgentVersion:      version,
+		DialContext:       serverDial,
 		Logger:            logger,
 	})
 	if err != nil {
@@ -181,7 +189,7 @@ func run() error {
 	rec := metrics.New(q)
 	q.SetMetrics(rec)
 
-	agentTransport, httpClient, err := newAgentHTTPClient(cfg, logger)
+	agentTransport, httpClient, err := newAgentHTTPClient(cfg, serverDial, logger)
 	if err != nil {
 		return err
 	}
@@ -229,6 +237,8 @@ func run() error {
 		pidTable:      pidTable,
 		health:        healthRegistry,
 		esfDispatcher: esfDispatcher,
+		neDispatcher:  neDispatcher,
+		containment:   containmentMgr,
 		hostID:        hostID,
 		hostIDFn:      tokenProvider.HostID,
 	})
@@ -266,8 +276,15 @@ func run() error {
 		generation:      genRegistry,
 		// One tracker for both transports, which is the whole point: it is what stops the floor poll and the push path executing the
 		// same command at once now that the poll no longer waits on the stream indefinitely (issue #711).
-		inFlight: commander.NewInFlight(),
-		logger:   logger,
+		inFlight:       commander.NewInFlight(),
+		containmentMgr: containmentMgr,
+		serverDial:     serverDial,
+		logger:         logger,
+	}
+	if containmentMgr != nil {
+		// Assigned only when present so the executor sees a nil interface, not a nil pointer, and reports the command unsupported.
+		cmdDeps.containment = containmentMgr
+		go containmentMgr.Run(ctx)
 	}
 	startCommander(ctx, hostID, cfg.ServerURL, agentTransport, cmdDeps)
 	if err := startControlClient(ctx, cfg, hostID, cmdDeps); err != nil {
@@ -345,7 +362,7 @@ func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config)
 // We clone http.DefaultTransport (rather than &http.Transport{}) so the agent
 // keeps ProxyFromEnvironment, keep-alive, and the stdlib's hardened
 // dial/idle timeouts. Real deployments behind HTTPS_PROXY fail without them.
-func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
+func newAgentHTTPClient(cfg *config.Config, dial dialFunc, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
 	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
 	if err != nil {
 		logger.ErrorContext(context.Background(), "build tls config", "err", err)
@@ -353,6 +370,7 @@ func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTrip
 	}
 	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	baseTransport.TLSClientConfig = tlsCfg
+	baseTransport.DialContext = dial
 	// Enable HTTP/2 with keep-alive PINGs so the long-lived agent connection (shared by the uploader + commander) detects a half-open
 	// link (laptop sleep, NAT rebind) and re-establishes it instead of hanging until the request timeout. ConfigureTransports negotiates
 	// h2 over the existing TLS config and returns the h2 transport for tuning. Non-fatal on failure: the agent keeps HTTP/1.1 keep-alive.
@@ -411,7 +429,12 @@ type commandDeps struct {
 	// inFlight is the process-wide executing-command set shared by both transports. It exists because the poll is a bounded floor
 	// rather than suspended while the stream is believed up, so push and poll can deliver one command at the same time (issue #711).
 	inFlight *commander.InFlight
-	logger   *slog.Logger
+	// containment applies set_network_containment on both transports; nil where the host cannot contain.
+	containment commander.NetworkContainment
+	// containmentMgr and serverDial route the control channel through the containment lifeline.
+	containmentMgr *containment.Manager
+	serverDial     dialFunc
+	logger         *slog.Logger
 }
 
 // startCommander spins up the command-poll loop when we have a host_id. With no host_id the agent keeps running (events still upload)
@@ -436,7 +459,8 @@ func startCommander(ctx context.Context, hostID, serverURL string, transport htt
 		// Shared live generation map so a kill_process is pinned to the operator-selected process generation (issue #627).
 		Generation: deps.generation,
 		// Shared executing-command set so the floor poll and the push path cannot both run one command (issue #711).
-		InFlight: deps.inFlight,
+		InFlight:    deps.inFlight,
+		Containment: deps.containment,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, deps.logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -463,7 +487,8 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 	if err != nil {
 		return err
 	}
-	conn, err := grpc.NewClient(target,
+	dialTarget, dialOpts := controlDialOptions(cfg, target, deps.containmentMgr, deps.serverDial, http.ProxyFromEnvironment)
+	conn, err := grpc.NewClient(dialTarget, append(dialOpts,
 		grpc.WithTransportCredentials(creds),
 		// Keep-alive PINGs detect a half-open link (laptop sleep, NAT rebind) on the long-lived stream, mirroring the HTTP/2 transport.
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -471,7 +496,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 			Timeout:             h2PingTimeout,
 			PermitWithoutStream: true,
 		}),
-	)
+	)...)
 	if err != nil {
 		logger.ErrorContext(ctx, "control channel dial", "addr", target, "err", err)
 		return err
@@ -485,6 +510,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 		Ledger:            deps.ledger,
 		Generation:        deps.generation,
 		InFlight:          deps.inFlight,
+		Containment:       deps.containment,
 		OnConnectedChange: deps.streamConnected.Store,
 		Logger:            logger,
 	})
@@ -611,6 +637,8 @@ type receiverLoopParams struct {
 	// transitions records capture-provider state changes as durable events (issue #684). Nil disables the recording, which
 	// is what the ESF loop and every non-darwin build get.
 	transitions *sensorevent.Transitions
+	// containment receives the network extension's containment status (#948). Nil for every loop but the network extension's.
+	containment *containment.Manager
 	// connectorFactory overrides how the loop builds its Connector. Nil uses the default XPC receiver (macOS); the Windows sensor seam
 	// sets it to build an ETW-backed Connector instead, so both platforms share the same reconnect/backoff/heartbeat + health machinery.
 	connectorFactory func() receiver.Connector
@@ -657,27 +685,19 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
-			// Provider-liveness status is a control message, not telemetry: it rides the event channel because the XPC bridge
-			// only surfaces messages carrying a `data` blob, but the agent consumes it for health and never uploads it
-			// (issue #649). Handled before anything else so it cannot reach the proctable or the upload queue.
-			// Whether we can RECORD the status is a separate question from whether it is telemetry: a control message must be
-			// dropped either way, so the health nil-check guards only the recording.
+			// The network extension's control messages ride the event channel because the XPC bridge only surfaces messages carrying a
+			// `data` blob; they are consumed here and never uploaded. Their type is peeked at once, since ordinary telemetry (a
+			// network_connect per flow) is the overwhelmingly common case.
 			if p.providerLiveness {
-				if status, ok := parseProviderStatus(evt.Data); ok {
-					if p.health != nil {
-						p.health.MarkProviders(p.component, status.Providers, status.Decoded)
+				switch peekEventType(evt.Data) {
+				case containment.StatusEventType:
+					// Dropped whether or not there is a manager to record it.
+					if p.containment != nil {
+						p.containment.Observe(ctx, containment.DecodeStatus(evt.Data))
 					}
-					// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed"
-					// cannot drift apart (issue #632).
-					if p.selfHeal != nil {
-						p.selfHeal.Observe(ctx, status.Providers)
-					}
-					// Health is level state, so it forgets a stop the moment the self-heal repairs it. This writes the
-					// transition down so the tamper evidence outlives the repair (issue #684).
-					// Only a report we could actually read may move the transition baseline; see providerStatus.Decoded.
-					if p.transitions != nil && status.Decoded {
-						p.transitions.Observe(ctx, status.Providers, status.StopReasons)
-					}
+					return
+				case providerStatusEventType:
+					observeProviderStatus(ctx, p, decodeProviderStatus(evt.Data))
 					return
 				}
 			}
@@ -695,6 +715,12 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	if p.dispatcher != nil {
 		hooks.OnConnected = p.dispatcher.Set
+		if p.containment != nil {
+			hooks.OnConnected = func(c receiver.Connector) {
+				p.dispatcher.Set(c)
+				p.containment.Reconnected()
+			}
+		}
 		hooks.OnDisconnected = p.dispatcher.Clear
 	}
 	hooks = withHealthHooks(hooks, p)
@@ -715,9 +741,6 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 // "awaiting provider status".
 const providerStatusEventType = "ne_provider_status"
 
-// parseProviderStatus recognises a provider-liveness control message and returns the provider-to-state map it carries. The second
-// result is false for every ordinary telemetry event, which is the overwhelmingly common case, so the check is a cheap type peek
-// before any further decoding.
 // providerStatus is a decoded provider-liveness control message: the graded state per provider, plus the raw platform stop
 // reason for stopped ones. The reasons map is nil against an extension too old to send it, which is a supported skew.
 type providerStatus struct {
@@ -730,21 +753,26 @@ type providerStatus struct {
 	Decoded bool
 }
 
-func parseProviderStatus(data []byte) (providerStatus, bool) {
-	// Peek at event_type ALONE. This runs on every network-extension event and ordinary telemetry (a network_connect per
-	// flow) is the overwhelmingly common case, so the common path must touch the payload as little as possible: with no
-	// payload field declared, encoding/json walks past it without allocating. Capturing it as a json.RawMessage would copy
-	// the payload bytes for every flow the host makes, and decoding it into a struct would additionally build a map.
+// peekEventType reads event_type ALONE. It runs on every network-extension event and ordinary telemetry (a network_connect per flow)
+// is the overwhelmingly common case, so the common path must touch the payload as little as possible: with no payload field declared,
+// encoding/json walks past it without allocating. Capturing it as a json.RawMessage would copy the payload bytes for every flow the
+// host makes, and decoding it into a struct would additionally build a map.
+func peekEventType(data []byte) string {
 	var hdr struct {
 		EventType string `json:"event_type"`
 	}
-	if err := json.Unmarshal(data, &hdr); err != nil || hdr.EventType != providerStatusEventType {
-		return providerStatus{}, false
+	if err := json.Unmarshal(data, &hdr); err != nil {
+		return ""
 	}
-	// Past this point event_type has identified a control message, so every path returns true: it must be kept out of the
-	// upload queue whether or not its payload decodes. The second pass costs a re-parse, which is free in aggregate because
-	// it only runs on the rare control message. An empty map is meaningful rather than a parse failure, because it is what
-	// the extension sends when NO provider has started, the condition this whole mechanism exists to surface.
+	return hdr.EventType
+}
+
+// decodeProviderStatus decodes a message peekEventType identified as provider status.
+func decodeProviderStatus(data []byte) providerStatus {
+	// event_type has identified a control message, which must be kept out of the upload queue whether or not its payload
+	// decodes. This second pass costs a re-parse, which is free in aggregate because it only runs on the rare control message.
+	// An empty map is meaningful rather than a parse failure, because it is what the extension sends when NO provider has
+	// started, the condition this whole mechanism exists to surface.
 	var envelope struct {
 		Payload struct {
 			Providers   map[string]string `json:"providers"`
@@ -752,14 +780,33 @@ func parseProviderStatus(data []byte) (providerStatus, bool) {
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Providers == nil {
-		return providerStatus{Providers: map[string]string{}}, true
+		return providerStatus{Providers: map[string]string{}}
 	}
 	// An explicitly decoded `{}` IS valid and meaningful: it is what the extension sends when no provider has started.
 	return providerStatus{
 		Providers:   envelope.Payload.Providers,
 		StopReasons: envelope.Payload.StopReasons,
 		Decoded:     true,
-	}, true
+	}
+}
+
+// observeProviderStatus records a provider-liveness report. Whether we can RECORD the status is a separate question from whether it is
+// telemetry: the caller drops the control message either way, so each nil check guards only its recording.
+func observeProviderStatus(ctx context.Context, p receiverLoopParams, status providerStatus) {
+	if p.health != nil {
+		p.health.MarkProviders(p.component, status.Providers, status.Decoded)
+	}
+	// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed" cannot drift apart
+	// (issue #632).
+	if p.selfHeal != nil {
+		p.selfHeal.Observe(ctx, status.Providers)
+	}
+	// Health is level state, so it forgets a stop the moment the self-heal repairs it. This writes the transition down so the tamper
+	// evidence outlives the repair (issue #684). Only a report we could actually read may move the transition baseline; see
+	// providerStatus.Decoded.
+	if p.transitions != nil && status.Decoded {
+		p.transitions.Observe(ctx, status.Providers, status.StopReasons)
+	}
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.

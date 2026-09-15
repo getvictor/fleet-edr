@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log/slog"
+	"net"
+	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,10 +21,24 @@ import (
 // asserts it constructs cleanly. This covers the http2.ConfigureTransports wiring, which has no other unit coverage.
 func TestNewAgentHTTPClient(t *testing.T) {
 	t.Parallel()
-	transport, client, err := newAgentHTTPClient(&config.Config{AllowInsecure: true}, slog.Default())
+	var dialed atomic.Value
+	dial := func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed.Store(addr)
+		return nil, errors.New("dial recorded")
+	}
+	transport, client, err := newAgentHTTPClient(&config.Config{AllowInsecure: true}, dial, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, transport)
 	require.NotNil(t, client)
+	// Every server connection goes through the given dial, which is what routes a contained host through its lifeline (#948).
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://edr.example.com:8089/api/health", nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	require.ErrorContains(t, err, "dial recorded")
+	assert.Equal(t, "edr.example.com:8089", dialed.Load())
 }
 
 // TestControlDialTarget pins how the control-channel dial endpoint and transport credentials are derived from EDR_SERVER_URL (issue

@@ -31,9 +31,14 @@ The work lands in steps, producer before consumer.
 - **The extension reports containment status** (contained, version, epoch, whether it applied) to the agent after each change and on every agent hello, and sends nothing on a host that has never received a containment update, so an agent without containment support uploads no stray control events. Filter applies run one at a time, so settings never take effect out of order.
 - While contained, the filter records no `network_connect` events: dropped flows never reach the provider.
 
+### Agent
+
+- **`set_network_containment`** (`version`, `epoch`, `contained`) resolves the lifeline, the endpoint the agent reaches the server through (the server, or its proxy), with a direct resolver query, since the system resolver answers nothing while contained. It sends the extension its document and completes only when the extension reports that state applied, so the console can say a host is contained on the strength of the command's result. It fails with the reason when the lifeline cannot be resolved (nothing is sent), when the extension cannot be reached, does not apply the state or reports a newer one, or on a host without the network extension.
+- **A contained host reaches the server through its lifeline.** Uploads, command polls, token refresh and re-enrollment, and the control channel dial the lifeline addresses while the host is contained. A proxied control channel keeps gRPC's own proxy dialing.
+- **The lifeline stays current.** While contained the agent re-resolves every five minutes and sends new addresses at the same version when they moved; an agent that starts on a contained host learns it from the extension's status and refreshes once. The extension's status events are consumed and never uploaded.
+
 ### Later steps
 
-- Agent: a `set_network_containment` command, resolving the server name for the lifeline (with a direct resolver query, since the system resolver answers nothing while contained) and refreshing it while contained, and reporting the extension's status.
 - DNS proxy: while contained, answer only the EDR server's name, so DNS cannot carry traffic out of a contained host.
 - Server: containment state per host, a contain and release API with a required reason, audit, delivery with catch-up, and the state on the host API.
 - Console: contain and release on the host, with the reason and step-up reauthentication, and the state on the host list and header.

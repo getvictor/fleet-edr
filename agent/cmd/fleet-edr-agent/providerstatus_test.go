@@ -9,6 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// parseProviderStatus is the receiver loop's recognition of a provider-liveness control message: a type peek, then the decode only
+// for that type. The second result is false for every ordinary telemetry event.
+func parseProviderStatus(data []byte) (providerStatus, bool) {
+	if peekEventType(data) != providerStatusEventType {
+		return providerStatus{}, false
+	}
+	return decodeProviderStatus(data), true
+}
+
 // TestParseProviderStatus pins the filter that keeps the network extension's liveness control message out of the upload queue
 // while letting every ordinary event through untouched (issue #649).
 //

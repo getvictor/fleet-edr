@@ -31,6 +31,10 @@ func (p *pingerConnector) SendWatchedPaths(b []byte) error {
 	panic("pingerConnector.SendWatchedPaths: unused")
 }
 
+func (p *pingerConnector) SendNetworkContainment(b []byte) error {
+	panic("pingerConnector.SendNetworkContainment: unused")
+}
+
 func (p *pingerConnector) Ping(timeout time.Duration) error {
 	p.count.Add(1)
 	if p.pingFn != nil {

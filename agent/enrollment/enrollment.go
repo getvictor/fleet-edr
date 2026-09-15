@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -93,7 +94,10 @@ type Options struct {
 	AllowInsecure     bool   // allow http:// + skip cert verify (dev only)
 	HostIDOverride    string // if set, used instead of the IOPlatformUUID
 	AgentVersion      string
-	Logger            *slog.Logger
+	// DialContext, when set, is the dial the enrollment and token-refresh client uses, so a contained host refreshes its token through
+	// the containment lifeline (#948). Nil keeps the stdlib's dial.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	Logger      *slog.Logger
 }
 
 // Ensure loads an existing token file or performs a fresh enroll. Returns a TokenProvider the
@@ -410,6 +414,9 @@ func (p *provider) httpClient() (*http.Client, error) {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = tlsCfg
+	if p.opts.DialContext != nil {
+		tr.DialContext = p.opts.DialContext
+	}
 	return &http.Client{
 		Timeout:   10 * time.Second,
 		Transport: tr,

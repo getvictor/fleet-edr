@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/containment"
 	"github.com/fleetdm/edr/agent/health"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/receiver"
@@ -19,6 +20,10 @@ type telemetryDeps struct {
 	pidTable      *proctable.Table
 	health        *health.Registry
 	esfDispatcher *receiver.Dispatcher
+	// neDispatcher publishes the network extension's connection for set_network_containment, and containment consumes that
+	// extension's containment status. Both are macOS-only and nil-safe elsewhere.
+	neDispatcher *receiver.Dispatcher
+	containment  *containment.Manager
 	// hostID is the value at sensor-start time. Fine for the Windows ETW sensor, which stamps it once into a connector.
 	hostID string
 	// hostIDFn reads the CURRENT host id. Anything that stamps an id onto an event must use this rather than hostID: a
