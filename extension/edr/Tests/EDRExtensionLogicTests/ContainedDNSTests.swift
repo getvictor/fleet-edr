@@ -44,6 +44,8 @@ final class ContainedDNSTests: XCTestCase {
         }
     }
 
+    // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/an-allowed-lookup-goes-to-a-configured-resolver
+    //
     // A contained host's allowed lookup goes to a configured resolver: the one the client asked when it is configured, otherwise the
     // first configured one, and none when the host has none.
     func testAnAllowedLookupGoesToAConfiguredResolver() {
