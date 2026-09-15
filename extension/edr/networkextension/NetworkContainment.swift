@@ -159,41 +159,47 @@ enum NetworkContainment {
     }
 }
 
-/// ReleasedLifeline is what a release keeps allowed: the TCP flows to every EDR server endpoint the released containment named.
+/// ReleasedLifeline is what a release keeps allowed: TCP to the server endpoint of the containment it released, and to the endpoint that
+/// one replaced.
 ///
 /// While contained, the lifeline rules decide the agent's connections to the server, so a connection opened then never reaches the
 /// provider. Measured on edr-dev, releasing to settings that hand every flow to the provider cuts such a connection within seconds, and
 /// with it the release command's own outcome on its way to the server. Kept as allow rules, those flows are not handed to the provider
 /// and survive. They record no network_connect events.
 ///
-/// Every endpoint since the containment began is kept, not only the latest: a lifeline refresh is accepted before it is applied, and
-/// one that failed to apply leaves the filter allowing the earlier endpoint the agent is still connected to. Everything is forgotten when
-/// a content filter starts, since its first settings carry no kept rules and a start cuts the connections they kept, so the state is
-/// held in memory and not persisted.
+/// The replaced endpoint is kept because a lifeline refresh is accepted before it is applied: one that failed to apply leaves the filter
+/// allowing the endpoint the agent is still connected to. Older endpoints are not kept, since applying a later lifeline cut their
+/// connections, and so the rules stay bounded however long a containment lasts. Everything is forgotten when a content filter starts:
+/// its first settings carry no kept rules and a start cuts the connections they kept. The state is held in memory, not persisted.
 struct ReleasedLifeline {
     private(set) var rules: [LifelineRule] = []
-    /// containment is the server rules of every containment update since the filter started or the host was last released.
-    private var containment: [LifelineRule] = []
+    /// latest is the server rules of the most recent containment update since the filter started or the host was last released, and
+    /// replaced the different ones before it. A containment after a release or a start replaces the empty latest, so replaced needs no
+    /// reset of its own.
+    private var latest: [LifelineRule] = []
+    private var replaced: [LifelineRule] = []
 
-    /// accepted notes an accepted update. A containment or a lifeline refresh adds its server rules to the containment's; a release keeps
-    /// them. A release of a host that was not contained keeps what the last release kept.
+    /// accepted notes an accepted update. A containment or a lifeline refresh that moves the endpoint becomes the latest; a release keeps
+    /// the latest and replaced endpoints. A release of a host that was not contained keeps what the last release kept.
     mutating func accepted(_ update: NetworkContainmentUpdate) {
         guard update.contained else {
-            if !containment.isEmpty {
-                rules = containment
-                containment = []
+            if !latest.isEmpty {
+                rules = replaced.filter { !latest.contains($0) } + latest
+                latest = []
             }
             return
         }
-        for rule in NetworkContainment.serverRules(for: update) where !containment.contains(rule) {
-            containment.append(rule)
+        let server = NetworkContainment.serverRules(for: update)
+        if server != latest {
+            replaced = latest
+            latest = server
         }
     }
 
     /// filterStarting forgets the kept rules and starts over from the state the starting filter's first settings enforce.
     mutating func filterStarting(with state: NetworkContainmentUpdate?) {
         rules = []
-        containment = []
+        latest = []
         if let state {
             accepted(state)
         }

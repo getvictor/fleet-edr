@@ -126,14 +126,23 @@ final class NetworkContainmentTests: XCTestCase {
         XCTAssertEqual(released.rules.count, 2, "a repeated release keeps the connections the first one kept")
     }
 
-    // A lifeline refresh is accepted before it is applied; if its apply failed the agent is still connected to the earlier endpoint.
-    func testAReleaseKeepsEveryEndpointTheContainmentNamed() {
+    // A lifeline refresh is accepted before it is applied; if its apply failed the agent is still connected to the endpoint it replaced.
+    // Older endpoints are not kept, so the rules stay bounded over a long containment.
+    func testAReleaseKeepsTheLatestEndpointAndTheOneItReplaced() {
         var released = ReleasedLifeline()
+        let release = NetworkContainmentUpdate(version: 6, epoch: 100, contained: false, serverPort: 0, serverAddresses: [])
+        released.accepted(contained(port: 8443, addresses: ["203.0.113.6"]))
         released.accepted(contained(port: 8443, addresses: ["203.0.113.7"]))
         released.accepted(contained(port: 8443, addresses: ["203.0.113.8"]))
         released.accepted(contained(port: 8443, addresses: ["203.0.113.8"]))
-        released.accepted(NetworkContainmentUpdate(version: 6, epoch: 100, contained: false, serverPort: 0, serverAddresses: []))
-        XCTAssertEqual(released.rules.map(\.address), ["203.0.113.7", "203.0.113.8"])
+        released.accepted(release)
+        XCTAssertEqual(released.rules.map(\.address), ["203.0.113.7", "203.0.113.8"],
+                       "the replaced endpoint and the latest, nothing older; an unchanged refresh replaces nothing")
+
+        released.accepted(contained(port: 8443, addresses: ["203.0.113.7"]))
+        released.accepted(contained(port: 8443, addresses: ["203.0.113.7", "203.0.113.8"]))
+        released.accepted(release)
+        XCTAssertEqual(released.rules.map(\.address), ["203.0.113.7", "203.0.113.8"], "an address in both endpoints is kept once")
 
         released.accepted(contained(port: 9443, addresses: ["198.51.100.9"]))
         released.accepted(NetworkContainmentUpdate(version: 8, epoch: 100, contained: false, serverPort: 0, serverAddresses: []))

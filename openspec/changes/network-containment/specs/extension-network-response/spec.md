@@ -2,7 +2,7 @@
 
 ### Requirement: Containment is enforced by the operating system
 
-The network extension SHALL enforce host network containment as content-filter settings whose default action drops every flow the lifeline does not allow, so the operating system enforces it without consulting the provider: new and established connections to other destinations are cut, and containment stays in force while the provider is stopped or restarting. A contained host SHALL keep a lifeline of TCP to each EDR server address it was given on the server port, DHCP between the client and server ports (UDP 68 to 67, and UDP 546 to 547 for DHCPv6), and outbound DNS (TCP and UDP 53); loopback is not filtered. A host that is not contained SHALL have the filter's telemetry settings, which hand every flow to the provider, except that a release SHALL keep TCP to every EDR server endpoint the released containment named since the content filter started allowed by rule, until the content filter next starts. The lifeline rules decide the connections the agent opens while the host is contained, so the provider never sees them, and the operating system cuts such a connection once it is handed to a provider that never saw it, together with the release command's outcome on its way to the server. The kept server flows record no `network_connect` events.
+The network extension SHALL enforce host network containment as content-filter settings whose default action drops every flow the lifeline does not allow, so the operating system enforces it without consulting the provider: new and established connections to other destinations are cut, and containment stays in force while the provider is stopped or restarting. A contained host SHALL keep a lifeline of TCP to each EDR server address it was given on the server port, DHCP between the client and server ports (UDP 68 to 67, and UDP 546 to 547 for DHCPv6), and outbound DNS (TCP and UDP 53); loopback is not filtered. A host that is not contained SHALL have the filter's telemetry settings, which hand every flow to the provider, except that a release SHALL keep TCP to the released containment's EDR server endpoint, and to the endpoint a lifeline refresh last replaced since the content filter started, allowed by rule until the content filter next starts. The lifeline rules decide the connections the agent opens while the host is contained, so the provider never sees them, and the operating system cuts such a connection once it is handed to a provider that never saw it, together with the release command's outcome on its way to the server. The kept server flows record no `network_connect` events.
 
 #### Scenario: A contained host keeps only the lifeline
 
@@ -20,7 +20,7 @@ The network extension SHALL enforce host network containment as content-filter s
 
 - **GIVEN** a contained host whose agent opened connections to the EDR server while contained
 - **WHEN** the containment is released
-- **THEN** TCP to each server address and port the containment named since the content filter started, including one a lifeline refresh replaced, stays allowed by rule, and every other flow is handed to the provider
+- **THEN** TCP to the containment's server addresses and port, and to the endpoint its last lifeline refresh replaced, stays allowed by rule, and every other flow is handed to the provider
 - **AND** a later release keeps those rules, a starting content filter does not apply them, and a release after the start keeps none from before it
 
 ### Requirement: Containment state is persisted and ordered
