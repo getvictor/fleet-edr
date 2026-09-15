@@ -28,6 +28,18 @@ function lastButton(name: string): HTMLElement {
   return buttons[buttons.length - 1];
 }
 
+// jsdom has no dialog methods; these stand-ins are restored after each test so they do not leak into other files' tests.
+const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+
+function restore(name: "showModal" | "close", descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) {
+    Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
+  } else {
+    Reflect.deleteProperty(HTMLDialogElement.prototype, name);
+  }
+}
+
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function showModal() {
     this.open = true;
@@ -40,7 +52,14 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  restore("showModal", originalShowModal);
+  restore("close", originalClose);
 });
+
+const pendingContain: ContainmentState = {
+  host_id: HOST, contained: true, version: 1, epoch: 100, reason: "beaconing",
+  delivery: { command_id: 7, status: "pending", current: true },
+};
 
 describe("HostContainment", () => {
   it("offers Contain to an operator holding host.isolate on a host that is not contained, with no badge and no polling", async () => {
@@ -92,10 +111,12 @@ describe("HostContainment", () => {
     fireEvent.change(reason, { target: { value: "  beaconing  " } });
     fireEvent.click(lastButton("Contain host"));
 
+    read.mockResolvedValue(pendingContain);
     await waitFor(() => {
       expect(set).toHaveBeenCalledWith(HOST, true, "beaconing");
     });
     expect(await screen.findByText("Containing")).toBeVisible();
+    expect(screen.getByText("Containing").closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
 
     read.mockResolvedValue(contained);
     await act(async () => {
@@ -121,6 +142,9 @@ describe("HostContainment", () => {
     renderControl();
 
     fireEvent.click(await screen.findByRole("button", { name: "Release host" }));
+    vi.mocked(api.getHostContainment).mockResolvedValue({
+      host_id: HOST, contained: false, version: 2, epoch: 200, delivery: { command_id: 8, status: "pending", current: true },
+    });
     expect(screen.getByRole("dialog", { name: "Release this host?" })).toBeVisible();
     fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "reimaged" } });
     fireEvent.click(lastButton("Release host"));
@@ -128,5 +152,41 @@ describe("HostContainment", () => {
       expect(set).toHaveBeenCalledWith(HOST, false, "reimaged");
     });
     expect(await screen.findByText("Releasing")).toBeVisible();
+  });
+
+  it("reads one at a time while a change is on its way", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answer: (s: ContainmentState) => void = () => undefined;
+    const read = vi.spyOn(api, "getHostContainment")
+      .mockResolvedValueOnce(pendingContain)
+      .mockImplementationOnce(() => new Promise<ContainmentState>((resolve) => { answer = resolve; }));
+    renderControl();
+    expect(await screen.findByText("Containing")).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12000);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    read.mockResolvedValue(contained);
+    await act(async () => {
+      answer(contained);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(await screen.findByText("Contained")).toBeVisible();
+  });
+
+  it("keeps following a change through a failed read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const read = vi.spyOn(api, "getHostContainment").mockResolvedValue(never);
+    vi.spyOn(api, "setHostContainment").mockResolvedValue({ state: pendingContain, changed: true, command_id: 7 });
+    renderControl();
+    fireEvent.click(await screen.findByRole("button", { name: "Contain host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "beaconing" } });
+    read.mockRejectedValueOnce(new Error("blip")).mockResolvedValue(contained);
+    fireEvent.click(lastButton("Contain host"));
+    expect(await screen.findByText("Containing")).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(await screen.findByText("Contained")).toBeVisible();
   });
 });

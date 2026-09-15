@@ -81,7 +81,7 @@ export function HostHeader({ hostId, actions }: HostHeaderProps) {
         </span>
       )}
       {detail && <HostDetailsPopover detail={detail} />}
-      <HostContainment hostId={hostId} />
+      <HostContainment key={hostId} hostId={hostId} />
     </span>
   );
 

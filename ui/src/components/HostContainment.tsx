@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { getHostContainment, setHostContainment } from "../api";
 import { containmentBadge, containmentPhase, containmentSettled } from "../containment";
 import { PermissionAction, useCan } from "../permissions-core";
@@ -18,44 +18,54 @@ const REASON_MAX_LENGTH = 1024;
 // HostContainment is the host header's network containment control (#948): a badge for where containment stands, and, for an operator
 // holding host.isolate, a Contain or Release action that asks for a reason. Containment cuts the host off from the network except its
 // connection to the EDR server, so the confirmation says so. The state is best-effort: a failed read shows nothing rather than block
-// the header.
+// the header. The host header mounts one per host (keyed by host id), so a navigation to another host starts fresh: no read, open
+// confirmation or pending change carries across hosts.
 export function HostContainment({ hostId }: { readonly hostId: string }) {
   const can = useCan();
   const [state, setState] = useState<ContainmentState | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // reads restarts the read chain: a change the operator just made is read back at once and followed until the host settles it.
+  const [reads, setReads] = useState(0);
 
-  const refresh = useCallback(() => {
-    getHostContainment(hostId)
-      .then(setState)
-      .catch(() => {
-        // Best-effort, like the rest of the header.
-      });
-  }, [hostId]);
-
+  // One read at a time: the next is scheduled only after the current one settles, so a slow response cannot land after a newer one,
+  // and nothing is applied once the effect is cleaned up. A read that fails while a change is on its way is retried; otherwise the
+  // badge is best-effort, like the rest of the header.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on host change so another host's state never shows here
-    setState(null);
-    refresh();
-  }, [refresh]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = (pending: boolean) => {
+      getHostContainment(hostId)
+        .then((next) => {
+          if (cancelled) return;
+          setState(next);
+          if (!containmentSettled(containmentPhase(next))) timer = setTimeout(read, CONTAINMENT_POLL_MS, true);
+        })
+        .catch(() => {
+          if (!cancelled && pending) timer = setTimeout(read, CONTAINMENT_POLL_MS, true);
+        });
+    };
+    read(reads > 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [hostId, reads]);
 
   const phase = containmentPhase(state);
-  useEffect(() => {
-    if (containmentSettled(phase)) return;
-    const timer = setInterval(refresh, CONTAINMENT_POLL_MS);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [phase, refresh]);
 
   const contain = !(state?.contained ?? false);
   const badge = containmentBadge(phase);
   return (
     <span className="host-containment">
-      {badge && (
-        <Badge variant={badge.variant} className="host-containment__badge">
-          {badge.label}
-        </Badge>
-      )}
+      {/* A polite live region, so a change the host confirms or fails later is announced. Not role="status": the host page already
+          has a status notice (the process tree's truncation notice), and this region is always present. */}
+      <span aria-live="polite" aria-atomic="true" className="host-containment__status">
+        {badge && (
+          <Badge variant={badge.variant} className="host-containment__badge">
+            {badge.label}
+          </Badge>
+        )}
+      </span>
       {state && can(PermissionAction.HostIsolate) && (
         <Button
           type="button"
@@ -88,6 +98,7 @@ export function HostContainment({ hostId }: { readonly hostId: string }) {
           const change = await setHostContainment(hostId, contain, reason);
           setState(change.state);
           setConfirming(false);
+          setReads((n) => n + 1);
         }}
       />
     </span>
