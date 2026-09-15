@@ -94,6 +94,7 @@ final class NetworkContainmentController: @unchecked Sendable {
         case .deferred:
             return
         case .noFilter:
+            appliedUpdate = nil
             applyError = "content filter is not running"
             publishLocked()
         case .apply(let target):
@@ -105,6 +106,8 @@ final class NetworkContainmentController: @unchecked Sendable {
                     let outcome = self.sequencer.completed(target)
                     if outcome.report {
                         if let error {
+                            // The running filter is not confirmed to enforce anything now, whatever an earlier filter did.
+                            self.appliedUpdate = nil
                             self.applyError = error.localizedDescription
                         } else {
                             self.appliedUpdate = update
