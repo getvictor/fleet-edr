@@ -395,7 +395,12 @@ paths:
               required: [contained, reason]
               properties:
                 contained: {type: boolean}
-                reason: {type: string, maxLength: 1024}
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+                  pattern: '\S'
+                  description: Why the host is contained or released; blank or whitespace-only reasons are refused.
       responses:
         "200":
           description: The state after the request, whether it changed, and the queued command's id

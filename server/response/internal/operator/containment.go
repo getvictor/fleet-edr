@@ -2,9 +2,7 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -57,21 +55,6 @@ type containmentRequest struct {
 	Reason    string `json:"reason"`
 }
 
-// decodeContainmentRequest reads exactly one JSON object with a contained value from the capped body. Anything after it is refused
-// too, so a request cannot carry a valid change followed by other data.
-func decodeContainmentRequest(w http.ResponseWriter, r *http.Request) (containmentRequest, bool) {
-	var body containmentRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, containmentBodyCap))
-	if err := dec.Decode(&body); err != nil || body.Contained == nil {
-		return containmentRequest{}, false
-	}
-	var extra json.RawMessage
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return containmentRequest{}, false
-	}
-	return body, true
-}
-
 func (h *ContainmentHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	hostID := r.PathValue("host_id")
@@ -95,8 +78,9 @@ func (h *ContainmentHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostIsolate, identityapi.Resource{Type: "host", ID: hostID}) {
 		return
 	}
-	body, ok := decodeContainmentRequest(w, r)
-	if !ok {
+	// The whole capped body must be one JSON object with a contained value, so a valid change cannot carry other data after it.
+	var body containmentRequest
+	if httpserver.DecodeCappedJSON(r, containmentBodyCap, &body) != httpserver.BodyOK || body.Contained == nil {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
 		return
 	}
