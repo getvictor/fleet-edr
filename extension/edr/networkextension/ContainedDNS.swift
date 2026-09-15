@@ -8,10 +8,9 @@ enum ContainedDNS {
     enum Decision: Equatable {
         /// Forward the query upstream as usual.
         case forward
-        /// Forward the query, but only to one of the host's configured resolvers: a contained host's allowed lookup does not go to an
-        /// address the client chose, which could be a server that reads what the query carries. The refused answer is for a host
-        /// with no configured resolver.
-        case forwardToSystemResolver(refused: Data)
+        /// Forward this query in place of the datagram: a contained host's allowed lookup rebuilt from its header and question alone,
+        /// so nothing a process appends after the question (records, options or any other bytes) leaves the host with it.
+        case forwardQuestion(Data)
         /// Answer the client with this response instead of forwarding.
         case answer(Data)
         /// Neither forward nor answer: the datagram is not a query this proxy can refuse.
@@ -34,25 +33,15 @@ enum ContainedDNS {
     }
 
     /// decision is the proxy's action for one UDP datagram. A host that is not contained forwards everything. A contained host forwards
-    /// a single-question query whose name is one of the lifeline's names, compared case-insensitively and without a trailing dot, to a
-    /// configured resolver, and answers every other query REFUSED. A datagram that is not a well-formed query is dropped.
+    /// a single-question query whose name is one of the lifeline's names, compared case-insensitively and without a trailing dot, rebuilt
+    /// from its header and question, and answers every other query REFUSED. A datagram that is not a well-formed query is dropped.
     static func decision(for datagram: Data, containment: NetworkContainmentUpdate?) -> Decision {
         guard let containment, containment.contained else { return .forward }
         guard let question = singleQuestion(in: datagram) else { return .drop }
-        let refusal = refused(datagram, questionEnd: question.end)
         if let name = question.name, containment.serverNames.contains(name) {
-            return .forwardToSystemResolver(refused: refusal)
+            return .forwardQuestion(questionOnly(datagram, questionEnd: question.end))
         }
-        return .answer(refusal)
-    }
-
-    /// systemResolver is where a contained host's allowed lookup is sent: the resolver the client asked when it is one of the host's
-    /// configured resolvers, otherwise the first configured one, and nil when there is none.
-    static func systemResolver(for requested: String?, systemServers: [String]) -> String? {
-        if let requested, systemServers.contains(where: { DNSUpstreamFailover.sameAddress($0, requested) }) {
-            return requested
-        }
-        return systemServers.first
+        return .answer(refused(datagram, questionEnd: question.end))
     }
 
     /// normalized is a name as the lifeline compares it: lowercase, without a trailing dot.
@@ -95,6 +84,18 @@ enum ContainedDNS {
     private static func isHostNameByte(_ byte: UInt8) -> Bool {
         (byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z")) || (byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z"))
             || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_")
+    }
+
+    /// questionOnly rebuilds a query from its ID, opcode, recursion-desired flag and question, with every other flag clear and no records.
+    /// What remains for a process to choose is the ID and where the query goes; the rest of the datagram does not leave the host.
+    private static func questionOnly(_ query: Data, questionEnd: Int) -> Data {
+        var bytes = [UInt8](query.prefix(questionEnd))
+        bytes[Wire.flagsOffset] &= Wire.opcodeAndRD
+        bytes[Wire.flagsOffset + 1] = 0
+        for index in Wire.ancountOffset..<Wire.headerLength {
+            bytes[index] = 0
+        }
+        return Data(bytes)
     }
 
     /// refused builds the REFUSED response to a query: its ID, its opcode and recursion-desired flag, and its question, with no records.

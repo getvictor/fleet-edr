@@ -35,27 +35,26 @@ final class ContainedDNSTests: XCTestCase {
     // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/the-server-s-name-still-resolves
     func testTheServersNameIsForwardedWhateverItsCase() {
         for spelling in ["edr.example.com", "EDR.Example.COM"] {
-            guard case .forwardToSystemResolver(let refused) = ContainedDNS.decision(for: query(name(spelling)), containment: contained)
-            else {
-                return XCTFail("\(spelling) is the server's name")
-            }
-            XCTAssertEqual(refused.prefix(4), Data([0x12, 0x34, 0x81, 0x85]),
-                           "the refusal kept for a host with no configured resolver answers this query")
+            let datagram = query(name(spelling))
+            XCTAssertEqual(ContainedDNS.decision(for: datagram, containment: contained), .forwardQuestion(datagram),
+                           "a plain query is already its header and question")
         }
     }
 
-    // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/an-allowed-lookup-goes-to-a-configured-resolver
+    // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/an-allowed-lookup-carries-only-its-question
     //
-    // A contained host's allowed lookup goes to a configured resolver: the one the client asked when it is configured, otherwise the
-    // first configured one, and none when the host has none.
-    func testAnAllowedLookupGoesToAConfiguredResolver() {
-        let system = ["192.168.64.1", "fd00::1"]
-        XCTAssertEqual(ContainedDNS.systemResolver(for: "192.168.64.1", systemServers: system), "192.168.64.1")
-        XCTAssertEqual(ContainedDNS.systemResolver(for: "fd00:0:0:0:0:0:0:1", systemServers: system), "fd00:0:0:0:0:0:0:1",
-                       "the client's spelling of a configured resolver is kept")
-        XCTAssertEqual(ContainedDNS.systemResolver(for: "1.1.1.1", systemServers: system), "192.168.64.1", "an address the client chose")
-        XCTAssertEqual(ContainedDNS.systemResolver(for: nil, systemServers: system), "192.168.64.1")
-        XCTAssertNil(ContainedDNS.systemResolver(for: "1.1.1.1", systemServers: []))
+    // An allowed lookup leaves the host as its ID, opcode, recursion-desired flag and question: records, options, stray flags and bytes
+    // appended after the question stay behind.
+    func testAnAllowedLookupCarriesOnlyItsQuestion() {
+        var padded = [UInt8](query(name("edr.example.com"), flags: [0x05, 0xF0], edns: true))
+        padded += Array("exfiltrated payload".utf8)
+        var expected: [UInt8] = [0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]
+        for label in name("edr.example.com") {
+            expected.append(UInt8(label.count))
+            expected += label
+        }
+        expected += [0, 0x00, 0x01, 0x00, 0x01]
+        XCTAssertEqual(ContainedDNS.decision(for: Data(padded), containment: contained), .forwardQuestion(Data(expected)))
     }
 
     // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/any-other-name-is-refused-locally
@@ -112,7 +111,9 @@ final class ContainedDNSTests: XCTestCase {
         """#.utf8))
         XCTAssertEqual(good?.serverNames, ["edr.example.com"])
         let refused: [(String, String)] = [
-            ("an empty name", #"["" ]"#),
+            ("an empty name", #"[""]"#),
+            ("a trailing dot alone", #"["."]"#),
+            ("a trailing hyphen", #"["edr-.example.com"]"#),
             ("a label with a space", #"["edr example.com"]"#),
             ("a leading hyphen", #"["-edr.example.com"]"#),
             ("an empty label", #"["edr..example.com"]"#),

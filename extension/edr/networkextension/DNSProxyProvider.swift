@@ -13,8 +13,8 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 /// the legacy `NWHostEndpoint` surface is deprecated and emits build warnings.
 ///
 /// Safety: The proxy forwards datagrams unchanged, and parsing for telemetry is best-effort: if it fails, forwarding still succeeds.
-/// The exception is a contained host (#948), where ContainedDNS decides each query: an allowed name is forwarded to a configured
-/// resolver, any other query is answered REFUSED locally, a malformed datagram is dropped, and DNS over TCP is closed.
+/// The exception is a contained host (#948), where ContainedDNS decides each query: an allowed name is forwarded as its header and
+/// question alone, any other query is answered REFUSED locally, a malformed datagram is dropped, and DNS over TCP is closed.
 ///
 /// The system keeps THIS extension's own outbound connections out of the proxy chain, so our own forward cannot loop back
 /// into us. That guarantee does not extend to a second network extension that is itself a resolver, which is what issue
@@ -36,7 +36,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     /// startProxy so the first flow already has a snapshot to match against.
     private let interfaces = InterfaceSnapshot()
     /// Resolver list for the failover decision, read through a short-lived cache over one dynamic-store session.
-    let resolvers = SystemResolverCache()
+    private let resolvers = SystemResolverCache()
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         interfaces.start()
@@ -156,10 +156,9 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 case .forward:
                     self.forwardUDPDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
                                                               flow: flow, ctx: ctx, route: route, isFailover: false))
-                case .forwardToSystemResolver(let refused):
-                    self.forwardContainedDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
-                                                                    flow: flow, ctx: ctx, route: route, isFailover: false),
-                                                  refused: refused)
+                case .forwardQuestion(let question):
+                    self.forwardUDPDatagram(UDPForwardRequest(datagram: question, target: endpoint, replyEndpoint: endpoint,
+                                                              flow: flow, ctx: ctx, route: route, isFailover: false))
                 case .answer(let refused):
                     // A contained host resolves only the server's name (#948); anything else is refused locally.
                     Self.answerLocally(refused, to: endpoint, on: flow)
@@ -173,7 +172,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    func forwardUDPDatagram(_ request: UDPForwardRequest) {
+    private func forwardUDPDatagram(_ request: UDPForwardRequest) {
         // Forward to the intended DNS server. The system excludes this extension's own connections from the DNS proxy
         // chain, so OUR forward cannot loop back into us. That guarantee does not extend to another network-extension
         // provider's flows, which is what `route.routing` exists to handle: those are forwarded off tunnel interfaces so

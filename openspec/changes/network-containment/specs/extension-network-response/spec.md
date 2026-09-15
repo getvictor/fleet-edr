@@ -25,7 +25,7 @@ The network extension SHALL enforce host network containment as content-filter s
 
 ### Requirement: A contained host resolves only the EDR server's name
 
-While the host is contained, the network extension's DNS proxy SHALL forward a DNS query only when it is a single-question query for one of the lifeline's names, compared case-insensitively and without a trailing dot label by label, and SHALL send it only to one of the host's configured resolvers: the one the client addressed when it is configured, otherwise the first configured one, with the answer still returned as if from the resolver the client addressed. It SHALL answer every other query locally with REFUSED, carrying the query's ID and question and no records, as it does an allowed query on a host with no configured resolver. A datagram that is not a single well-formed query SHALL be neither forwarded nor answered, and DNS over TCP SHALL not be resolved: a session is refused when it starts, and one opened before the host was contained is closed on its next query. A containment whose lifeline names no host name resolves nothing. The filter's lifeline allows DNS so the agent can resolve the server, and every lookup on the host passes through this proxy, so this is what keeps DNS from carrying traffic out of a contained host. A host that is not contained SHALL have its DNS forwarded as before.
+While the host is contained, the network extension's DNS proxy SHALL forward a DNS query only when it is a single-question query for one of the lifeline's names, compared case-insensitively and without a trailing dot label by label, and SHALL forward it rebuilt from its ID, opcode, recursion-desired flag and question alone, with every other flag clear and no records, so nothing a process appends after the question leaves the host; the query's ID and destination remain the process's choice. It SHALL answer every other query locally with REFUSED, carrying the query's ID and question and no records. A datagram that is not a single well-formed query SHALL be neither forwarded nor answered, and DNS over TCP SHALL not be resolved: a session is refused when it starts, and one opened before the host was contained is closed on its next query. A containment whose lifeline names no host name resolves nothing. The filter's lifeline allows DNS so the agent can resolve the server, and every lookup on the host passes through this proxy, so this is what keeps DNS from carrying traffic out of a contained host. A host that is not contained SHALL have its DNS forwarded as before.
 
 #### Scenario: The server's name still resolves
 
@@ -33,11 +33,11 @@ While the host is contained, the network extension's DNS proxy SHALL forward a D
 - **WHEN** a query for that name arrives, in any letter case
 - **THEN** the proxy forwards it
 
-#### Scenario: An allowed lookup goes to a configured resolver
+#### Scenario: An allowed lookup carries only its question
 
 - **GIVEN** a contained host whose lifeline names the EDR server's host name
-- **WHEN** a query for that name is addressed to a resolver that is not one of the host's configured resolvers
-- **THEN** the proxy sends it to a configured resolver instead, and nothing to the address the client chose
+- **WHEN** a query for that name arrives carrying additional records, options or bytes after its question
+- **THEN** the proxy forwards the query's header and question alone, with no records
 
 #### Scenario: Any other name is refused locally
 

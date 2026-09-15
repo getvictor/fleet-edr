@@ -9,8 +9,6 @@ import NetworkExtension
 
 /// Wire-format + flow-control constants for DNS proxying.
 enum DNSProxy {
-    /// The DNS port a contained host's redirected lookup is sent to.
-    static let dnsPort: Network.NWEndpoint.Port = 53
     /// RFC 1035 §4.2.2: TCP DNS messages are prefixed with a two-byte big-endian length.
     static let tcpLengthPrefixBytes = 2
     /// 16-bit length means the upper bound on a TCP DNS payload is UInt16.max bytes.

@@ -174,7 +174,8 @@ enum NetworkContainment {
     /// digits and hyphens that neither start nor end with a hyphen.
     static func isHostName(_ name: String) -> Bool {
         let trimmed = name.hasSuffix(".") ? String(name.dropLast()) : name
-        guard !trimmed.isEmpty, trimmed.utf8.count <= maxHostNameBytes else { return false }
+        // An empty name splits into one empty label, which the label check refuses.
+        guard trimmed.utf8.count <= maxHostNameBytes else { return false }
         return trimmed.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
             !label.isEmpty && label.utf8.count <= maxLabelBytes && !label.hasPrefix("-") && !label.hasSuffix("-")
                 && label.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-") }
