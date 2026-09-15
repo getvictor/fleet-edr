@@ -132,15 +132,6 @@ enum NetworkContainment {
         return rules
     }
 
-    /// status is what the extension reports for the held state: applied when the running filter was confirmed to enforce exactly that
-    /// state, pending (not applied, no error) while it waits to be applied, and not applied with the error when the latest attempt
-    /// failed.
-    static func status(held: NetworkContainmentUpdate, applied: NetworkContainmentUpdate?, error: String?) -> NetworkContainmentStatus {
-        let isApplied = held == applied
-        return NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: isApplied,
-                                        error: isApplied ? nil : error)
-    }
-
     /// isUsableAddress accepts an IPv4 or IPv6 literal other than the unspecified address, which as a lifeline would match nothing. A
     /// string with an embedded NUL is refused before parsing, since inet_pton would read only the part before it.
     static func isUsableAddress(_ address: String) -> Bool {
@@ -296,5 +287,41 @@ final class ContainmentSequencer<Filter: AnyObject> {
     func completed(_ filter: Filter) -> (report: Bool, applyAgain: Bool) {
         applying = false
         return (filter === running && !reapply, reapply)
+    }
+}
+
+/// ContainmentStatusTracker is what NetworkContainmentController knows about applying the held state, kept free of NetworkExtension so
+/// the reported status is unit-testable. The status is derived from it and the held state, never cached, so it always describes the
+/// state the extension holds.
+struct ContainmentStatusTracker {
+    /// applied is the state the running filter was last confirmed to enforce; error is why the held state is not applied, when an
+    /// attempt failed or found no filter running.
+    private(set) var applied: NetworkContainmentUpdate?
+    private(set) var error: String?
+
+    /// accepted notes a newly accepted update: whatever went wrong before concerned an earlier state.
+    mutating func accepted() {
+        error = nil
+    }
+
+    /// confirmed notes that the running filter enforces update.
+    mutating func confirmed(_ update: NetworkContainmentUpdate?) {
+        applied = update
+        error = nil
+    }
+
+    /// failed notes that applying the held state failed, or that no filter is running to apply it. The running filter is then not
+    /// confirmed to enforce anything, whatever an earlier filter did.
+    mutating func failed(_ reason: String) {
+        applied = nil
+        error = reason
+    }
+
+    /// status is what the extension reports for the held state: applied when the running filter was confirmed to enforce exactly that
+    /// state, pending (not applied, no error) while it waits, and not applied with the error when the latest attempt failed.
+    func status(held: NetworkContainmentUpdate) -> NetworkContainmentStatus {
+        // Confirming clears the error and failing clears the confirmation, so an applied state never carries one.
+        NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: held == applied,
+                                 error: error)
     }
 }

@@ -171,16 +171,34 @@ final class NetworkContainmentTests: XCTestCase {
     // spec:extension-network-response/the-extension-reports-containment-status/a-state-waiting-to-be-applied-is-reported-as-pending
     func testStatusDescribesTheHeldState() {
         let held = contained(version: 4)
-        let older = contained(version: 3)
-        XCTAssertEqual(NetworkContainment.status(held: held, applied: held, error: nil),
-                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil))
-        XCTAssertEqual(NetworkContainment.status(held: held, applied: older, error: nil),
+        var tracker = ContainmentStatusTracker()
+        XCTAssertEqual(tracker.status(held: held),
                        NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil),
-                       "an older applied state is not reported; the held state is pending")
-        XCTAssertEqual(NetworkContainment.status(held: held, applied: nil, error: "content filter is not running"),
+                       "pending before any apply")
+
+        tracker.confirmed(contained(version: 3))
+        XCTAssertEqual(tracker.status(held: held).applied, false, "an older applied state is not reported; the held state is pending")
+        XCTAssertNil(tracker.status(held: held).error)
+
+        tracker.confirmed(held)
+        XCTAssertEqual(tracker.status(held: held),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil))
+    }
+
+    // spec:extension-network-response/the-extension-reports-containment-status/a-failed-apply-is-not-reported-as-applied
+    func testAFailureClearsAnEarlierConfirmationOfTheSameState() {
+        let held = contained(version: 4)
+        var tracker = ContainmentStatusTracker()
+        tracker.confirmed(held)
+        tracker.failed("content filter is not running")
+        XCTAssertEqual(tracker.status(held: held),
                        NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false,
-                                                error: "content filter is not running"))
-        XCTAssertEqual(NetworkContainment.status(held: held, applied: held, error: "stale").error, nil, "an applied state carries no error")
+                                                error: "content filter is not running"),
+                       "a replacement filter that failed to apply the same state is not confirmed by its predecessor")
+        tracker.accepted()
+        XCTAssertNil(tracker.status(held: contained(version: 5)).error, "a new update starts without the earlier state's error")
+        tracker.confirmed(contained(version: 5))
+        XCTAssertEqual(tracker.status(held: contained(version: 5)).applied, true)
     }
 
     // MARK: ordering shared with the other pushed documents

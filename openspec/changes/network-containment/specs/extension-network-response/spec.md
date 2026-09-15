@@ -66,6 +66,12 @@ The network extension SHALL report its containment status to the agent as an `ne
 - **WHEN** that filter stops and a replacement starts before the apply completes
 - **THEN** the completed apply is not reported, and the replacement is given the current state
 
+#### Scenario: A failed apply is not reported as applied
+
+- **GIVEN** a running filter was confirmed to enforce the held state
+- **WHEN** a later attempt to apply that state fails, or finds no content filter running
+- **THEN** the status names the state as not applied, with the failure as its error
+
 #### Scenario: A state waiting to be applied is reported as pending
 
 - **GIVEN** the extension holds a containment update whose filter settings have not yet been confirmed

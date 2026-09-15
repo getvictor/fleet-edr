@@ -24,11 +24,7 @@ final class NetworkContainmentController: @unchecked Sendable {
     private let serializer = NetworkEventSerializer()
     // Everything below is guarded by queue.
     private let sequencer = ContainmentSequencer<NEFilterDataProvider>()
-    /// appliedUpdate is the state the running filter's settings were last confirmed to enforce, and applyError why the held state
-    /// is not applied, when an attempt failed. The reported status is derived from these and the held state, never cached, so it
-    /// always describes the state the extension holds.
-    private var appliedUpdate: NetworkContainmentUpdate?
-    private var applyError: String?
+    private var tracker = ContainmentStatusTracker()
 
     /// baselineSettings are the filter's settings when the host is not contained.
     static func baselineSettings() -> NEFilterSettings {
@@ -51,8 +47,7 @@ final class NetworkContainmentController: @unchecked Sendable {
             case .apply:
                 self.applyLocked()
             case .report:
-                self.appliedUpdate = applied
-                self.applyError = nil
+                self.tracker.confirmed(applied)
                 self.publishLocked()
             }
         }
@@ -73,7 +68,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 self.publishLocked()
                 return
             }
-            self.applyError = nil
+            self.tracker.accepted()
             logger.info("""
             network containment update accepted: contained=\(update.contained, privacy: .public) \
             version=\(update.version, privacy: .public) epoch=\(update.epoch, privacy: .public)
@@ -94,8 +89,7 @@ final class NetworkContainmentController: @unchecked Sendable {
         case .deferred:
             return
         case .noFilter:
-            appliedUpdate = nil
-            applyError = "content filter is not running"
+            tracker.failed("content filter is not running")
             publishLocked()
         case .apply(let target):
             target.apply(update.map(Self.settings(for:)) ?? Self.baselineSettings()) { error in
@@ -106,12 +100,9 @@ final class NetworkContainmentController: @unchecked Sendable {
                     let outcome = self.sequencer.completed(target)
                     if outcome.report {
                         if let error {
-                            // The running filter is not confirmed to enforce anything now, whatever an earlier filter did.
-                            self.appliedUpdate = nil
-                            self.applyError = error.localizedDescription
+                            self.tracker.failed(error.localizedDescription)
                         } else {
-                            self.appliedUpdate = update
-                            self.applyError = nil
+                            self.tracker.confirmed(update)
                         }
                         self.publishLocked()
                     }
@@ -127,7 +118,7 @@ final class NetworkContainmentController: @unchecked Sendable {
     /// been contained sends no status an agent without containment support would upload as telemetry.
     private func publishLocked() {
         guard let held = store.current else { return }
-        let status = NetworkContainment.status(held: held, applied: appliedUpdate, error: applyError)
+        let status = tracker.status(held: held)
         guard let data = serializer.serialize(eventType: NetworkContainmentStatus.eventType, payload: status) else { return }
         XPCServer.shared.send(data: data)
     }
