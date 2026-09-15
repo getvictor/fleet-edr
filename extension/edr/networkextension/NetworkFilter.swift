@@ -22,14 +22,17 @@ final class NetworkFilter: NEFilterDataProvider {
     private let serializer = NetworkEventSerializer()
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
-        let settings = NEFilterSettings(rules: [], defaultAction: .filterData)
-        apply(settings) { error in
+        // The first settings a starting filter applies already carry a persisted containment. Starting from the baseline and
+        // containing afterwards would release a contained host for as long as the second apply takes, on every provider restart.
+        let startup = NetworkContainmentController.shared.startupState()
+        apply(startup.settings) { error in
             if let error {
                 logger.error("Failed to apply filter settings: \(error.localizedDescription)")
             } else {
                 logger.info("Network filter started")
                 ProviderStatus.shared.recordStarted(.contentFilter)
             }
+            NetworkContainmentController.shared.providerStarted(self, applied: startup.update, error: error)
             completionHandler(error)
         }
     }
@@ -37,6 +40,7 @@ final class NetworkFilter: NEFilterDataProvider {
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logger.info("Network filter stopping: \(String(describing: reason))")
         ProviderStatus.shared.recordStopped(.contentFilter, reason: reason.rawValue)
+        NetworkContainmentController.shared.providerStopped(self)
         completionHandler()
     }
 
