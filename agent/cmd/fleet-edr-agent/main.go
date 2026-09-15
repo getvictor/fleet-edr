@@ -685,10 +685,13 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
-			// Containment status is a control message like provider liveness: consumed here and never uploaded.
-			if p.containment != nil {
+			// Containment status is a control message like provider liveness, from the same extension: dropped here whether or not
+			// there is a manager to record it, and never uploaded.
+			if p.providerLiveness {
 				if status, ok := containment.ParseStatus(evt.Data); ok {
-					p.containment.Observe(ctx, status)
+					if p.containment != nil {
+						p.containment.Observe(ctx, status)
+					}
 					return
 				}
 			}
@@ -730,6 +733,12 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	if p.dispatcher != nil {
 		hooks.OnConnected = p.dispatcher.Set
+		if p.containment != nil {
+			hooks.OnConnected = func(c receiver.Connector) {
+				p.dispatcher.Set(c)
+				p.containment.Reconnected()
+			}
+		}
 		hooks.OnDisconnected = p.dispatcher.Clear
 	}
 	hooks = withHealthHooks(hooks, p)

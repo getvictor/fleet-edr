@@ -129,6 +129,7 @@ func TestReceiverLoop_ContainmentStatusIsConsumedNotUploaded(t *testing.T) {
 		logger:           slog.Default(),
 		serviceLabel:     "test-ne",
 		containment:      mgr,
+		providerLiveness: true,
 		connectorFactory: func() receiver.Connector { return newEventConnector(status, telemetry) },
 		enqueue: func(_ context.Context, data []byte) error {
 			mu.Lock()
@@ -156,4 +157,81 @@ func TestReceiverLoop_ContainmentStatusIsConsumedNotUploaded(t *testing.T) {
 		_, _ = dial(t.Context(), "tcp", "edr.test:8089")
 		return dialed == "192.168.64.1:8089"
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// A network extension loop with no manager, as on a host whose server URL yields no lifeline target, still keeps the extension's
+// containment status out of the upload queue.
+func TestReceiverLoop_ContainmentStatusIsDroppedWithoutAManager(t *testing.T) {
+	t.Parallel()
+	status := []byte(`{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":true}}`)
+	telemetry := []byte(`{"event_type":"network_connect","payload":{}}`)
+	var mu sync.Mutex
+	var uploaded [][]byte
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go startReceiverLoop(ctx, receiverLoopParams{
+		logger:           slog.Default(),
+		serviceLabel:     "test-ne",
+		providerLiveness: true,
+		connectorFactory: func() receiver.Connector { return newEventConnector(status, telemetry) },
+		enqueue: func(_ context.Context, data []byte) error {
+			mu.Lock()
+			defer mu.Unlock()
+			uploaded = append(uploaded, data)
+			return nil
+		},
+	})
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(uploaded) == 1
+	}, 2*time.Second, 10*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, [][]byte{telemetry}, uploaded)
+}
+
+// When the connection to the network extension drops and returns, the status the extension sends on the new connection sends the
+// lifeline again: a send over the dropped connection may never have arrived.
+func TestReceiverLoop_AReconnectSendsTheLifelineAgain(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	sends := 0
+	mgr := containment.New(containment.Options{
+		Target: containment.Target{Host: "edr.test", Port: 8089},
+		Send: func([]byte) error {
+			mu.Lock()
+			defer mu.Unlock()
+			sends++
+			return nil
+		},
+		Resolver: staticResolver{netip.MustParseAddr("192.168.64.1")},
+	})
+	sent := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return sends
+	}
+	status := []byte(`{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":true}}`)
+	connectors := make(chan *eventConnector, 4)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go startReceiverLoop(ctx, receiverLoopParams{
+		logger:           slog.Default(),
+		serviceLabel:     "test-ne",
+		containment:      mgr,
+		providerLiveness: true,
+		dispatcher:       receiver.NewDispatcher(),
+		connectorFactory: func() receiver.Connector {
+			c := newEventConnector(status)
+			connectors <- c
+			return c
+		},
+		enqueue: func(context.Context, []byte) error { return nil },
+	})
+	first := <-connectors
+	require.Eventually(t, func() bool { return sent() == 1 }, 2*time.Second, 10*time.Millisecond)
+	first.errs <- 1
+	require.Eventually(t, func() bool { return sent() == 2 }, 5*time.Second, 10*time.Millisecond)
 }

@@ -121,9 +121,18 @@ type Options struct {
 type Manager struct {
 	opts Options
 
-	mu        sync.Mutex
-	state     *Command
+	// applyMu runs one command at a time: the poll and push transports can each execute a containment command at once.
+	applyMu sync.Mutex
+	// refreshMu runs one lifeline refresh at a time, so a slower lookup cannot deliver its addresses after a newer one.
+	refreshMu sync.Mutex
+
+	mu    sync.Mutex
+	state *Command
+	// addresses are the lifeline addresses dials of the target are pinned to. sent are the ones sent over the current connection to
+	// the extension, which a reconnect forgets: a send reports no delivery, so addresses sent over a dropped connection may never
+	// have arrived.
 	addresses []netip.Addr
+	sent      []netip.Addr
 	// pending is the command Apply sent and is waiting on, with the addresses it sent, so the status that confirms it adopts them.
 	pending          *Command
 	pendingAddresses []netip.Addr
@@ -153,13 +162,24 @@ func New(opts Options) *Manager {
 // failed. A containment whose lifeline cannot be resolved is refused rather than sent, since it would cut the host off from the
 // server that has to release it.
 func (m *Manager) Apply(ctx context.Context, payload []byte) (json.RawMessage, error) {
-	var cmd Command
-	if err := json.Unmarshal(payload, &cmd); err != nil {
+	var fields struct {
+		Version   int64 `json:"version"`
+		Epoch     int64 `json:"epoch"`
+		Contained *bool `json:"contained"`
+	}
+	if err := json.Unmarshal(payload, &fields); err != nil {
 		return nil, fmt.Errorf("invalid payload: %w", err)
 	}
-	if cmd.Version <= 0 {
+	if fields.Version <= 0 {
 		return nil, errors.New("payload missing or invalid version")
 	}
+	// Required rather than defaulted: a payload that lost the field must not turn into a release.
+	if fields.Contained == nil {
+		return nil, errors.New("payload missing contained")
+	}
+	cmd := Command{Version: fields.Version, Epoch: fields.Epoch, Contained: *fields.Contained}
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	doc := document{Version: cmd.Version, Epoch: cmd.Epoch, Contained: cmd.Contained}
 	var addrs []netip.Addr
 	if cmd.Contained {
@@ -203,6 +223,9 @@ func (m *Manager) confirm(ctx context.Context, waiter chan Status, cmd Command) 
 			switch {
 			case s.Epoch == cmd.Epoch && s.Version == cmd.Version:
 				switch {
+				case s.Contained != cmd.Contained:
+					// The extension refused this state because it holds a different one at the same version.
+					return Status{}, fmt.Errorf("the host holds a different state at version %d", s.Version)
 				case s.Applied:
 					return s, nil
 				case s.Error != "":
@@ -230,12 +253,12 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 	if adopt {
 		m.state = &Command{Version: s.Version, Epoch: s.Epoch, Contained: s.Contained}
 		m.refreshed = false
-		m.addresses = nil
-		if m.pending != nil && m.pending.Epoch == s.Epoch && m.pending.Version == s.Version {
+		m.addresses, m.sent = nil, nil
+		if m.pending != nil && *m.pending == *m.state {
 			// The command this agent just sent: the extension holds exactly the addresses sent with it. Any other state, such as a
 			// containment held across an agent restart, leaves the addresses unknown, and the refresh below sends what the target
 			// resolves to now.
-			m.addresses = m.pendingAddresses
+			m.addresses, m.sent = m.pendingAddresses, m.pendingAddresses
 			m.refreshed = true
 		}
 	}
@@ -244,6 +267,15 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 	if refresh {
 		m.refresh(ctx)
 	}
+}
+
+// Reconnected notes that the connection to the network extension was re-established. The lifeline is sent again on the next status,
+// because a send reports no delivery and one made over the dropped connection may never have arrived. Dials stay pinned meanwhile.
+func (m *Manager) Reconnected() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent = nil
+	m.refreshed = false
 }
 
 // Run re-resolves the lifeline every RefreshInterval while the host is contained, and sends the extension the new addresses when they
@@ -268,6 +300,8 @@ func (m *Manager) Run(ctx context.Context) {
 
 // refresh resolves the lifeline and sends it at the current state's version when the addresses differ from the ones last sent.
 func (m *Manager) refresh(ctx context.Context) {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
 	addrs, err := m.resolve(ctx)
 	if err != nil {
 		m.opts.Logger.WarnContext(ctx, "network containment lifeline refresh: resolve failed; keeping the addresses in force", "err", err)
@@ -280,7 +314,7 @@ func (m *Manager) refresh(ctx context.Context) {
 		return
 	}
 	m.refreshed = true
-	if slices.Equal(addrs, m.addresses) {
+	if slices.Equal(addrs, m.sent) {
 		m.mu.Unlock()
 		return
 	}
@@ -298,7 +332,7 @@ func (m *Manager) refresh(ctx context.Context) {
 	}
 	m.mu.Lock()
 	if m.state != nil && *m.state == state {
-		m.addresses = addrs
+		m.addresses, m.sent = addrs, addrs
 	}
 	m.mu.Unlock()
 	m.opts.Logger.InfoContext(ctx, "network containment lifeline refreshed", "addresses", doc.Server.Addresses)
@@ -315,8 +349,10 @@ func (m *Manager) DialContext(base func(ctx context.Context, network, addr strin
 			return base(ctx, network, addr)
 		}
 		var errs []error
-		for _, a := range addrs {
-			conn, err := base(ctx, network, netip.AddrPortFrom(a, uint16(m.opts.Target.Port)).String()) //nolint:gosec // a validated TCP port
+		for i, a := range addrs {
+			conn, err := dialShare(ctx, len(addrs)-i, func(ctx context.Context) (net.Conn, error) {
+				return base(ctx, network, netip.AddrPortFrom(a, uint16(m.opts.Target.Port)).String()) //nolint:gosec // a validated TCP port
+			})
 			if err == nil {
 				return conn, nil
 			}
@@ -324,6 +360,18 @@ func (m *Manager) DialContext(base func(ctx context.Context, network, addr strin
 		}
 		return nil, errors.Join(errs...)
 	}
+}
+
+// dialShare runs one dial attempt with an equal share of the time left before ctx's deadline across the remaining attempts, so an
+// address that does not answer cannot use up the time the next one needs. Without a deadline the attempt runs under ctx.
+func dialShare(ctx context.Context, remaining int, dial func(context.Context) (net.Conn, error)) (net.Conn, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return dial(ctx)
+	}
+	attempt, cancel := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(remaining))
+	defer cancel()
+	return dial(attempt)
 }
 
 // pinned returns the lifeline addresses when addr is the lifeline target. They are empty whenever the host is not contained: a release,
@@ -399,7 +447,8 @@ func ParseStatus(data []byte) (Status, bool) {
 	var envelope struct {
 		Payload Status `json:"payload"`
 	}
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	// A status that does not decode, or names no state, is kept out of the upload queue and adopts nothing.
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Version <= 0 {
 		return Status{Error: "undecodable containment status"}, true
 	}
 	return envelope.Payload, true

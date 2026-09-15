@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 )
 
 // fakeResolver answers lookups from a settable list and counts them.
@@ -198,6 +199,8 @@ func TestApply_Failures(t *testing.T) {
 	}{
 		{name: "invalid payload", payload: `{`, respond: applies, wantErr: "invalid payload"},
 		{name: "no version", payload: `{"contained":true}`, respond: applies, wantErr: "invalid version"},
+		{name: "no contained", payload: `{"version":1}`, respond: applies, wantErr: "payload missing contained"},
+		{name: "a null contained", payload: `{"version":1,"contained":null}`, respond: applies, wantErr: "payload missing contained"},
 		{name: "an unresolvable lifeline is not sent", payload: `{"version":1,"contained":true}`, respond: applies,
 			resolve: errors.New("no such host"), wantErr: "resolve the lifeline"},
 		{name: "no usable address is not sent", payload: `{"version":1,"contained":true}`, respond: applies,
@@ -216,6 +219,11 @@ func TestApply_Failures(t *testing.T) {
 		{name: "the host holds a newer state", payload: `{"version":1,"epoch":100,"contained":true}`,
 			respond: func(document) *Status { return &Status{Contained: false, Version: 2, Epoch: 100, Applied: true} },
 			wantErr: "superseded on the host by version 2", wantSent: 1},
+		{name: "the host holds the other state at this version", payload: `{"version":1,"epoch":100,"contained":true}`,
+			respond: func(d document) *Status {
+				return &Status{Contained: false, Version: d.Version, Epoch: d.Epoch, Applied: true}
+			},
+			wantErr: "the host holds a different state at version 1", wantSent: 1},
 		{name: "the host holds a state from a newer epoch", payload: `{"version":5,"epoch":100,"contained":true}`,
 			respond: func(document) *Status { return &Status{Contained: false, Version: 1, Epoch: 101, Applied: true} },
 			wantErr: "superseded on the host by version 1", wantSent: 1},
@@ -464,17 +472,220 @@ func TestDialContext_PinsTheLifelineOnlyWhileContained(t *testing.T) {
 
 func TestParseStatus(t *testing.T) {
 	t.Parallel()
-	s, ok := ParseStatus([]byte(`{"event_type":"ne_containment_status",` +
-		`"payload":{"contained":true,"version":3,"epoch":100,"applied":false,"error":"x"}}`))
-	require.True(t, ok)
-	assert.Equal(t, Status{Contained: true, Version: 3, Epoch: 100, Applied: false, Error: "x"}, s)
+	undecodable := Status{Error: "undecodable containment status"}
+	cases := []struct {
+		name   string
+		data   string
+		want   Status
+		wantOK bool
+	}{
+		{"a status", `{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":false,"error":"x"}}`,
+			Status{Contained: true, Version: 3, Epoch: 100, Error: "x"}, true},
+		{"telemetry is not a status", `{"event_type":"network_connect","payload":{}}`, Status{}, false},
+		{"not JSON", `{`, Status{}, false},
+		{"a payload that does not decode is kept out of the upload queue", `{"event_type":"ne_containment_status","payload":"nope"}`,
+			undecodable, true},
+		{"a status naming no state adopts nothing", `{"event_type":"ne_containment_status","payload":{"applied":true}}`, undecodable, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := ParseStatus([]byte(tc.data))
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
 
-	_, ok = ParseStatus([]byte(`{"event_type":"network_connect","payload":{}}`))
-	assert.False(t, ok, "telemetry is not a status")
+// FuzzParseStatus feeds the network extension's control messages, which arrive beside telemetry, to the status parser: it must not
+// panic, and whatever it accepts as a status either names a state or is marked undecodable.
+func FuzzParseStatus(f *testing.F) {
+	f.Add([]byte(`{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":true}}`))
+	f.Add([]byte(`{"event_type":"ne_containment_status","payload":{"applied":true}}`))
+	f.Add([]byte(`{"event_type":"network_connect"}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		s, ok := ParseStatus(data)
+		if ok && s.Version <= 0 && s.Error == "" {
+			t.Fatalf("accepted a status naming no state: %+v", s)
+		}
+	})
+}
 
-	s, ok = ParseStatus([]byte(`{"event_type":"ne_containment_status","payload":"nope"}`))
-	assert.True(t, ok, "a status that does not decode is still kept out of the upload queue")
-	assert.False(t, s.Applied)
+// FuzzApply feeds set_network_containment payloads from the server to Apply: it must not panic, and a payload it cannot validate is
+// refused before anything is sent to the extension.
+func FuzzApply(f *testing.F) {
+	f.Add([]byte(`{"version":3,"epoch":100,"contained":true}`))
+	f.Add([]byte(`{"version":3}`))
+	f.Add([]byte(`{"version":-1,"contained":false}`))
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		sent := 0
+		m := New(Options{Target: serverTarget, Resolver: &fakeResolver{addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7")}},
+			Send: func([]byte) error { sent++; return errors.New("not connected") }})
+		_, err := m.Apply(t.Context(), payload)
+		if err == nil {
+			t.Fatalf("an unconnected extension confirmed %q", payload)
+		}
+		var fields struct {
+			Version   int64 `json:"version"`
+			Contained *bool `json:"contained"`
+		}
+		if json.Unmarshal(payload, &fields) != nil || fields.Version <= 0 || fields.Contained == nil {
+			if sent != 0 {
+				t.Fatalf("sent an invalid payload %q", payload)
+			}
+		}
+	})
+}
+
+// TestWireTypesRoundTrip is the round trip the testing-strategy matrix requires for new wire types: the command payload, the
+// extension's status and the document the agent sends it.
+func TestWireTypesRoundTrip(t *testing.T) {
+	t.Parallel()
+	roundTrip := func(rt *rapid.T, in, out any) {
+		body, err := json.Marshal(in)
+		require.NoError(rt, err)
+		require.NoError(rt, json.Unmarshal(body, out))
+	}
+	t.Run("command", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := Command{
+				Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"), Contained: rapid.Bool().Draw(rt, "contained"),
+			}
+			var out Command
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
+	t.Run("status", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := Status{Contained: rapid.Bool().Draw(rt, "contained"), Version: rapid.Int64().Draw(rt, "version"),
+				Epoch: rapid.Int64().Draw(rt, "epoch"), Applied: rapid.Bool().Draw(rt, "applied"), Error: rapid.String().Draw(rt, "error")}
+			var out Status
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
+	t.Run("document", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := document{
+				Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"), Contained: rapid.Bool().Draw(rt, "contained"),
+			}
+			if rapid.Bool().Draw(rt, "has_server") {
+				in.Server = &server{Port: rapid.IntRange(1, 65535).Draw(rt, "port"),
+					Addresses: rapid.SliceOfN(rapid.String(), 1, 16).Draw(rt, "addresses")}
+				if rapid.Bool().Draw(rt, "has_name") {
+					in.Server.Names = []string{rapid.StringN(1, 253, -1).Draw(rt, "name")}
+				}
+			}
+			var out document
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
+}
+
+// Commands run one at a time: the second is not sent to the extension until the first has its answer, so each confirmation adopts the
+// addresses its own command sent.
+func TestApply_CommandsRunOneAtATime(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, func(d document) *Status {
+		if d.Version == 1 {
+			return nil
+		}
+		return applies(d)
+	})
+	res.set("203.0.113.7")
+	first := make(chan error, 1)
+	go func() {
+		_, err := m.Apply(t.Context(), []byte(`{"version":1,"epoch":100,"contained":true}`))
+		first <- err
+	}()
+	require.Eventually(t, func() bool { return len(ext.sent()) == 1 }, time.Second, 5*time.Millisecond)
+	second := make(chan error, 1)
+	go func() {
+		_, err := m.Apply(t.Context(), []byte(`{"version":2,"epoch":100,"contained":true}`))
+		second <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	assert.Len(t, ext.sent(), 1, "the second command waits for the first")
+	require.ErrorContains(t, <-first, "did not confirm")
+	require.NoError(t, <-second)
+	assert.Len(t, ext.sent(), 2)
+	assert.Equal(t, 2, res.lookups(), "each command resolved its own lifeline, and the confirmation adopted it")
+}
+
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-reconnected-extension-is-sent-the-lifeline-again
+//
+// A send reports no delivery, so after the connection to the extension is re-established the next status sends the lifeline again,
+// while dials stay pinned.
+func TestReconnected_TheNextStatusSendsTheLifelineAgain(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	res.set("203.0.113.9")
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	m.Observe(t.Context(), held)
+	m.Observe(t.Context(), held)
+	require.Len(t, ext.sent(), 1)
+
+	m.Reconnected()
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"), "dials stay pinned")
+	m.Observe(t.Context(), held)
+	require.Len(t, ext.sent(), 2)
+	assert.Equal(t, []string{"203.0.113.9"}, ext.sent()[1].Server.Addresses)
+	m.Observe(t.Context(), held)
+	assert.Len(t, ext.sent(), 2)
+}
+
+// Refreshes run one at a time, so a slower lookup cannot deliver its addresses after a newer one.
+func TestRefresh_OneAtATime(t *testing.T) {
+	t.Parallel()
+	res := &gatedResolver{started: make(chan struct{}), release: make(chan struct{})}
+	m := New(Options{Target: serverTarget, Send: func([]byte) error { return nil }, Resolver: res, RefreshInterval: time.Hour})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); m.refresh(t.Context()) }()
+	<-res.started
+	go func() { defer wg.Done(); m.refresh(t.Context()) }()
+	select {
+	case <-res.started:
+		t.Fatal("a second refresh looked up while the first was running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(res.release)
+	<-res.started
+	wg.Wait()
+}
+
+// An address that does not answer gets only its share of the dial deadline, so the next lifeline address is still tried in time.
+func TestDialContext_AnUnansweredAddressLeavesTimeForTheNext(t *testing.T) {
+	t.Parallel()
+	m, _, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7", "203.0.113.8")
+	_, err := m.Apply(t.Context(), []byte(`{"version":1,"contained":true}`))
+	require.NoError(t, err)
+	var mu sync.Mutex
+	var reached []string
+	dial := m.DialContext(func(ctx context.Context, _, addr string) (net.Conn, error) {
+		if addr == "203.0.113.7:8443" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		reached = append(reached, addr)
+		return nil, nil
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 400*time.Millisecond)
+	defer cancel()
+	_, err = dial(ctx, "tcp", "edr.example.com:8443")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"203.0.113.8:8443"}, reached)
 }
 
 // The extension reports a held state as pending (not applied, no error) while it waits behind an apply in flight; the command keeps

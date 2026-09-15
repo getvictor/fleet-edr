@@ -118,8 +118,6 @@ func (r *recordingSender) count() int {
 	return len(r.sent)
 }
 
-// startClient wires a fakeGateway over bufconn and runs a control client against it until the test ends. It returns a connected
-// predicate and an auth-failure counter so tests can observe re-enrollment without standing up a real token provider.
 // recordingContainment records each set_network_containment payload and applies it successfully.
 type recordingContainment struct {
 	mu   sync.Mutex
@@ -139,6 +137,8 @@ func (r *recordingContainment) payloads() []string {
 	return append([]string(nil), r.seen...)
 }
 
+// startClient wires a fakeGateway over bufconn and runs a control client against it until the test ends. It returns a connected
+// predicate and an auth-failure counter so tests can observe re-enrollment without standing up a real token provider.
 func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isConnected func() bool, authFails func() int) {
 	t.Helper()
 	// Zero leaves the production default, which is minutes: long enough that no existing test trips the watchdog.

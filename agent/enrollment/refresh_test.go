@@ -233,10 +233,11 @@ func TestRunRefresh_ImmediateThenCancel(t *testing.T) {
 func TestHTTPClient_DialsThroughTheConfiguredDial(t *testing.T) {
 	t.Parallel()
 	var dialed atomic.Value
-	p := &provider{logger: slog.Default(), opts: Options{AllowInsecure: true, DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+	record := func(_ context.Context, _, addr string) (net.Conn, error) {
 		dialed.Store(addr)
 		return nil, errors.New("dial recorded")
-	}}}
+	}
+	p := &provider{logger: slog.Default(), opts: Options{AllowInsecure: true, DialContext: record}}
 	client, err := p.httpClient()
 	require.NoError(t, err)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://edr.example.com:8089/api/token/refresh", nil)
