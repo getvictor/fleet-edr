@@ -152,6 +152,45 @@ describe("HostContainment", () => {
     expect(await screen.findByText("Releasing")).toBeVisible();
   });
 
+  it("announces a release it followed to completion, and says nothing for a host already released", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const releasedState: ContainmentState = {
+      host_id: HOST, contained: false, version: 2, epoch: 200, delivery: { command_id: 8, status: "completed", current: true },
+    };
+    const read = vi.spyOn(api, "getHostContainment").mockResolvedValue(releasedState);
+    const { unmount } = renderControl();
+    expect(await screen.findByRole("button", { name: "Contain host" })).toBeVisible();
+    expect(screen.queryByText("Released")).toBeNull();
+    unmount();
+
+    read.mockResolvedValueOnce(contained).mockResolvedValue(releasedState);
+    vi.spyOn(api, "setHostContainment").mockResolvedValue({
+      state: { host_id: HOST, contained: false, version: 2, epoch: 200 },
+      changed: true,
+      command_id: 8,
+    });
+    renderControl();
+    fireEvent.click(await screen.findByRole("button", { name: "Release host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "reimaged" } });
+    fireEvent.click(lastButton("Release host"));
+    const announcement = await screen.findByText("Released");
+    expect(announcement).toHaveClass("host-containment__sr-only");
+    expect(announcement.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+    expect(screen.queryByText("Releasing")).toBeNull();
+
+    // A new change clears the announcement at once, not when the read that follows it returns.
+    read.mockImplementation(() => new Promise<ContainmentState>(() => undefined));
+    vi.mocked(api.setHostContainment).mockResolvedValue({ state: pendingContain, changed: true, command_id: 9 });
+    fireEvent.click(screen.getByRole("button", { name: "Contain host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "beaconing again" } });
+    fireEvent.click(lastButton("Contain host"));
+    expect(await screen.findByText("Containing")).toBeVisible();
+    expect(screen.queryByText("Released")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
   it("reads one at a time while a change is on its way", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let answer: (s: ContainmentState) => void = () => undefined;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach, onTestFinished } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 import { HostHeader } from "./HostHeader";
@@ -550,7 +550,10 @@ describe("HostHeader containment across hosts", () => {
       </MemoryRouter>,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Contain host" }));
+    // The control sits in the page heading, where a dialog is not allowed, so its confirmation is rendered outside it.
     expect(screen.getByRole("dialog", { name: "Contain this host?" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Contain this host?" }).closest("h1")).toBeNull();
+    expect(within(screen.getByRole("heading", { level: 1 })).getByRole("button", { name: "Contain host" })).toBeVisible();
 
     rerender(
       <MemoryRouter>
