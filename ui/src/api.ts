@@ -1005,13 +1005,26 @@ export async function getHostContainment(hostId: string): Promise<ContainmentSta
   return fetchJSON<ContainmentState>(`/hosts/${encodeURIComponent(hostId)}/containment`);
 }
 
+// containmentErrorMessages turns the containment change's typed refusals into what the operator can do about them. The server counts
+// the reason's limit in Unicode characters, which a text input's maxLength does not, so the limit is reported here rather than
+// enforced by the input.
+const containmentErrorMessages = new Map<string, string>([
+  ["reason_required", "Give a reason for the audit log."],
+  ["reason_too_long", "The reason is too long: keep it to 1024 characters."],
+  ["body_too_large", "The reason is too long: keep it to 1024 characters."],
+  ["host_not_found", "This host is no longer enrolled, so its containment cannot be changed."],
+]);
+
 // setHostContainment contains or releases a host. The server requires host.isolate, a recent authentication, and a reason; wrap it in
-// useReauthRetry.
+// useReauthRetry. A refusal throws an Error whose message says what to do about it.
 export async function setHostContainment(hostId: string, contained: boolean, reason: string): Promise<ContainmentChange> {
-  return fetchJSON<ContainmentChange>(`/hosts/${encodeURIComponent(hostId)}/containment`, {
-    method: "POST",
-    body: JSON.stringify({ contained, reason }),
-  });
+  return typedMutationEndpoint(
+    "POST",
+    `/hosts/${encodeURIComponent(hostId)}/containment`,
+    { contained, reason },
+    (res) => res.json() as Promise<ContainmentChange>,
+    (code, message) => new Error(containmentErrorMessages.get(code) ?? message),
+  );
 }
 
 // listContainment reads every host with a containment state, for the host list's badges.

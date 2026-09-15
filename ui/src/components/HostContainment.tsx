@@ -12,9 +12,6 @@ import "./HostContainment.scss";
 // command, and an offline host confirms when it next connects, so a few seconds keeps the badge current without hammering the API.
 const CONTAINMENT_POLL_MS = 3000;
 
-// REASON_MAX_LENGTH is the server's limit on a containment reason.
-const REASON_MAX_LENGTH = 1024;
-
 // HostContainment is the host header's network containment control (#948): a badge for where containment stands, and, for an operator
 // holding host.isolate, a Contain or Release action that asks for a reason. Containment cuts the host off from the network except its
 // connection to the EDR server, so the confirmation says so. The state is best-effort: a failed read shows nothing rather than block
@@ -90,7 +87,6 @@ export function HostContainment({ hostId }: { readonly hostId: string }) {
         confirmLabel={contain ? "Contain host" : "Release host"}
         confirmVariant={contain ? "alert" : "primary"}
         reasonPlaceholder={contain ? "Why is this host being contained?" : "Why is this host being released?"}
-        reasonMaxLength={REASON_MAX_LENGTH}
         onClose={() => {
           setConfirming(false);
         }}

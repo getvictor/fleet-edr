@@ -106,9 +106,7 @@ describe("HostContainment", () => {
     const dialog = screen.getByRole("dialog", { name: "Contain this host?" });
     expect(dialog).toHaveTextContent("loses network access except to the EDR server");
     expect(lastButton("Contain host")).toBeDisabled();
-    const reason = screen.getByLabelText("Reason (required for audit log)");
-    expect(reason).toHaveAttribute("maxLength", "1024");
-    fireEvent.change(reason, { target: { value: "  beaconing  " } });
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "  beaconing  " } });
     fireEvent.click(lastButton("Contain host"));
 
     read.mockResolvedValue(pendingContain);
@@ -188,5 +186,17 @@ describe("HostContainment", () => {
       await vi.advanceTimersByTimeAsync(3000);
     });
     expect(await screen.findByText("Contained")).toBeVisible();
+  });
+
+  it("shows why a change was refused in the confirmation", async () => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue(never);
+    const refusal = new Error("This host is no longer enrolled, so its containment cannot be changed.");
+    vi.spyOn(api, "setHostContainment").mockRejectedValue(refusal);
+    renderControl();
+    fireEvent.click(await screen.findByRole("button", { name: "Contain host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "beaconing" } });
+    fireEvent.click(lastButton("Contain host"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("no longer enrolled");
+    expect(screen.getByRole("dialog", { name: "Contain this host?" })).toBeVisible();
   });
 });

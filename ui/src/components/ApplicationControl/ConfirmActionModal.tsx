@@ -18,8 +18,6 @@ interface ConfirmActionModalProps {
   // confirmVariant controls the Save button's color: `alert` for delete (red), `primary` for non-destructive confirmations.
   readonly confirmVariant?: "primary" | "alert";
   readonly reasonPlaceholder?: string;
-  // reasonMaxLength caps the reason where the endpoint caps it, so the operator cannot type past what the server accepts.
-  readonly reasonMaxLength?: number;
   readonly onClose: () => void;
   // onConfirm receives the trimmed reason and returns a promise; the modal stays open until the promise resolves so the operator
   // sees the "Saving…" state. Errors thrown from onConfirm surface inline as form errors (typed AppControlApiError codes are
@@ -47,7 +45,6 @@ export function ConfirmActionModal({
   confirmLabel,
   confirmVariant = "primary",
   reasonPlaceholder,
-  reasonMaxLength,
   onClose,
   onConfirm,
 }: ConfirmActionModalProps) {
@@ -109,7 +106,6 @@ export function ConfirmActionModal({
         type="text"
         placeholder={reasonPlaceholder ?? "Why are you making this change?"}
         value={reason}
-        maxLength={reasonMaxLength}
         onChange={(e) => { setReason(e.target.value); }}
         disabled={busy}
         autoFocus
