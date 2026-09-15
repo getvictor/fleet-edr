@@ -29,6 +29,10 @@ This is the L5 layer of the testing pyramid (per [`testing-strategy.md`](../../d
           README.md
           attack.sh
           expected.yaml
+        network-containment/ -- contain and release a host (no alert; attack.sh asserts)
+          README.md
+          attack.sh
+          expected.yaml
         attack-runbook/      -- fires every shipped detection rule
           README.md
           attack.sh

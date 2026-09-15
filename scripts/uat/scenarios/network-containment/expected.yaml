@@ -1,0 +1,12 @@
+# network-containment scenario (issues #948, #584).
+#
+# There is intentionally NO `rules:` block. Containment is a response action and raises no alert, so there is nothing for the
+# driver's alert poll to find. attack.sh asserts the behaviour itself, from the server's delivery result and from a probe that
+# samples the VM's network while SSH is cut, and the driver passes the scenario on attack.sh's exit 0.
+
+scenario_id: network-containment
+description: >-
+  Contains the VM through the operator API, asserts that new outbound connections fail, names other than the server's are
+  refused, inbound SSH is refused and the EDR server stays reachable, then releases it and asserts the network is back.
+# within_seconds is the driver's alert-poll window, consumed only with a `rules:` block, so it is inert here.
+within_seconds: 60

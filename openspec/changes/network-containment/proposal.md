@@ -52,9 +52,10 @@ The work lands in steps, producer before consumer.
 - **The host header shows containment and offers the action.** A badge says Containing, Contained, Containment failed, Releasing or Release failed, re-read every few seconds while a change is on its way. An operator holding `host.isolate` gets Contain host or Release host, which asks for a reason in a confirmation that says what containment does, through the existing reauthentication prompt.
 - **The host list marks hosts under containment,** from `GET /api/containment`, which lists every host with a containment state and its delivery.
 
-### Later steps
+### Acceptance
 
-- An end-to-end system test on edr-qa, the operator guide and the release notes.
+- **An end-to-end system test.** The L5 scenario `network-containment` contains a host through the API, samples its network from a probe while SSH is cut, and releases it. It ran on edr-dev with this change's agent and extensions; edr-qa runs it against the release candidate, since it needs a signed build.
+- **The operator guide and the release notes.**
 
 ## Out of scope
 

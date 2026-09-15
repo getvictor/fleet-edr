@@ -134,7 +134,19 @@ docker exec fleet-edr-mysql mysql -uroot -e "UPDATE edr.app_control_policies SET
 
 The extension logs `version regressed (X -> Y) but epoch advanced ...; re-syncing (likely server DB restore)` and applies the regressed snapshot, so the new block takes effect rather than freezing on the stale higher version. Restore the version counter afterward.
 
-## 6. Edge-rejection resilience
+## 6. Network containment
+
+Run the L5 scenario against edr-qa with the RC's agent and extensions. It contains the host through the API, checks that only the server stays reachable and that other names are refused, then releases it and checks the network is back. The session must have signed in within the reauthentication window, and `EDR_SERVER_URL` must be the URL the agent enrolled with:
+
+```sh
+VM_SSH_TARGET=victor@192.168.64.7 UAT_SSH_KEY=$HOME/.ssh/id_ed25519 UAT_INSECURE=1 \
+EDR_SERVER_URL=https://192.168.64.1:8088 EDR_SESSION_COOKIE=<edr_session cookie value> \
+task uat:l5 -- network-containment --skip-install
+```
+
+The scenario releases the host on any failure. If its log says the cleanup release was refused, release the host from its page before continuing. See [the scenario README](../scripts/uat/scenarios/network-containment/README.md).
+
+## 7. Edge-rejection resilience
 
 The agent must keep telemetry queued on a blanket edge rejection (a 4xx the server never emits itself) rather than quarantining it. Front the dev server with a small toggleable TLS reverse proxy that reuses `tmp/dev.crt` (so the existing fingerprint pin still matches) and returns 403 only on `POST /api/events` while forwarding enroll and commands. Point the agent at the proxy (this needs a fresh enroll, since the token is bound to the URL), then:
 
@@ -144,7 +156,7 @@ The agent must keep telemetry queued on a blanket edge rejection (a 4xx the serv
 
 The agent only exports its own metrics if `OTEL_*` is set in its LaunchDaemon plist; do not write a real bearer token onto the VM just for this. The agent log lines above are sufficient evidence; the counter is unit-tested.
 
-## 7. Server-side checks via synthetic ingest
+## 8. Server-side checks via synthetic ingest
 
 For wire-format and ingest behavior that does not depend on a specific extension build, enroll a synthetic host and POST crafted events (plain JSON, no gzip, `Authorization: Bearer <host_token>` from `POST /api/enroll`; `hardware_uuid` must be a real UUID). Examples:
 
@@ -153,11 +165,11 @@ For wire-format and ingest behavior that does not depend on a specific extension
 
 Clean up the synthetic host rows when done.
 
-## 8. Observability
+## 9. Observability
 
 Validate any OTel-affecting change through the SigNoz MCP, not screenshots. Dev signals share the prod backend, so always filter `deployment.environment = 'dev-local'`. The dev server's traces (for example the detection monitor-mode signal) and counters land there; the agent's own metrics only appear if its plist exports `OTEL_*`.
 
-## 9. Cleanup
+## 10. Cleanup
 
 - Remove any app-control rules created during the run and restore the policy version counter.
 - Delete synthetic hosts and downloaded test binaries from the VM.

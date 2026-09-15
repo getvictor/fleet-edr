@@ -377,6 +377,48 @@ Common causes, in order:
 
 If a host has been offline for >30 days and you expect it to be permanently gone (retired laptop), revoke the enrollment from the UI (`Hosts > <host> > Revoke enrollment`) so its host-token can no longer be used.
 
+## Network containment
+
+Containing a host cuts it off from the network while it stays connected to the EDR server, so you can keep investigating a compromised Mac without it reaching anything else. The Mac enforces it locally and keeps it through agent and extension restarts and reboots until you release the host.
+
+### What a contained host can reach
+
+- **The EDR server:** TCP to the addresses the agent reaches the server through, on the server's port. That is the server itself, or the agent's proxy when it uses one. Telemetry, commands and the release keep flowing.
+- **DHCP**, so the Mac keeps its address.
+- **DNS for the server's name only.** The EDR's DNS proxy forwards lookups of the server's name and answers every other lookup with REFUSED.
+- **Loopback.**
+
+Everything else is dropped: new connections, and connections that were already open when containment took effect. While contained, the host records no `network_connect` events, since dropped connections never reach the filter; DNS lookups, including refused ones, and process and file events are still recorded and uploaded.
+
+### Contain and release
+
+Open the host's page and choose **Contain host**, or **Release host** on a contained host. Both ask for a reason, which is recorded in the audit log as `host.contain` or `host.release`. You need `host.isolate`, which the `super_admin`, `admin` and `senior_analyst` roles hold, and a recent sign-in: an older session is asked to sign in again (`EDR_REAUTH_WINDOW`, 30 minutes by default).
+
+The badge on the host's page and in the host list says where the change stands:
+
+| Badge              | Meaning                                                                                                         |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Containing         | The change is recorded and on its way; the host has not confirmed it yet.                                       |
+| Contained          | The host confirmed containment is in force.                                                                     |
+| Containment failed | The host reported that it could not apply containment, for example because its network extension is not active. |
+| Releasing          | The release is recorded and on its way.                                                                         |
+| Release failed     | The host reported that it could not apply the release, so it may still be contained.                            |
+
+A host that is not contained, including one that was released, shows no badge. Through the API, `POST /api/hosts/{host_id}/containment` with `contained` and `reason` asks for a state, `GET` on the same path returns it with its delivery, and `GET /api/containment` lists every host that has one.
+
+### Offline hosts and failures
+
+A change for an offline host takes effect when its agent next connects, and the badge shows Containing or Releasing until then. The server checks every five minutes for hosts that have not been sent their current state and sends it again, so a lost command or a re-enrolled host still converges.
+
+The host's reason for a failure is in the delivery's `result` from `GET /api/hosts/{host_id}/containment`. Asking for the state a host already has changes nothing, so a failed containment is not retried by containing again: fix the cause, then release and contain the host. The server also retries a failed change on its own after six hours.
+
+### Known limits
+
+- **No addresses of your choosing stay reachable.** A contained host reaches only the EDR server, even when you want it to reach a remediation or forensics service ([#1059](https://github.com/getvictor/fleet-edr/issues/1059)).
+- **DNS is not restricted when the DNS proxy is off.** On a host where the proxy was disabled or has stopped, DNS to any resolver stays open while the host is contained ([#1069](https://github.com/getvictor/fleet-edr/issues/1069)).
+- **A proxy named by host name.** When the agent reaches the server through a proxy named by host name rather than address, its control channel cannot reconnect while the host is contained; commands then arrive through the agent's regular polling ([#1064](https://github.com/getvictor/fleet-edr/issues/1064)).
+- **An agent without its enrollment token.** An agent that starts on a contained host with no saved token, for example after a reinstall removed it, cannot enroll, so the host cannot be released from the console ([#1065](https://github.com/getvictor/fleet-edr/issues/1065)).
+
 ## Application control
 
 Application Control enforces operator-managed policies (named, versioned, audited) containing typed rules. The AUTH_EXEC handler in the system extension consults the active snapshot on every exec and denies the first matching rule with `action=BLOCK` and `enforcement=PROTECT`. Precedence is CDHASH → BINARY → CERTIFICATE → SIGNINGID → TEAMID → PATH.
