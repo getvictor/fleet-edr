@@ -1,10 +1,13 @@
 package api_test
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/fleetdm/edr/server/response/api"
 )
@@ -36,4 +39,56 @@ func TestStatusValuesMatchAgentWire(t *testing.T) {
 	assert.Equal(t, "acked", string(api.StatusAcked))
 	assert.Equal(t, "completed", string(api.StatusCompleted))
 	assert.Equal(t, "failed", string(api.StatusFailed))
+}
+
+// TestContainmentWireTypesRoundTrip is the round trip the testing-strategy matrix requires for new wire types: the command payload
+// agents receive and the state, delivery and change the containment routes return.
+func TestContainmentWireTypesRoundTrip(t *testing.T) {
+	t.Parallel()
+	roundTrip := func(rt *rapid.T, in, out any) {
+		body, err := json.Marshal(in)
+		require.NoError(rt, err)
+		require.NoError(rt, json.Unmarshal(body, out))
+	}
+	t.Run("payload", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := api.SetNetworkContainmentPayload{
+				Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"), Contained: rapid.Bool().Draw(rt, "contained"),
+			}
+			var out api.SetNetworkContainmentPayload
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
+	t.Run("change", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := api.ContainmentChange{
+				State: api.ContainmentState{
+					HostID: rapid.StringN(1, 64, -1).Draw(rt, "host"), Contained: rapid.Bool().Draw(rt, "contained"),
+					Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"),
+					Reason: rapid.String().Draw(rt, "reason"), UpdatedBy: rapid.String().Draw(rt, "updated_by"),
+				},
+				Changed:   rapid.Bool().Draw(rt, "changed"),
+				CommandID: rapid.Int64Min(0).Draw(rt, "command_id"),
+			}
+			if rapid.Bool().Draw(rt, "has_time") {
+				at := time.UnixMicro(rapid.Int64Range(0, 1<<50).Draw(rt, "updated_at")).UTC()
+				in.State.UpdatedAt = &at
+			}
+			if rapid.Bool().Draw(rt, "has_delivery") {
+				status := rapid.SampledFrom([]string{"pending", "completed"}).Draw(rt, "status")
+				in.State.Delivery = &api.ContainmentDelivery{
+					CommandID: rapid.Int64().Draw(rt, "delivery_id"), Status: api.Status(status), Current: rapid.Bool().Draw(rt, "current"),
+				}
+				if rapid.Bool().Draw(rt, "has_result") {
+					in.State.Delivery.Result = json.RawMessage(`{"applied":true}`)
+				}
+			}
+			var out api.ContainmentChange
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
 }

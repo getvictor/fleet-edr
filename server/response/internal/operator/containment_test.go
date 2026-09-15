@@ -167,3 +167,33 @@ func TestContainmentHandler_DeniedCallersReachNothing(t *testing.T) {
 		})
 	}
 }
+
+// FuzzContainmentHandler_Set feeds arbitrary request bodies to the containment route: it must not panic, and every body is either
+// refused as malformed or handed to the service with a definite contained value.
+func FuzzContainmentHandler_Set(f *testing.F) {
+	f.Add(`{"contained":true,"reason":"beaconing"}`)
+	f.Add(`{"contained":null}`)
+	f.Add(`{"reason":7}`)
+	f.Add(`[`)
+	f.Fuzz(func(t *testing.T, body string) {
+		svc := &fakeContainment{}
+		h := NewContainmentHandler(svc, &recordingAuthZ{allow: true}, slog.New(slog.DiscardHandler))
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/hosts/host-a/containment", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		switch rec.Code {
+		case http.StatusOK:
+			if len(svc.calls) != 1 {
+				t.Fatalf("a 200 without exactly one change: %q", body)
+			}
+		case http.StatusBadRequest:
+			if len(svc.calls) != 0 {
+				t.Fatalf("a malformed body reached the service: %q", body)
+			}
+		default:
+			t.Fatalf("unexpected status %d for %q", rec.Code, body)
+		}
+	})
+}

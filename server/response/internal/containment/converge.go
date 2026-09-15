@@ -78,9 +78,15 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 	for _, e := range enrolled {
 		enrolledAt[e.HostID] = e.EnrolledAt
 	}
-	hostIDs := make([]string, len(states))
-	for i, state := range states {
-		hostIDs[i] = state.HostID
+	// Only enrolled hosts can be queued, and rows are kept for every host ever contained, so the command-history read is limited to them.
+	hostIDs := make([]string, 0, len(states))
+	for _, state := range states {
+		if _, ok := enrolledAt[state.HostID]; ok {
+			hostIDs = append(hostIDs, state.HostID)
+		}
+	}
+	if len(hostIDs) == 0 {
+		return 0, nil
 	}
 	latest, err := c.latest(ctx, api.CommandTypeSetNetworkContainment, hostIDs)
 	if err != nil {

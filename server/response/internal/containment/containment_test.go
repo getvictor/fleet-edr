@@ -143,12 +143,17 @@ func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 		assert.Equal(t, "203.0.113.5", e.RemoteAddr)
 		assert.Equal(t, int64(i+1), e.Payload["version"])
 	}
+	assert.Equal(t, contain.State.Epoch, events[0].Payload["epoch"])
+	assert.Equal(t, release.State.Epoch, events[1].Payload["epoch"])
 	assert.Equal(t, "beaconing to a known C2", events[0].Payload["reason"])
 	assert.Equal(t, contain.CommandID, events[0].Payload["command_id"])
 }
 
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-without-a-reason-is-refused
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-reason-over-the-limit-is-refused
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/a-host-that-is-not-enrolled-cannot-be-contained
+//
+// Each refusal leaves no trace: no state is recorded for the host, no command is queued for it, and no audit event is written about it.
 func TestSet_Refusals(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -233,7 +238,8 @@ func TestGet_StateAndDelivery(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 
-	_, err := f.commands.Insert(t.Context(), "host-b", api.CommandTypeSetNetworkContainment, []byte(`{"version":1,"epoch":1,"contained":true}`))
+	stale := []byte(`{"version":1,"epoch":1,"contained":true}`)
+	_, err := f.commands.Insert(t.Context(), "host-b", api.CommandTypeSetNetworkContainment, stale)
 	require.NoError(t, err)
 	never, err := f.svc.Get(t.Context(), "host-b")
 	require.NoError(t, err)
@@ -252,7 +258,7 @@ func TestGet_StateAndDelivery(t *testing.T) {
 	assert.Equal(t, api.ContainmentDelivery{CommandID: change.CommandID, Status: api.StatusPending, Current: true}, *got.Delivery)
 
 	// A command left over from an earlier state is the latest delivery but not a current one.
-	_, err = f.commands.Insert(t.Context(), "host-a", api.CommandTypeSetNetworkContainment, []byte(`{"version":1,"epoch":1,"contained":true}`))
+	_, err = f.commands.Insert(t.Context(), "host-a", api.CommandTypeSetNetworkContainment, stale)
 	require.NoError(t, err)
 	got, err = f.svc.Get(t.Context(), "host-a")
 	require.NoError(t, err)
@@ -329,7 +335,8 @@ func TestConverge(t *testing.T) {
 	t.Run("a command for an earlier state is replaced", func(t *testing.T) {
 		t.Parallel()
 		f, _ := contained(t)
-		_, err := f.commands.Insert(t.Context(), "host-a", api.CommandTypeSetNetworkContainment, []byte(`{"version":1,"epoch":1,"contained":true}`))
+		stale := []byte(`{"version":1,"epoch":1,"contained":true}`)
+		_, err := f.commands.Insert(t.Context(), "host-a", api.CommandTypeSetNetworkContainment, stale)
 		require.NoError(t, err)
 		assert.Equal(t, 1, queued(t, f))
 	})
@@ -350,6 +357,26 @@ func TestConverge(t *testing.T) {
 		delete(f.enrolled, "host-a")
 		assert.Zero(t, queued(t, f))
 		assert.Empty(t, f.containmentCommands(t, "host-b"))
+	})
+	t.Run("command history is read only for enrolled hosts", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		for _, host := range []string{"host-a", "host-b"} {
+			_, err := f.svc.Set(t.Context(), operator, "", host, true, "suspicious")
+			require.NoError(t, err)
+		}
+		delete(f.enrolled, "host-b")
+		var asked [][]string
+		latest := func(ctx context.Context, commandType string, hostIDs []string) (map[string]api.Command, error) {
+			asked = append(asked, hostIDs)
+			return f.commands.LatestOfType(ctx, commandType, hostIDs)
+		}
+		enrollments := func(context.Context) ([]api.HostEnrollment, error) {
+			return []api.HostEnrollment{{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]}}, nil
+		}
+		_, err := containment.NewConverger(f.store, f.commands.Insert, enrollments, latest, nil).Converge(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"host-a"}}, asked)
 	})
 }
 
@@ -397,8 +424,10 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	_, err = containment.NewConverger(f.store, f.commands.Insert, func(context.Context) ([]api.HostEnrollment, error) { return nil, boom },
 		f.commands.LatestOfType, nil).Converge(t.Context())
 	require.ErrorIs(t, err, boom)
-	_, err = containment.NewConverger(f.store, f.commands.Insert, func(context.Context) ([]api.HostEnrollment, error) { return nil, nil },
-		latestFails, nil).Converge(t.Context())
+	onlyHostA := func(context.Context) ([]api.HostEnrollment, error) {
+		return []api.HostEnrollment{{HostID: "host-a"}}, nil
+	}
+	_, err = containment.NewConverger(f.store, f.commands.Insert, onlyHostA, latestFails, nil).Converge(t.Context())
 	require.ErrorIs(t, err, boom)
 }
 

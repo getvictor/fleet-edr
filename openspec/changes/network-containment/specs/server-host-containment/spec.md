@@ -2,7 +2,7 @@
 
 ### Requirement: An operator contains or releases a host
 
-The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `contained` and a `reason`, authorized as `host.isolate` on that host, which for an interactive session requires a recent authentication. A request with a blank reason SHALL be refused with `reason_required`, and a request for a host with no active enrollment with `host_not_found`, changing nothing. A request that changes the host's containment SHALL record the new desired state (contained, reason, actor and time) at the host's next version, queue a `set_network_containment` command carrying that version, the state's epoch (the change time in microseconds, so ordering survives a database restore that sends versions backwards) and `contained`, audit the change as `host.contain` or `host.release` with the reason and version, and return the state with the queued command's id. A request for the state the host already has SHALL change nothing, queue nothing and return the current state. The generic `POST /api/commands` SHALL refuse `set_network_containment` and `isolate`, so containment changes only through this state.
+The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `contained` and a `reason`, authorized as `host.isolate` on that host, which for an interactive session requires a recent authentication. A request with a blank reason SHALL be refused with `reason_required`, a reason longer than 1024 characters with `reason_too_long`, and a request for a host with no active enrollment with `host_not_found`, changing nothing. A request that changes the host's containment SHALL record the new desired state (contained, reason, actor and time) at the host's next version, queue a `set_network_containment` command carrying that version, the state's epoch (the change time in microseconds, so ordering survives a database restore that sends versions backwards) and `contained`, audit the change as `host.contain` or `host.release` with the reason, version and epoch and, when the command was queued, its id, and return the state with the queued command's id. The recorded state is authoritative: a command that cannot be queued SHALL NOT fail the change, which the catch-up then delivers. A request for the state the host already has SHALL change nothing, queue nothing and return the current state. The generic `POST /api/commands` SHALL refuse `set_network_containment` and `isolate`, so containment changes only through this state.
 
 #### Scenario: An operator contains a host
 
@@ -22,6 +22,11 @@ The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `containe
 
 - **WHEN** the operator posts a containment change with a blank reason
 - **THEN** the server responds `reason_required` and changes nothing
+
+#### Scenario: A reason over the limit is refused
+
+- **WHEN** the operator posts a containment change whose reason is longer than 1024 characters
+- **THEN** the server responds `reason_too_long` and changes nothing
 
 #### Scenario: A host that is not enrolled cannot be contained
 
