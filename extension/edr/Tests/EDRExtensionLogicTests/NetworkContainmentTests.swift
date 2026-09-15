@@ -191,7 +191,7 @@ final class NetworkContainmentTests: XCTestCase {
                        "a filter that started and has yet to apply the held state is pending, not failed")
         tracker.confirmed(held)
         tracker.pending()
-        XCTAssertEqual(tracker.status(held: held).applied, false, "a filter that has yet to apply the held state is not confirmed by the last")
+        XCTAssertEqual(tracker.status(held: held).applied, false, "a filter yet to apply the held state is not confirmed by the last")
     }
 
     // spec:extension-network-response/the-extension-reports-containment-status/a-failed-apply-is-not-reported-as-applied
