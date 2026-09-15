@@ -11,9 +11,20 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
     /// across a server database restore that sends version backwards, as it does for application control and the watched-path set.
     let epoch: Int64
     let contained: Bool
-    /// serverPort and serverAddresses are the EDR server as the agent resolved it. Empty when the host is not contained.
+    /// serverPort and serverAddresses are the EDR server as the agent resolved it, and serverNames the host names the DNS proxy still
+    /// resolves while the host is contained (normalized: lowercase, no trailing dot). Empty when the host is not contained.
     let serverPort: UInt16
     let serverAddresses: [String]
+    let serverNames: [String]
+
+    init(version: Int64, epoch: Int64, contained: Bool, serverPort: UInt16, serverAddresses: [String], serverNames: [String] = []) {
+        self.version = version
+        self.epoch = epoch
+        self.contained = contained
+        self.serverPort = serverPort
+        self.serverAddresses = serverAddresses
+        self.serverNames = serverNames
+    }
 
     var order: PushOrder { PushOrder(epoch: epoch, version: version) }
 
@@ -30,7 +41,7 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
     func refreshesLifeline(_ current: NetworkContainmentUpdate?) -> Bool {
         guard let current else { return false }
         return order == current.order && contained == current.contained
-            && (serverPort != current.serverPort || serverAddresses != current.serverAddresses)
+            && (serverPort != current.serverPort || serverAddresses != current.serverAddresses || serverNames != current.serverNames)
     }
 }
 
@@ -67,6 +78,8 @@ enum NetworkContainment {
     /// maxServerAddresses bounds the lifeline. A server name resolves to a handful of addresses; a document naming more is not one
     /// the agent produces.
     static let maxServerAddresses = 16
+    /// maxServerNames bounds the names the DNS proxy resolves while contained: the server, or the proxy it is reached through.
+    static let maxServerNames = 4
 
     /// The ports and prefixes of the lifeline beyond the server itself.
     private static let dhcpServerPort: UInt16 = 67
@@ -87,6 +100,7 @@ enum NetworkContainment {
     private struct Server: Decodable {
         let port: Int
         let addresses: [String]
+        let names: [String]?
     }
 
     /// decode reads a `network_containment.update` payload. It returns nil, leaving the current state in force, for a payload that is
@@ -102,13 +116,15 @@ enum NetworkContainment {
                 version: document.version, epoch: document.epoch ?? 0, contained: false, serverPort: 0, serverAddresses: []
             )
         }
+        let names = document.server?.names ?? []
         guard let server = document.server, (1...Int(UInt16.max)).contains(server.port), !server.addresses.isEmpty,
-              server.addresses.count <= maxServerAddresses, server.addresses.allSatisfy(isUsableAddress) else {
+              server.addresses.count <= maxServerAddresses, server.addresses.allSatisfy(isUsableAddress),
+              names.count <= maxServerNames, names.allSatisfy(isHostName) else {
             return nil
         }
         return NetworkContainmentUpdate(
             version: document.version, epoch: document.epoch ?? 0, contained: true, serverPort: UInt16(server.port),
-            serverAddresses: server.addresses
+            serverAddresses: server.addresses, serverNames: names.map(ContainedDNS.normalized)
         )
     }
 
@@ -153,6 +169,20 @@ enum NetworkContainment {
         }
         return false
     }
+
+    /// isHostName accepts a DNS host name: at most 253 characters without a trailing dot, of dot-separated labels of 1 to 63 letters,
+    /// digits and hyphens that neither start nor end with a hyphen.
+    static func isHostName(_ name: String) -> Bool {
+        let trimmed = name.hasSuffix(".") ? String(name.dropLast()) : name
+        guard !trimmed.isEmpty, trimmed.utf8.count <= maxHostNameBytes else { return false }
+        return trimmed.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+            !label.isEmpty && label.utf8.count <= maxLabelBytes && !label.hasPrefix("-") && !label.hasSuffix("-")
+                && label.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-") }
+        }
+    }
+
+    private static let maxHostNameBytes = 253
+    private static let maxLabelBytes = 63
 
     private static func isIPv6(_ address: String) -> Bool {
         address.contains(":")

@@ -148,10 +148,21 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
             for (datagram, endpoint) in pairs {
                 // Emitted once per datagram, here rather than per attempt, so a failover does not produce a second
-                // dns_query event for the same question (best-effort; never gates forwarding).
+                // dns_query event for the same question (best-effort; never gates forwarding). A contained host's refused
+                // lookups are recorded too.
                 self.emitDNSTelemetry(datagram: datagram, ctx: ctx, proto: "udp")
-                self.forwardUDPDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
-                                                          flow: flow, ctx: ctx, route: route, isFailover: false))
+                switch NetworkContainmentController.shared.dnsDecision(for: datagram) {
+                case .forward:
+                    self.forwardUDPDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
+                                                              flow: flow, ctx: ctx, route: route, isFailover: false))
+                case .answer(let refused):
+                    // A contained host resolves only the server's name (#948); anything else is refused locally.
+                    flow.writeDatagrams([(refused, endpoint)]) { writeError in
+                        writeError.map { logger.error("Failed to write a contained host's refused answer: \($0.localizedDescription)") }
+                    }
+                case .drop:
+                    continue
+                }
             }
 
             // Continue reading for more datagrams on this flow.
@@ -229,6 +240,13 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     // MARK: TCP flow handling
 
     private func handleTCPFlow(_ flow: NEAppProxyTCPFlow, ctx: FlowContext, routing: DNSForwardPolicy.Routing) {
+        // DNS over TCP is not resolved on a contained host (#948): the proxy restricts names per UDP query, and the lifeline's lookups
+        // are UDP. A stub resolver whose answer was truncated falls back to TCP and gets no answer instead.
+        guard !NetworkContainmentController.shared.isContained else {
+            flow.closeReadWithError(nil)
+            flow.closeWriteWithError(nil)
+            return
+        }
         let upstreamEndpoint = flow.remoteFlowEndpoint
         let pinned = boundInterface(for: flow)
 
