@@ -80,7 +80,11 @@ func (h *ContainmentHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	}
 	// The whole capped body must be one JSON object with a contained value, so a valid change cannot carry other data after it.
 	var body containmentRequest
-	if httpserver.DecodeCappedJSON(r, containmentBodyCap, &body) != httpserver.BodyOK || body.Contained == nil {
+	switch outcome := httpserver.DecodeCappedJSON(r, containmentBodyCap, &body); {
+	case outcome == httpserver.BodyTooLarge:
+		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
+		return
+	case outcome != httpserver.BodyOK || body.Contained == nil:
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
 		return
 	}

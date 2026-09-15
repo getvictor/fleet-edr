@@ -28,7 +28,8 @@ type ContainmentState struct {
 	Reason    string     `json:"reason,omitempty"`
 	UpdatedBy string     `json:"updated_by,omitempty"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
-	// Delivery is the host's latest set_network_containment command. Nil when none was ever queued.
+	// Delivery is the host's latest set_network_containment command. Nil when none was ever queued, and for a host with no containment
+	// state, whose version is 0, whatever commands were queued for it by other means.
 	Delivery *ContainmentDelivery `json:"delivery,omitempty"`
 }
 

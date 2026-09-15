@@ -424,6 +424,8 @@ paths:
           description: Not permitted, or a recent authentication is required
         "404":
           description: "`host_not_found`: the host has no active enrollment"
+        "413":
+          description: "`body_too_large`: the request body is over 16 KiB"
 
   /api/alerts:
     get:

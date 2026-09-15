@@ -92,6 +92,8 @@ func TestContainmentHandler_Set(t *testing.T) {
 		{name: "release", body: `{"contained":false,"reason":"reimaged"}`, wantStatus: http.StatusOK, wantCall: "set host-a release reimaged"},
 		{name: "no contained", body: `{"reason":"beaconing"}`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
 		{name: "not JSON", body: `{`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
+		{name: "a body over the cap", body: `{"contained":true,"reason":"` + strings.Repeat("x", containmentBodyCap) + `"}`,
+			wantStatus: http.StatusRequestEntityTooLarge, wantError: "body_too_large"},
 		{name: "data after the object", body: `{"contained":true,"reason":"x"}{}`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
 		{name: "a second object", body: `{"contained":true,"reason":"x"} {"contained":false}`, wantStatus: http.StatusBadRequest,
 			wantError: "bad_body"},
@@ -197,7 +199,7 @@ func FuzzContainmentHandler_Set(f *testing.F) {
 			if dec.Decode(&first) != nil || !errors.Is(dec.Decode(&second), io.EOF) {
 				t.Fatalf("a body that is not exactly one JSON value changed a host: %q", body)
 			}
-		case http.StatusBadRequest:
+		case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
 			if len(svc.calls) != 0 {
 				t.Fatalf("a malformed body reached the service: %q", body)
 			}
