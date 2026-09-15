@@ -328,6 +328,12 @@ final class XPCEventServer {
         var dataLen: Int = 0
         var inboundData: Data?
         if let dataPtr = xpc_dictionary_get_data(event, "data", &dataLen), dataLen > 0 {
+            // A containment update over its bound is refused before its bytes are copied, so the bound limits what a faulty peer
+            // can make this extension allocate, not only what it decodes.
+            guard typeStr != XPCMessageType.networkContainmentUpdate || dataLen <= networkContainmentMaxBytes else {
+                log.error("network_containment.update larger than \(networkContainmentMaxBytes, privacy: .public) bytes refused")
+                return
+            }
             inboundData = Data(bytes: dataPtr, count: dataLen)
         }
 

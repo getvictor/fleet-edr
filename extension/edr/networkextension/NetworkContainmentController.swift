@@ -38,10 +38,18 @@ final class NetworkContainmentController: @unchecked Sendable {
     }
 
     /// providerStarted records the running content filter and the state its startup settings enforced. When an update was accepted
-    /// while the filter was starting, or an apply is still in flight, the current state is applied to it.
+    /// while the filter was starting, or an apply is still in flight, the current state is applied to it. A filter whose startup
+    /// settings failed is rejected by the framework, so it is not recorded, and the failure is reported.
     func providerStarted(_ filter: NEFilterDataProvider, applied: NetworkContainmentUpdate?, error: Error?) {
         queue.async {
-            switch self.sequencer.started(filter, startupEnforcesCurrent: error == nil && self.store.current == applied) {
+            if let error {
+                // The framework rejects a filter whose startup settings failed, so it never becomes the target.
+                self.sequencer.stopped(filter)
+                self.tracker.failed(error.localizedDescription)
+                self.publishLocked()
+                return
+            }
+            switch self.sequencer.started(filter, startupEnforcesCurrent: self.store.current == applied) {
             case .ignore, .wait:
                 return
             case .apply:
@@ -73,6 +81,8 @@ final class NetworkContainmentController: @unchecked Sendable {
             network containment update accepted: contained=\(update.contained, privacy: .public) \
             version=\(update.version, privacy: .public) epoch=\(update.epoch, privacy: .public)
             """)
+            // Reported as pending now, so a change is visible even while an earlier apply is still in flight.
+            self.publishLocked()
             self.applyLocked()
         }
     }

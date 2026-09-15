@@ -116,8 +116,10 @@ enum NetworkContainment {
     /// the server port, which carries the agent's uploads, commands and the release itself. It is DHCP, between the client port (68,
     /// or 546 for DHCPv6) and the server port (67, or 547): measured, a lease renewal during containment otherwise loses the host's
     /// address, and with it the route to the server. Requiring the client port, which only a privileged process can bind, keeps the
-    /// rule from carrying arbitrary UDP to port 67. And it is DNS (TCP and UDP 53): every lookup on the host passes through this
-    /// extension's DNS proxy, whose own forwards are subject to these settings, so without it the agent cannot resolve the server name.
+    /// rule from carrying arbitrary UDP to port 67; it allows either direction because a server's offer arrives as its own flow. And
+    /// it is DNS (TCP and UDP 53), outbound only, so an inbound flow from source port 53 reaches nothing: every lookup on the host
+    /// passes through this extension's DNS proxy, whose own forwards are subject to these settings, so without it the agent cannot
+    /// resolve the server name.
     static func lifeline(for update: NetworkContainmentUpdate) -> [LifelineRule] {
         guard update.contained else { return [] }
         var rules = update.serverAddresses.map { address in
@@ -126,8 +128,8 @@ enum NetworkContainment {
         }
         for (any, server, client) in [("0.0.0.0", dhcpServerPort, dhcpClientPort), ("::", dhcpv6ServerPort, dhcpv6ClientPort)] {
             rules.append(LifelineRule(address: any, prefix: 0, port: server, localPort: client, transport: .udp, direction: .any))
-            rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .udp, direction: .any))
-            rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .tcp, direction: .any))
+            rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .udp, direction: .outbound))
+            rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .tcp, direction: .outbound))
         }
         return rules
     }

@@ -92,11 +92,11 @@ final class NetworkContainmentTests: XCTestCase {
             LifelineRule(address: "203.0.113.7", prefix: 32, port: 8443, transport: .tcp, direction: .outbound),
             LifelineRule(address: "2001:db8::7", prefix: 128, port: 8443, transport: .tcp, direction: .outbound),
             LifelineRule(address: "0.0.0.0", prefix: 0, port: 67, localPort: 68, transport: .udp, direction: .any),
-            LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .udp, direction: .any),
-            LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .tcp, direction: .any),
+            LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .udp, direction: .outbound),
+            LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .tcp, direction: .outbound),
             LifelineRule(address: "::", prefix: 0, port: 547, localPort: 546, transport: .udp, direction: .any),
-            LifelineRule(address: "::", prefix: 0, port: 53, transport: .udp, direction: .any),
-            LifelineRule(address: "::", prefix: 0, port: 53, transport: .tcp, direction: .any)
+            LifelineRule(address: "::", prefix: 0, port: 53, transport: .udp, direction: .outbound),
+            LifelineRule(address: "::", prefix: 0, port: 53, transport: .tcp, direction: .outbound)
         ])
     }
 
