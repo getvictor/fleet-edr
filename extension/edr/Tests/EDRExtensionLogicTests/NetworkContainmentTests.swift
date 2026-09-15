@@ -40,6 +40,8 @@ final class NetworkContainmentTests: XCTestCase {
             ("one bad address among good ones",
              #"{"version":1,"contained":true,"server":{"port":443,"addresses":["203.0.113.7","nope"]}}"#),
             ("the IPv4 unspecified address", #"{"version":1,"contained":true,"server":{"port":443,"addresses":["0.0.0.0"]}}"#),
+            ("an address with an embedded NUL",
+             #"{"version":1,"contained":true,"server":{"port":443,"addresses":["203.0.113.7\u0000x"]}}"#),
             ("the IPv6 unspecified address", #"{"version":1,"contained":true,"server":{"port":443,"addresses":["::"]}}"#),
             ("port 0", #"{"version":1,"contained":true,"server":{"port":0,"addresses":["203.0.113.7"]}}"#),
             ("port above 65535", #"{"version":1,"contained":true,"server":{"port":65536,"addresses":["203.0.113.7"]}}"#),
@@ -164,6 +166,21 @@ final class NetworkContainmentTests: XCTestCase {
         XCTAssertEqual(String(bytes: try encoder.encode(applied), encoding: .utf8),
                        #"{"applied":true,"contained":false,"epoch":100,"version":4}"#, "no error key when it applied")
         XCTAssertEqual(NetworkContainmentStatus.eventType, "ne_containment_status")
+    }
+
+    // spec:extension-network-response/the-extension-reports-containment-status/a-state-waiting-to-be-applied-is-reported-as-pending
+    func testStatusDescribesTheHeldState() {
+        let held = contained(version: 4)
+        let older = contained(version: 3)
+        XCTAssertEqual(NetworkContainment.status(held: held, applied: held, error: nil),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil))
+        XCTAssertEqual(NetworkContainment.status(held: held, applied: older, error: nil),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil),
+                       "an older applied state is not reported; the held state is pending")
+        XCTAssertEqual(NetworkContainment.status(held: held, applied: nil, error: "content filter is not running"),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false,
+                                                error: "content filter is not running"))
+        XCTAssertEqual(NetworkContainment.status(held: held, applied: held, error: "stale").error, nil, "an applied state carries no error")
     }
 
     // MARK: ordering shared with the other pushed documents

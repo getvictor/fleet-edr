@@ -132,8 +132,19 @@ enum NetworkContainment {
         return rules
     }
 
-    /// isUsableAddress accepts an IPv4 or IPv6 literal other than the unspecified address, which as a lifeline would match nothing.
+    /// status is what the extension reports for the held state: applied when the running filter was confirmed to enforce exactly that
+    /// state, pending (not applied, no error) while it waits to be applied, and not applied with the error when the latest attempt
+    /// failed.
+    static func status(held: NetworkContainmentUpdate, applied: NetworkContainmentUpdate?, error: String?) -> NetworkContainmentStatus {
+        let isApplied = held == applied
+        return NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: isApplied,
+                                        error: isApplied ? nil : error)
+    }
+
+    /// isUsableAddress accepts an IPv4 or IPv6 literal other than the unspecified address, which as a lifeline would match nothing. A
+    /// string with an embedded NUL is refused before parsing, since inet_pton would read only the part before it.
     static func isUsableAddress(_ address: String) -> Bool {
+        guard !address.contains("\u{0}") else { return false }
         var v4 = in_addr()
         if inet_pton(AF_INET, address, &v4) == 1 {
             return v4.s_addr != 0
@@ -219,8 +230,8 @@ final class NetworkContainmentStore: Sendable {
     }
 }
 
-/// ContainmentSequencer is NetworkContainmentController's bookkeeping for applying filter settings, kept free of NetworkExtension so its
-/// orderings are unit-testable. The controller calls it on its serial queue and performs the applies it asks for.
+/// ContainmentSequencer is NetworkContainmentController's bookkeeping for applying filter settings, kept free of NetworkExtension so
+/// its orderings are unit-testable. The controller calls it on its serial queue and performs the applies it asks for.
 ///
 /// One apply is in flight at a time, and a request while one is in flight is deferred until it completes, so settings never take
 /// effect out of order. A filter's start completion is ignored once that filter has stopped, and a completion from a filter other than

@@ -46,7 +46,7 @@ The network extension SHALL persist an accepted containment update before applyi
 
 ### Requirement: The extension reports containment status
 
-The network extension SHALL report its containment status to the agent as an `ne_containment_status` control event carrying whether the host is contained, the version and epoch of the state it holds, whether the content filter applied it, and the error when it did not. It SHALL report after every change and whenever an agent completes the hello handshake, including before the content filter has started, when it reports the persisted state as not applied. A host that has never received a containment update SHALL send no status. Filter settings SHALL be applied one at a time, so a later update never takes effect before an earlier one, and a result from a filter that has since stopped SHALL NOT be reported.
+The network extension SHALL report its containment status to the agent as an `ne_containment_status` control event describing the state it holds: whether the host is contained, that state's version and epoch, whether the content filter was confirmed to enforce that state, and the error when the latest attempt to apply it failed. A held state waiting to be applied SHALL be reported as not applied with no error, and an earlier state that was applied SHALL NOT be reported in its place. It SHALL report after every change and whenever an agent completes the hello handshake, including before the content filter has started. A host that has never received a containment update SHALL send no status. Filter settings SHALL be applied one at a time, so a later update never takes effect before an earlier one, and a result from a filter that has since stopped SHALL NOT be reported.
 
 #### Scenario: The status says whether containment was applied
 
@@ -65,3 +65,9 @@ The network extension SHALL report its containment status to the agent as an `ne
 - **GIVEN** filter settings are being applied to a content filter
 - **WHEN** that filter stops and a replacement starts before the apply completes
 - **THEN** the completed apply is not reported, and the replacement is given the current state
+
+#### Scenario: A state waiting to be applied is reported as pending
+
+- **GIVEN** the extension holds a containment update whose filter settings have not yet been confirmed
+- **WHEN** it reports its status
+- **THEN** the status names that update's version as not applied, with no error
