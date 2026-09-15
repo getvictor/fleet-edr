@@ -469,3 +469,37 @@ func TestConstructorsRequireTheirDependencies(t *testing.T) {
 	assert.Panics(t, func() { containment.NewConverger(f.store, nil, enrollments, f.commands.LatestOfType, nil) })
 	assert.Panics(t, func() { containment.NewConverger(f.store, f.commands.Insert, nil, f.commands.LatestOfType, nil) })
 }
+
+// spec:server-host-containment/the-containment-state-is-readable/the-host-list-shows-every-host-with-a-state
+func TestList_EveryHostWithAState(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	empty, err := f.svc.List(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+
+	contain, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+	require.NoError(t, err)
+	_, err = f.svc.Set(t.Context(), operator, "", "host-b", true, "suspicious")
+	require.NoError(t, err)
+	release, err := f.svc.Set(t.Context(), operator, "", "host-b", false, "cleared")
+	require.NoError(t, err)
+
+	got, err := f.svc.List(t.Context())
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "host-a", got[0].HostID)
+	assert.True(t, got[0].Contained)
+	require.NotNil(t, got[0].Delivery)
+	assert.Equal(t, api.ContainmentDelivery{CommandID: contain.CommandID, Status: api.StatusPending, Current: true}, *got[0].Delivery)
+	assert.Equal(t, "host-b", got[1].HostID)
+	assert.False(t, got[1].Contained, "a released host is listed with its release")
+	require.NotNil(t, got[1].Delivery)
+	assert.Equal(t, release.CommandID, got[1].Delivery.CommandID)
+
+	boom := errors.New("boom")
+	latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
+	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.Insert,
+		latestFails, nil, nil).List(t.Context())
+	require.ErrorIs(t, err, boom)
+}

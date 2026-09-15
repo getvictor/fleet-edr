@@ -3,6 +3,7 @@
 //	POST /api/commands                       - admin issues a command for a target host
 //	GET  /api/commands/{id}                  - admin reads a single command by id
 //	POST /api/commands/{id}/cancel           - admin withdraws a command no agent has taken
+//	GET  /api/containment                    - lists every host with a containment state (host.read)
 //	GET  /api/hosts/{host_id}/containment    - reads a host's containment state (host.read)
 //	POST /api/hosts/{host_id}/containment    - contains or releases a host (host.isolate, reason required)
 //

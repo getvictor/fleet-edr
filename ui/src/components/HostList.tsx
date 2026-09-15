@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { listHosts } from "../api";
-import type { HostSummary } from "../types";
+import { listContainment, listHosts } from "../api";
+import { containmentBadge, containmentPhase } from "../containment";
+import type { ContainmentState, HostSummary } from "../types";
+import { Badge } from "./ui/Badge";
 import { formatRelativeNs, isOnline } from "../time";
 import { formatPlatform } from "../platform";
 import { Table, EmptyState } from "./ui/Table";
@@ -13,9 +15,18 @@ export function HostList() {
   const [hosts, setHosts] = useState<HostSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // containment holds each host's containment state by host id, for its badge. Best-effort: the list renders without it.
+  const [containment, setContainment] = useState<ReadonlyMap<string, ContainmentState>>(new Map());
   const navigate = useNavigate();
 
   useEffect(() => {
+    listContainment()
+      .then((states) => {
+        setContainment(new Map(states.map((s) => [s.host_id, s])));
+      })
+      .catch(() => {
+        // Best-effort: a host list without containment badges is still the host list.
+      });
     listHosts()
       .then(setHosts)
       .catch((err: unknown) => {
@@ -68,6 +79,7 @@ export function HostList() {
                 // at the exact threshold boundary and render an "online" class with an
                 // "offline" label.
                 const rowOnline = isOnline(h.last_seen_ns);
+                const badge = containmentBadge(containmentPhase(containment.get(h.host_id)));
                 const pillClass = rowOnline ? "status-pill status-pill--online" : "status-pill status-pill--offline";
                 return (
                   <tr
@@ -92,7 +104,10 @@ export function HostList() {
                     </td>
                     <td>{formatPlatform(h.platform)}</td>
                     <td>
-                      <span className={pillClass}>{rowOnline ? "online" : "offline"}</span>
+                      <span className="host-list__status">
+                        <span className={pillClass}>{rowOnline ? "online" : "offline"}</span>
+                        {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+                      </span>
                     </td>
                     <td>
                       <HealthBadge status={h.overall_status} />

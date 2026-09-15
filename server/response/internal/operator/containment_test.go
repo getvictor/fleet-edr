@@ -20,11 +20,17 @@ import (
 
 // fakeContainment records what the handler asked of the containment service and answers with set values.
 type fakeContainment struct {
+	list   []api.ContainmentState
 	state  api.ContainmentState
 	change api.ContainmentChange
 	err    error
 	calls  []string
 	actor  identityapi.PrincipalRef
+}
+
+func (f *fakeContainment) List(context.Context) ([]api.ContainmentState, error) {
+	f.calls = append(f.calls, "list")
+	return f.list, f.err
 }
 
 func (f *fakeContainment) Get(_ context.Context, hostID string) (api.ContainmentState, error) {
@@ -133,6 +139,31 @@ func TestContainmentHandler_Set(t *testing.T) {
 	}
 }
 
+func TestContainmentHandler_List(t *testing.T) {
+	t.Parallel()
+	t.Run("returns every host with a state", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeContainment{list: []api.ContainmentState{{HostID: "host-a", Contained: true, Version: 1}}}
+		authz := &recordingAuthZ{allow: true}
+		resp := serveContainment(t, svc, authz, http.MethodGet, "/api/containment", "")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, []string{"host.read host:"}, authz.decisions)
+		var got struct {
+			Items []api.ContainmentState `json:"items"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		assert.Equal(t, svc.list, got.Items)
+	})
+	t.Run("a read failure", func(t *testing.T) {
+		t.Parallel()
+		resp := serveContainment(t, &fakeContainment{err: errors.New("db down")}, &recordingAuthZ{allow: true}, http.MethodGet,
+			"/api/containment", "")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
+}
+
 func TestContainmentHandler_Get(t *testing.T) {
 	t.Parallel()
 	t.Run("returns the state", func(t *testing.T) {
@@ -160,12 +191,15 @@ func TestContainmentHandler_Get(t *testing.T) {
 // Both routes are gated: a denied caller changes and reads nothing.
 func TestContainmentHandler_DeniedCallersReachNothing(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{http.MethodGet, http.MethodPost} {
-		t.Run(method, func(t *testing.T) {
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/api/containment"},
+		{http.MethodGet, "/api/hosts/host-a/containment"},
+		{http.MethodPost, "/api/hosts/host-a/containment"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			t.Parallel()
 			svc := &fakeContainment{}
-			resp := serveContainment(t, svc, &recordingAuthZ{allow: false}, method, "/api/hosts/host-a/containment",
-				`{"contained":true,"reason":"x"}`)
+			resp := serveContainment(t, svc, &recordingAuthZ{allow: false}, route.method, route.path, `{"contained":true,"reason":"x"}`)
 			defer resp.Body.Close()
 			assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 			assert.Empty(t, svc.calls)

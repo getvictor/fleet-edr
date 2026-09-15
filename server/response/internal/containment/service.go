@@ -68,9 +68,36 @@ func (s *Service) Get(ctx context.Context, hostID string) (api.ContainmentState,
 		return api.ContainmentState{}, err
 	}
 	if cmd, ok := latest[hostID]; ok {
-		state.Delivery = &api.ContainmentDelivery{CommandID: cmd.ID, Status: cmd.Status, Result: cmd.Result, Current: carries(cmd, state)}
+		state.Delivery = deliveryOf(cmd, state)
 	}
 	return state, nil
+}
+
+func deliveryOf(cmd api.Command, state api.ContainmentState) *api.ContainmentDelivery {
+	return &api.ContainmentDelivery{CommandID: cmd.ID, Status: cmd.Status, Result: cmd.Result, Current: carries(cmd, state)}
+}
+
+// List returns every host that has a containment state, with its delivery, in host_id order. A host whose containment was released
+// is included: its state says so, and its delivery says whether the release reached it.
+func (s *Service) List(ctx context.Context) ([]api.ContainmentState, error) {
+	states, err := s.store.All(ctx)
+	if err != nil || len(states) == 0 {
+		return states, err
+	}
+	hostIDs := make([]string, len(states))
+	for i, state := range states {
+		hostIDs[i] = state.HostID
+	}
+	latest, err := s.latest(ctx, api.CommandTypeSetNetworkContainment, hostIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range states {
+		if cmd, ok := latest[states[i].HostID]; ok {
+			states[i].Delivery = deliveryOf(cmd, states[i])
+		}
+	}
+	return states, nil
 }
 
 // Set asks for a host to be contained or released. A change is recorded, queued for the host and audited; a request for the state the

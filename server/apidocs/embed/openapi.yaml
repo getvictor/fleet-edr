@@ -345,6 +345,30 @@ paths:
         "404":
           description: No process found at the given coordinates
 
+  /api/containment:
+    get:
+      tags: [Hosts]
+      summary: List hosts with a network containment state
+      description: |
+        Every host whose containment was ever changed, released hosts included,
+        each with its delivery. Hosts never contained are not listed. Requires
+        `host.read`.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Containment states
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContainmentState"
+
   /api/hosts/{host_id}/containment:
     get:
       tags: [Hosts]

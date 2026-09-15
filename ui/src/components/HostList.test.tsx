@@ -34,6 +34,7 @@ const renderList = () =>
 
 beforeEach(() => {
   vi.spyOn(api, "listHosts");
+  vi.spyOn(api, "listContainment").mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -158,3 +159,35 @@ describe("HostList states", () => {
     });
   });
 });
+
+describe("HostList containment badges", () => {
+  // spec:web-ui/host-network-containment-in-the-console/the-host-list-marks-hosts-under-containment
+  it("marks a contained host, a host being contained, and nothing on a released host", async () => {
+    vi.mocked(api.listHosts).mockResolvedValue([
+      makeHost({ host_id: "H-CONTAINED", hostname: "contained.local" }),
+      makeHost({ host_id: "H-PENDING", hostname: "pending.local" }),
+      makeHost({ host_id: "H-RELEASED", hostname: "released.local" }),
+      makeHost({ host_id: "H-NEVER", hostname: "never.local" }),
+    ]);
+    vi.mocked(api.listContainment).mockResolvedValue([
+      { host_id: "H-CONTAINED", contained: true, version: 1, epoch: 1, delivery: { command_id: 1, status: "completed", current: true } },
+      { host_id: "H-PENDING", contained: true, version: 1, epoch: 1, delivery: { command_id: 2, status: "pending", current: true } },
+      { host_id: "H-RELEASED", contained: false, version: 2, epoch: 2, delivery: { command_id: 3, status: "completed", current: true } },
+    ]);
+    renderList();
+    const row = async (name: string) => (await screen.findByText(name)).closest("tr") as HTMLElement;
+    expect(within(await row("contained.local")).getByText("Contained")).toBeVisible();
+    expect(within(await row("pending.local")).getByText("Containing")).toBeVisible();
+    expect(within(await row("released.local")).queryByText(/Contain|Releas/)).toBeNull();
+    expect(within(await row("never.local")).queryByText(/Contain|Releas/)).toBeNull();
+  });
+
+  it("renders the list without badges when containment cannot be read", async () => {
+    vi.mocked(api.listHosts).mockResolvedValue([makeHost({ host_id: "H-1", hostname: "one.local" })]);
+    vi.mocked(api.listContainment).mockRejectedValue(new Error("forbidden"));
+    renderList();
+    expect(await screen.findByText("one.local")).toBeVisible();
+    expect(screen.queryByText(/Contain/)).toBeNull();
+  });
+});
+

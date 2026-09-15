@@ -18,6 +18,8 @@ import type {
   Alert,
   AlertDetail,
   Command,
+  ContainmentChange,
+  ContainmentState,
   ApplicationControlPolicy,
   ApplicationControlRule,
 } from "./types";
@@ -996,6 +998,26 @@ export async function createCommand(hostId: string, commandType: string, payload
 
 export async function getCommand(id: number): Promise<Command> {
   return fetchJSON<Command>(`/commands/${String(id)}`);
+}
+
+// getHostContainment reads a host's network containment state and its delivery (#948).
+export async function getHostContainment(hostId: string): Promise<ContainmentState> {
+  return fetchJSON<ContainmentState>(`/hosts/${encodeURIComponent(hostId)}/containment`);
+}
+
+// setHostContainment contains or releases a host. The server requires host.isolate, a recent authentication, and a reason; wrap it in
+// useReauthRetry.
+export async function setHostContainment(hostId: string, contained: boolean, reason: string): Promise<ContainmentChange> {
+  return fetchJSON<ContainmentChange>(`/hosts/${encodeURIComponent(hostId)}/containment`, {
+    method: "POST",
+    body: JSON.stringify({ contained, reason }),
+  });
+}
+
+// listContainment reads every host with a containment state, for the host list's badges.
+export async function listContainment(): Promise<ContainmentState[]> {
+  const body = await fetchJSON<{ items: ContainmentState[] }>("/containment");
+  return body.items;
 }
 
 // --- SSO / OIDC configuration (issue #375) --------------------------------------

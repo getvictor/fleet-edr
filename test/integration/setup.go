@@ -416,6 +416,7 @@ func buildMux(
 	// handler that is definitely mounted. Add the pattern here, matching the handler's own pattern exactly, wildcards included.
 	for _, p := range []string{
 		"POST /api/commands",
+		"GET /api/containment",
 		"GET /api/hosts/{host_id}/containment",
 		"POST /api/hosts/{host_id}/containment",
 		"GET /api/audit-events",

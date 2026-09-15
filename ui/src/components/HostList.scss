@@ -28,3 +28,11 @@ $font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+// The status cell carries the online pill and, for a host under containment, its containment badge beside it.
+.host-list__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}

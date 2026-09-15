@@ -47,9 +47,14 @@ The work lands in steps, producer before consumer.
 - **Delivery with catch-up.** Every five minutes the server queues a host's state again when its latest command does not deliver it (none, another state, expired or cancelled, failed six hours ago, or queued before the host last enrolled), mirroring the watched-path catch-up per host.
 - **No generic containment command.** `POST /api/commands` no longer accepts the unused `isolate` reservation and never accepts `set_network_containment`, so containment changes only through the recorded state.
 
+### Console
+
+- **The host header shows containment and offers the action.** A badge says Containing, Contained, Containment failed, Releasing or Release failed, re-read every few seconds while a change is on its way. An operator holding `host.isolate` gets Contain host or Release host, which asks for a reason in a confirmation that says what containment does, through the existing reauthentication prompt.
+- **The host list marks hosts under containment,** from `GET /api/containment`, which lists every host with a containment state and its delivery.
+
 ### Later steps
 
-- Console: contain and release on the host, with the reason and step-up reauthentication, and the state on the host list and header.
+- An end-to-end system test on edr-qa, the operator guide and the release notes.
 
 ## Out of scope
 

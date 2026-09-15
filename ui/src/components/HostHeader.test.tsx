@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
@@ -35,6 +35,11 @@ function renderHeader(hostId: string) {
     </MemoryRouter>,
   );
 }
+
+beforeEach(() => {
+  // The header's containment control reads its own state; these tests are about the rest of the header.
+  vi.spyOn(api, "getHostContainment").mockResolvedValue({ host_id: "", contained: false, version: 0, epoch: 0 });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
