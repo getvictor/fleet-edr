@@ -106,6 +106,36 @@ final class NetworkContainmentTests: XCTestCase {
         XCTAssertEqual(NetworkContainment.lifeline(for: release), [])
     }
 
+    // spec:extension-network-response/containment-is-enforced-by-the-operating-system/a-release-keeps-the-server-flows-allowed
+    func testAReleaseKeepsTheReleasedContainmentsServerFlows() {
+        let held = contained(port: 8443, addresses: ["203.0.113.7", "2001:db8::7"])
+        let release = NetworkContainmentUpdate(version: 6, epoch: 100, contained: false, serverPort: 0, serverAddresses: [])
+        var released = ReleasedLifeline()
+
+        released.accepted(release, releasing: nil)
+        XCTAssertEqual(released.rules, [], "a host that was never contained keeps nothing")
+
+        released.accepted(release, releasing: held)
+        XCTAssertEqual(released.rules, [
+            LifelineRule(address: "203.0.113.7", prefix: 32, port: 8443, transport: .tcp, direction: .outbound),
+            LifelineRule(address: "2001:db8::7", prefix: 128, port: 8443, transport: .tcp, direction: .outbound)
+        ], "only the server flows: DHCP and DNS go back to the provider")
+
+        let repeated = NetworkContainmentUpdate(version: 7, epoch: 100, contained: false, serverPort: 0, serverAddresses: [])
+        released.accepted(repeated, releasing: release)
+        XCTAssertEqual(released.rules.count, 2, "a repeated release keeps the connections the first one kept")
+
+        let moved = contained(port: 9443, addresses: ["198.51.100.9"])
+        released.accepted(moved, releasing: repeated)
+        XCTAssertEqual(released.rules.count, 2, "a containment carries the server flows in its own lifeline")
+        released.accepted(contained(port: 9443, addresses: ["198.51.100.10"]), releasing: moved)
+        XCTAssertEqual(released.rules.count, 2, "a lifeline refresh while contained keeps nothing new either")
+        released.accepted(release, releasing: moved)
+        XCTAssertEqual(released.rules, [
+            LifelineRule(address: "198.51.100.9", prefix: 32, port: 9443, transport: .tcp, direction: .outbound)
+        ])
+    }
+
     // MARK: store
 
     private func temporaryPath() -> String {

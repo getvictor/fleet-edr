@@ -25,6 +25,7 @@ final class NetworkContainmentController: @unchecked Sendable {
     // Everything below is guarded by queue.
     private let sequencer = ContainmentSequencer<NEFilterDataProvider>()
     private var tracker = ContainmentStatusTracker()
+    private var released = ReleasedLifeline()
 
     /// baselineSettings are the filter's settings when the host is not contained.
     static func baselineSettings() -> NEFilterSettings {
@@ -34,7 +35,7 @@ final class NetworkContainmentController: @unchecked Sendable {
     /// startupState is the persisted state and the settings that enforce it, for a starting filter to apply as its first settings.
     func startupState() -> (update: NetworkContainmentUpdate?, settings: NEFilterSettings) {
         let update = store.current
-        return (update, update.map(Self.settings(for:)) ?? Self.baselineSettings())
+        return (update, update.map { Self.settings(for: $0, released: []) } ?? Self.baselineSettings())
     }
 
     /// providerStarted records the running content filter and the state its startup settings enforced. When an update was accepted
@@ -81,6 +82,7 @@ final class NetworkContainmentController: @unchecked Sendable {
     /// receive handles a `network_containment.update` from the agent.
     func receive(_ data: Data) {
         queue.async {
+            let held = self.store.current
             guard let update = self.store.accept(data) else {
                 logger.info("""
                 network containment update refused: not a valid document, not newer than the current state, or not persisted
@@ -89,6 +91,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 return
             }
             self.tracker.pending()
+            self.released.accepted(update, releasing: held)
             logger.info("""
             network containment update accepted: contained=\(update.contained, privacy: .public) \
             version=\(update.version, privacy: .public) epoch=\(update.epoch, privacy: .public)
@@ -114,7 +117,7 @@ final class NetworkContainmentController: @unchecked Sendable {
             tracker.failed("content filter is not running")
             publishLocked()
         case .apply(let target):
-            target.apply(update.map(Self.settings(for:)) ?? Self.baselineSettings()) { error in
+            target.apply(update.map { Self.settings(for: $0, released: released.rules) } ?? Self.baselineSettings()) { error in
                 self.queue.async {
                     if let error {
                         logger.error("network containment settings not applied: \(error.localizedDescription, privacy: .public)")
@@ -145,12 +148,17 @@ final class NetworkContainmentController: @unchecked Sendable {
         XPCServer.shared.send(data: data)
     }
 
-    /// settings turns a containment state into filter settings: the lifeline allowed and everything else dropped when contained, the
-    /// baseline otherwise.
-    static func settings(for update: NetworkContainmentUpdate) -> NEFilterSettings {
-        let rules = NetworkContainment.lifeline(for: update)
-        guard !rules.isEmpty else { return baselineSettings() }
-        return NEFilterSettings(rules: rules.map { NEFilterRule(networkRule: networkRule(for: $0), action: .allow) }, defaultAction: .drop)
+    /// settings turns a containment state into filter settings: the lifeline allowed and everything else dropped when contained, and
+    /// otherwise the baseline's hand-every-flow-to-the-provider with the released server flows still allowed (see ReleasedLifeline).
+    static func settings(for update: NetworkContainmentUpdate, released: [LifelineRule]) -> NEFilterSettings {
+        guard update.contained else {
+            return NEFilterSettings(rules: allowRules(released), defaultAction: .filterData)
+        }
+        return NEFilterSettings(rules: allowRules(NetworkContainment.lifeline(for: update)), defaultAction: .drop)
+    }
+
+    private static func allowRules(_ rules: [LifelineRule]) -> [NEFilterRule] {
+        rules.map { NEFilterRule(networkRule: networkRule(for: $0), action: .allow) }
     }
 
     private static func networkRule(for rule: LifelineRule) -> NENetworkRule {

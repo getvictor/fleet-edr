@@ -182,7 +182,7 @@ final class XPCEventServer {
     private let serviceName: String
     private let log: Logger
     /// Inbound application-control handler. The security extension wires this to ApplicationControlStore.apply; the
-    /// network extension passes nil (no inbound control messages), so an application_control.update it never receives
+    /// network extension passes nil (it receives no application-control messages), so an application_control.update it never receives
     /// would be a no-op rather than a crash.
     private let onApplicationControl: ((Data) -> Void)?
     /// Inbound watched-path handler. The security extension wires this to the file-tamper client; nil in the network

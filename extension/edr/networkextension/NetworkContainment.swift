@@ -122,16 +122,21 @@ enum NetworkContainment {
     /// resolve the server name.
     static func lifeline(for update: NetworkContainmentUpdate) -> [LifelineRule] {
         guard update.contained else { return [] }
-        var rules = update.serverAddresses.map { address in
-            LifelineRule(address: address, prefix: isIPv6(address) ? ipv6HostPrefix : ipv4HostPrefix, port: update.serverPort,
-                         transport: .tcp, direction: .outbound)
-        }
+        var rules = serverRules(for: update)
         for (any, server, client) in [("0.0.0.0", dhcpServerPort, dhcpClientPort), ("::", dhcpv6ServerPort, dhcpv6ClientPort)] {
             rules.append(LifelineRule(address: any, prefix: 0, port: server, localPort: client, transport: .udp, direction: .any))
             rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .udp, direction: .outbound))
             rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .tcp, direction: .outbound))
         }
         return rules
+    }
+
+    /// serverRules are the lifeline's flows to the EDR server: TCP to each server address on the server port.
+    static func serverRules(for update: NetworkContainmentUpdate) -> [LifelineRule] {
+        update.serverAddresses.map { address in
+            LifelineRule(address: address, prefix: isIPv6(address) ? ipv6HostPrefix : ipv4HostPrefix, port: update.serverPort,
+                         transport: .tcp, direction: .outbound)
+        }
     }
 
     /// isUsableAddress accepts an IPv4 or IPv6 literal other than the unspecified address, which as a lifeline would match nothing. A
@@ -151,6 +156,24 @@ enum NetworkContainment {
 
     private static func isIPv6(_ address: String) -> Bool {
         address.contains(":")
+    }
+}
+
+/// ReleasedLifeline is what a release keeps allowed: the TCP flows to the EDR server of the containment it released.
+///
+/// While contained, the lifeline rules decide the agent's connections to the server, so a connection opened then never reaches the
+/// provider. Measured on edr-dev, releasing to settings that hand every flow to the provider cuts such a connection within seconds, and
+/// with it the release command's own outcome on its way to the server. Kept as allow rules, those flows are not handed to the provider
+/// and survive. They record no network_connect events. The rules last until the content filter next starts, which cuts established
+/// connections anyway, so they are held in memory and not persisted.
+struct ReleasedLifeline {
+    private(set) var rules: [LifelineRule] = []
+
+    /// accepted notes an accepted update. A release of a containment keeps that containment's server rules; any other update keeps the
+    /// rules as they are, since a containment's own lifeline carries the server flows and a repeated release has nothing new to keep.
+    mutating func accepted(_ update: NetworkContainmentUpdate, releasing held: NetworkContainmentUpdate?) {
+        guard !update.contained, let held, held.contained else { return }
+        rules = NetworkContainment.serverRules(for: held)
     }
 }
 
