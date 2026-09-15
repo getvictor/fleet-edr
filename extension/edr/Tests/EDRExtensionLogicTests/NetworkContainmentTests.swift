@@ -265,6 +265,17 @@ final class ContainmentSequencerTests: XCTestCase {
         XCTAssertTrue(applied(sequencer.requestApply()) === replacement)
     }
 
+    func testStoppedSaysWhetherTheRunningFilterStopped() {
+        let sequencer = ContainmentSequencer<Filter>()
+        let old = Filter()
+        let replacement = Filter()
+        _ = sequencer.started(old, startupEnforcesCurrent: true)
+        _ = sequencer.started(replacement, startupEnforcesCurrent: true)
+        XCTAssertFalse(sequencer.stopped(old), "a late stop from a replaced filter is not the running filter stopping")
+        XCTAssertTrue(sequencer.stopped(replacement))
+        guard case .noFilter = sequencer.requestApply() else { return XCTFail("no filter is running") }
+    }
+
     func testAStartCompletionAfterItsFiltersStopIsIgnored() {
         let sequencer = ContainmentSequencer<Filter>()
         let old = Filter()

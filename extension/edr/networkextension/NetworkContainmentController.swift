@@ -63,7 +63,13 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// providerStopped forgets the filter, so an update received while it is down is persisted and applied at its next start.
     func providerStopped(_ filter: NEFilterDataProvider) {
-        queue.async { self.sequencer.stopped(filter) }
+        queue.async {
+            // With no filter running nothing is confirmed to enforce the held state, so the status stops saying it is applied until
+            // a filter starts and confirms it again. A late stop from a filter already replaced leaves its replacement's status alone.
+            guard self.sequencer.stopped(filter) else { return }
+            self.tracker.failed("content filter is not running")
+            self.publishLocked()
+        }
     }
 
     /// receive handles a `network_containment.update` from the agent.

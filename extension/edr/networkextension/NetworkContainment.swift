@@ -265,11 +265,14 @@ final class ContainmentSequencer<Filter: AnyObject> {
         return startupEnforcesCurrent ? .report : .apply
     }
 
-    func stopped(_ filter: Filter) {
+    /// stopped records that filter stopped, and returns whether it was the running filter. A stop from a filter that was already
+    /// replaced changes nothing about the running one.
+    @discardableResult
+    func stopped(_ filter: Filter) -> Bool {
         stopped.add(filter)
-        if running === filter {
-            running = nil
-        }
+        guard running === filter else { return false }
+        running = nil
+        return true
     }
 
     func requestApply() -> ApplyDecision {
