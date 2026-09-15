@@ -95,6 +95,7 @@ final class ContainedDNSTests: XCTestCase {
             ("a question past the end", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 10, 0x61])),
             ("a question without its type and class", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0x61, 0, 0x00])),
             ("a compression pointer", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0xC0, 0x0C, 0, 1, 0, 1])),
+            ("a name over 255 octets", query([[UInt8]](repeating: [UInt8](repeating: 0x61, count: 63), count: 4))),
             ("a reserved label type", Data([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0x40] + [UInt8](repeating: 0x61, count: 64)
                 + [0, 0, 1, 0, 1]))
         ]

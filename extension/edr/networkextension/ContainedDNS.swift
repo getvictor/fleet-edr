@@ -30,6 +30,8 @@ enum ContainedDNS {
         static let bitsPerByte: UInt16 = 8
         static let ancountOffset = 6
         static let maxLabelLength = 63
+        /// RFC 1035 3.1: a name is at most 255 octets on the wire, its length octets and the root terminator included.
+        static let maxNameLength = 255
     }
 
     /// decision is the proxy's action for one UDP datagram. A host that is not contained forwards everything. A contained host forwards
@@ -52,8 +54,8 @@ enum ContainedDNS {
 
     /// singleQuestion returns where the question of a one-question query ends, and its name normalized when every label is made of
     /// host-name characters. It returns nil for a response, a query with other than one question, or a question that runs past the
-    /// datagram or uses a compression pointer or reserved label type, none of which a stub resolver sends. The name is read label by
-    /// label rather than as text, so a label carrying a dot byte cannot spell the server's name.
+    /// datagram, uses a compression pointer or reserved label type, or spells a name over 255 octets, none of which a stub resolver
+    /// sends. The name is read label by label rather than as text, so a label carrying a dot byte cannot spell the server's name.
     private static func singleQuestion(in data: Data) -> (end: Int, name: String?)? {
         let bytes = [UInt8](data)
         guard bytes.count >= Wire.headerLength, bytes[Wire.flagsOffset] & Wire.qrBit == 0,
@@ -65,7 +67,7 @@ enum ContainedDNS {
             let length = Int(bytes[offset])
             if length == 0 {
                 let end = offset + 1 + Wire.questionTrailer
-                guard end <= bytes.count else { return nil }
+                guard end <= bytes.count, offset + 1 - Wire.headerLength <= Wire.maxNameLength else { return nil }
                 return (end, plain && !labels.isEmpty ? normalized(labels.joined(separator: ".")) : nil)
             }
             // A length over 63 is a compression pointer or a reserved label type, neither of which a stub resolver sends.
