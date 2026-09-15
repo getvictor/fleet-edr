@@ -47,13 +47,19 @@ While the network extension reports the host contained, the agent SHALL connect 
 
 ### Requirement: The lifeline is kept current while contained
 
-While the host is contained, the agent SHALL re-resolve its lifeline every five minutes and send the network extension an update at the current state's version and epoch when the addresses changed, and nothing when they did not. An agent that starts while the host is contained SHALL learn the containment from the extension's status and send the lifeline it resolves once. The extension's `ne_containment_status` control events SHALL be consumed by the agent and never uploaded as telemetry.
+While the host is contained, the agent SHALL re-resolve its lifeline every five minutes and send the network extension an update at the current state's version and epoch when the addresses changed, and nothing when they did not. An update that could not be delivered SHALL be sent again at the next refresh or extension status, and SHALL NOT be dialed through until it is delivered. An agent that starts while the host is contained SHALL learn the containment from the extension's status and send the lifeline it resolves once. The extension's `ne_containment_status` control events SHALL be consumed by the agent and never uploaded as telemetry.
 
 #### Scenario: A moved server address reaches the extension
 
 - **GIVEN** a contained host
 - **WHEN** the server's name resolves to different addresses at the next refresh
 - **THEN** the agent sends the extension the new addresses at the same version and epoch
+
+#### Scenario: An undelivered lifeline refresh is sent again
+
+- **GIVEN** a contained host whose lifeline refresh could not be delivered to the network extension
+- **WHEN** the extension next reports its status
+- **THEN** the agent sends the lifeline again, and dials the server through those addresses only once it was delivered
 
 #### Scenario: A restarted agent refreshes the lifeline
 

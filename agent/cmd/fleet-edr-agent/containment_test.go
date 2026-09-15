@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime"
 	"sync"
@@ -25,7 +26,13 @@ func TestNewContainment(t *testing.T) {
 	send := func([]byte) error { return nil }
 	cfg := &config.Config{ServerURL: "https://edr.example.com:8443", NetXPCService: "group.com.fleetdm.edr.networkextension"}
 
-	mgr, dial := newContainment(cfg, send, slog.Default())
+	var dialed []string
+	record := func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return nil, errors.New("recorded")
+	}
+
+	mgr, dial := newContainment(cfg, send, record, slog.Default())
 	require.NotNil(t, dial)
 	if runtime.GOOS != "darwin" {
 		assert.Nil(t, mgr, "only macOS has a network extension to contain with")
@@ -33,10 +40,25 @@ func TestNewContainment(t *testing.T) {
 	}
 	require.NotNil(t, mgr)
 
-	noNE, _ := newContainment(&config.Config{ServerURL: cfg.ServerURL}, send, slog.Default())
+	noNE, _ := newContainment(&config.Config{ServerURL: cfg.ServerURL}, send, record, slog.Default())
 	assert.Nil(t, noNE, "an agent without the network extension service cannot contain")
-	noTarget, _ := newContainment(&config.Config{ServerURL: "https:///", NetXPCService: cfg.NetXPCService}, send, slog.Default())
+	noTarget, _ := newContainment(&config.Config{ServerURL: "https:///", NetXPCService: cfg.NetXPCService}, send, record, slog.Default())
 	assert.Nil(t, noTarget, "a server URL without a host yields no lifeline target")
+
+	// The dial goes through the manager. A non-canonical IPv6 literal tells a pinned dial from an unpinned one without a lookup: the
+	// lifeline address is its canonical form.
+	literal := &config.Config{ServerURL: "https://[2001:0db8::0001]:8443", NetXPCService: cfg.NetXPCService}
+	literalMgr, literalDial := newContainment(literal, send, record, slog.Default())
+	literalMgr.Observe(t.Context(), containment.Status{Contained: true, Version: 1, Applied: true})
+	_, _ = literalDial(t.Context(), "tcp", "[2001:0db8::0001]:8443")
+	assert.Equal(t, []string{"[2001:db8::1]:8443"}, dialed)
+}
+
+// staticResolver answers every lookup with the same addresses.
+type staticResolver []netip.Addr
+
+func (r staticResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return r, nil
 }
 
 func TestControlDialOptions(t *testing.T) {
@@ -92,8 +114,9 @@ func (c *eventConnector) SendNetworkContainment(p []byte) error { return nil }
 func TestReceiverLoop_ContainmentStatusIsConsumedNotUploaded(t *testing.T) {
 	t.Parallel()
 	mgr := containment.New(containment.Options{
-		Target: containment.Target{Host: "192.168.64.1", Port: 8089},
-		Send:   func([]byte) error { return nil },
+		Target:   containment.Target{Host: "edr.test", Port: 8089},
+		Send:     func([]byte) error { return nil },
+		Resolver: staticResolver{netip.MustParseAddr("192.168.64.1")},
 	})
 	status := []byte(`{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":true}}`)
 	telemetry := []byte(`{"event_type":"network_connect","payload":{}}`)
@@ -129,7 +152,7 @@ func TestReceiverLoop_ContainmentStatusIsConsumedNotUploaded(t *testing.T) {
 		return nil, errors.New("recorded")
 	})
 	require.Eventually(t, func() bool {
-		_, _ = dial(t.Context(), "tcp", "192.168.64.1:8089")
+		_, _ = dial(t.Context(), "tcp", "edr.test:8089")
 		return dialed == "192.168.64.1:8089"
 	}, 2*time.Second, 10*time.Millisecond)
 }

@@ -257,7 +257,6 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ticker.C:
 			m.mu.Lock()
 			contained := m.state != nil && m.state.Contained
-			m.refreshed = false
 			m.mu.Unlock()
 			if contained {
 				m.refresh(ctx)
@@ -274,6 +273,7 @@ func (m *Manager) refresh(ctx context.Context) {
 		return
 	}
 	m.mu.Lock()
+	// The state can change while the lookup runs: a release adopted meanwhile must not be answered with a containment document.
 	if m.state == nil || !m.state.Contained {
 		m.mu.Unlock()
 		return
@@ -283,17 +283,23 @@ func (m *Manager) refresh(ctx context.Context) {
 		m.mu.Unlock()
 		return
 	}
-	doc := document{Version: m.state.Version, Epoch: m.state.Epoch, Contained: true, Server: m.lifelineServer(addrs)}
-	m.addresses = addrs
+	state := *m.state
 	m.mu.Unlock()
+	doc := document{Version: state.Version, Epoch: state.Epoch, Contained: true, Server: m.lifelineServer(addrs)}
 	body, _ := json.Marshal(doc)
 	if err := m.opts.Send(body); err != nil {
+		// Nothing is recorded as sent, so the next status or refresh tries again rather than finding these addresses already sent.
 		m.opts.Logger.WarnContext(ctx, "network containment lifeline refresh: send failed", "err", err)
 		m.mu.Lock()
 		m.refreshed = false
 		m.mu.Unlock()
 		return
 	}
+	m.mu.Lock()
+	if m.state != nil && *m.state == state {
+		m.addresses = addrs
+	}
+	m.mu.Unlock()
 	m.opts.Logger.InfoContext(ctx, "network containment lifeline refreshed", "addresses", doc.Server.Addresses)
 }
 
@@ -342,7 +348,7 @@ func (m *Manager) lifelineServer(addrs []netip.Addr) *server {
 
 func (m *Manager) resolve(ctx context.Context) ([]netip.Addr, error) {
 	if a, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
-		return []netip.Addr{a.Unmap()}, nil
+		return []netip.Addr{a}, nil
 	}
 	addrs, err := m.opts.Resolver.LookupNetIP(ctx, "ip", m.opts.Target.Host)
 	if err != nil {

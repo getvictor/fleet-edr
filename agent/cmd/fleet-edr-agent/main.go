@@ -138,7 +138,7 @@ func run() error {
 	// a contained host reaches the server only through its lifeline. neDispatcher is the manager's route to the network extension,
 	// published by that extension's receiver loop below.
 	neDispatcher := receiver.NewDispatcher()
-	containmentMgr, serverDial := newContainment(cfg, neDispatcher.SendNetworkContainment, logger)
+	containmentMgr, serverDial := newContainment(cfg, neDispatcher.SendNetworkContainment, baseServerDial(), logger)
 
 	tokenProvider, err := enrollment.Ensure(ctx, enrollment.Options{
 		ServerURL:         cfg.ServerURL,

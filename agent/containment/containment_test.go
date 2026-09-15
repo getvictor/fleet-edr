@@ -31,6 +31,12 @@ func (f *fakeResolver) LookupNetIP(context.Context, string, string) ([]netip.Add
 	return f.addrs, f.err
 }
 
+func (f *fakeResolver) lookups() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func (f *fakeResolver) set(addrs ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -181,6 +187,7 @@ func TestApply_Failures(t *testing.T) {
 		name     string
 		payload  string
 		respond  func(document) *Status
+		resolved []string
 		resolve  error
 		sendErr  error
 		wantErr  string
@@ -190,6 +197,8 @@ func TestApply_Failures(t *testing.T) {
 		{name: "no version", payload: `{"contained":true}`, respond: applies, wantErr: "invalid version"},
 		{name: "an unresolvable lifeline is not sent", payload: `{"version":1,"contained":true}`, respond: applies,
 			resolve: errors.New("no such host"), wantErr: "resolve the lifeline"},
+		{name: "no usable address is not sent", payload: `{"version":1,"contained":true}`, respond: applies,
+			resolved: []string{"0.0.0.0", "::"}, wantErr: "no usable addresses"},
 		{name: "the extension is not connected", payload: `{"version":1,"contained":true}`, respond: applies,
 			sendErr: errors.New("no connector"), wantErr: "send to the network extension", wantSent: 1},
 		{name: "the extension does not answer", payload: `{"version":1,"contained":true}`, respond: func(document) *Status { return nil },
@@ -204,12 +213,18 @@ func TestApply_Failures(t *testing.T) {
 		{name: "the host holds a newer state", payload: `{"version":1,"epoch":100,"contained":true}`,
 			respond: func(document) *Status { return &Status{Contained: false, Version: 2, Epoch: 100, Applied: true} },
 			wantErr: "superseded on the host by version 2", wantSent: 1},
+		{name: "the host holds a state from a newer epoch", payload: `{"version":5,"epoch":100,"contained":true}`,
+			respond: func(document) *Status { return &Status{Contained: false, Version: 1, Epoch: 101, Applied: true} },
+			wantErr: "superseded on the host by version 1", wantSent: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			m, ext, res := newTestManager(t, serverTarget, tc.respond)
 			res.set("203.0.113.7")
+			if tc.resolved != nil {
+				res.set(tc.resolved...)
+			}
 			res.err = tc.resolve
 			ext.err = tc.sendErr
 			_, err := m.Apply(t.Context(), []byte(tc.payload))
@@ -235,6 +250,118 @@ func TestObserve_AContainmentHeldAcrossARestartIsRefreshedOnce(t *testing.T) {
 
 	m.Observe(t.Context(), held)
 	assert.Len(t, ext.sent(), 1, "the same status on the next connect sends nothing new")
+
+	m.Observe(t.Context(), Status{Contained: false, Version: 4, Epoch: 100, Applied: true})
+	assert.Len(t, ext.sent(), 1)
+	assert.Equal(t, 1, res.lookups(), "a release reported by the extension resolves nothing")
+}
+
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/an-undelivered-lifeline-refresh-is-sent-again
+//
+// A lifeline refresh the extension did not receive is not recorded as sent, so the status the extension reports when it reconnects
+// sends it again, and dials are not pinned to addresses the extension never allowed.
+func TestObserve_AFailedRefreshIsSentAgainOnTheNextStatus(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	res.set("203.0.113.9")
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	ext.err = errors.New("no connector")
+
+	m.Observe(t.Context(), held)
+	require.Len(t, ext.sent(), 1)
+	assert.Empty(t, m.pinned("edr.example.com:8443"))
+
+	ext.mu.Lock()
+	ext.err = nil
+	ext.mu.Unlock()
+	m.Observe(t.Context(), held)
+	require.Len(t, ext.sent(), 2, "the next status sends the lifeline again")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
+}
+
+// gatedResolver blocks each lookup until release is closed, after reporting that it started. A lookup nobody waits for fails rather
+// than blocking the test.
+type gatedResolver struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	select {
+	case g.started <- struct{}{}:
+	case <-time.After(time.Second):
+		return nil, errors.New("unexpected lookup")
+	}
+	<-g.release
+	return []netip.Addr{netip.MustParseAddr("203.0.113.9")}, nil
+}
+
+// A release the extension reports while a lifeline lookup is still running is not answered with a containment document once the
+// lookup returns.
+func TestObserve_AReleaseDuringTheLookupSendsNothing(t *testing.T) {
+	t.Parallel()
+	res := &gatedResolver{started: make(chan struct{}), release: make(chan struct{})}
+	ext := &fakeExtension{}
+	m := New(Options{Target: serverTarget, Send: ext.send, Resolver: res, RefreshInterval: time.Hour})
+	ext.mgr = m
+
+	done := make(chan struct{})
+	go func() {
+		m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+		close(done)
+	}()
+	<-res.started
+	m.Observe(t.Context(), Status{Contained: false, Version: 4, Epoch: 100, Applied: true})
+	close(res.release)
+	<-done
+	assert.Empty(t, ext.sent())
+	assert.Empty(t, m.pinned("edr.example.com:8443"))
+}
+
+// A release the extension reports while a refresh is being sent leaves dials unpinned once the send returns.
+func TestObserve_AReleaseDuringTheRefreshSendLeavesDialsUnpinned(t *testing.T) {
+	t.Parallel()
+	res := &fakeResolver{}
+	res.set("203.0.113.9")
+	var m *Manager
+	send := func([]byte) error {
+		m.Observe(context.Background(), Status{Contained: false, Version: 4, Epoch: 100, Applied: true})
+		return nil
+	}
+	m = New(Options{Target: serverTarget, Send: send, Resolver: res, RefreshInterval: time.Hour})
+	m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+	assert.Empty(t, m.pinned("edr.example.com:8443"))
+}
+
+// A status at the command's version from another epoch is not the command's confirmation: the extension holds some other state whose
+// addresses the agent does not know, so the lifeline is refreshed for it rather than assumed to be the addresses the command sent.
+func TestObserve_AHeldStateFromAnotherEpochIsRefreshed(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, func(d document) *Status {
+		if d.Epoch != 100 {
+			return nil
+		}
+		return &Status{Contained: true, Version: d.Version, Epoch: 99, Applied: true}
+	})
+	res.set("203.0.113.7")
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true}`))
+	require.ErrorContains(t, err, "did not confirm")
+	require.Eventually(t, func() bool { return len(ext.sent()) == 2 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, int64(99), ext.sent()[1].Epoch)
+	assert.Equal(t, []string{"203.0.113.7"}, ext.sent()[1].Server.Addresses)
+}
+
+func TestApply_TheLifelineIsCappedAtSixteenAddresses(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	var addrs []string
+	for i := range 20 {
+		addrs = append(addrs, netip.AddrFrom4([4]byte{203, 0, 113, byte(i + 1)}).String())
+	}
+	res.set(addrs...)
+	_, err := m.Apply(t.Context(), []byte(`{"version":1,"contained":true}`))
+	require.NoError(t, err)
+	assert.Equal(t, addrs[:16], ext.sent()[0].Server.Addresses, "the extension refuses more than sixteen")
 }
 
 func TestObserve_AfterApplyTheConfirmingStatusSendsNoRefresh(t *testing.T) {
@@ -245,6 +372,7 @@ func TestObserve_AfterApplyTheConfirmingStatusSendsNoRefresh(t *testing.T) {
 	require.NoError(t, err)
 	m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
 	assert.Len(t, ext.sent(), 1)
+	assert.Equal(t, 1, res.lookups(), "the addresses the command sent are the ones the extension holds, so nothing is resolved again")
 }
 
 // spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-moved-server-address-reaches-the-extension
@@ -309,6 +437,9 @@ func TestDialContext_PinsTheLifelineOnlyWhileContained(t *testing.T) {
 	_, err = dial(t.Context(), "tcp", "EDR.example.com:8443")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"203.0.113.7:8443", "203.0.113.8:8443"}, reset(), "contained: each lifeline address in turn")
+	m.Observe(t.Context(), Status{Contained: false, Version: 2, Error: "content filter is not running"})
+	_, _ = dial(t.Context(), "tcp", "edr.example.com:8443")
+	assert.Equal(t, []string{"203.0.113.7:8443", "203.0.113.8:8443"}, reset(), "a release the extension did not apply stays pinned")
 	_, _ = dial(t.Context(), "tcp", "other.example.com:8443")
 	assert.Equal(t, []string{"other.example.com:8443"}, reset(), "another host is dialed as asked")
 	_, _ = dial(t.Context(), "tcp", "edr.example.com:443")

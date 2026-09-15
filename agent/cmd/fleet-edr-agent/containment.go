@@ -24,12 +24,16 @@ const (
 	serverDialKeepAlive = 30 * time.Second
 )
 
+// baseServerDial is the dial a server connection uses when the lifeline does not apply to it.
+func baseServerDial() dialFunc {
+	return (&net.Dialer{Timeout: serverDialTimeout, KeepAlive: serverDialKeepAlive}).DialContext
+}
+
 // newContainment builds the network containment manager (#948) and the dial every server connection uses: the enrollment client, the
 // shared agent transport and the control channel. While the host is contained, that dial reaches the server through the lifeline
 // addresses, because the system resolver answers nothing then. Only macOS has a network extension to contain with; elsewhere, and when
-// the server URL yields no lifeline target, there is no manager, set_network_containment reports failed, and the dial is the base one.
-func newContainment(cfg *config.Config, send func([]byte) error, logger *slog.Logger) (*containment.Manager, dialFunc) {
-	base := (&net.Dialer{Timeout: serverDialTimeout, KeepAlive: serverDialKeepAlive}).DialContext
+// the server URL yields no lifeline target, there is no manager, set_network_containment reports failed, and the dial is base.
+func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, logger *slog.Logger) (*containment.Manager, dialFunc) {
 	if runtime.GOOS != "darwin" || cfg.NetXPCService == "" {
 		return nil, base
 	}
