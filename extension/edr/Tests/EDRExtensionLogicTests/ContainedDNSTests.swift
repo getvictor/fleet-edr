@@ -48,12 +48,13 @@ final class ContainedDNSTests: XCTestCase {
     func testAnAllowedLookupCarriesOnlyItsQuestion() {
         var padded = [UInt8](query(name("edr.example.com"), flags: [0x05, 0xF0], edns: true))
         padded += Array("exfiltrated payload".utf8)
-        var expected: [UInt8] = [0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]
-        for label in name("edr.example.com") {
-            expected.append(UInt8(label.count))
-            expected += label
-        }
-        expected += [0, 0x00, 0x01, 0x00, 0x01]
+        let expected: [UInt8] = [
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ID, RD only, one question, no records
+            0x03, 0x65, 0x64, 0x72, // "edr"
+            0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, // "example"
+            0x03, 0x63, 0x6F, 0x6D, 0x00, // "com", root
+            0x00, 0x01, 0x00, 0x01 // type A, class IN
+        ]
         XCTAssertEqual(ContainedDNS.decision(for: Data(padded), containment: contained), .forwardQuestion(Data(expected)))
     }
 
