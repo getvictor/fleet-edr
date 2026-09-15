@@ -23,9 +23,31 @@ The network extension SHALL enforce host network containment as content-filter s
 - **THEN** TCP to the containment's server addresses and port, and to the endpoint its last lifeline refresh replaced, stays allowed by rule, and every other flow is handed to the provider
 - **AND** a later release keeps those rules, a starting content filter does not apply them, and a release after the start keeps none from before it
 
+### Requirement: A contained host resolves only the EDR server's name
+
+While the host is contained, the network extension's DNS proxy SHALL forward a DNS query only when it is a single-question query for one of the lifeline's names, compared case-insensitively and without a trailing dot label by label, and SHALL forward it rebuilt from its ID, opcode, recursion-desired flag and question alone, with every other flag clear and no records, so nothing a process appends after the question leaves the host; the query's ID and destination remain the process's choice. It SHALL answer every other query locally with REFUSED, carrying the query's ID and question and no records. A datagram that is not a single well-formed query SHALL be neither forwarded nor answered, and DNS over TCP SHALL not be resolved: a session is refused when it starts, and one opened before the host was contained is closed on its next query. A containment whose lifeline names no host name resolves nothing. The filter's lifeline allows DNS so the agent can resolve the server, and every lookup on the host passes through this proxy, so this is what keeps DNS from carrying traffic out of a contained host. A host that is not contained SHALL have its DNS forwarded as before.
+
+#### Scenario: The server's name still resolves
+
+- **GIVEN** a contained host whose lifeline names the EDR server's host name
+- **WHEN** a query for that name arrives, in any letter case
+- **THEN** the proxy forwards it
+
+#### Scenario: An allowed lookup carries only its question
+
+- **GIVEN** a contained host whose lifeline names the EDR server's host name
+- **WHEN** a query for that name arrives carrying additional records, options or bytes after its question
+- **THEN** the proxy forwards the query's header and question alone, with no records
+
+#### Scenario: Any other name is refused locally
+
+- **GIVEN** a contained host
+- **WHEN** a query for any other name arrives
+- **THEN** the proxy answers REFUSED with the query's ID and question and no records, and forwards nothing
+
 ### Requirement: Containment state is persisted and ordered
 
-The network extension SHALL persist an accepted containment update before applying it, and SHALL apply the persisted state as the first settings of a starting content filter, so a contained host is contained again when the extension restarts and never passes through the uncontained settings while doing so. Updates SHALL be ordered by epoch, then version; an update that is not newer SHALL be refused, except that an update at the same epoch and version that changes only the server endpoint SHALL be accepted, so the lifeline of a contained host can be refreshed. A containment that names no usable lifeline (no address, an address that is not an IPv4 or IPv6 literal or is the unspecified address, more than 16 addresses, or a port outside 1 to 65535) SHALL be refused whole, leaving the current state in force.
+The network extension SHALL persist an accepted containment update before applying it, and SHALL apply the persisted state as the first settings of a starting content filter, so a contained host is contained again when the extension restarts and never passes through the uncontained settings while doing so. Updates SHALL be ordered by epoch, then version; an update that is not newer SHALL be refused, except that an update at the same epoch and version that changes only the server endpoint SHALL be accepted, so the lifeline of a contained host can be refreshed. A containment that names no usable lifeline (no address, an address that is not an IPv4 or IPv6 literal or is the unspecified address, more than 16 addresses, a port outside 1 to 65535, or a name that is not a DNS host name, or more than 4 names) SHALL be refused whole, leaving the current state in force.
 
 #### Scenario: Containment survives an extension restart
 

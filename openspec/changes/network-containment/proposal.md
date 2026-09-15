@@ -23,10 +23,10 @@ With DHCP and DNS in the lifeline, a direct query to the configured resolver (`d
 
 The work lands in steps, producer before consumer.
 
-### Network extension (this step)
+### Network extension
 
 - **Containment is enforced by filter settings.** Contained, the content filter's settings allow the lifeline and drop everything else, which the operating system enforces without consulting the provider. Not contained, the settings are the telemetry settings the filter already uses, with one addition after a release: the released containment's TCP flows to the EDR server stay allowed by rule until the filter next starts. Measured on edr-dev, releasing straight to the telemetry settings cut a connection opened while contained within two seconds (the rules decided it, so the provider never saw it), and after an extension restart while contained it cut the agent's control stream and with it the release command's outcome. With the server flows kept by rule, connections opened before containment, during it, and across an extension restart all survived the release.
-- **The lifeline** is TCP to each EDR server address on the server port, DHCP from the client port to the server port (UDP 68 to 67, and 546 to 547 for DHCPv6; only a privileged process can bind the client port), and DNS (TCP and UDP 53). Loopback is never filtered. Until the DNS proxy step lands, DNS to any address stays open on a contained host; that step lands before any operator can contain a host.
+- **The lifeline** is TCP to each EDR server address on the server port, DHCP from the client port to the server port (UDP 68 to 67, and 546 to 547 for DHCPv6; only a privileged process can bind the client port), and DNS (TCP and UDP 53). Loopback is never filtered. DNS is restricted to the server's name by the DNS proxy (below).
 - **The state is persisted and ordered.** A `network_containment.update` from the agent carries the server's version and epoch, whether the host is contained, and the server endpoint the agent resolved. The extension persists it before applying it, applies it as the first settings of a starting filter, orders updates by epoch then version, and accepts an update at the same version that only moves the server endpoint, so the agent can refresh the addresses of a contained host. A containment with no usable lifeline is refused whole.
 - **The extension reports containment status** (contained, version, epoch, whether it applied) to the agent after each change and on every agent hello, and sends nothing on a host that has never received a containment update, so an agent without containment support uploads no stray control events. Filter applies run one at a time, so settings never take effect out of order.
 - While contained, the filter records no `network_connect` events: dropped flows never reach the provider.
@@ -37,9 +37,12 @@ The work lands in steps, producer before consumer.
 - **A contained host reaches the server through its lifeline.** Uploads, command polls, token refresh and re-enrollment, and the control channel dial the lifeline addresses while the host is contained. A proxied control channel keeps gRPC's own proxy dialing.
 - **The lifeline stays current.** While contained the agent re-resolves every five minutes and sends new addresses at the same version when they moved; an agent that starts on a contained host learns it from the extension's status and refreshes once. The extension's status events are consumed and never uploaded.
 
+### DNS proxy
+
+- **A contained host resolves only the EDR server's name.** The containment document carries the lifeline's host names, and while the host is contained the DNS proxy forwards a single-question query only for one of them (case-insensitive, label by label), answers every other query locally with REFUSED, drops what is not a query, and resolves nothing over TCP. The filter's lifeline allows DNS so the agent can resolve the server; restricting names in the proxy, which every lookup passes through, is what keeps DNS from carrying traffic out of the host. Refused lookups are still recorded as `dns_query` events.
+
 ### Later steps
 
-- DNS proxy: while contained, answer only the EDR server's name, so DNS cannot carry traffic out of a contained host.
 - Server: containment state per host, a contain and release API with a required reason, audit, delivery with catch-up, and the state on the host API.
 - Console: contain and release on the host, with the reason and step-up reauthentication, and the state on the host list and header.
 

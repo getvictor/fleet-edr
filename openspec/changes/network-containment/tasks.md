@@ -19,8 +19,13 @@
 - [x] Consume `ne_containment_status` without uploading it.
 - [x] VM: contain and release edr-dev through a server command; uploads and command delivery keep working while contained.
 
+## DNS proxy
+
+- [x] Carry the lifeline's host names in the containment document, validated and normalized.
+- [x] While contained, forward only single-question queries for those names, answer the rest REFUSED, drop non-queries, and close DNS over TCP.
+- [x] VM: while contained, the server's name resolves, other names are refused (including queries addressed to another resolver), DNS over TCP gets nothing; release restores DNS.
+
 ## Later steps
 
-- [ ] DNS proxy answers only the server name while contained.
 - [ ] Server state, API, audit, delivery and host API.
 - [ ] Console actions and state.

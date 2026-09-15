@@ -82,6 +82,7 @@ let package = Package(
                 "networkextension/networkextension.entitlements",
                 "networkextension/main.swift",
                 "networkextension/DNSProxyProvider.swift",
+                "networkextension/DNSProxyContainment.swift",
                 "networkextension/DNSProxyTypes.swift",
                 "networkextension/NetworkEventSerializer.swift",
                 "networkextension/NetworkFilter.swift",
@@ -130,6 +131,9 @@ let package = Package(
                 // ordering updates, the lifeline a contained host keeps, the reported status, and the persisted store. No
                 // NetworkExtension import; NetworkContainmentController applies it as filter settings.
                 "networkextension/NetworkContainment.swift",
+                // ContainedDNS.swift is the DNS proxy's decision while the host is contained: forward the server's name, refuse the
+                // rest. Pure, with its own strict question reader, separate from DNSParser's lenient telemetry parser.
+                "networkextension/ContainedDNS.swift",
                 // DNSForwardPolicy.swift decides HOW a claimed flow is forwarded, keeping our forward out of another
                 // provider's tunnel (issue #656). Declining such flows is NOT viable: returning false from handleNewFlow
                 // kills the flow rather than handing it back to the OS. Pure Foundation with the entitlement probe

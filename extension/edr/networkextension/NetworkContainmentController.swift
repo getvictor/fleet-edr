@@ -105,6 +105,17 @@ final class NetworkContainmentController: @unchecked Sendable {
         }
     }
 
+    /// dnsDecision is what the DNS proxy does with a query datagram under the held containment state. Safe from any thread: the store
+    /// guards its state.
+    func dnsDecision(for datagram: Data) -> ContainedDNS.Decision {
+        ContainedDNS.decision(for: datagram, containment: store.current)
+    }
+
+    /// isContained reports whether the held state contains the host. Safe from any thread.
+    var isContained: Bool {
+        store.current?.contained ?? false
+    }
+
     /// publish re-broadcasts the current status. Called when an agent completes the hello handshake: the status is level-triggered,
     /// so an agent that connects after containment was applied must be told rather than wait for the next change.
     func publish() {
