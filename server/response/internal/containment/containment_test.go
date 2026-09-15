@@ -303,6 +303,12 @@ func TestConverge(t *testing.T) {
 		f, _ := contained(t)
 		assert.Zero(t, queued(t, f))
 	})
+	t.Run("an acknowledged command for the current state is left alone", func(t *testing.T) {
+		t.Parallel()
+		f, change := contained(t)
+		f.setStatus(t, change.CommandID, api.StatusAcked)
+		assert.Zero(t, queued(t, f))
+	})
 	t.Run("a completed command for the current state is not sent again", func(t *testing.T) {
 		t.Parallel()
 		f, change := contained(t)

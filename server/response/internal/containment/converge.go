@@ -126,7 +126,8 @@ func needsState(cmd api.Command, state api.ContainmentState, enrolledAt, now tim
 	case api.StatusExpired, api.StatusCancelled:
 		return true
 	case api.StatusFailed:
-		return cmd.CompletedAt == nil || now.Sub(*cmd.CompletedAt) >= failedRetryAfter
+		// Every failure is stamped with its completion time; one without it is not retried early.
+		return cmd.CompletedAt != nil && now.Sub(*cmd.CompletedAt) >= failedRetryAfter
 	case api.StatusPending, api.StatusAcked, api.StatusCompleted:
 		// On its way or delivered. An offline host keeps its command pending until it reconnects or the command ages out, so it is not
 		// sent a new copy every interval.
