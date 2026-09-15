@@ -78,13 +78,14 @@ func (s *Service) Get(ctx context.Context, hostID string) (api.ContainmentState,
 // fail the change: the response carries no command id and the catch-up queues it.
 func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, hostID string, contained bool,
 	reason string) (api.ContainmentChange, error) {
-	reason = strings.TrimSpace(reason)
+	// The limit applies to the reason as sent, as the API schema states it; the recorded reason is the trimmed one.
 	switch {
-	case reason == "":
-		return api.ContainmentChange{}, api.ErrContainmentReasonRequired
 	case utf8.RuneCountInString(reason) > api.MaxContainmentReasonLength:
 		return api.ContainmentChange{}, api.ErrContainmentReasonTooLong
+	case strings.TrimSpace(reason) == "":
+		return api.ContainmentChange{}, api.ErrContainmentReasonRequired
 	}
+	reason = strings.TrimSpace(reason)
 	enrolled, err := s.enrolled(ctx, hostID)
 	if err != nil {
 		return api.ContainmentChange{}, err

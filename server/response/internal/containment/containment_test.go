@@ -162,6 +162,8 @@ func TestSet_Refusals(t *testing.T) {
 	}{
 		{"a blank reason", "host-a", " \t ", api.ErrContainmentReasonRequired},
 		{"a reason over the limit", "host-a", strings.Repeat("é", api.MaxContainmentReasonLength+1), api.ErrContainmentReasonTooLong},
+		{"a reason over the limit only with its whitespace", "host-a", strings.Repeat("é", api.MaxContainmentReasonLength) + " ",
+			api.ErrContainmentReasonTooLong},
 		{"a host with no active enrollment", "host-unknown", "suspicious", api.ErrContainmentHostNotFound},
 	}
 	for _, tc := range cases {
