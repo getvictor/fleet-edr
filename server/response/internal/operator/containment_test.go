@@ -1,0 +1,210 @@
+package operator
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	identityapi "github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/response/api"
+)
+
+// fakeContainment records what the handler asked of the containment service and answers with set values.
+type fakeContainment struct {
+	state  api.ContainmentState
+	change api.ContainmentChange
+	err    error
+	calls  []string
+	actor  identityapi.PrincipalRef
+}
+
+func (f *fakeContainment) Get(_ context.Context, hostID string) (api.ContainmentState, error) {
+	f.calls = append(f.calls, "get "+hostID)
+	return f.state, f.err
+}
+
+func (f *fakeContainment) Set(_ context.Context, actor identityapi.PrincipalRef, _, hostID string, contained bool, reason string) (
+	api.ContainmentChange, error) {
+	f.actor = actor
+	f.calls = append(f.calls, "set "+hostID+" "+map[bool]string{true: "contain", false: "release"}[contained]+" "+reason)
+	return f.change, f.err
+}
+
+// recordingAuthZ records each decision it is asked for and answers with allow.
+type recordingAuthZ struct {
+	allow     bool
+	decisions []string
+}
+
+func (r *recordingAuthZ) Allow(_ context.Context, action identityapi.Action, resource identityapi.Resource) (identityapi.Decision, error) {
+	r.decisions = append(r.decisions, string(action)+" "+resource.Type+":"+resource.ID)
+	return identityapi.Decision{Allow: r.allow, Reason: "test"}, nil
+}
+
+func serveContainment(t *testing.T, svc ContainmentService, authz identityapi.AuthZ, method, path, body string) *http.Response {
+	t.Helper()
+	mux := http.NewServeMux()
+	NewContainmentHandler(svc, authz, slog.Default()).RegisterRoutes(mux)
+	actor := &identityapi.Actor{Principal: identityapi.PrincipalRef{ID: "user:7", Type: "user"}}
+	withActor := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(identityapi.WithActor(r.Context(), actor)))
+	})
+	srv := httptest.NewServer(withActor)
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, strings.NewReader(body))
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func errorCode(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	var body struct {
+		Error string `json:"error"`
+	}
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &body), string(raw))
+	return body.Error
+}
+
+func TestContainmentHandler_Set(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		body       string
+		svcErr     error
+		wantStatus int
+		wantError  string
+		wantCall   string
+	}{
+		{name: "contain", body: `{"contained":true,"reason":"beaconing"}`, wantStatus: http.StatusOK, wantCall: "set host-a contain beaconing"},
+		{name: "release", body: `{"contained":false,"reason":"reimaged"}`, wantStatus: http.StatusOK, wantCall: "set host-a release reimaged"},
+		{name: "no contained", body: `{"reason":"beaconing"}`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
+		{name: "not JSON", body: `{`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
+		{name: "a body over the cap", body: `{"contained":true,"reason":"` + strings.Repeat("x", containmentBodyCap) + `"}`,
+			wantStatus: http.StatusRequestEntityTooLarge, wantError: "body_too_large"},
+		{name: "data after the object", body: `{"contained":true,"reason":"x"}{}`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
+		{name: "a second object", body: `{"contained":true,"reason":"x"} {"contained":false}`, wantStatus: http.StatusBadRequest,
+			wantError: "bad_body"},
+		{name: "a missing reason", body: `{"contained":true}`, svcErr: api.ErrContainmentReasonRequired,
+			wantStatus: http.StatusBadRequest, wantError: "reason_required", wantCall: "set host-a contain "},
+		{name: "a long reason", body: `{"contained":true,"reason":"x"}`, svcErr: api.ErrContainmentReasonTooLong,
+			wantStatus: http.StatusBadRequest, wantError: "reason_too_long", wantCall: "set host-a contain x"},
+		{name: "an unenrolled host", body: `{"contained":true,"reason":"x"}`, svcErr: api.ErrContainmentHostNotFound,
+			wantStatus: http.StatusNotFound, wantError: "host_not_found", wantCall: "set host-a contain x"},
+		{name: "a store failure", body: `{"contained":true,"reason":"x"}`, svcErr: errors.New("db down"),
+			wantStatus: http.StatusInternalServerError, wantError: "internal", wantCall: "set host-a contain x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeContainment{err: tc.svcErr, change: api.ContainmentChange{
+				State: api.ContainmentState{HostID: "host-a", Contained: true, Version: 3}, Changed: true, CommandID: 9}}
+			authz := &recordingAuthZ{allow: true}
+			resp := serveContainment(t, svc, authz, http.MethodPost, "/api/hosts/host-a/containment", tc.body)
+			defer resp.Body.Close()
+			assert.Equal(t, tc.wantStatus, resp.StatusCode)
+			assert.Equal(t, []string{"host.isolate host:host-a"}, authz.decisions)
+			if tc.wantCall == "" {
+				assert.Empty(t, svc.calls)
+			} else {
+				assert.Equal(t, []string{tc.wantCall}, svc.calls)
+				assert.Equal(t, "user:7", svc.actor.ID, "the change is attributed to the authenticated actor")
+			}
+			if tc.wantError != "" {
+				assert.Equal(t, tc.wantError, errorCode(t, resp))
+				return
+			}
+			var got api.ContainmentChange
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+			assert.Equal(t, svc.change, got)
+		})
+	}
+}
+
+func TestContainmentHandler_Get(t *testing.T) {
+	t.Parallel()
+	t.Run("returns the state", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeContainment{state: api.ContainmentState{HostID: "host-a", Contained: true, Version: 2}}
+		authz := &recordingAuthZ{allow: true}
+		resp := serveContainment(t, svc, authz, http.MethodGet, "/api/hosts/host-a/containment", "")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, []string{"host.read host:host-a"}, authz.decisions)
+		var got api.ContainmentState
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		assert.Equal(t, svc.state, got)
+	})
+	t.Run("a read failure", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeContainment{err: errors.New("db down")}
+		resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodGet, "/api/hosts/host-a/containment", "")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+		assert.Equal(t, "internal", errorCode(t, resp))
+	})
+}
+
+// Both routes are gated: a denied caller changes and reads nothing.
+func TestContainmentHandler_DeniedCallersReachNothing(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeContainment{}
+			resp := serveContainment(t, svc, &recordingAuthZ{allow: false}, method, "/api/hosts/host-a/containment",
+				`{"contained":true,"reason":"x"}`)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+			assert.Empty(t, svc.calls)
+		})
+	}
+}
+
+// FuzzContainmentHandler_Set feeds arbitrary request bodies to the containment route: it must not panic, and every body is either
+// refused as malformed or handed to the service with a definite contained value.
+func FuzzContainmentHandler_Set(f *testing.F) {
+	f.Add(`{"contained":true,"reason":"beaconing"}`)
+	f.Add(`{"contained":null}`)
+	f.Add(`{"reason":7}`)
+	f.Add(`[`)
+	f.Fuzz(func(t *testing.T, body string) {
+		svc := &fakeContainment{}
+		h := NewContainmentHandler(svc, &recordingAuthZ{allow: true}, slog.New(slog.DiscardHandler))
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/hosts/host-a/containment", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		switch rec.Code {
+		case http.StatusOK:
+			if len(svc.calls) != 1 {
+				t.Fatalf("a 200 without exactly one change: %q", body)
+			}
+			// A body that changed a host is one JSON object and nothing more.
+			dec := json.NewDecoder(strings.NewReader(body))
+			var first, second json.RawMessage
+			if dec.Decode(&first) != nil || !errors.Is(dec.Decode(&second), io.EOF) {
+				t.Fatalf("a body that is not exactly one JSON value changed a host: %q", body)
+			}
+		case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+			if len(svc.calls) != 0 {
+				t.Fatalf("a malformed body reached the service: %q", body)
+			}
+		default:
+			t.Fatalf("unexpected status %d for %q", rec.Code, body)
+		}
+	})
+}

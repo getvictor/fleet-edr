@@ -345,6 +345,88 @@ paths:
         "404":
           description: No process found at the given coordinates
 
+  /api/hosts/{host_id}/containment:
+    get:
+      tags: [Hosts]
+      summary: Read a host's network containment
+      description: |
+        The host's desired containment and its delivery: the latest
+        `set_network_containment` command and whether it carries the current
+        state. A host never contained is returned not contained at version 0
+        with no delivery. Requires `host.read`.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: host_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Containment state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContainmentState"
+    post:
+      tags: [Hosts]
+      summary: Contain or release a host
+      description: |
+        Records the desired containment with a reason, queues a
+        `set_network_containment` command for the host, and audits the change
+        as `host.contain` or `host.release`. The recorded state is
+        authoritative: when the command cannot be queued the change still
+        succeeds without a `command_id`, and the catch-up queues it. Asking for
+        the state the host already has changes nothing. Requires `host.isolate`, which for an
+        interactive session requires a recent authentication. Hosts that miss
+        the command are sent it again by a catch-up every five minutes.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      parameters:
+        - name: host_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contained, reason]
+              properties:
+                contained: {type: boolean}
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+                  pattern: '\S'
+                  description: Why the host is contained or released; blank or whitespace-only reasons are refused.
+      responses:
+        "200":
+          description: The state after the request, whether it changed, and the queued command's id
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, changed]
+                properties:
+                  state: {$ref: "#/components/schemas/ContainmentState"}
+                  changed: {type: boolean}
+                  command_id:
+                    type: integer
+                    format: int64
+                    description: The queued command; absent when nothing changed or the command could not be queued.
+        "400":
+          description: "`bad_body`, `reason_required` or `reason_too_long`"
+        "403":
+          description: Not permitted, or a recent authentication is required
+        "404":
+          description: "`host_not_found`: the host has no active enrollment"
+        "413":
+          description: "`body_too_large`: the request body is over 16 KiB"
+
   /api/alerts:
     get:
       tags: [Alerts]
@@ -1926,6 +2008,30 @@ components:
               items:
                 $ref: "#/components/schemas/EventEnvelope"
 
+    ContainmentState:
+      type: object
+      required: [host_id, contained, version, epoch]
+      properties:
+        host_id: {type: string}
+        contained: {type: boolean}
+        version: {type: integer, format: int64}
+        epoch:
+          type: integer
+          format: int64
+          description: The state's change time in microseconds; hosts order states by epoch, then version.
+        reason: {type: string}
+        updated_by: {type: string}
+        updated_at: {type: string, format: date-time}
+        delivery:
+          type: object
+          required: [command_id, status, current]
+          properties:
+            command_id: {type: integer, format: int64}
+            status: {type: string}
+            result: {type: object, additionalProperties: true}
+            current:
+              type: boolean
+              description: Whether the command carries the host's current version and epoch.
     Command:
       type: object
       required: [id, host_id, command_type, status, created_at]

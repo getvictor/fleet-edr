@@ -100,11 +100,11 @@ func TestMultiReplicaSessionsAndCSRFValidateAcrossReplicas(t *testing.T) {
 	})
 
 	t.Run("spec:server-availability/sessions-and-csrf-tokens-validate-across-any-replica/csrf-token-from-replica-a-passes-on-replica-b", func(t *testing.T) {
-		// senior_analyst clears the authz + freshness gates on the unsafe isolate command, so a 403 here can only be the CSRF
+		// senior_analyst clears the authz + freshness gates on the unsafe containment change, so a 403 here can only be the CSRF
 		// middleware rejecting the token, which is exactly what we are pinning does NOT happen cross-replica.
 		user := testkit.SeedJITUser(t, db, "xrep-csrf@multi.test", "senior_analyst")
 
-		resp := postCommand(t, replicaB, user, isolateBody("host-xrep"))
+		resp := postContainment(t, replicaB, user, "host-xrep")
 		defer resp.Body.Close()
 		require.NotEqual(t, http.StatusForbidden, resp.StatusCode,
 			"replica B must accept the CSRF token minted against the shared store")
@@ -112,7 +112,7 @@ func TestMultiReplicaSessionsAndCSRFValidateAcrossReplicas(t *testing.T) {
 		// Control: the same unsafe request without the CSRF header is rejected, proving the token (not an unguarded POST) is what
 		// passed the middleware above.
 		noTokenReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-			replicaB.Server.URL+"/api/commands", strings.NewReader(isolateBody("host-xrep")))
+			replicaB.Server.URL+"/api/hosts/host-xrep/containment", strings.NewReader(`{"contained":true,"reason":"csrf"}`))
 		require.NoError(t, err)
 		noTokenReq.Header.Set("Content-Type", "application/json")
 		noTokenReq.AddCookie(&http.Cookie{Name: identityapi.SessionCookieName, Value: user.SessionCookie})

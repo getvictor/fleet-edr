@@ -20,6 +20,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -202,6 +203,7 @@ func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
 		DB:        db,
 		Logger:    logger,
 		Heartbeat: detectionCtx.Service().RecordHostSeen,
+		Audit:     identityCtx.AuditRecorder(),
 		AuthZ:     identityCtx.AuthZ(),
 	})
 	require.NoError(t, err, "open response")
@@ -290,6 +292,23 @@ func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
 	// silently: every cross-context test of the health path, the efficacy harness included, would see nothing and could not tell that
 	// apart from the rule not firing.
 	detectionCtx.SetHealthEpisodeRecorder(endpointCtx.HealthEpisodeRecorder())
+	// Mirrors cmd/main (issue #948): host containment checks and lists enrollments through the endpoint context.
+	responseCtx.EnableContainment(
+		func(ctx context.Context, hostID string) (bool, error) {
+			e, err := endpointCtx.Service().Get(ctx, hostID)
+			if errors.Is(err, endpointapi.ErrNotFound) {
+				return false, nil
+			}
+			return err == nil && e.RevokedAt == nil, err
+		},
+		func(ctx context.Context) ([]responseapi.HostEnrollment, error) {
+			active, err := endpointCtx.Service().ActiveEnrollments(ctx)
+			out := make([]responseapi.HostEnrollment, len(active))
+			for i, e := range active {
+				out[i] = responseapi.HostEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt}
+			}
+			return out, err
+		})
 
 	mux := buildMux(detectionCtx, endpointCtx, identityCtx, rulesCtx, responseCtx, logger)
 
@@ -397,6 +416,8 @@ func buildMux(
 	// handler that is definitely mounted. Add the pattern here, matching the handler's own pattern exactly, wildcards included.
 	for _, p := range []string{
 		"POST /api/commands",
+		"GET /api/hosts/{host_id}/containment",
+		"POST /api/hosts/{host_id}/containment",
 		"GET /api/audit-events",
 		"GET /api/v1/app-control/policies",
 		"GET /api/v1/app-control/policies/{id}",

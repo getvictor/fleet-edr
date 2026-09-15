@@ -1,10 +1,13 @@
 package api_test
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/fleetdm/edr/server/response/api"
 )
@@ -36,4 +39,88 @@ func TestStatusValuesMatchAgentWire(t *testing.T) {
 	assert.Equal(t, "acked", string(api.StatusAcked))
 	assert.Equal(t, "completed", string(api.StatusCompleted))
 	assert.Equal(t, "failed", string(api.StatusFailed))
+}
+
+// TestContainmentWireTypesRoundTrip is the round trip the testing-strategy matrix requires for new wire types: the command payload
+// agents receive and the state, delivery and change the containment routes return.
+func TestContainmentWireTypesRoundTrip(t *testing.T) {
+	t.Parallel()
+	roundTrip := func(rt *rapid.T, in, out any) {
+		body, err := json.Marshal(in)
+		require.NoError(rt, err)
+		require.NoError(rt, json.Unmarshal(body, out))
+	}
+	t.Run("payload", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := api.SetNetworkContainmentPayload{
+				Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"), Contained: rapid.Bool().Draw(rt, "contained"),
+			}
+			var out api.SetNetworkContainmentPayload
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
+	t.Run("change", func(t *testing.T) {
+		t.Parallel()
+		rapid.Check(t, func(rt *rapid.T) {
+			in := api.ContainmentChange{
+				State: api.ContainmentState{
+					HostID: rapid.StringN(1, 64, -1).Draw(rt, "host"), Contained: rapid.Bool().Draw(rt, "contained"),
+					Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"),
+					Reason: rapid.String().Draw(rt, "reason"), UpdatedBy: rapid.String().Draw(rt, "updated_by"),
+				},
+				Changed:   rapid.Bool().Draw(rt, "changed"),
+				CommandID: rapid.Int64Min(0).Draw(rt, "command_id"),
+			}
+			if rapid.Bool().Draw(rt, "has_time") {
+				at := time.UnixMicro(rapid.Int64Range(0, 1<<50).Draw(rt, "updated_at")).UTC()
+				in.State.UpdatedAt = &at
+			}
+			if rapid.Bool().Draw(rt, "has_delivery") {
+				status := rapid.SampledFrom([]string{"pending", "completed"}).Draw(rt, "status")
+				in.State.Delivery = &api.ContainmentDelivery{
+					CommandID: rapid.Int64().Draw(rt, "delivery_id"), Status: api.Status(status), Current: rapid.Bool().Draw(rt, "current"),
+				}
+				if rapid.Bool().Draw(rt, "has_result") {
+					in.State.Delivery.Result = json.RawMessage(`{"applied":true}`)
+				}
+			}
+			var out api.ContainmentChange
+			roundTrip(rt, in, &out)
+			assert.Equal(rt, in, out)
+		})
+	})
+}
+
+// TestContainmentWireShapes pins the reviewed JSON of the containment wire types as literal text, beside the round trips above: a
+// renamed or retagged field changes these bytes even when it still round-trips.
+func TestContainmentWireShapes(t *testing.T) {
+	t.Parallel()
+	updated := time.Date(2026, 9, 15, 12, 52, 9, 21263000, time.UTC)
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"payload", api.SetNetworkContainmentPayload{Version: 2, Epoch: 1789476737910464, Contained: true},
+			`{"version":2,"epoch":1789476737910464,"contained":true}`},
+		{"a change with its delivery", api.ContainmentChange{
+			State: api.ContainmentState{HostID: "H-1", Contained: true, Version: 1, Epoch: 1789476729021263, Reason: "beaconing",
+				UpdatedBy: "usr_1", UpdatedAt: &updated, Delivery: &api.ContainmentDelivery{CommandID: 866, Status: api.StatusCompleted,
+					Result: json.RawMessage(`{"applied":true}`), Current: true}},
+			Changed: true, CommandID: 866,
+		}, `{"state":{"host_id":"H-1","contained":true,"version":1,"epoch":1789476729021263,"reason":"beaconing","updated_by":"usr_1",` +
+			`"updated_at":"2026-09-15T12:52:09.021263Z","delivery":{"command_id":866,"status":"completed","result":{"applied":true},` +
+			`"current":true}},"changed":true,"command_id":866}`},
+		{"a host never contained", api.ContainmentState{HostID: "H-2"}, `{"host_id":"H-2","contained":false,"version":0,"epoch":0}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := json.Marshal(tc.in)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(got))
+		})
+	}
 }

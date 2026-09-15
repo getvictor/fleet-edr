@@ -25,7 +25,14 @@
 - [x] While contained, forward only single-question queries for those names, answer the rest REFUSED, drop non-queries, and close DNS over TCP.
 - [x] VM: while contained, the server's name resolves, other names are refused (including queries addressed to another resolver), DNS over TCP gets nothing; release restores DNS.
 
+## Server
+
+- [x] Record each host's desired containment, versioned with a change-time epoch, and queue `set_network_containment` on a change.
+- [x] `POST` and `GET /api/hosts/{host_id}/containment` with `host.isolate` and `host.read`, a required reason, and `host.contain` / `host.release` audit events.
+- [x] Catch-up every five minutes for hosts whose latest command does not deliver their state.
+- [x] Refuse `isolate` and `set_network_containment` on the generic command endpoint.
+- [x] Dev server and VM: contain and release edr-dev through the API.
+
 ## Later steps
 
-- [ ] Server state, API, audit, delivery and host API.
 - [ ] Console actions and state.

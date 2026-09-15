@@ -15,17 +15,20 @@ import (
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/testkit"
+	responseapi "github.com/fleetdm/edr/server/response/api"
 )
 
 // TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads is the
 // headline cross-context test for the user-management arc. It walks
 // the wave-1 RBAC story end-to-end:
 //
-//  1. An OIDC-provisioned analyst attempts host.isolate via
-//     POST /api/commands -> chokepoint denies with no_matching_rule
-//     and the response carries the reason header.
-//  2. A senior_analyst attempts the same -> chokepoint allows; the
-//     response is 201 + a command id; the row lands in commands.
+//  1. An OIDC-provisioned analyst attempts host.isolate by containing
+//     a host through POST /api/hosts/{host_id}/containment ->
+//     chokepoint denies with no_matching_rule and the response carries
+//     the reason header.
+//  2. A senior_analyst contains an enrolled host -> chokepoint allows;
+//     the host is contained and a set_network_containment command is
+//     queued for it.
 //  3. A senior_analyst with a stale session attempts the same ->
 //     chokepoint denies with reauth_required (freshness gate).
 //  4. An auditor reads /api/audit-events -> sees the deny + allow
@@ -46,7 +49,7 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 
 	t.Run("analyst_denied_isolate", func(t *testing.T) {
 		analyst := testkit.SeedJITUser(t, stack.DB, "analyst@journey.test", "analyst")
-		resp := postCommand(t, stack, analyst, isolateBody("host-journey-1"))
+		resp := postContainment(t, stack, analyst, "host-journey-1")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
@@ -55,19 +58,27 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 			"deny reason header carries the policy verdict for the analyst path")
 	})
 
+	// spec:server-host-containment/an-operator-contains-or-releases-a-host/an-operator-contains-a-host
 	t.Run("senior_analyst_allowed_isolate", func(t *testing.T) {
+		const hostID = "B0B0B0B0-2222-3333-4444-555566667777"
+		stepEnroll(t, stack, hostID)
 		senior := testkit.SeedJITUser(t, stack.DB, "senior@journey.test", "senior_analyst")
-		resp := postCommand(t, stack, senior, isolateBody("host-journey-2"))
+		resp := postContainment(t, stack, senior, hostID)
 		defer resp.Body.Close()
 
-		require.Equal(t, http.StatusCreated, resp.StatusCode,
+		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"senior_analyst must be allowed host.isolate; got header reason=%q",
 			resp.Header.Get(identityapi.AuthzReasonHeader))
-		var got struct {
-			ID int64 `json:"id"`
-		}
+		var got responseapi.ContainmentChange
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
-		assert.NotZero(t, got.ID, "successful POST /api/commands returns the new row id")
+		assert.True(t, got.Changed)
+		assert.True(t, got.State.Contained)
+		assert.Equal(t, int64(1), got.State.Version)
+		require.NotZero(t, got.CommandID, "the containment change queues a set_network_containment command")
+		cmd, err := stack.ResponseService().Get(t.Context(), got.CommandID)
+		require.NoError(t, err)
+		assert.Equal(t, responseapi.CommandTypeSetNetworkContainment, cmd.CommandType)
+		assert.JSONEq(t, fmt.Sprintf(`{"version":1,"epoch":%d,"contained":true}`, got.State.Epoch), string(cmd.Payload))
 	})
 
 	t.Run("senior_analyst_denied_after_reauth_window", func(t *testing.T) {
@@ -76,7 +87,7 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 		// reauth_required deny on top of the otherwise-granting role.
 		testkit.AgeSession(t, stack.DB, stale.ID, time.Hour)
 
-		resp := postCommand(t, stack, stale, isolateBody("host-journey-3"))
+		resp := postContainment(t, stack, stale, "host-journey-3")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
@@ -90,15 +101,16 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 		// inline, rather than relying on the preceding subtests' side effects. Keeps the subtest runnable in isolation (go
 		// test -run ...) and pins exactly which audit rows the auditor must see.
 		analyst := testkit.SeedJITUser(t, stack.DB, "analyst-aud@journey.test", "analyst")
-		denyResp := postCommand(t, stack, analyst, isolateBody("host-journey-aud-deny"))
+		denyResp := postContainment(t, stack, analyst, "host-journey-aud-deny")
 		denyResp.Body.Close()
 		require.Equal(t, http.StatusForbidden, denyResp.StatusCode,
 			"audit-row prep: analyst must be denied so a deny row lands in audit_events")
 
 		senior := testkit.SeedJITUser(t, stack.DB, "senior-aud@journey.test", "senior_analyst")
-		allowResp := postCommand(t, stack, senior, isolateBody("host-journey-aud-allow"))
+		allowResp := postContainment(t, stack, senior, "host-journey-aud-allow")
 		allowResp.Body.Close()
-		require.Equal(t, http.StatusCreated, allowResp.StatusCode,
+		// The chokepoint allows it; the host is not enrolled, so the change itself is refused after the allow row is written.
+		require.Equal(t, http.StatusNotFound, allowResp.StatusCode,
 			"audit-row prep: senior_analyst must be allowed so an allow row lands in audit_events")
 
 		auditor := testkit.SeedJITUser(t, stack.DB, "auditor@journey.test", "auditor")
@@ -137,12 +149,12 @@ func TestAuthZJourney_AnalystDeniedSeniorAllowedAuditorReads(t *testing.T) {
 	})
 }
 
-// postCommand drives POST /api/commands with the seeded user's session + CSRF token. Centralised so each subtest reads cleanly as
-// "verb the action; assert the response."
-func postCommand(t *testing.T, stack *Stack, user testkit.SeededUser, body string) *http.Response {
+// postContainment contains hostID through POST /api/hosts/{host_id}/containment with the seeded user's session + CSRF token, the
+// endpoint host.isolate gates. Centralised so each subtest reads cleanly as "verb the action; assert the response."
+func postContainment(t *testing.T, stack *Stack, user testkit.SeededUser, hostID string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		stack.Server.URL+"/api/commands", strings.NewReader(body))
+		stack.Server.URL+"/api/hosts/"+hostID+"/containment", strings.NewReader(`{"contained":true,"reason":"authz journey"}`))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(identityapi.CSRFHeaderName, user.CSRFToken)
@@ -154,17 +166,11 @@ func postCommand(t *testing.T, stack *Stack, user testkit.SeededUser, body strin
 
 // newGet builds an authenticated GET request with the session cookie. GET is a safe method so the CSRF middleware does not require
 // the X-Csrf-Token header; the cookie alone is enough to pass the session middleware, which is what the read-side endpoint gates on.
-// Tests that hit unsafe methods use postCommand above.
+// Tests that hit unsafe methods use postContainment above.
 func newGet(t *testing.T, url string, user testkit.SeededUser) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 	require.NoError(t, err)
 	req.AddCookie(&http.Cookie{Name: identityapi.SessionCookieName, Value: user.SessionCookie})
 	return req
-}
-
-// isolateBody returns the JSON wire body the response operator handler
-// expects for an isolate command targeting the named host.
-func isolateBody(hostID string) string {
-	return fmt.Sprintf(`{"command_type":"isolate","host_id":%q,"payload":{}}`, hostID)
 }

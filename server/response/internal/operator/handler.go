@@ -255,16 +255,14 @@ func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, s
 // chokepoint; an unrecognised command_type is a request-validation
 // failure, not a permission decision.
 //
-// kill_process is the wave-1 implemented type; isolate / run_script
-// are reserved per the spec for wave-1 destructive actions and are
-// validated here so the role matrix already covers them when the
-// command-execution side ships.
+// kill_process is the implemented type; run_script is reserved for a destructive action and validated here so the role matrix already
+// covers it when the command-execution side ships. Host containment is not a command an operator issues: it is a desired state changed
+// through POST /api/hosts/{host_id}/containment, which queues set_network_containment itself, so neither that type nor the former
+// isolate reservation is accepted here.
 func commandTypeToAction(commandType string) (identityapi.Action, bool) {
 	switch commandType {
 	case api.CommandTypeKillProcess:
 		return identityapi.ActionHostKillProcess, true
-	case "isolate":
-		return identityapi.ActionHostIsolate, true
 	case "run_script":
 		return identityapi.ActionHostRunScript, true
 	}
