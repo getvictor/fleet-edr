@@ -47,6 +47,11 @@ const (
 	// Command issuance (response context).
 	AuditCommandIssue AuditAction = "command.issue"
 
+	// Host network containment (response context, issue #948). Records an operator containing or releasing a host, with the reason,
+	// the state's version and epoch, and the command queued to deliver it. A request for the state a host already has records nothing.
+	AuditHostContain AuditAction = "host.contain"
+	AuditHostRelease AuditAction = "host.release"
+
 	// Enrollment lifecycle (endpoint context). Constants follow the <resource>.<verb> convention documented at the top of this file:
 	// rotate_token reads as "rotate the host token of the enrollment." Under the self-validating-token model this is an operator-driven
 	// epoch bump (no agent command is dispatched); the affected agent recovers when its refresh carrying the now-stale epoch 401s and it

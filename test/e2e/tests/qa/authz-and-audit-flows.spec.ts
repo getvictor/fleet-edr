@@ -25,20 +25,21 @@ async function fetchCSRF(req: APIRequestContext): Promise<string> {
   return body.csrf_token;
 }
 
+// tryIsolate asks to contain a host through the endpoint host.isolate gates.
 async function tryIsolate(req: APIRequestContext, csrf: string) {
-  return req.post("/api/commands", {
+  return req.post("/api/hosts/qa-host-1/containment", {
     headers: { "X-Csrf-Token": csrf, "Content-Type": "application/json" },
-    data: { host_id: "qa-host-1", command_type: "isolate" },
+    data: { contained: true, reason: "authz and audit flows" },
   });
 }
 
 // Allowed status codes for the "chokepoint allowed; downstream may
 // still reject" branch. The role matrix is about RBAC, not the
-// command-insert pipeline, so we accept 201 (full success) plus the
-// 400 family that the Insert layer emits for unknown host_ids /
-// wave-1 unsupported command_types. Any other status (500, 502,
-// 401, 403) is a regression the test must catch.
-const CHOKEPOINT_ALLOWED_STATUSES = new Set([201, 400]);
+// containment change itself, so we accept 200 (the host contained)
+// plus the 404 the change returns for a host that is not enrolled,
+// as qa-host-1 is not. Any other status (500, 502, 401, 403) is a
+// regression the test must catch.
+const CHOKEPOINT_ALLOWED_STATUSES = new Set([200, 404]);
 
 test.describe.serial("RBAC, reauth, and audit flows", () => {
   test.beforeAll(async ({ browser }) => {

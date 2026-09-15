@@ -143,6 +143,19 @@ func TestHandleCreate(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 			wantBody:   "unsupported_command_type",
 		},
+		{
+			// spec:server-host-containment/an-operator-contains-or-releases-a-host/containment-is-not-issued-through-the-generic-command-endpoint
+			name:       "containment is not a command an operator issues",
+			body:       `{"host_id":"host-a","command_type":"set_network_containment","payload":{"version":1,"contained":true}}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "unsupported_command_type",
+		},
+		{
+			name:       "the former isolate reservation is refused",
+			body:       `{"host_id":"host-a","command_type":"isolate","payload":{}}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "unsupported_command_type",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

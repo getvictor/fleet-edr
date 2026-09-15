@@ -41,9 +41,14 @@ The work lands in steps, producer before consumer.
 
 - **A contained host resolves only the EDR server's name.** The containment document carries the lifeline's host names, and while the host is contained the DNS proxy forwards a single-question query only for one of them (case-insensitive, label by label), answers every other query locally with REFUSED, drops what is not a query, and resolves nothing over TCP. The filter's lifeline allows DNS so the agent can resolve the server; restricting names in the proxy, which every lookup passes through, is what keeps DNS from carrying traffic out of the host. Refused lookups are still recorded as `dns_query` events.
 
+### Server
+
+- **Desired state per host.** `POST /api/hosts/{host_id}/containment` (`contained`, `reason`) records the state at the host's next version with the change time as its epoch, queues `set_network_containment` for the host, and audits `host.contain` or `host.release`. It is authorized as `host.isolate`, which the chokepoint already gates on a recent authentication for an interactive session, and refuses a blank reason or a host with no active enrollment. Asking for the state the host already has changes nothing. `GET` on the same path returns the state and its delivery.
+- **Delivery with catch-up.** Every five minutes the server queues a host's state again when its latest command does not deliver it (none, another state, expired or cancelled, failed six hours ago, or queued before the host last enrolled), mirroring the watched-path catch-up per host.
+- **No generic containment command.** `POST /api/commands` no longer accepts the unused `isolate` reservation and never accepts `set_network_containment`, so containment changes only through the recorded state.
+
 ### Later steps
 
-- Server: containment state per host, a contain and release API with a required reason, audit, delivery with catch-up, and the state on the host API.
 - Console: contain and release on the host, with the reason and step-up reauthentication, and the state on the host list and header.
 
 ## Out of scope

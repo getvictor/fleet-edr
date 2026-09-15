@@ -475,6 +475,46 @@ func TestLatestOfType_ThroughTheService(t *testing.T) {
 	assert.Equal(t, newest, got["host-a"].ID)
 }
 
+// TestBootstrap_ContainmentIsMountedOnlyOnceEnabled pins the containment wiring: the routes are absent and the catch-up returns at once
+// until EnableContainment is called, and then the routes serve a change end to end.
+func TestBootstrap_ContainmentIsMountedOnlyOnceEnabled(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	serve := func(method, body string) *http.Response {
+		mux := http.NewServeMux()
+		r.RegisterAuthedRoutes(mux)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			actor := &identityapi.Actor{Principal: identityapi.PrincipalRef{ID: "user:1", Type: "user"}}
+			mux.ServeHTTP(w, req.WithContext(identityapi.WithActor(req.Context(), actor)))
+		}))
+		t.Cleanup(srv.Close)
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+"/api/hosts/host-a/containment", strings.NewReader(body))
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	notMounted := serve(http.MethodGet, "")
+	notMounted.Body.Close()
+	assert.Equal(t, http.StatusNotFound, notMounted.StatusCode)
+	r.RunContainmentCatchUp(t.Context()) // returns at once: nothing to run
+
+	r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
+		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil })
+	contained := serve(http.MethodPost, `{"contained":true,"reason":"wiring"}`)
+	defer contained.Body.Close()
+	require.Equal(t, http.StatusOK, contained.StatusCode)
+	var change api.ContainmentChange
+	require.NoError(t, json.NewDecoder(contained.Body).Decode(&change))
+	assert.True(t, change.State.Contained)
+	assert.NotZero(t, change.CommandID)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	r.RunContainmentCatchUp(ctx) // returns once its context has ended
+}
+
 // TestBootstrap_MissingDB surfaces the required-field error.
 func TestBootstrap_MissingDB(t *testing.T) {
 	t.Parallel()

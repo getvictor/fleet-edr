@@ -13,6 +13,7 @@ import (
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/agent"
+	"github.com/fleetdm/edr/server/response/internal/containment"
 	"github.com/fleetdm/edr/server/response/internal/gateway"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 	"github.com/fleetdm/edr/server/response/internal/operator"
@@ -52,6 +53,11 @@ type Response struct {
 	operatorH *operator.Handler
 	db        *sqlx.DB
 	logger    *slog.Logger
+	audit     identityapi.AuditRecorder
+	authz     identityapi.AuthZ
+	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
+	containmentH         *operator.ContainmentHandler
+	containmentConverger *containment.Converger
 }
 
 // New wires the response context. Does NOT apply the schema (call
@@ -77,7 +83,28 @@ func New(deps Deps) (*Response, error) {
 		operatorH: opH,
 		db:        deps.DB,
 		logger:    logger,
+		audit:     deps.Audit,
+		authz:     deps.AuthZ,
 	}, nil
+}
+
+// EnableContainment wires host network containment (#948): the containment routes and the catch-up that re-queues a host's state.
+// cmd/main calls it once the endpoint context is open, since whether a host is enrolled, and when it last enrolled, are endpoint's.
+// Until it is called the routes are not mounted and the catch-up does nothing.
+func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) {
+	store := containment.NewStore(r.db)
+	svc := containment.NewService(store, enrolled, r.svc.Insert, r.svc.LatestOfType, r.audit, r.logger)
+	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
+	r.containmentConverger = containment.NewConverger(store, r.svc.Insert, enrollments, r.svc.LatestOfType, r.logger)
+}
+
+// RunContainmentCatchUp re-queues hosts' containment states every containment.DefaultConvergeInterval until ctx is cancelled. It returns
+// at once when containment is not enabled.
+func (r *Response) RunContainmentCatchUp(ctx context.Context) {
+	if r.containmentConverger == nil {
+		return
+	}
+	r.containmentConverger.Loop(ctx, 0)
 }
 
 // ApplySchema applies response's goose migration corpus. Idempotent (goose skips already-applied versions). No cross-context FKs;
@@ -139,9 +166,14 @@ func (r *Response) RegisterAgentRoutes(mux *http.ServeMux) {
 //
 //	POST /api/commands
 //	GET  /api/commands/{id}
+//	GET  /api/hosts/{host_id}/containment   (once EnableContainment is called)
+//	POST /api/hosts/{host_id}/containment
 //
 // Caller wraps in identity.SessionMiddleware + identity.CSRFMiddleware
 // before mounting.
 func (r *Response) RegisterAuthedRoutes(mux httpserver.Router) {
 	r.operatorH.RegisterRoutes(mux)
+	if r.containmentH != nil {
+		r.containmentH.RegisterRoutes(mux)
+	}
 }

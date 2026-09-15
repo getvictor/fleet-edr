@@ -290,6 +290,9 @@ func run() error {
 	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
 	go gw.Run(gwCtx)
+	// Re-queues hosts' containment states their latest command did not deliver (issue #948). Stops with the process context: a sweep
+	// missed during shutdown is made up by the next replica's.
+	go responseCtx.RunContainmentCatchUp(ctx)
 	// The deferred join above waits for the rules loops before this returns, so the shutdown flush (issue #837) completes rather
 	// than racing the process exit. Bounded, because a shutdown must end.
 	//
@@ -396,6 +399,9 @@ func openContexts(
 	if endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel)); err != nil {
 		return
 	}
+	// Host containment checks and lists enrollments, which are endpoint's, so it is enabled once endpoint is open (issue #948).
+	responseCtx.EnableContainment(hostEnrolledFromEndpoint(endpointCtx.Service()),
+		containmentEnrollmentsFromEndpoint(endpointCtx.Service()))
 	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx, ruleContentCtx, endpointCtx); err != nil {
 		return
 	}
@@ -684,6 +690,36 @@ func activeEnrollmentsFromEndpoint(svc endpointapi.Service) rulesapi.WatchedPath
 		out := make([]rulesapi.WatchedPathEnrollment, len(active))
 		for i, e := range active {
 			out[i] = rulesapi.WatchedPathEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt}
+		}
+		return out, nil
+	}
+}
+
+// hostEnrolledFromEndpoint adapts the endpoint context's enrollment lookup to the containment change's check: a host is enrolled when
+// it has an enrollment that is not revoked.
+func hostEnrolledFromEndpoint(svc endpointapi.Service) responseapi.HostEnrolledChecker {
+	return func(ctx context.Context, hostID string) (bool, error) {
+		e, err := svc.Get(ctx, hostID)
+		switch {
+		case errors.Is(err, endpointapi.ErrNotFound):
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		return e.RevokedAt == nil, nil
+	}
+}
+
+// containmentEnrollmentsFromEndpoint adapts the endpoint context's active enrollments to the containment catch-up's shape.
+func containmentEnrollmentsFromEndpoint(svc endpointapi.Service) responseapi.ActiveEnrollmentLister {
+	return func(ctx context.Context) ([]responseapi.HostEnrollment, error) {
+		active, err := svc.ActiveEnrollments(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]responseapi.HostEnrollment, len(active))
+		for i, e := range active {
+			out[i] = responseapi.HostEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt}
 		}
 		return out, nil
 	}
