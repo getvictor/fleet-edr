@@ -34,8 +34,12 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// startupState is the persisted state and the settings that enforce it, for a starting filter to apply as its first settings.
     func startupState() -> (update: NetworkContainmentUpdate?, settings: NEFilterSettings) {
-        let update = store.current
-        return (update, update.map { Self.settings(for: $0, released: []) } ?? Self.baselineSettings())
+        // On the queue, so a release accepted after these settings were chosen is ordered after the kept rules were reset.
+        queue.sync {
+            let update = store.current
+            released.filterStarting(with: update)
+            return (update, update.map { Self.settings(for: $0, released: []) } ?? Self.baselineSettings())
+        }
     }
 
     /// providerStarted records the running content filter and the state its startup settings enforced. When an update was accepted
@@ -82,7 +86,6 @@ final class NetworkContainmentController: @unchecked Sendable {
     /// receive handles a `network_containment.update` from the agent.
     func receive(_ data: Data) {
         queue.async {
-            let held = self.store.current
             guard let update = self.store.accept(data) else {
                 logger.info("""
                 network containment update refused: not a valid document, not newer than the current state, or not persisted
@@ -91,7 +94,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 return
             }
             self.tracker.pending()
-            self.released.accepted(update, releasing: held)
+            self.released.accepted(update)
             logger.info("""
             network containment update accepted: contained=\(update.contained, privacy: .public) \
             version=\(update.version, privacy: .public) epoch=\(update.epoch, privacy: .public)
