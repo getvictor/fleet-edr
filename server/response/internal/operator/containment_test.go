@@ -92,6 +92,9 @@ func TestContainmentHandler_Set(t *testing.T) {
 		{name: "release", body: `{"contained":false,"reason":"reimaged"}`, wantStatus: http.StatusOK, wantCall: "set host-a release reimaged"},
 		{name: "no contained", body: `{"reason":"beaconing"}`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
 		{name: "not JSON", body: `{`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
+		{name: "data after the object", body: `{"contained":true,"reason":"x"}{}`, wantStatus: http.StatusBadRequest, wantError: "bad_body"},
+		{name: "a second object", body: `{"contained":true,"reason":"x"} {"contained":false}`, wantStatus: http.StatusBadRequest,
+			wantError: "bad_body"},
 		{name: "a missing reason", body: `{"contained":true}`, svcErr: api.ErrContainmentReasonRequired,
 			wantStatus: http.StatusBadRequest, wantError: "reason_required", wantCall: "set host-a contain "},
 		{name: "a long reason", body: `{"contained":true,"reason":"x"}`, svcErr: api.ErrContainmentReasonTooLong,
@@ -187,6 +190,12 @@ func FuzzContainmentHandler_Set(f *testing.F) {
 		case http.StatusOK:
 			if len(svc.calls) != 1 {
 				t.Fatalf("a 200 without exactly one change: %q", body)
+			}
+			// A body that changed a host is one JSON object and nothing more.
+			dec := json.NewDecoder(strings.NewReader(body))
+			var first, second json.RawMessage
+			if dec.Decode(&first) != nil || !errors.Is(dec.Decode(&second), io.EOF) {
+				t.Fatalf("a body that is not exactly one JSON value changed a host: %q", body)
 			}
 		case http.StatusBadRequest:
 			if len(svc.calls) != 0 {

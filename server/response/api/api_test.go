@@ -92,3 +92,35 @@ func TestContainmentWireTypesRoundTrip(t *testing.T) {
 		})
 	})
 }
+
+// TestContainmentWireShapes pins the reviewed JSON of the containment wire types as literal text, beside the round trips above: a
+// renamed or retagged field changes these bytes even when it still round-trips.
+func TestContainmentWireShapes(t *testing.T) {
+	t.Parallel()
+	updated := time.Date(2026, 9, 15, 12, 52, 9, 21263000, time.UTC)
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"payload", api.SetNetworkContainmentPayload{Version: 2, Epoch: 1789476737910464, Contained: true},
+			`{"version":2,"epoch":1789476737910464,"contained":true}`},
+		{"a change with its delivery", api.ContainmentChange{
+			State: api.ContainmentState{HostID: "H-1", Contained: true, Version: 1, Epoch: 1789476729021263, Reason: "beaconing",
+				UpdatedBy: "usr_1", UpdatedAt: &updated, Delivery: &api.ContainmentDelivery{CommandID: 866, Status: api.StatusCompleted,
+					Result: json.RawMessage(`{"applied":true}`), Current: true}},
+			Changed: true, CommandID: 866,
+		}, `{"state":{"host_id":"H-1","contained":true,"version":1,"epoch":1789476729021263,"reason":"beaconing","updated_by":"usr_1",` +
+			`"updated_at":"2026-09-15T12:52:09.021263Z","delivery":{"command_id":866,"status":"completed","result":{"applied":true},` +
+			`"current":true}},"changed":true,"command_id":866}`},
+		{"a host never contained", api.ContainmentState{HostID: "H-2"}, `{"host_id":"H-2","contained":false,"version":0,"epoch":0}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := json.Marshal(tc.in)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(got))
+		})
+	}
+}

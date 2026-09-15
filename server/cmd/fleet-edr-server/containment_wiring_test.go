@@ -43,14 +43,28 @@ func TestHostEnrolledFromEndpoint(t *testing.T) {
 		"active": {HostID: "active"}, "revoked": {HostID: "revoked", RevokedAt: &revokedAt},
 	}}
 	enrolled := hostEnrolledFromEndpoint(stub)
-	for host, want := range map[string]bool{"active": true, "revoked": false, "unknown": false} {
-		got, err := enrolled(t.Context(), host)
-		require.NoError(t, err)
-		assert.Equal(t, want, got, host)
+	cases := []struct {
+		name, host string
+		want       bool
+	}{
+		{"an active enrollment", "active", true},
+		{"a revoked enrollment", "revoked", false},
+		{"no enrollment", "unknown", false},
 	}
-	boom := errors.New("boom")
-	_, err := hostEnrolledFromEndpoint(enrollmentStub{getErr: boom})(t.Context(), "active")
-	require.ErrorIs(t, err, boom)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := enrolled(t.Context(), tc.host)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	t.Run("a lookup failure", func(t *testing.T) {
+		t.Parallel()
+		boom := errors.New("boom")
+		_, err := hostEnrolledFromEndpoint(enrollmentStub{getErr: boom})(t.Context(), "active")
+		require.ErrorIs(t, err, boom)
+	})
 }
 
 func TestContainmentEnrollmentsFromEndpoint_CarriesHostAndEnrollmentTime(t *testing.T) {

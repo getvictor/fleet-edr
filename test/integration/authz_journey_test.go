@@ -166,7 +166,7 @@ func postContainment(t *testing.T, stack *Stack, user testkit.SeededUser, hostID
 
 // newGet builds an authenticated GET request with the session cookie. GET is a safe method so the CSRF middleware does not require
 // the X-Csrf-Token header; the cookie alone is enough to pass the session middleware, which is what the read-side endpoint gates on.
-// Tests that hit unsafe methods use postCommand above.
+// Tests that hit unsafe methods use postContainment above.
 func newGet(t *testing.T, url string, user testkit.SeededUser) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
