@@ -685,37 +685,19 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
-			// Containment status is a control message like provider liveness, from the same extension: dropped here whether or not
-			// there is a manager to record it, and never uploaded.
+			// The network extension's control messages ride the event channel because the XPC bridge only surfaces messages carrying a
+			// `data` blob; they are consumed here and never uploaded. Their type is peeked at once, since ordinary telemetry (a
+			// network_connect per flow) is the overwhelmingly common case.
 			if p.providerLiveness {
-				if status, ok := containment.ParseStatus(evt.Data); ok {
+				switch peekEventType(evt.Data) {
+				case containment.StatusEventType:
+					// Dropped whether or not there is a manager to record it.
 					if p.containment != nil {
-						p.containment.Observe(ctx, status)
+						p.containment.Observe(ctx, containment.DecodeStatus(evt.Data))
 					}
 					return
-				}
-			}
-			// Provider-liveness status is a control message, not telemetry: it rides the event channel because the XPC bridge
-			// only surfaces messages carrying a `data` blob, but the agent consumes it for health and never uploads it
-			// (issue #649). Handled before anything else so it cannot reach the proctable or the upload queue.
-			// Whether we can RECORD the status is a separate question from whether it is telemetry: a control message must be
-			// dropped either way, so the health nil-check guards only the recording.
-			if p.providerLiveness {
-				if status, ok := parseProviderStatus(evt.Data); ok {
-					if p.health != nil {
-						p.health.MarkProviders(p.component, status.Providers, status.Decoded)
-					}
-					// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed"
-					// cannot drift apart (issue #632).
-					if p.selfHeal != nil {
-						p.selfHeal.Observe(ctx, status.Providers)
-					}
-					// Health is level state, so it forgets a stop the moment the self-heal repairs it. This writes the
-					// transition down so the tamper evidence outlives the repair (issue #684).
-					// Only a report we could actually read may move the transition baseline; see providerStatus.Decoded.
-					if p.transitions != nil && status.Decoded {
-						p.transitions.Observe(ctx, status.Providers, status.StopReasons)
-					}
+				case providerStatusEventType:
+					observeProviderStatus(ctx, p, decodeProviderStatus(evt.Data))
 					return
 				}
 			}
@@ -759,9 +741,6 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 // "awaiting provider status".
 const providerStatusEventType = "ne_provider_status"
 
-// parseProviderStatus recognises a provider-liveness control message and returns the provider-to-state map it carries. The second
-// result is false for every ordinary telemetry event, which is the overwhelmingly common case, so the check is a cheap type peek
-// before any further decoding.
 // providerStatus is a decoded provider-liveness control message: the graded state per provider, plus the raw platform stop
 // reason for stopped ones. The reasons map is nil against an extension too old to send it, which is a supported skew.
 type providerStatus struct {
@@ -774,21 +753,26 @@ type providerStatus struct {
 	Decoded bool
 }
 
-func parseProviderStatus(data []byte) (providerStatus, bool) {
-	// Peek at event_type ALONE. This runs on every network-extension event and ordinary telemetry (a network_connect per
-	// flow) is the overwhelmingly common case, so the common path must touch the payload as little as possible: with no
-	// payload field declared, encoding/json walks past it without allocating. Capturing it as a json.RawMessage would copy
-	// the payload bytes for every flow the host makes, and decoding it into a struct would additionally build a map.
+// peekEventType reads event_type ALONE. It runs on every network-extension event and ordinary telemetry (a network_connect per flow)
+// is the overwhelmingly common case, so the common path must touch the payload as little as possible: with no payload field declared,
+// encoding/json walks past it without allocating. Capturing it as a json.RawMessage would copy the payload bytes for every flow the
+// host makes, and decoding it into a struct would additionally build a map.
+func peekEventType(data []byte) string {
 	var hdr struct {
 		EventType string `json:"event_type"`
 	}
-	if err := json.Unmarshal(data, &hdr); err != nil || hdr.EventType != providerStatusEventType {
-		return providerStatus{}, false
+	if err := json.Unmarshal(data, &hdr); err != nil {
+		return ""
 	}
-	// Past this point event_type has identified a control message, so every path returns true: it must be kept out of the
-	// upload queue whether or not its payload decodes. The second pass costs a re-parse, which is free in aggregate because
-	// it only runs on the rare control message. An empty map is meaningful rather than a parse failure, because it is what
-	// the extension sends when NO provider has started, the condition this whole mechanism exists to surface.
+	return hdr.EventType
+}
+
+// decodeProviderStatus decodes a message peekEventType identified as provider status.
+func decodeProviderStatus(data []byte) providerStatus {
+	// event_type has identified a control message, which must be kept out of the upload queue whether or not its payload
+	// decodes. This second pass costs a re-parse, which is free in aggregate because it only runs on the rare control message.
+	// An empty map is meaningful rather than a parse failure, because it is what the extension sends when NO provider has
+	// started, the condition this whole mechanism exists to surface.
 	var envelope struct {
 		Payload struct {
 			Providers   map[string]string `json:"providers"`
@@ -796,14 +780,33 @@ func parseProviderStatus(data []byte) (providerStatus, bool) {
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Providers == nil {
-		return providerStatus{Providers: map[string]string{}}, true
+		return providerStatus{Providers: map[string]string{}}
 	}
 	// An explicitly decoded `{}` IS valid and meaningful: it is what the extension sends when no provider has started.
 	return providerStatus{
 		Providers:   envelope.Payload.Providers,
 		StopReasons: envelope.Payload.StopReasons,
 		Decoded:     true,
-	}, true
+	}
+}
+
+// observeProviderStatus records a provider-liveness report. Whether we can RECORD the status is a separate question from whether it is
+// telemetry: the caller drops the control message either way, so each nil check guards only its recording.
+func observeProviderStatus(ctx context.Context, p receiverLoopParams, status providerStatus) {
+	if p.health != nil {
+		p.health.MarkProviders(p.component, status.Providers, status.Decoded)
+	}
+	// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed" cannot drift apart
+	// (issue #632).
+	if p.selfHeal != nil {
+		p.selfHeal.Observe(ctx, status.Providers)
+	}
+	// Health is level state, so it forgets a stop the moment the self-heal repairs it. This writes the transition down so the tamper
+	// evidence outlives the repair (issue #684). Only a report we could actually read may move the transition baseline; see
+	// providerStatus.Decoded.
+	if p.transitions != nil && status.Decoded {
+		p.transitions.Observe(ctx, status.Providers, status.StopReasons)
+	}
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.

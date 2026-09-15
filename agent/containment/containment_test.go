@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,10 @@ func TestTargetFor(t *testing.T) {
 		{"an explicit port", "https://edr.example.com:8443/", nil, Target{"edr.example.com", 8443}, false},
 		{"http defaults to 80", "http://10.0.0.5", nil, Target{"10.0.0.5", 80}, false},
 		{"a proxy is the target", "https://edr.example.com", proxy, Target{"proxy.corp", 3128}, false},
+		{"a SOCKS5 proxy defaults to 1080", "https://edr.example.com",
+			func(*http.Request) (*url.URL, error) { return url.Parse("socks5://proxy.corp") }, Target{"proxy.corp", 1080}, false},
+		{"a SOCKS5h proxy defaults to 1080", "https://edr.example.com",
+			func(*http.Request) (*url.URL, error) { return url.Parse("socks5h://proxy.corp") }, Target{"proxy.corp", 1080}, false},
 		{"no proxy for this URL", "https://edr.example.com", func(*http.Request) (*url.URL, error) { return nil, nil },
 			Target{"edr.example.com", 443}, false},
 		{"no host", "https:///path", nil, Target{}, true},
@@ -171,6 +176,32 @@ func TestApply_ReleaseResolvesNothing(t *testing.T) {
 	assert.JSONEq(t, `{"version":4,"contained":false,"applied":true,"lifeline":[]}`, string(result))
 	assert.Nil(t, ext.sent()[0].Server)
 	assert.Zero(t, res.calls)
+}
+
+// An IP literal target is normalized like a resolved address, and one the extension would refuse is refused before anything is sent.
+func TestApply_AnIPLiteralTargetIsNormalized(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, host, wantAddress, wantErr string
+	}{
+		{name: "a v4-mapped literal is unmapped", host: "::ffff:192.0.2.1", wantAddress: "192.0.2.1"},
+		{name: "the unspecified address", host: "0.0.0.0", wantErr: "no usable addresses"},
+		{name: "a scoped literal", host: "fe80::1%en0", wantErr: "no usable addresses"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m, ext, _ := newTestManager(t, Target{Host: tc.host, Port: 8089}, applies)
+			_, err := m.Apply(t.Context(), []byte(`{"version":1,"contained":true}`))
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				assert.Empty(t, ext.sent())
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{tc.wantAddress}, ext.sent()[0].Server.Addresses)
+		})
+	}
 }
 
 func TestApply_AnIPLiteralTargetNeedsNoLookup(t *testing.T) {
@@ -470,43 +501,37 @@ func TestDialContext_PinsTheLifelineOnlyWhileContained(t *testing.T) {
 	assert.Equal(t, []string{"edr.example.com:8443"}, reset(), "a release reported by the extension unpins too")
 }
 
-func TestParseStatus(t *testing.T) {
+func TestDecodeStatus(t *testing.T) {
 	t.Parallel()
 	undecodable := Status{Error: "undecodable containment status"}
 	cases := []struct {
-		name   string
-		data   string
-		want   Status
-		wantOK bool
+		name string
+		data string
+		want Status
 	}{
 		{"a status", `{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":false,"error":"x"}}`,
-			Status{Contained: true, Version: 3, Epoch: 100, Error: "x"}, true},
-		{"telemetry is not a status", `{"event_type":"network_connect","payload":{}}`, Status{}, false},
-		{"not JSON", `{`, Status{}, false},
-		{"a payload that does not decode is kept out of the upload queue", `{"event_type":"ne_containment_status","payload":"nope"}`,
-			undecodable, true},
-		{"a status naming no state adopts nothing", `{"event_type":"ne_containment_status","payload":{"applied":true}}`, undecodable, true},
+			Status{Contained: true, Version: 3, Epoch: 100, Error: "x"}},
+		{"not JSON", `{`, undecodable},
+		{"a payload that does not decode", `{"event_type":"ne_containment_status","payload":"nope"}`, undecodable},
+		{"a status naming no state adopts nothing", `{"event_type":"ne_containment_status","payload":{"applied":true}}`, undecodable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := ParseStatus([]byte(tc.data))
-			assert.Equal(t, tc.wantOK, ok)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, DecodeStatus([]byte(tc.data)))
 		})
 	}
 }
 
-// FuzzParseStatus feeds the network extension's control messages, which arrive beside telemetry, to the status parser: it must not
-// panic, and whatever it accepts as a status either names a state or is marked undecodable.
-func FuzzParseStatus(f *testing.F) {
+// FuzzDecodeStatus feeds the network extension's control messages to the status decoder: it must not panic, and what it returns either
+// names a state or is marked undecodable and not applied.
+func FuzzDecodeStatus(f *testing.F) {
 	f.Add([]byte(`{"event_type":"ne_containment_status","payload":{"contained":true,"version":3,"epoch":100,"applied":true}}`))
 	f.Add([]byte(`{"event_type":"ne_containment_status","payload":{"applied":true}}`))
 	f.Add([]byte(`{"event_type":"network_connect"}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		s, ok := ParseStatus(data)
-		if ok && s.Version <= 0 && s.Error == "" {
-			t.Fatalf("accepted a status naming no state: %+v", s)
+		if s := DecodeStatus(data); s.Version <= 0 && (s.Error == "" || s.Applied) {
+			t.Fatalf("a status naming no state was not marked undecodable: %+v", s)
 		}
 	})
 }
@@ -637,6 +662,29 @@ func TestReconnected_TheNextStatusSendsTheLifelineAgain(t *testing.T) {
 	assert.Equal(t, []string{"203.0.113.9"}, ext.sent()[1].Server.Addresses)
 	m.Observe(t.Context(), held)
 	assert.Len(t, ext.sent(), 2)
+}
+
+// A send that completes over a connection the extension has since replaced is not recorded as sent, so the status on the new connection
+// sends the lifeline again.
+func TestRefresh_AReconnectDuringTheSendIsSentAgain(t *testing.T) {
+	t.Parallel()
+	res := &fakeResolver{}
+	res.set("203.0.113.9")
+	var m *Manager
+	var sends atomic.Int32
+	send := func([]byte) error {
+		if sends.Add(1) == 1 {
+			m.Reconnected()
+		}
+		return nil
+	}
+	m = New(Options{Target: serverTarget, Send: send, Resolver: res, RefreshInterval: time.Hour})
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	m.Observe(t.Context(), held)
+	m.Observe(t.Context(), held)
+	assert.Equal(t, int32(2), sends.Load())
+	m.Observe(t.Context(), held)
+	assert.Equal(t, int32(2), sends.Load(), "delivered over the current connection, it is not sent a third time")
 }
 
 // Refreshes run one at a time, so a slower lookup cannot deliver its addresses after a newer one.

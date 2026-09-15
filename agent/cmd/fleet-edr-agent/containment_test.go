@@ -18,6 +18,7 @@ import (
 
 	"github.com/fleetdm/edr/agent/config"
 	"github.com/fleetdm/edr/agent/containment"
+	"github.com/fleetdm/edr/agent/health"
 	"github.com/fleetdm/edr/agent/receiver"
 )
 
@@ -234,4 +235,43 @@ func TestReceiverLoop_AReconnectSendsTheLifelineAgain(t *testing.T) {
 	require.Eventually(t, func() bool { return sent() == 1 }, 2*time.Second, 10*time.Millisecond)
 	first.errs <- 1
 	require.Eventually(t, func() bool { return sent() == 2 }, 5*time.Second, 10*time.Millisecond)
+}
+
+// The provider-liveness report shares the network extension loop's single type peek with containment status: it is recorded to health
+// and never uploaded, while telemetry beside it still is.
+func TestReceiverLoop_ProviderStatusIsRecordedNotUploaded(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry()
+	registry.Register(health.ComponentNetworkExtension, "Network extension")
+	status := []byte(`{"event_type":"ne_provider_status","payload":{"providers":{"content_filter":"running","dns_proxy":"running"}}}`)
+	telemetry := []byte(`{"event_type":"network_connect","payload":{}}`)
+	var mu sync.Mutex
+	var uploaded [][]byte
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go startReceiverLoop(ctx, receiverLoopParams{
+		logger:           slog.Default(),
+		serviceLabel:     "test-ne",
+		health:           registry,
+		component:        health.ComponentNetworkExtension,
+		providerLiveness: true,
+		connectorFactory: func() receiver.Connector { return newEventConnector(status, telemetry) },
+		enqueue: func(_ context.Context, data []byte) error {
+			mu.Lock()
+			defer mu.Unlock()
+			uploaded = append(uploaded, data)
+			return nil
+		},
+	})
+	require.Eventually(t, func() bool { return len(registry.Snapshot()) == 3 }, 2*time.Second, 10*time.Millisecond,
+		"the network extension and its two providers")
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(uploaded) == 1
+	}, 2*time.Second, 10*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, [][]byte{telemetry}, uploaded)
 }

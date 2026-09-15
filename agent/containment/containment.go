@@ -29,6 +29,7 @@ const (
 	defaultRefreshInterval = 5 * time.Minute
 	httpsPort              = 443
 	httpPort               = 80
+	socksPort              = 1080
 )
 
 // Command is the server's containment state for this host, as a set_network_containment command carries it.
@@ -81,9 +82,13 @@ func TargetFor(serverURL string, proxy func(*http.Request) (*url.URL, error)) (T
 			u = p
 		}
 	}
+	// The default ports net/http dials for each scheme a proxy URL can carry.
 	port := httpsPort
-	if u.Scheme == "http" {
+	switch u.Scheme {
+	case "http":
 		port = httpPort
+	case "socks5", "socks5h":
+		port = socksPort
 	}
 	if p := u.Port(); p != "" {
 		// The extension refuses a lifeline port outside 1 to 65535, so a URL naming one yields no target rather than a refused containment.
@@ -133,6 +138,9 @@ type Manager struct {
 	// have arrived.
 	addresses []netip.Addr
 	sent      []netip.Addr
+	// generation counts reconnects to the extension, so a send that completes over a connection that has since been replaced is not
+	// recorded as sent.
+	generation uint64
 	// pending is the command Apply sent and is waiting on, with the addresses it sent, so the status that confirms it adopts them.
 	pending          *Command
 	pendingAddresses []netip.Addr
@@ -274,6 +282,7 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 func (m *Manager) Reconnected() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.generation++
 	m.sent = nil
 	m.refreshed = false
 }
@@ -318,7 +327,7 @@ func (m *Manager) refresh(ctx context.Context) {
 		m.mu.Unlock()
 		return
 	}
-	state := *m.state
+	state, generation := *m.state, m.generation
 	m.mu.Unlock()
 	doc := document{Version: state.Version, Epoch: state.Epoch, Contained: true, Server: m.lifelineServer(addrs)}
 	body, _ := json.Marshal(doc)
@@ -331,7 +340,7 @@ func (m *Manager) refresh(ctx context.Context) {
 		return
 	}
 	m.mu.Lock()
-	if m.state != nil && *m.state == state {
+	if m.state != nil && *m.state == state && m.generation == generation {
 		m.addresses, m.sent = addrs, addrs
 	}
 	m.mu.Unlock()
@@ -395,17 +404,18 @@ func (m *Manager) lifelineServer(addrs []netip.Addr) *server {
 	return s
 }
 
+// resolve returns the target's lifeline addresses: the target itself when it is an IP literal, otherwise what it resolves to. Either way
+// they are unmapped, deduplicated and capped, and an address the extension would refuse (unspecified, or with a zone) is dropped.
 func (m *Manager) resolve(ctx context.Context) ([]netip.Addr, error) {
-	if a, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
-		return []netip.Addr{a}, nil
-	}
-	addrs, err := m.opts.Resolver.LookupNetIP(ctx, "ip", m.opts.Target.Host)
-	if err != nil {
+	addrs := []netip.Addr{}
+	if literal, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
+		addrs = append(addrs, literal)
+	} else if addrs, err = m.opts.Resolver.LookupNetIP(ctx, "ip", m.opts.Target.Host); err != nil {
 		return nil, err
 	}
 	out := make([]netip.Addr, 0, len(addrs))
 	for _, a := range addrs {
-		if a = a.Unmap(); a.IsValid() && !a.IsUnspecified() && !slices.Contains(out, a) {
+		if a = a.Unmap(); a.IsValid() && !a.IsUnspecified() && a.Zone() == "" && !slices.Contains(out, a) {
 			out = append(out, a)
 		}
 	}
@@ -435,23 +445,17 @@ func (m *Manager) unwait(w chan Status) {
 	m.mu.Unlock()
 }
 
-// ParseStatus recognises a containment status control message. The second result is false for every other event, checked with a
-// type peek first because this runs on every network-extension event.
-func ParseStatus(data []byte) (Status, bool) {
-	var hdr struct {
-		EventType string `json:"event_type"`
-	}
-	if err := json.Unmarshal(data, &hdr); err != nil || hdr.EventType != StatusEventType {
-		return Status{}, false
-	}
+// DecodeStatus decodes a control event already identified by its event_type as a StatusEventType. The receiver peeks at the type once
+// for every network-extension event, so this runs only on the rare status. A status that does not decode, or names no state, comes
+// back not applied and marked undecodable, so it adopts nothing.
+func DecodeStatus(data []byte) Status {
 	var envelope struct {
 		Payload Status `json:"payload"`
 	}
-	// A status that does not decode, or names no state, is kept out of the upload queue and adopts nothing.
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Version <= 0 {
-		return Status{Error: "undecodable containment status"}, true
+		return Status{Error: "undecodable containment status"}
 	}
-	return envelope.Payload, true
+	return envelope.Payload
 }
 
 func addrStrings(addrs []netip.Addr) []string {
