@@ -312,9 +312,11 @@
 - requirement: extension-network-response/host-network-containment-is-declarative-and-survives-provider-restart
   tracked_by: "#948"
   reason: >-
-    Host containment is not implemented. Nothing in the extension persists a containment ruleset or reapplies one on provider
-    restart, and the operator-facing half is #584. Restoring the requirement would claim an incident-response action the
-    product does not have.
+    Built by the network-containment change, which specifies it under new requirements rather than restoring this one: the
+    extension enforces containment as filter settings the operating system applies, and persists the state and applies it as a
+    starting filter's first settings. When that change is archived, switch this entry to covered_by
+    extension-network-response/containment-is-enforced-by-the-operating-system and
+    extension-network-response/containment-state-is-persisted-and-ordered.
 
 - requirement: extension-network-response/a-blocked-dns-query-is-answered-locally-without-upstream
   tracked_by: "#949"
@@ -420,8 +422,9 @@
     too because it carries the half the capture requirement does not, and CORRECTS the archived text while doing so: the
     archived version assumed not-denying was achievable by declining a flow, and measured on edr-dev declining terminates the
     flow rather than returning it to the OS, which is why the survivor forbids declining outright. The body's remaining half,
-    denying on an explicit match against a blocklist or containment ruleset, describes an enforcement path that does not exist
-    and is tracked as #948 and #949.
+    denying on an explicit match against a blocklist or containment ruleset, is half built: the blocklist path does not exist and
+    is tracked as #949, and the containment path is specified by the network-containment change, whose DNS proxy answers a
+    contained host's queries for other names with REFUSED.
 
 - requirement: server-admin-surface/read-the-role-catalog
   tracked_by: "#956"
