@@ -31,6 +31,7 @@ var standard = []route{
 	{"GET", "/api/session"},
 	{"GET", "/api/audit-events"},
 	{"GET", "/api/hosts"},
+	{"GET", "/api/containment"},
 	{"GET", "/api/alerts"},
 	{"GET", "/api/rules"},
 	{"GET", "/api/attack-coverage"},
