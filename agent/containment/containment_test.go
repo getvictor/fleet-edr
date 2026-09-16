@@ -766,11 +766,12 @@ func TestSeed_AdoptsTheContainmentTheExtensionPersisted(t *testing.T) {
 		`"server":{"port":8443,"addresses":["203.0.113.7","2001:db8::7"],"names":["edr.example.com"]}}`
 	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
 
-	m, _, _ := newTestManager(t, serverTarget, applies)
+	m, ext, _ := newTestManager(t, serverTarget, applies)
 	m.Seed(path)
 
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7"), netip.MustParseAddr("2001:db8::7")},
 		m.pinned("edr.example.com:8443"), "the enroll dials the addresses the extension holds")
+	assert.Empty(t, ext.sent(), "adopting a state sends the extension nothing: it is where the state came from")
 }
 
 func TestSeed_LeavesTheHostUncontained(t *testing.T) {
@@ -878,7 +879,9 @@ func TestSeed_ANameWithTheRootDotIsTheSameEndpoint(t *testing.T) {
 func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "network-containment.json")
-	doc := `{"version":7,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`
+	// Names the configured endpoint, so the document is one this agent would otherwise adopt and the state check is what refuses it.
+	doc := `{"version":7,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`
 	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
 
 	m, _, res := newTestManager(t, serverTarget, applies)
