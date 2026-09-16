@@ -70,6 +70,9 @@ PROBE_MAX_SECONDS=900
 OUTSIDE_URL="https://1.1.1.1/"
 # OUTSIDE_NAME is a name that is not the server's, resolved with dig so the answer's status is visible.
 OUTSIDE_NAME="example.com"
+# PHASE_MARGIN is how far from each change a sample is ignored, covering the whole-second clock offset and the moment between the
+# request returning and the host applying it.
+PHASE_MARGIN=3
 # CONTAIN_REASON identifies this run's containment on the state itself, for the case where the server applies a request whose
 # response never arrives. The per-run tag keeps it this run's own, so two runs against one host cannot adopt each other's.
 CONTAIN_REASON="uat network-containment $RUN_TAG"
@@ -187,12 +190,20 @@ fi
 
 # The phases are cut on this script's clock and the samples are stamped on the VM's, so measure the difference once. A suspended
 # VM can resume well behind the host.
-HOST_NOW=$(date +%s)
-VM_NOW=$(uat_ssh "$VM" 'date +%s' | tr -dc '0-9')
-# An SSH banner or a failed connection would otherwise reach the arithmetic below as a shell syntax error rather than a report.
-[[ -n "$VM_NOW" ]] || uat_fail "$TAG" "could not read the VM clock; the samples could not be placed in a phase"
-CLOCK_OFFSET=$(( VM_NOW - HOST_NOW ))
-uat_log "$TAG" "VM clock offset ${CLOCK_OFFSET}s"
+# The local clock is read on both sides of the remote one, so the offset is the difference from the midpoint rather than one that
+# has absorbed the SSH round trip. Only the last line of the reply is taken, and it must be a bare timestamp: a login banner
+# would otherwise contribute its own digits, and stripping non-digits from the whole reply would splice them into the number.
+HOST_BEFORE=$(date +%s)
+VM_NOW=$(uat_ssh "$VM" 'date +%s' | tr -d '\r' | tail -1)
+HOST_AFTER=$(date +%s)
+[[ "$VM_NOW" =~ ^[0-9]+$ ]] || uat_fail "$TAG" "the VM clock read back as \"$VM_NOW\"; the samples could not be placed in a phase"
+ROUND_TRIP=$(( HOST_AFTER - HOST_BEFORE ))
+if (( ROUND_TRIP > PHASE_MARGIN )); then
+  # Beyond the margin the midpoint is not accurate enough to say which side of a change a sample falls on.
+  uat_fail "$TAG" "reading the VM clock took ${ROUND_TRIP}s, more than the ${PHASE_MARGIN}s margin the phases rely on"
+fi
+CLOCK_OFFSET=$(( VM_NOW - (HOST_BEFORE + HOST_AFTER) / 2 ))
+uat_log "$TAG" "VM clock offset ${CLOCK_OFFSET}s, read in ${ROUND_TRIP}s"
 
 # ---------------------------------------------------------------------------
 # Probe
@@ -295,7 +306,6 @@ phase() {
   awk -v from="$from" -v to="$to" '$1 >= from && $2 <= to' <<<"$SAMPLES"
 }
 
-PHASE_MARGIN=3
 BEFORE_SAMPLES=$(phase 0 $(( CONTAIN_AT - PHASE_MARGIN )))
 CONTAINED_SAMPLES=$(phase $(( CONTAINED_AT + PHASE_MARGIN )) $(( RELEASE_AT - PHASE_MARGIN )))
 AFTER_SAMPLES=$(phase $(( RELEASED_AT + PHASE_MARGIN )) 9999999999)
