@@ -300,7 +300,10 @@ BEFORE_SAMPLES=$(phase 0 $(( CONTAIN_AT - PHASE_MARGIN )))
 CONTAINED_SAMPLES=$(phase $(( CONTAINED_AT + PHASE_MARGIN )) $(( RELEASE_AT - PHASE_MARGIN )))
 AFTER_SAMPLES=$(phase $(( RELEASED_AT + PHASE_MARGIN )) 9999999999)
 
-count() { grep -c . <<<"$1" || true; }
+count() {
+  local samples="$1"
+  grep -c . <<<"$samples" || true
+}
 FAILED=0
 
 # expect <label> <samples> <minimum> <pattern>: every sample in the phase matches the pattern, and there are enough of them. The

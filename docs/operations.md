@@ -393,7 +393,7 @@ Everything else is dropped: new connections, and connections that were already o
 
 ### Contain and release
 
-Open the host's page and choose **Contain host**, or **Release host** on a contained host. Both ask for a reason, which is recorded in the audit log as `host.contain` or `host.release`. You need `host.isolate`, which the `super_admin`, `admin` and `senior_analyst` roles hold, and a recent sign-in: an older session is asked to sign in again (`EDR_REAUTH_WINDOW`, 30 minutes by default).
+Open the host's page and choose **Contain host**, or **Release host** on a contained host. Both ask for a reason, which is recorded in the audit log as `host.contain` or `host.release`. You need `host.isolate`, which the `super_admin`, `admin` and `senior_analyst` roles hold. An operator also needs a recent sign-in: a session that authenticated longer ago than `EDR_REAUTH_WINDOW` (30 minutes by default) is asked to sign in again. A service account holding `host.isolate` is not subject to that window, so automation contains and releases without an interactive sign-in.
 
 The badge on the host's page and in the host list says where the change stands:
 

@@ -203,6 +203,8 @@ uat_rest() {
     -H "X-Csrf-Token: $UAT_CSRF_TOKEN" -X "$method" "$EDR_SERVER_URL$path")
   [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data "$body")
   curl "${args[@]}"
+  # Explicit, so the call's status is plainly the function's: callers branch on a non-2xx response.
+  return
 }
 
 # uat_server_get <path> <out_file>: GET <EDR_SERVER_URL><path> with the
