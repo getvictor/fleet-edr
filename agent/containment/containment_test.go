@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -752,4 +754,70 @@ func TestApply_APendingStatusIsFollowedByTheApplied(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	m.Observe(t.Context(), Status{Contained: true, Version: 7, Epoch: 1, Applied: true})
 	require.NoError(t, <-done)
+}
+
+// Seed: an agent that has to enroll from scratch on a contained host dials the lifeline the extension persisted, because the status
+// that would tell it arrives on a receiver loop the agent starts only after enrolling (issue #1065).
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/an-agent-starting-on-a-contained-host-reaches-the-server
+func TestSeed_AdoptsTheContainmentTheExtensionPersisted(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	doc := `{"version":7,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7","2001:db8::7"],"names":["edr.example.com"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	m, _, _ := newTestManager(t, serverTarget, applies)
+	m.Seed(path)
+
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7"), netip.MustParseAddr("2001:db8::7")},
+		m.pinned("edr.example.com:8443"), "the enroll dials the addresses the extension holds")
+}
+
+func TestSeed_LeavesTheHostUncontained(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		// write says whether the file exists at all.
+		write bool
+	}{
+		{name: "no file, the host was never contained", write: false},
+		{name: "a release", body: `{"version":8,"epoch":100,"contained":false}`, write: true},
+		// What decides is the contained flag: a document naming a lifeline it is not contained under is still a released host.
+		{name: "a release that still names a server", write: true,
+			body: `{"version":8,"epoch":100,"contained":false,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+		{name: "a containment naming no server", body: `{"version":8,"epoch":100,"contained":true}`, write: true},
+		{name: "a containment naming no usable address", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["not-an-address"]}}`},
+		{name: "not a document", body: `{`, write: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "network-containment.json")
+			if tc.write {
+				require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
+			}
+			m, ext, _ := newTestManager(t, serverTarget, applies)
+			m.Seed(path)
+			assert.Empty(t, m.pinned("edr.example.com:8443"))
+			assert.Nil(t, m.state, "the host is left as it was, with no containment adopted")
+			assert.Empty(t, ext.sent(), "seeding sends the extension nothing")
+		})
+	}
+}
+
+// What the extension says now beats what a restart left on disk: a state already reported over XPC is the live answer.
+func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	doc := `{"version":7,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	m, _, res := newTestManager(t, serverTarget, applies)
+	res.addrs = []netip.Addr{netip.MustParseAddr("203.0.113.9")}
+	m.Observe(t.Context(), Status{Contained: true, Version: 9, Epoch: 200, Applied: true})
+	m.Seed(path)
+
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
 }
