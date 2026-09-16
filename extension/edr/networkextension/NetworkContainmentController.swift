@@ -26,6 +26,21 @@ final class NetworkContainmentController: @unchecked Sendable {
     private let sequencer = ContainmentSequencer<NEFilterDataProvider>()
     private var tracker = ContainmentStatusTracker()
     private var released = ReleasedLifeline()
+    /// The host's configured resolvers, which are the only DNS the lifeline allows (issue #1069). Read here rather than taken from
+    /// the DNS proxy because containment does not require the proxy to be running, which is the case the restriction exists for.
+    private let resolvers = SystemResolverCache()
+
+    private init() {
+        // A read publishes a list the rules name, so settings that allowed the previous resolvers are re-applied against the new
+        // ones. Only while contained: a host that is not contained has no lifeline rules to move.
+        resolvers.onRefresh = { [weak self] _ in
+            guard let self else { return }
+            self.queue.async {
+                guard self.store.current?.contained == true else { return }
+                self.applyLocked()
+            }
+        }
+    }
 
     /// baselineSettings are the filter's settings when the host is not contained.
     static func baselineSettings() -> NEFilterSettings {
@@ -34,11 +49,15 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// startupState is the persisted state and the settings that enforce it, for a starting filter to apply as its first settings.
     func startupState() -> (update: NetworkContainmentUpdate?, settings: NEFilterSettings) {
+        // Warm the resolver list while the filter starts, so a containment applied moments later already has the DNS half of its
+        // lifeline. A cold read costs the host nothing lasting: the refresh re-applies the settings when it lands.
+        resolvers.prime()
         // On the queue, so a release accepted after these settings were chosen is ordered after the kept rules were reset.
-        queue.sync {
+        return queue.sync {
             let update = store.current
             released.filterStarting(with: update)
-            return (update, update.map { Self.settings(for: $0, released: []) } ?? Self.baselineSettings())
+            return (update, update.map { Self.settings(for: $0, released: [], resolvers: self.resolvers.addresses()) }
+                ?? Self.baselineSettings())
         }
     }
 
@@ -131,7 +150,16 @@ final class NetworkContainmentController: @unchecked Sendable {
             tracker.failed("content filter is not running")
             publishLocked()
         case .apply(let target):
-            target.apply(update.map { Self.settings(for: $0, released: released.rules) } ?? Self.baselineSettings()) { error in
+            let resolverAddresses = resolvers.addresses()
+            if update?.contained == true {
+                // The DNS half of the lifeline is the host's own configuration rather than anything the server sent, so it is worth
+                // saying which addresses it came to on the host itself.
+                let allowed = resolverAddresses.isEmpty ? "none" : resolverAddresses.joined(separator: ",")
+                logger.info("network containment: DNS allowed to the configured resolvers: \(allowed, privacy: .public)")
+            }
+            let settings = update.map { Self.settings(for: $0, released: released.rules, resolvers: resolverAddresses) }
+                ?? Self.baselineSettings()
+            target.apply(settings) { error in
                 self.queue.async {
                     if let error {
                         logger.error("network containment settings not applied: \(error.localizedDescription, privacy: .public)")
@@ -164,11 +192,12 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// settings turns a containment state into filter settings: the lifeline allowed and everything else dropped when contained, and
     /// otherwise the baseline's hand-every-flow-to-the-provider with the released server flows still allowed (see ReleasedLifeline).
-    static func settings(for update: NetworkContainmentUpdate, released: [LifelineRule]) -> NEFilterSettings {
+    static func settings(for update: NetworkContainmentUpdate, released: [LifelineRule], resolvers: [String]) -> NEFilterSettings {
         guard update.contained else {
             return NEFilterSettings(rules: allowRules(released), defaultAction: .filterData)
         }
-        return NEFilterSettings(rules: allowRules(NetworkContainment.lifeline(for: update)), defaultAction: .drop)
+        let lifeline = NetworkContainment.lifeline(for: update, resolvers: resolvers)
+        return NEFilterSettings(rules: allowRules(lifeline), defaultAction: .drop)
     }
 
     private static func allowRules(_ rules: [LifelineRule]) -> [NEFilterRule] {

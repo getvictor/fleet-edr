@@ -386,7 +386,7 @@ Containing a host cuts it off from the network while it stays connected to the E
 - **The EDR server:** TCP to the addresses the agent reaches the server through, on the server's port. That is the server itself, or the agent's proxy when it uses one. Telemetry, commands and the release keep flowing.
   - The rule is a destination, not a process: anything running on the Mac can reach that address and port. That is harmless for the EDR server, which serves only its own API, but a proxy forwards wherever it is asked. **If your agents reach the server through a proxy, the proxy must not forward a contained host to arbitrary destinations,** or containment leaks through it.
 - **DHCP**, so the Mac keeps its address.
-- **DNS for the server's name only.** The EDR's DNS proxy forwards lookups of the server's name and answers every other lookup with REFUSED.
+- **DNS for the server's name only, and only to the resolvers the Mac is configured with.** The EDR's DNS proxy forwards lookups of the server's name and answers every other lookup with REFUSED, and the lifeline allows port 53 only to the Mac's own resolvers, so a process cannot take DNS to a resolver of its choosing. A Mac with no resolver configured is allowed no DNS and reaches the server at the addresses containment pinned.
 - **Loopback.**
 
 Everything else is dropped: new connections, and connections that were already open when containment took effect. While contained, the host records no `network_connect` events, since dropped connections never reach the filter; DNS lookups, including refused ones, and process and file events are still recorded and uploaded.
@@ -416,7 +416,6 @@ The host's reason for a failure is in the delivery's `result` from `GET /api/hos
 ### Known limits
 
 - **You cannot add destinations of your own.** The lifeline is fixed, so a contained host cannot be allowed to reach a remediation or forensics service you name ([#1059](https://github.com/getvictor/fleet-edr/issues/1059)).
-- **DNS is not restricted when the DNS proxy is off.** On a host where the proxy was disabled or has stopped, DNS to any resolver stays open while the host is contained ([#1069](https://github.com/getvictor/fleet-edr/issues/1069)).
 - **A proxy named by host name.** When the agent reaches the server through a proxy named by host name rather than address, its control channel cannot reconnect while the host is contained; commands then arrive through the agent's regular polling ([#1064](https://github.com/getvictor/fleet-edr/issues/1064)).
 - **An agent without its enrollment token.** An agent that starts on a contained host with no saved token, for example after a reinstall removed it, cannot enroll, so the host cannot be released from the console ([#1065](https://github.com/getvictor/fleet-edr/issues/1065)).
 

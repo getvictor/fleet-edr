@@ -86,24 +86,57 @@ final class NetworkContainmentTests: XCTestCase {
     // MARK: lifeline
 
     // spec:extension-network-response/containment-is-enforced-by-the-operating-system/a-contained-host-keeps-only-the-lifeline
-    func testLifelineIsTheServerDHCPAndDNS() {
-        let rules = NetworkContainment.lifeline(for: contained(port: 8443, addresses: ["203.0.113.7", "2001:db8::7"]))
+    func testLifelineIsTheServerDHCPAndTheConfiguredResolvers() {
+        let rules = NetworkContainment.lifeline(for: contained(port: 8443, addresses: ["203.0.113.7", "2001:db8::7"]),
+                                                resolvers: ["198.51.100.1", "2001:db8::53"])
         XCTAssertEqual(rules, [
             LifelineRule(address: "203.0.113.7", prefix: 32, port: 8443, transport: .tcp, direction: .outbound),
             LifelineRule(address: "2001:db8::7", prefix: 128, port: 8443, transport: .tcp, direction: .outbound),
             LifelineRule(address: "0.0.0.0", prefix: 0, port: 67, localPort: 68, transport: .udp, direction: .any),
-            LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .udp, direction: .outbound),
-            LifelineRule(address: "0.0.0.0", prefix: 0, port: 53, transport: .tcp, direction: .outbound),
             LifelineRule(address: "::", prefix: 0, port: 547, localPort: 546, transport: .udp, direction: .any),
-            LifelineRule(address: "::", prefix: 0, port: 53, transport: .udp, direction: .outbound),
-            LifelineRule(address: "::", prefix: 0, port: 53, transport: .tcp, direction: .outbound)
+            LifelineRule(address: "198.51.100.1", prefix: 32, port: 53, transport: .udp, direction: .outbound),
+            LifelineRule(address: "198.51.100.1", prefix: 32, port: 53, transport: .tcp, direction: .outbound),
+            LifelineRule(address: "2001:db8::53", prefix: 128, port: 53, transport: .udp, direction: .outbound),
+            LifelineRule(address: "2001:db8::53", prefix: 128, port: 53, transport: .tcp, direction: .outbound)
         ])
+    }
+
+    // The hole this closes (issue #1069): the restriction on which names a contained host may resolve lives in the DNS proxy, and a
+    // host can be contained with the proxy off, stopped or wedged. DNS to an address of the caller's choosing is a way out of the
+    // host, so the lifeline names the resolvers instead of allowing port 53 to anywhere.
+    // spec:extension-network-response/containment-is-enforced-by-the-operating-system/contained-dns-reaches-only-the-configured-resolvers
+    func testLifelineAllowsNoDNSToAnAddressThatIsNotAConfiguredResolver() {
+        let rules = NetworkContainment.lifeline(for: contained(port: 8443, addresses: ["203.0.113.7"]), resolvers: ["198.51.100.1"])
+        let dns = rules.filter { $0.port == 53 }
+        XCTAssertEqual(dns.map(\.address), ["198.51.100.1", "198.51.100.1"])
+        XCTAssertTrue(dns.allSatisfy { $0.prefix == 32 && $0.direction == .outbound })
+        XCTAssertFalse(rules.contains { $0.port == 53 && ($0.address == "0.0.0.0" || $0.address == "::") })
+    }
+
+    // spec:extension-network-response/containment-is-enforced-by-the-operating-system/contained-dns-reaches-only-the-configured-resolvers
+    func testLifelineAllowsNoDNSWhenNoResolverIsKnown() {
+        let rules = NetworkContainment.lifeline(for: contained(port: 8443, addresses: ["203.0.113.7"]), resolvers: [])
+        XCTAssertFalse(rules.contains { $0.port == 53 })
+        // The rest of the lifeline is untouched: the host still reaches the server it has to be released from.
+        XCTAssertTrue(rules.contains { $0.address == "203.0.113.7" && $0.port == 8443 })
+    }
+
+    func testResolverRulesDropWhatIsNotAnAddressAndCollapseRepeats() {
+        let rules = NetworkContainment.resolverRules(for: ["198.51.100.1", "not-an-address", "198.51.100.1", "0.0.0.0", ""])
+        XCTAssertEqual(rules.map(\.address), ["198.51.100.1", "198.51.100.1"])
+    }
+
+    func testResolverRulesStopAtTheCap() {
+        let many = (1...(NetworkContainment.maxResolvers + 4)).map { "198.51.100.\($0)" }
+        let rules = NetworkContainment.resolverRules(for: many)
+        XCTAssertEqual(Set(rules.map(\.address)).count, NetworkContainment.maxResolvers)
+        XCTAssertEqual(rules.count, NetworkContainment.maxResolvers * 2)
     }
 
     // spec:extension-network-response/containment-is-enforced-by-the-operating-system/releasing-a-host-restores-the-telemetry-settings
     func testAHostThatIsNotContainedHasNoLifelineRules() {
         let release = NetworkContainmentUpdate(version: 6, epoch: 100, contained: false, serverPort: 8443, serverAddresses: ["203.0.113.7"])
-        XCTAssertEqual(NetworkContainment.lifeline(for: release), [])
+        XCTAssertEqual(NetworkContainment.lifeline(for: release, resolvers: ["198.51.100.1"]), [])
     }
 
     // spec:extension-network-response/containment-is-enforced-by-the-operating-system/a-release-keeps-the-server-flows-allowed

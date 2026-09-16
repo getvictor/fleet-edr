@@ -37,6 +37,10 @@ final class SystemResolverCache {
     private var cached: [String] = []
     private var readAt: TimeInterval?
     private var refreshing = false
+    /// onRefresh is called after a read publishes a list, off the caller's thread. The containment controller uses it to re-apply the
+    /// filter settings when the resolvers it allowed have moved, since its rules name those addresses (issue #1069). Nil for the DNS
+    /// proxy, which reads the list per failover and needs no notice.
+    var onRefresh: (([String]) -> Void)?
     /// One serial queue for the dynamic-store read, so the store is never touched concurrently and a refresh cannot
     /// pile up behind itself when many queries fail at once. Injected so a test can await a refresh deterministically
     /// by draining it, rather than polling for the published value.
@@ -95,11 +99,15 @@ final class SystemResolverCache {
     private func refresh() {
         let servers = read()
         let stamp = now()
-        lock.withLockValue {
+        let changed = lock.withLockValue { () -> Bool in
+            let moved = cached != servers
             cached = servers
             readAt = stamp
             refreshing = false
+            return moved
         }
+        // Outside the lock: the callback applies filter settings, which is not work to do while holding a lock every query path takes.
+        if changed { onRefresh?(servers) }
     }
 
     /// dynamicStoreReader builds the production reader, creating the `SCDynamicStore` session ONCE and capturing it.

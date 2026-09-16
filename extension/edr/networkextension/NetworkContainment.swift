@@ -80,6 +80,9 @@ enum NetworkContainment {
     static let maxServerAddresses = 16
     /// maxServerNames bounds the names the DNS proxy resolves while contained: the server, or the proxy it is reached through.
     static let maxServerNames = 4
+    /// maxResolvers bounds the DNS half of the lifeline. A host configures a handful of resolvers; a list longer than this is a
+    /// configuration this extension will not turn into rules, and the first addresses of it are the ones the host queries first.
+    static let maxResolvers = 8
 
     /// The ports and prefixes of the lifeline beyond the server itself.
     private static let dhcpServerPort: UInt16 = 67
@@ -133,16 +136,38 @@ enum NetworkContainment {
     /// or 546 for DHCPv6) and the server port (67, or 547): measured, a lease renewal during containment otherwise loses the host's
     /// address, and with it the route to the server. Requiring the client port, which only a privileged process can bind, keeps the
     /// rule from carrying arbitrary UDP to port 67; it allows either direction because a server's offer arrives as its own flow. And
-    /// it is DNS (TCP and UDP 53), outbound only, so an inbound flow from source port 53 reaches nothing: every lookup on the host
-    /// passes through this extension's DNS proxy, whose own forwards are subject to these settings, so without it the agent cannot
-    /// resolve the server name.
-    static func lifeline(for update: NetworkContainmentUpdate) -> [LifelineRule] {
+    /// it is DNS (TCP and UDP 53), outbound only, so an inbound flow from source port 53 reaches nothing, and only to the resolvers
+    /// passed in: the agent resolves the server name through them, and this extension's DNS proxy forwards through them as well.
+    ///
+    /// DNS is restricted to those addresses rather than allowed to any, because the name restriction that makes a contained host's
+    /// DNS safe lives in the DNS proxy, and containment does not require the proxy to be running (issue #1069). A host whose proxy is
+    /// off, stopped or wedged would otherwise keep an open path for any process to send arbitrary DNS to a resolver of its choosing,
+    /// which carries data out of the host as readily as any other protocol. With no resolvers known the host gets no DNS at all: that
+    /// is the same set the agent's own resolver queries, so a host that cannot be told them cannot resolve the server either way, and
+    /// the agent reaches the server through the addresses the containment pinned.
+    static func lifeline(for update: NetworkContainmentUpdate, resolvers: [String]) -> [LifelineRule] {
         guard update.contained else { return [] }
         var rules = serverRules(for: update)
         for (any, server, client) in [("0.0.0.0", dhcpServerPort, dhcpClientPort), ("::", dhcpv6ServerPort, dhcpv6ClientPort)] {
             rules.append(LifelineRule(address: any, prefix: 0, port: server, localPort: client, transport: .udp, direction: .any))
-            rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .udp, direction: .outbound))
-            rules.append(LifelineRule(address: any, prefix: 0, port: dnsPort, transport: .tcp, direction: .outbound))
+        }
+        rules.append(contentsOf: resolverRules(for: resolvers))
+        return rules
+    }
+
+    /// resolverRules allow DNS to each configured resolver, over UDP and TCP. Addresses that are not usable literals are dropped
+    /// rather than refusing the containment: the list comes from the host's own configuration, not from the server, so one entry the
+    /// extension cannot turn into a rule must not cost the host its containment. Duplicates are collapsed so a list that repeats an
+    /// address cannot crowd out the rest under the cap.
+    static func resolverRules(for resolvers: [String]) -> [LifelineRule] {
+        var seen = Set<String>()
+        var rules: [LifelineRule] = []
+        for address in resolvers where isUsableAddress(address) {
+            guard seen.insert(address).inserted else { continue }
+            guard seen.count <= maxResolvers else { break }
+            let prefix = isIPv6(address) ? ipv6HostPrefix : ipv4HostPrefix
+            rules.append(LifelineRule(address: address, prefix: prefix, port: dnsPort, transport: .udp, direction: .outbound))
+            rules.append(LifelineRule(address: address, prefix: prefix, port: dnsPort, transport: .tcp, direction: .outbound))
         }
         return rules
     }
