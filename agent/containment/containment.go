@@ -275,9 +275,13 @@ func (m *Manager) describesTarget(s *server) bool {
 	// name may carry the root dot that the extension's own comparison drops.
 	if target, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
 		target = target.Unmap()
-		return slices.ContainsFunc(s.Addresses, func(a string) bool {
+		// EVERY address, not merely one of them: a literal endpoint's document is the literal and nothing else, which is how this
+		// agent writes one. A document left by a name target can hold this literal alongside the other addresses that name resolved
+		// to, and adopting that list would have the enroll, and the secret it carries, reach an endpoint this agent is not
+		// configured for.
+		return !slices.ContainsFunc(s.Addresses, func(a string) bool {
 			addr, perr := netip.ParseAddr(a)
-			return perr == nil && addr.Unmap() == target
+			return perr != nil || addr.Unmap() != target
 		})
 	}
 	host := normalizedName(m.opts.Target.Host)

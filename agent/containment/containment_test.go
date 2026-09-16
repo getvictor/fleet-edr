@@ -861,6 +861,11 @@ func TestSeed_AnIPLiteralTargetIsIdentifiedByItsAddress(t *testing.T) {
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
 		{name: "another endpoint's address", adopted: false,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["198.51.100.4"]}}`},
+		// A document a name target left behind can name this literal among the addresses that name resolved to. Adopting the list
+		// would pin addresses of an endpoint this agent is not configured for.
+		{name: "the literal among another endpoint's addresses", adopted: false,
+			body: `{"version":8,"epoch":100,"contained":true,"server":` +
+				`{"port":8443,"addresses":["203.0.113.7","198.51.100.4"],"names":["old.example.com"]}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
