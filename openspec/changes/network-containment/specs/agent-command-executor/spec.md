@@ -31,7 +31,13 @@ The agent SHALL execute a `set_network_containment` command, whose payload carri
 
 ### Requirement: The server is reached through the lifeline
 
-While the network extension reports the host contained, the agent SHALL connect to the endpoint it reaches the server through by the lifeline addresses it sent, trying each in turn with an equal share of the time left to connect, for its uploads and command polls, its token refresh and re-enrollment, and the control channel, because the system resolver answers nothing on a contained host. Connections to other destinations, and every connection while the host is not contained, SHALL be dialed as before. A control channel to a proxied server SHALL keep its own proxy dialing; it resolves the proxy with the system resolver, so while the host is contained that channel stays down and commands arrive by polling.
+While the network extension reports the host contained, the agent SHALL connect to the endpoint it reaches the server through by the lifeline addresses it sent, trying each in turn with an equal share of the time left to connect, for its uploads and command polls, its token refresh and re-enrollment, and the control channel, because the system resolver answers nothing on a contained host. Connections to other destinations, and every connection while the host is not contained, SHALL be dialed as before. A control channel to a proxied server SHALL keep its own proxy dialing; it resolves the proxy with the system resolver, so while the host is contained that channel stays down and commands arrive by polling. Before its first connection to the server, the agent SHALL adopt the containment the network extension persisted, pinning its addresses, so an agent that must enroll on a contained host reaches the server; a state the extension reports SHALL replace it, and a persisted state that is not a containment, that the network extension would itself have refused, or that describes an endpoint other than the one the agent is configured for SHALL leave the host uncontained rather than be adopted in part.
+
+#### Scenario: An agent starting on a contained host reaches the server
+
+- **GIVEN** a contained host whose network extension persisted the containment and the lifeline addresses it holds
+- **WHEN** the agent starts, before the extension has reported its status
+- **THEN** its connections to the server go to those addresses, nothing is sent to the extension, and a persisted state that is not a containment, that names another endpoint, or that the extension would have refused leaves the host uncontained
 
 #### Scenario: Contained dials use the lifeline
 

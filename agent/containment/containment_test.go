@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -752,4 +756,196 @@ func TestApply_APendingStatusIsFollowedByTheApplied(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	m.Observe(t.Context(), Status{Contained: true, Version: 7, Epoch: 1, Applied: true})
 	require.NoError(t, <-done)
+}
+
+// Seed: an agent that has to enroll from scratch on a contained host dials the lifeline the extension persisted, because the status
+// that would tell it arrives on a receiver loop the agent starts only after enrolling (issue #1065).
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/an-agent-starting-on-a-contained-host-reaches-the-server
+func TestSeed_AdoptsTheContainmentTheExtensionPersisted(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	doc := `{"version":7,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7","2001:db8::7"],"names":["edr.example.com"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	m, ext, _ := newTestManager(t, serverTarget, applies)
+	m.Seed(path)
+
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7"), netip.MustParseAddr("2001:db8::7")},
+		m.pinned("edr.example.com:8443"), "the enroll dials the addresses the extension holds")
+	assert.Empty(t, ext.sent(), "adopting a state sends the extension nothing: it is where the state came from")
+}
+
+func TestSeed_LeavesTheHostUncontained(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		// write says whether the file exists at all.
+		write bool
+	}{
+		{name: "no file, the host was never contained", write: false},
+		{name: "a release", body: `{"version":8,"epoch":100,"contained":false}`, write: true},
+		// What decides is the contained flag: a document naming a lifeline it is not contained under is still a released host.
+		{name: "a release that still names a server", write: true,
+			body: `{"version":8,"epoch":100,"contained":false,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+		{name: "a containment naming no server", body: `{"version":8,"epoch":100,"contained":true}`, write: true},
+		{name: "a containment naming no usable address", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["not-an-address"]}}`},
+		{name: "not a document", body: `{`, write: true},
+		// Parsing is not enough: the unspecified address matches nothing as a lifeline, and a scope the extension cannot parse would
+		// have cost the document its containment there, so neither is something to pin an enroll to.
+		{name: "a containment naming only the unspecified address", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["0.0.0.0","::"]}}`},
+		// The extension refuses a document whole rather than salvaging part of it, so a file holding one it would have refused is
+		// corrupt, not current. Adopting the good half would have this agent push that state back on its next lifeline refresh.
+		{name: "a containment with one bad address among good ones", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":` +
+				`{"port":8443,"addresses":["203.0.113.7","nope"],"names":["edr.example.com"]}}`},
+		{name: "a containment naming more addresses than the extension accepts", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":` + manyAddresses(17) +
+				`,"names":["edr.example.com"]}}`},
+		{name: "a containment naming a name the extension would refuse", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":` +
+				`{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com","-bad"]}}`},
+		{name: "a containment with no version", write: true,
+			body: `{"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`},
+		{name: "a containment naming only a scoped address", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["fe80::1%en0"]}}`},
+		// The endpoint moved while the host was contained. Pinning the old addresses under the new target would send this agent's
+		// first request, the enroll secret with it, to whatever answers there.
+		{name: "a containment for another port", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":9443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`},
+		{name: "a containment for another name", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"],"names":["proxy.example.com"]}}`},
+		{name: "a containment naming no name, for a target that is one", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "network-containment.json")
+			if tc.write {
+				require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
+			}
+			m, ext, _ := newTestManager(t, serverTarget, applies)
+			m.Seed(path)
+			assert.Empty(t, m.pinned("edr.example.com:8443"))
+			assert.Nil(t, m.state, "the host is left as it was, with no containment adopted")
+			assert.Empty(t, ext.sent(), "seeding sends the extension nothing")
+		})
+	}
+}
+
+// An IP literal target is written as its own address and carries no name, so that is what identifies it.
+// The grammar is the extension's, mirrored: a name outside it costs the document its containment there, so a file holding one is
+// corrupt rather than current.
+func TestIsHostName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{name: "edr.example.com", want: true},
+		{name: "edr.example.com.", want: true},
+		{name: "EDR-1.example.com", want: true},
+		{name: "localhost", want: true},
+		{name: "", want: false},
+		{name: "-bad.example.com", want: false},
+		{name: "bad-.example.com", want: false},
+		{name: "edr..example.com", want: false},
+		{name: "edr_1.example.com", want: false},
+		{name: "edr.exämple.com", want: false},
+		{name: strings.Repeat("a", 64) + ".example.com", want: false},
+		{name: strings.Repeat("a", 63) + ".example.com", want: true},
+		{name: strings.Repeat("a.", 127) + "b", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, isHostName(tc.name))
+		})
+	}
+}
+
+// manyAddresses renders a JSON array of n distinct addresses.
+func manyAddresses(n int) string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, fmt.Sprintf("%q", fmt.Sprintf("203.0.113.%d", i+1)))
+	}
+	return "[" + strings.Join(out, ",") + "]"
+}
+
+func TestSeed_AnIPLiteralTargetIsIdentifiedByItsAddress(t *testing.T) {
+	t.Parallel()
+	literal := Target{Host: "203.0.113.7", Port: 8443}
+	for _, tc := range []struct {
+		name string
+		body string
+		// target overrides the IP literal endpoint, for a configuration that spells the same address differently.
+		target  Target
+		adopted bool
+	}{
+		{name: "the target's own address", adopted: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+		// The agent persists netip's canonical form, so the two sides need not be spelled alike.
+		{name: "the same address written as IPv4-mapped IPv6", adopted: true, target: Target{Host: "::ffff:203.0.113.7", Port: 8443},
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+		{name: "another endpoint's address", adopted: false,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["198.51.100.4"]}}`},
+		// A document a name target left behind can name this literal among the addresses that name resolved to. Adopting the list
+		// would pin addresses of an endpoint this agent is not configured for.
+		{name: "the literal among another endpoint's addresses", adopted: false,
+			body: `{"version":8,"epoch":100,"contained":true,"server":` +
+				`{"port":8443,"addresses":["203.0.113.7","198.51.100.4"],"names":["old.example.com"]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "network-containment.json")
+			require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
+			target := literal
+			if tc.target.Host != "" {
+				target = tc.target
+			}
+			m, _, _ := newTestManager(t, target, applies)
+			m.Seed(path)
+			dialed := net.JoinHostPort(target.Host, "8443")
+			if tc.adopted {
+				assert.NotEmpty(t, m.pinned(dialed))
+			} else {
+				assert.Empty(t, m.pinned(dialed))
+			}
+		})
+	}
+}
+
+// A name is one endpoint however it is written: the configuration may carry the root dot the extension's comparison drops.
+func TestSeed_ANameWithTheRootDotIsTheSameEndpoint(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	body := `{"version":8,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	m, _, _ := newTestManager(t, Target{Host: "EDR.example.com.", Port: 8443}, applies)
+	m.Seed(path)
+
+	assert.NotEmpty(t, m.pinned("EDR.example.com.:8443"))
+}
+
+// What the extension says now beats what a restart left on disk: a state already reported over XPC is the live answer.
+func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	// Names the configured endpoint, so the document is one this agent would otherwise adopt and the state check is what refuses it.
+	doc := `{"version":7,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	m, _, res := newTestManager(t, serverTarget, applies)
+	res.addrs = []netip.Addr{netip.MustParseAddr("203.0.113.9")}
+	m.Observe(t.Context(), Status{Contained: true, Version: 9, Epoch: 200, Applied: true})
+	m.Seed(path)
+
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
 }

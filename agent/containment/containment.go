@@ -8,16 +8,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // StatusEventType is the control event type the network extension reports its containment status under. Wire contract shared with
@@ -101,6 +104,10 @@ func TargetFor(serverURL string, proxy func(*http.Request) (*url.URL, error)) (T
 	return Target{Host: u.Hostname(), Port: port}, nil
 }
 
+// ExtensionStatePath is where the network extension persists the containment it holds. The agent reads it once at startup, before it
+// can be told the state over XPC, so a contained host's first connection to the server already goes to the lifeline addresses.
+const ExtensionStatePath = "/var/db/com.fleetdm.edr/network-containment.json"
+
 // Resolver resolves the lifeline target. Production uses net.Resolver with PreferGo, which queries the configured resolvers directly:
 // measured on macOS 26.3, mDNSResponder sends no query at all while the host is contained, so a getaddrinfo lookup would find nothing.
 type Resolver interface {
@@ -163,6 +170,154 @@ func New(opts Options) *Manager {
 		opts.Logger = slog.Default()
 	}
 	return &Manager{opts: opts, waiters: map[chan Status]struct{}{}}
+}
+
+// Seed adopts the containment the network extension persisted, pinning the lifeline addresses it holds.
+//
+// Why this exists (issue #1065). The manager otherwise learns containment only from the extension's status, which arrives on the
+// receiver loop the agent starts after enrolling. An agent with a saved token does not care, because loading it makes no network call,
+// but one that has to enroll from scratch, after a reinstall cleared its token while the host was contained, dials the server by name
+// before any status has arrived. On a contained host the system resolver answers nothing, the enroll fails, launchd restarts the agent,
+// and the host can no longer be released from the console. Reading the state the extension already persisted closes that.
+//
+// The extension's own word still wins: a state reported over XPC replaces this, and nothing is sent to the extension here. A file that
+// is missing, unreadable, not a containment, or names no usable address leaves the host uncontained, which is what it was before.
+func (m *Manager) Seed(path string) {
+	// #nosec G304 -- the path is this package's own constant in production and a test's temporary file otherwise; it is never
+	// attacker-supplied, and the file is written by the network extension as root.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Missing is the ordinary case: a host that has never been contained has no file.
+		if !errors.Is(err, fs.ErrNotExist) {
+			m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state could not be read",
+				"path", path, "err", err)
+		}
+		return
+	}
+	var doc document
+	if err := json.Unmarshal(data, &doc); err != nil {
+		m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state could not be decoded",
+			"path", path, "err", err)
+		return
+	}
+	if !doc.Contained || doc.Server == nil {
+		return
+	}
+	if !m.describesTarget(doc.Server) {
+		// The endpoint moved while the host was contained: a changed EDR_SERVER_URL, or a proxy added or removed. Pinning the old
+		// endpoint's addresses under the new target would send this agent's first request, the enroll secret with it, to whatever
+		// answers at the previous address. The enrollment path refuses a token bound to another server for the same reason.
+		m.opts.Logger.WarnContext(context.Background(),
+			"network containment: the extension's persisted state names another endpoint, so it was not adopted",
+			"target", net.JoinHostPort(m.opts.Target.Host, strconv.Itoa(m.opts.Target.Port)),
+			"persisted_port", doc.Server.Port, "persisted_names", doc.Server.Names)
+		return
+	}
+	addrs, ok := adoptableAddresses(doc)
+	if !ok {
+		m.opts.Logger.WarnContext(context.Background(),
+			"network containment: the extension's persisted state is not one it would hold, so it was not adopted", "path", path,
+			"version", doc.Version, "addresses", doc.Server.Addresses, "port", doc.Server.Port)
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state != nil {
+		// The extension has already said what it holds, which is the live answer rather than what a restart left on disk.
+		return
+	}
+	m.state = &Command{Version: doc.Version, Epoch: doc.Epoch, Contained: true}
+	m.addresses = addrs
+	// sent stays empty: these addresses were sent by whichever agent run wrote them, over a connection this one does not hold, so the
+	// first status starts a refresh that sends what the target resolves to now.
+	m.opts.Logger.InfoContext(context.Background(), "network containment: adopted the state the extension persisted",
+		"version", doc.Version, "epoch", doc.Epoch, "addresses", doc.Server.Addresses)
+}
+
+// adoptableAddresses is the lifeline of a persisted document, and whether the document is one the extension would hold at all.
+//
+// The extension refuses a containment document WHOLE: a bad address among good ones, more addresses than it accepts, a port outside
+// the range, and it cannot decode one without a version. So a document failing any of those was never applied there, and a file
+// holding one is corrupt rather than current. Salvaging what parses would leave this agent believing in a containment the extension
+// does not hold, and its lifeline refresh would then push that state back to the extension, containing a host on the strength of a
+// damaged file. The name grammar is left to the extension, which polices what it will hold: the agent only compares a name against
+// the endpoint it is configured for, which a malformed one cannot match.
+func adoptableAddresses(doc document) ([]netip.Addr, bool) {
+	if doc.Version <= 0 || doc.Server.Port < 1 || doc.Server.Port > maxPort {
+		return nil, false
+	}
+	if len(doc.Server.Addresses) == 0 || len(doc.Server.Addresses) > maxLifelineAddresses ||
+		len(doc.Server.Names) > maxLifelineNames {
+		return nil, false
+	}
+	for _, n := range doc.Server.Names {
+		if !isHostName(n) {
+			return nil, false
+		}
+	}
+	addrs := make([]netip.Addr, 0, len(doc.Server.Addresses))
+	for _, a := range doc.Server.Addresses {
+		addr, err := netip.ParseAddr(a)
+		if err != nil {
+			return nil, false
+		}
+		if addr = addr.Unmap(); !addr.IsValid() || addr.IsUnspecified() || addr.Zone() != "" {
+			return nil, false
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, true
+}
+
+// isHostName mirrors the extension's own grammar (NetworkContainment.isHostName in NetworkContainment.swift), which is the authority:
+// at most 253 bytes without a trailing root dot, of dot-separated labels of 1 to 63 bytes of ASCII letters, digits and hyphens that
+// neither start nor end with a hyphen. A name outside it costs the document its containment there, so a file holding one is corrupt.
+func isHostName(name string) bool {
+	trimmed := strings.TrimSuffix(name, ".")
+	if len(trimmed) > maxHostNameBytes {
+		return false
+	}
+	for label := range strings.SplitSeq(trimmed, ".") {
+		if label == "" || len(label) > maxLabelBytes || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if r > unicode.MaxASCII || (r != '-' && !unicode.IsLetter(r) && !unicode.IsDigit(r)) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// describesTarget reports whether a persisted lifeline is the one this agent's configured endpoint would have. The port must match,
+// and the endpoint must be named: by host name when the target is a name, and among the addresses when it is an IP literal, which is
+// how the agent writes each case.
+func (m *Manager) describesTarget(s *server) bool {
+	if s.Port != m.opts.Target.Port {
+		return false
+	}
+	// By value on both sides, because neither is written only one way: an address is persisted as netip's canonical form, so a
+	// configuration naming the same address as an IPv4-mapped or non-canonical IPv6 literal would not compare equal as text, and a
+	// name may carry the root dot that the extension's own comparison drops.
+	if target, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
+		target = target.Unmap()
+		// EVERY address, not merely one of them: a literal endpoint's document is the literal and nothing else, which is how this
+		// agent writes one. A document left by a name target can hold this literal alongside the other addresses that name resolved
+		// to, and adopting that list would have the enroll, and the secret it carries, reach an endpoint this agent is not
+		// configured for.
+		return !slices.ContainsFunc(s.Addresses, func(a string) bool {
+			addr, perr := netip.ParseAddr(a)
+			return perr != nil || addr.Unmap() != target
+		})
+	}
+	host := normalizedName(m.opts.Target.Host)
+	return slices.ContainsFunc(s.Names, func(n string) bool { return normalizedName(n) == host })
+}
+
+// normalizedName is a host name as a comparison should see it: case folded, without the trailing root dot.
+func normalizedName(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
 }
 
 // Apply runs a set_network_containment command: it resolves the lifeline for a containment, sends the extension its document, and
@@ -413,20 +568,38 @@ func (m *Manager) resolve(ctx context.Context) ([]netip.Addr, error) {
 	} else if addrs, err = m.opts.Resolver.LookupNetIP(ctx, "ip", m.opts.Target.Host); err != nil {
 		return nil, err
 	}
+	out := usableAddresses(addrs)
+	if len(out) == 0 {
+		return nil, errors.New("no usable addresses")
+	}
+	return out, nil
+}
+
+// What the extension accepts in a containment document, mirrored here so the agent adopts only what it would hold: a version, a port
+// in range, one to sixteen addresses it can all use, and at most four names it considers host names. The agent is stricter on one
+// point only, a version of zero, which the server never issues.
+const (
+	maxLifelineAddresses = 16
+	maxLifelineNames     = 4
+	maxPort              = 65535
+	maxHostNameBytes     = 253
+	maxLabelBytes        = 63
+)
+
+// usableAddresses is what may become a lifeline: a valid address that is not the unspecified one, unmapped, unscoped and not already
+// present, up to the number the extension accepts. The unspecified address as a lifeline matches nothing, and a scope the extension
+// cannot parse costs the containment its whole document.
+func usableAddresses(addrs []netip.Addr) []netip.Addr {
 	out := make([]netip.Addr, 0, len(addrs))
 	for _, a := range addrs {
 		if a = a.Unmap(); a.IsValid() && !a.IsUnspecified() && a.Zone() == "" && !slices.Contains(out, a) {
 			out = append(out, a)
 		}
+		if len(out) == maxLifelineAddresses {
+			break
+		}
 	}
-	if len(out) == 0 {
-		return nil, errors.New("no usable addresses")
-	}
-	const maxLifelineAddresses = 16 // the extension refuses more
-	if len(out) > maxLifelineAddresses {
-		out = out[:maxLifelineAddresses]
-	}
-	return out, nil
+	return out
 }
 
 func (m *Manager) wait(cmd *Command, addrs []netip.Addr) chan Status {

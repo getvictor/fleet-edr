@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
@@ -33,7 +35,7 @@ func TestNewContainment(t *testing.T) {
 		return nil, errors.New("recorded")
 	}
 
-	mgr, dial := newContainment(cfg, send, record, slog.Default())
+	mgr, dial := newContainment(cfg, send, record, slog.Default(), "")
 	require.NotNil(t, dial)
 	if runtime.GOOS != "darwin" {
 		assert.Nil(t, mgr, "only macOS has a network extension to contain with")
@@ -41,15 +43,15 @@ func TestNewContainment(t *testing.T) {
 	}
 	require.NotNil(t, mgr)
 
-	noNE, _ := newContainment(&config.Config{ServerURL: cfg.ServerURL}, send, record, slog.Default())
+	noNE, _ := newContainment(&config.Config{ServerURL: cfg.ServerURL}, send, record, slog.Default(), "")
 	assert.Nil(t, noNE, "an agent without the network extension service cannot contain")
-	noTarget, _ := newContainment(&config.Config{ServerURL: "https:///", NetXPCService: cfg.NetXPCService}, send, record, slog.Default())
+	noTarget, _ := newContainment(&config.Config{ServerURL: "https:///", NetXPCService: cfg.NetXPCService}, send, record, slog.Default(), "")
 	assert.Nil(t, noTarget, "a server URL without a host yields no lifeline target")
 
 	// The dial goes through the manager. A non-canonical IPv6 literal tells a pinned dial from an unpinned one without a lookup: the
 	// lifeline address is its canonical form.
 	literal := &config.Config{ServerURL: "https://[2001:0db8::0001]:8443", NetXPCService: cfg.NetXPCService}
-	literalMgr, literalDial := newContainment(literal, send, record, slog.Default())
+	literalMgr, literalDial := newContainment(literal, send, record, slog.Default(), "")
 	require.NotNil(t, literalMgr)
 	literalMgr.Observe(t.Context(), containment.Status{Contained: true, Version: 1, Applied: true})
 	_, _ = literalDial(t.Context(), "tcp", "[2001:0db8::0001]:8443")
@@ -274,4 +276,29 @@ func TestReceiverLoop_ProviderStatusIsRecordedNotUploaded(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, [][]byte{telemetry}, uploaded)
+}
+
+// The wiring, not the manager: an agent built on a contained host must dial the lifeline the extension persisted, because the enroll
+// that follows cannot resolve the server's name (issue #1065). Deleting the Seed call in newContainment fails here.
+func TestNewContainment_SeedsFromTheExtensionsPersistedState(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "darwin" {
+		t.Skip("only macOS builds a containment manager")
+	}
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	doc := `{"version":3,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	var dialed []string
+	record := func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return nil, errors.New("recorded")
+	}
+	cfg := &config.Config{ServerURL: "https://edr.example.com:8443", NetXPCService: "group.com.fleetdm.edr.networkextension"}
+
+	_, dial := newContainment(cfg, func([]byte) error { return nil }, record, slog.Default(), path)
+	_, _ = dial(t.Context(), "tcp", "edr.example.com:8443")
+
+	assert.Equal(t, []string{"203.0.113.7:8443"}, dialed, "the enroll dials the lifeline rather than resolving the name")
 }
