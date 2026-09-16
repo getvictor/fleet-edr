@@ -58,9 +58,10 @@ PROBE_STOP="$RUN_DIR/stop"
 # DELIVERY_TIMEOUT bounds how long the host takes to confirm a change: the command reaches an online agent within seconds over
 # the control channel, and the agent completes it once the network extension reports the state applied.
 DELIVERY_TIMEOUT=120
-# HOLD_SECONDS is how long the host stays contained after it confirmed, so the probe takes several samples under containment.
-# Measured on edr-dev, a sample takes about two seconds while contained, because a dropped connection fails immediately. Sized
-# for a network that blackholes what it drops instead, where each sample waits out the outside probe's own timeout.
+# HOLD_SECONDS is how long the host stays contained after it confirmed. The other phases wait for the samples they need, which
+# this one cannot do: SSH is cut while the host is contained, so the log cannot be read until afterwards. The window is the hold
+# plus the SSH-refusal check, less the margin at each end, so about 39s; at the probe's worst case of a sample every 8s that is
+# still 4 whole samples, and measured on edr-dev it is 17, because a dropped connection fails immediately rather than timing out.
 HOLD_SECONDS=30
 # SSH_RETURN_TIMEOUT bounds how long SSH takes to come back after the release is confirmed.
 SSH_RETURN_TIMEOUT=60
@@ -73,6 +74,14 @@ OUTSIDE_NAME="example.com"
 # PHASE_MARGIN is how far from each change a sample is ignored, covering the whole-second clock offset and the moment between the
 # request returning and the host applying it.
 PHASE_MARGIN=3
+# How many whole samples each phase needs. The before phase is the one that gives the others meaning, so it is not zero.
+MIN_BEFORE=2
+MIN_CONTAINED=3
+MIN_AFTER=2
+# SAMPLE_WAIT_TIMEOUT bounds waiting for the samples a phase needs, so a probe that is not sampling fails the run rather than
+# hanging it. A sample takes about two seconds here and under eight in the probe's worst case, where every request waits out its
+# own timeout.
+SAMPLE_WAIT_TIMEOUT=90
 # CONTAIN_REASON identifies this run's containment on the state itself, for the case where the server applies a request whose
 # response never arrives. The per-run tag keeps it this run's own, so two runs against one host cannot adopt each other's.
 CONTAIN_REASON="uat network-containment $RUN_TAG"
@@ -177,6 +186,22 @@ ssh_reaches_vm() {
   uat_ssh "$VM" true >/dev/null 2>&1
 }
 
+# wait_for_samples <count> <what> [since]: waits until the probe log holds <count> samples, or those starting at or after <since>
+# on the VM's clock. Reads the log over SSH, so it is only usable while the host is reachable.
+wait_for_samples() {
+  local want="$1" what="$2" since="${3:-0}" deadline have
+  deadline=$(( $(date +%s) + SAMPLE_WAIT_TIMEOUT ))
+  while :; do
+    have=$(uat_ssh "$VM" "awk '\$1 >= $since' $PROBE_LOG 2>/dev/null | wc -l" | tr -dc '0-9')
+    [[ -n "$have" ]] || have=0
+    (( have >= want )) && return 0
+    if (( $(date +%s) >= deadline )); then
+      uat_fail "$TAG" "waited ${SAMPLE_WAIT_TIMEOUT}s for $what and got $have; is the probe running?"
+    fi
+    sleep 2
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Preconditions
 # ---------------------------------------------------------------------------
@@ -235,8 +260,11 @@ uat_log "$TAG" "starting the probe on the VM"
 uat_ssh "$VM" "mkdir -p $RUN_DIR && echo '$PROBE_B64' | base64 -D > $RUN_DIR/probe.sh && \
   nohup /bin/bash $RUN_DIR/probe.sh $PROBE_LOG $PROBE_STOP '$EDR_SERVER_URL' '$OUTSIDE_URL' '$OUTSIDE_NAME' $PROBE_MAX_SECONDS \
   > /dev/null 2>&1 < /dev/null &"
-# Long enough for a few whole samples to land before the containment request, which is what proves the probe works at all.
-sleep 14
+# Wait for the samples the before phase needs rather than assuming a duration: a slow host takes longer per sample, and a run
+# that failed for want of a baseline sample would say nothing about containment. The margin then puts them wholly before the
+# request.
+wait_for_samples "$MIN_BEFORE" "the probe to take $MIN_BEFORE samples of the free host"
+sleep "$PHASE_MARGIN"
 
 # ---------------------------------------------------------------------------
 # Contain
@@ -287,8 +315,9 @@ until ssh_reaches_vm; do
   (( $(date +%s) < deadline )) || uat_fail "$TAG" "SSH did not come back within ${SSH_RETURN_TIMEOUT}s of the release"
   sleep 3
 done
-uat_log "$TAG" "SSH is back; letting the probe sample the released host"
-sleep 10
+uat_log "$TAG" "SSH is back; waiting for the probe to sample the released host"
+wait_for_samples "$MIN_AFTER" "$MIN_AFTER samples of the released host" \
+  "$(( RELEASED_AT + CLOCK_OFFSET + PHASE_MARGIN ))"
 uat_ssh "$VM" "touch $PROBE_STOP"
 sleep 3
 SAMPLES=$(uat_ssh "$VM" "cat $PROBE_LOG")
@@ -337,11 +366,11 @@ expect() {
   uat_log "$TAG" "ok $label ($n samples)"
 }
 
-expect "before containment the outside, DNS and the server all answer" "$BEFORE_SAMPLES" 2 \
+expect "before containment the outside, DNS and the server all answer" "$BEFORE_SAMPLES" "$MIN_BEFORE" \
   'outside=[1-5][0-9][0-9] dns=NOERROR/[1-9][0-9]* server=[1-5][0-9][0-9]$'
-expect "while contained the outside fails, other names are refused, the server answers" "$CONTAINED_SAMPLES" 3 \
+expect "while contained the outside fails, other names are refused, the server answers" "$CONTAINED_SAMPLES" "$MIN_CONTAINED" \
   'outside=000 dns=REFUSED/0 server=[1-5][0-9][0-9]$'
-expect "after the release the outside and DNS answer again" "$AFTER_SAMPLES" 2 \
+expect "after the release the outside and DNS answer again" "$AFTER_SAMPLES" "$MIN_AFTER" \
   'outside=[1-5][0-9][0-9] dns=NOERROR/[1-9][0-9]* server=[1-5][0-9][0-9]$'
 
 if (( FAILED == 1 )); then

@@ -415,7 +415,7 @@ The host's reason for a failure is in the delivery's `result` from `GET /api/hos
 
 ### Known limits
 
-- **No addresses of your choosing stay reachable.** A contained host reaches only the EDR server, even when you want it to reach a remediation or forensics service ([#1059](https://github.com/getvictor/fleet-edr/issues/1059)).
+- **You cannot add destinations of your own.** The lifeline is fixed, so a contained host cannot be allowed to reach a remediation or forensics service you name ([#1059](https://github.com/getvictor/fleet-edr/issues/1059)).
 - **DNS is not restricted when the DNS proxy is off.** On a host where the proxy was disabled or has stopped, DNS to any resolver stays open while the host is contained ([#1069](https://github.com/getvictor/fleet-edr/issues/1069)).
 - **A proxy named by host name.** When the agent reaches the server through a proxy named by host name rather than address, its control channel cannot reconnect while the host is contained; commands then arrive through the agent's regular polling ([#1064](https://github.com/getvictor/fleet-edr/issues/1064)).
 - **An agent without its enrollment token.** An agent that starts on a contained host with no saved token, for example after a reinstall removed it, cannot enroll, so the host cannot be released from the console ([#1065](https://github.com/getvictor/fleet-edr/issues/1065)).
