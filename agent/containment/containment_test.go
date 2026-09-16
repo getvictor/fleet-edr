@@ -796,6 +796,14 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["0.0.0.0","::"]}}`},
 		{name: "a containment naming only a scoped address", write: true,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["fe80::1%en0"]}}`},
+		// The endpoint moved while the host was contained. Pinning the old addresses under the new target would send this agent's
+		// first request, the enroll secret with it, to whatever answers there.
+		{name: "a containment for another port", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":9443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`},
+		{name: "a containment for another name", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"],"names":["proxy.example.com"]}}`},
+		{name: "a containment naming no name, for a target that is one", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -809,6 +817,35 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 			assert.Empty(t, m.pinned("edr.example.com:8443"))
 			assert.Nil(t, m.state, "the host is left as it was, with no containment adopted")
 			assert.Empty(t, ext.sent(), "seeding sends the extension nothing")
+		})
+	}
+}
+
+// An IP literal target is written as its own address and carries no name, so that is what identifies it.
+func TestSeed_AnIPLiteralTargetIsIdentifiedByItsAddress(t *testing.T) {
+	t.Parallel()
+	literal := Target{Host: "203.0.113.7", Port: 8443}
+	for _, tc := range []struct {
+		name    string
+		body    string
+		adopted bool
+	}{
+		{name: "the target's own address", adopted: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+		{name: "another endpoint's address", adopted: false,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["198.51.100.4"]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "network-containment.json")
+			require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
+			m, _, _ := newTestManager(t, literal, applies)
+			m.Seed(path)
+			if tc.adopted {
+				assert.NotEmpty(t, m.pinned("203.0.113.7:8443"))
+			} else {
+				assert.Empty(t, m.pinned("203.0.113.7:8443"))
+			}
 		})
 	}
 }

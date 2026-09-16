@@ -202,6 +202,16 @@ func (m *Manager) Seed(path string) {
 	if !doc.Contained || doc.Server == nil {
 		return
 	}
+	if !m.describesTarget(doc.Server) {
+		// The endpoint moved while the host was contained: a changed EDR_SERVER_URL, or a proxy added or removed. Pinning the old
+		// endpoint's addresses under the new target would send this agent's first request, the enroll secret with it, to whatever
+		// answers at the previous address. The enrollment path refuses a token bound to another server for the same reason.
+		m.opts.Logger.WarnContext(context.Background(),
+			"network containment: the extension's persisted state names another endpoint, so it was not adopted",
+			"target", net.JoinHostPort(m.opts.Target.Host, strconv.Itoa(m.opts.Target.Port)),
+			"persisted_port", doc.Server.Port, "persisted_names", doc.Server.Names)
+		return
+	}
 	parsed := make([]netip.Addr, 0, len(doc.Server.Addresses))
 	for _, a := range doc.Server.Addresses {
 		if addr, perr := netip.ParseAddr(a); perr == nil {
@@ -228,6 +238,19 @@ func (m *Manager) Seed(path string) {
 	// first status starts a refresh that sends what the target resolves to now.
 	m.opts.Logger.InfoContext(context.Background(), "network containment: adopted the state the extension persisted",
 		"version", doc.Version, "epoch", doc.Epoch, "addresses", doc.Server.Addresses)
+}
+
+// describesTarget reports whether a persisted lifeline is the one this agent's configured endpoint would have. The port must match,
+// and the endpoint must be named: by host name when the target is a name, and among the addresses when it is an IP literal, which is
+// how the agent writes each case.
+func (m *Manager) describesTarget(s *server) bool {
+	if s.Port != m.opts.Target.Port {
+		return false
+	}
+	if _, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
+		return slices.ContainsFunc(s.Addresses, func(a string) bool { return strings.EqualFold(a, m.opts.Target.Host) })
+	}
+	return slices.ContainsFunc(s.Names, func(n string) bool { return strings.EqualFold(n, m.opts.Target.Host) })
 }
 
 // Apply runs a set_network_containment command: it resolves the lifeline for a containment, sends the extension its document, and
