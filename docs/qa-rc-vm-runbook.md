@@ -144,7 +144,7 @@ EDR_SERVER_URL=https://192.168.64.1:8088 EDR_SESSION_COOKIE=<edr_session cookie 
 task uat:l5 -- network-containment --skip-install
 ```
 
-The scenario releases the host on any failure. If its log says the cleanup release was refused, release the host from its page before continuing. See [the scenario README](../scripts/uat/scenarios/network-containment/README.md).
+The scenario releases its own containment on any failure, and leaves a containment made by anyone else alone. If its log says the cleanup release was refused, release the host from its page before continuing. See [the scenario README](../scripts/uat/scenarios/network-containment/README.md).
 
 ## 7. Edge-rejection resilience
 

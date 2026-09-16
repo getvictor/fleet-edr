@@ -22,8 +22,11 @@
 #   UAT_SCRIPT_DIR      scripts/uat/ absolute path
 # EDR_SERVER_URL must be the URL the agent enrolled with, because the lifeline allows only the agent's own server endpoint.
 #
-# The scenario has no rules block: containment raises no alert, so it passes on this script's exit status alone. It always
-# leaves the host released: the exit trap releases a containment this script asked for and has not seen released.
+# The scenario has no rules block: containment raises no alert, so it passes on this script's exit status alone.
+#
+# It never releases a containment it did not make. The host must be free when the run starts, the containment request must report
+# that it changed the state, and the exit trap releases only while the host still carries the version this run created. An
+# operator who contains the host in the moment between the check and the request keeps their containment, and the run stops.
 
 set -eEuo pipefail
 
@@ -55,28 +58,24 @@ PROBE_MAX_SECONDS=900
 OUTSIDE_URL="https://1.1.1.1/"
 # OUTSIDE_NAME is a name that is not the server's, resolved with dig so the answer's status is visible.
 OUTSIDE_NAME="example.com"
-
-# rest METHOD PATH [JSON_BODY]: authenticated admin REST call; prints the body, and fails on a non-2xx status.
-rest() {
-  local method="$1" path="$2" body="${3:-}"
-  local args=("${UAT_CURL_ARGS[@]}" "${UAT_COOKIE_HEADER[@]}" -H "X-Csrf-Token: $UAT_CSRF_TOKEN" -X "$method" "$EDR_SERVER_URL$path")
-  [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data "$body")
-  curl "${args[@]}"
-}
+# CONTAIN_REASON identifies this run's containment on the state itself, for the case where the server applies a request whose
+# response never arrives.
+CONTAIN_REASON="uat network-containment"
 
 containment() {
-  rest GET "/api/hosts/$UAT_HOST_ID/containment"
+  uat_rest GET "/api/hosts/$UAT_HOST_ID/containment"
 }
 
-# request_containment <true|false> <reason>: asks for a state and prints the version it was recorded at.
-request_containment() {
+# request_state <true|false> <reason>: asks for a state and prints "<version> <changed>". `changed` is false when the host was
+# already in the state asked for, which for a containment means someone else contained it first.
+request_state() {
   local contained="$1" reason="$2" out
-  if ! out=$(rest POST "/api/hosts/$UAT_HOST_ID/containment" "{\"contained\":$contained,\"reason\":\"$reason\"}"); then
+  if ! out=$(uat_rest POST "/api/hosts/$UAT_HOST_ID/containment" "{\"contained\":$contained,\"reason\":\"$reason\"}"); then
     uat_log "$TAG" "containment request refused: $out"
     uat_log "$TAG" "(reauth_required means EDR_SESSION_COOKIE's session authenticated longer ago than EDR_REAUTH_WINDOW)"
     return 1
   fi
-  jq -r '.state.version' <<<"$out"
+  jq -r '"\(.state.version) \(.changed)"' <<<"$out"
 }
 
 # wait_for_delivery <version> <true|false>: waits for the host to complete the command carrying that version, and checks the
@@ -107,17 +106,35 @@ wait_for_delivery() {
   return 1
 }
 
-CONTAIN_REQUESTED=0
-RELEASED=0
+# OWNED_VERSION is the containment version this run created, while it is still in force: empty before the containment and once
+# the release is confirmed. The exit trap releases only this.
+OWNED_VERSION=""
+
+# adopt_lost_containment handles a containment request whose response never arrived: the server may have applied it. The state
+# carries the reason the request was made with, so a containment carrying this run's reason is this run's to release.
+adopt_lost_containment() {
+  local state
+  state=$(containment 2>/dev/null) || return 0
+  if [[ $(jq -r '.contained' <<<"$state") == "true" && $(jq -r '.reason // ""' <<<"$state") == "$CONTAIN_REASON" ]]; then
+    OWNED_VERSION=$(jq -r '.version' <<<"$state")
+    uat_log "$TAG" "the request failed but the host is contained with this run's reason, at version $OWNED_VERSION"
+  fi
+}
 
 cleanup() {
-  if (( CONTAIN_REQUESTED == 1 && RELEASED == 0 )); then
-    uat_log "$TAG" "releasing the host the scenario contained"
-    local version
-    if version=$(request_containment false "uat network-containment cleanup"); then
-      wait_for_delivery "$version" false || uat_log "$TAG" "WARNING: the cleanup release was not confirmed; check the host"
+  if [[ -n "$OWNED_VERSION" ]]; then
+    local state version out
+    state=$(containment 2>/dev/null) || state="{}"
+    version=$(jq -r '.version // 0' <<<"$state")
+    if [[ $(jq -r '.contained' <<<"$state") == "true" && "$version" == "$OWNED_VERSION" ]]; then
+      uat_log "$TAG" "releasing the containment this run made"
+      if out=$(request_state false "uat network-containment cleanup"); then
+        wait_for_delivery "${out%% *}" false || uat_log "$TAG" "WARNING: the cleanup release was not confirmed; check the host"
+      else
+        uat_log "$TAG" "WARNING: the cleanup release was refused; release the host from its page"
+      fi
     else
-      uat_log "$TAG" "WARNING: the cleanup release was refused; release the host from its page"
+      uat_log "$TAG" "WARNING: not releasing: the host no longer carries this run's containment (version $version); check the host"
     fi
   fi
   uat_ssh "$VM" "touch $PROBE_STOP 2>/dev/null; sleep 3; rm -rf $RUN_DIR" >/dev/null 2>&1 || true
@@ -151,16 +168,20 @@ uat_log "$TAG" "VM clock offset ${CLOCK_OFFSET}s"
 # ---------------------------------------------------------------------------
 
 # A sample every few seconds: the outside destination's HTTP status (000 when the connection fails), the DNS status of a name
-# that is not the server's (none when no answer came back), and the server's HTTP status over the lifeline.
+# that is not the server's (none when no answer came back), and the server's HTTP status over the lifeline. Each line carries the
+# instant the sample started and the instant it finished, because the three probes take several seconds together and a sample
+# that straddles a change belongs to neither state.
 read -r -d '' PROBE <<'EOF' || true
 out="$1"; stop="$2"; server="$3"; outside="$4"; name="$5"; max="$6"
 end=$(( $(date +%s) + max ))
-while [ ! -e "$stop" ] && [ "$(date +%s)" -lt "$end" ]; do
+# Stop on the stop file, on the run directory going away (the script removes it, and it may not have been able to reach this host
+# to write the stop file first), or at the deadline, so no run leaves a sampler behind.
+while [ ! -e "$stop" ] && [ -d "$(dirname "$out")" ] && [ "$(date +%s)" -lt "$end" ]; do
   t=$(date +%s)
   o=$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$outside" 2>/dev/null)
   d=$(dig +time=2 +tries=1 "$name" A 2>/dev/null | sed -n 's/.*status: \([A-Z]*\).*/\1/p')
   s=$(curl -s -k -m 3 -o /dev/null -w '%{http_code}' "$server/livez" 2>/dev/null)
-  echo "$t outside=${o:-000} dns=${d:-none} server=${s:-000}" >> "$out"
+  echo "$t $(date +%s) outside=${o:-000} dns=${d:-none} server=${s:-000}" >> "$out"
   sleep 2
 done
 EOF
@@ -169,15 +190,24 @@ uat_log "$TAG" "starting the probe on the VM"
 uat_ssh "$VM" "mkdir -p $RUN_DIR && echo '$PROBE_B64' | base64 -D > $RUN_DIR/probe.sh && \
   nohup /bin/bash $RUN_DIR/probe.sh $PROBE_LOG $PROBE_STOP '$EDR_SERVER_URL' '$OUTSIDE_URL' '$OUTSIDE_NAME' $PROBE_MAX_SECONDS \
   > /dev/null 2>&1 < /dev/null &"
-sleep 8
+# Long enough for a few whole samples to land before the containment request, which is what proves the probe works at all.
+sleep 14
 
 # ---------------------------------------------------------------------------
 # Contain
 # ---------------------------------------------------------------------------
 
 CONTAIN_AT=$(date +%s)
-CONTAIN_REQUESTED=1
-CONTAIN_VERSION=$(request_containment true "uat network-containment")
+if ! CONTAIN_RESULT=$(request_state true "$CONTAIN_REASON"); then
+  adopt_lost_containment
+  uat_fail "$TAG" "the containment request did not succeed"
+fi
+CONTAIN_VERSION="${CONTAIN_RESULT%% *}"
+if [[ "${CONTAIN_RESULT##* }" != "true" ]]; then
+  # The host was free at the precondition and is contained now, so someone else contained it in between. Theirs to release.
+  uat_fail "$TAG" "the host was contained by someone else between the check and the request; leaving their containment in place"
+fi
+OWNED_VERSION="$CONTAIN_VERSION"
 uat_log "$TAG" "containment requested at version $CONTAIN_VERSION; waiting for the host to confirm"
 wait_for_delivery "$CONTAIN_VERSION" true
 CONTAINED_AT=$(date +%s)
@@ -199,10 +229,11 @@ sleep "$HOLD_SECONDS"
 # ---------------------------------------------------------------------------
 
 RELEASE_AT=$(date +%s)
-RELEASE_VERSION=$(request_containment false "uat network-containment release")
+RELEASE_RESULT=$(request_state false "uat network-containment release")
+RELEASE_VERSION="${RELEASE_RESULT%% *}"
 uat_log "$TAG" "release requested at version $RELEASE_VERSION; waiting for the contained host to confirm"
 wait_for_delivery "$RELEASE_VERSION" false
-RELEASED=1
+OWNED_VERSION=""
 RELEASED_AT=$(date +%s)
 uat_log "$TAG" "host confirmed the release after $(( RELEASED_AT - RELEASE_AT ))s"
 
@@ -221,12 +252,13 @@ SAMPLES=$(uat_ssh "$VM" "cat $PROBE_LOG")
 # Assert on the samples
 # ---------------------------------------------------------------------------
 
-# phase <from> <to>: the samples stamped between two script-clock times, converted to the VM's clock. The callers keep a margin of
-# PHASE_MARGIN around each change, so a sample taken while a state was being applied is not judged against either state: the clock
-# offset is measured in whole seconds over SSH, and the host applies a change within a second or two of the request.
+# phase <from> <to>: the samples that both started and finished between two script-clock times, converted to the VM's clock. A
+# sample overlapping either end is left out rather than judged against one state, since it observed both. The callers also keep a
+# margin of PHASE_MARGIN around each change: the clock offset is measured in whole seconds over SSH, and the host applies a change
+# a moment after the request returns.
 phase() {
   local from=$(( $1 + CLOCK_OFFSET )) to=$(( $2 + CLOCK_OFFSET ))
-  awk -v from="$from" -v to="$to" '$1 >= from && $1 <= to' <<<"$SAMPLES"
+  awk -v from="$from" -v to="$to" '$1 >= from && $2 <= to' <<<"$SAMPLES"
 }
 
 PHASE_MARGIN=3

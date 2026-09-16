@@ -314,9 +314,11 @@
   reason: >-
     Built by the network-containment change, which specifies it under new requirements rather than restoring this one: the
     extension enforces containment as filter settings the operating system applies, and persists the state and applies it as a
-    starting filter's first settings. When that change is archived, switch this entry to covered_by
-    extension-network-response/containment-is-enforced-by-the-operating-system and
-    extension-network-response/containment-state-is-persisted-and-ordered.
+    starting filter's first settings, and the agent reaches the server through the lifeline the containment pins, which is what
+    keeps a contained host talking to the server. When that change is archived, switch this entry to covered_by
+    extension-network-response/containment-is-enforced-by-the-operating-system,
+    extension-network-response/containment-state-is-persisted-and-ordered and
+    agent-command-executor/the-server-is-reached-through-the-lifeline.
 
 - requirement: extension-network-response/a-blocked-dns-query-is-answered-locally-without-upstream
   tracked_by: "#949"
