@@ -43,6 +43,9 @@ func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, 
 		return nil, base
 	}
 	mgr := containment.New(containment.Options{Target: target, Send: send, Logger: logger})
+	// Before anything dials: an agent enrolling from scratch on a contained host has no other way to learn the lifeline, since the
+	// extension's status arrives on a receiver loop that starts after enrollment (issue #1065).
+	mgr.Seed(containment.ExtensionStatePath)
 	return mgr, mgr.DialContext(base)
 }
 
