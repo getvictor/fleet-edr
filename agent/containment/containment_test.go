@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -795,6 +797,16 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 		// have cost the document its containment there, so neither is something to pin an enroll to.
 		{name: "a containment naming only the unspecified address", write: true,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["0.0.0.0","::"]}}`},
+		// The extension refuses a document whole rather than salvaging part of it, so a file holding one it would have refused is
+		// corrupt, not current. Adopting the good half would have this agent push that state back on its next lifeline refresh.
+		{name: "a containment with one bad address among good ones", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":` +
+				`{"port":8443,"addresses":["203.0.113.7","nope"],"names":["edr.example.com"]}}`},
+		{name: "a containment naming more addresses than the extension accepts", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":` + manyAddresses(17) +
+				`,"names":["edr.example.com"]}}`},
+		{name: "a containment with no version", write: true,
+			body: `{"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`},
 		{name: "a containment naming only a scoped address", write: true,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["fe80::1%en0"]}}`},
 		// The endpoint moved while the host was contained. Pinning the old addresses under the new target would send this agent's
@@ -823,6 +835,15 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 }
 
 // An IP literal target is written as its own address and carries no name, so that is what identifies it.
+// manyAddresses renders a JSON array of n distinct addresses.
+func manyAddresses(n int) string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, fmt.Sprintf("%q", fmt.Sprintf("203.0.113.%d", i+1)))
+	}
+	return "[" + strings.Join(out, ",") + "]"
+}
+
 func TestSeed_AnIPLiteralTargetIsIdentifiedByItsAddress(t *testing.T) {
 	t.Parallel()
 	literal := Target{Host: "203.0.113.7", Port: 8443}

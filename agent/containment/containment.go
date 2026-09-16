@@ -212,18 +212,11 @@ func (m *Manager) Seed(path string) {
 			"persisted_port", doc.Server.Port, "persisted_names", doc.Server.Names)
 		return
 	}
-	parsed := make([]netip.Addr, 0, len(doc.Server.Addresses))
-	for _, a := range doc.Server.Addresses {
-		if addr, perr := netip.ParseAddr(a); perr == nil {
-			parsed = append(parsed, addr)
-		}
-	}
-	// The same rule a resolved lifeline goes through: a document naming only the unspecified address, or a scoped one, names nothing
-	// this agent can dial, and the extension would have refused it too.
-	addrs := usableAddresses(parsed)
-	if len(addrs) == 0 {
-		m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state names no usable address",
-			"path", path)
+	addrs, ok := adoptableAddresses(doc)
+	if !ok {
+		m.opts.Logger.WarnContext(context.Background(),
+			"network containment: the extension's persisted state is not one it would hold, so it was not adopted", "path", path,
+			"version", doc.Version, "addresses", doc.Server.Addresses, "port", doc.Server.Port)
 		return
 	}
 	m.mu.Lock()
@@ -238,6 +231,36 @@ func (m *Manager) Seed(path string) {
 	// first status starts a refresh that sends what the target resolves to now.
 	m.opts.Logger.InfoContext(context.Background(), "network containment: adopted the state the extension persisted",
 		"version", doc.Version, "epoch", doc.Epoch, "addresses", doc.Server.Addresses)
+}
+
+// adoptableAddresses is the lifeline of a persisted document, and whether the document is one the extension would hold at all.
+//
+// The extension refuses a containment document WHOLE: a bad address among good ones, more addresses than it accepts, a port outside
+// the range, and it cannot decode one without a version. So a document failing any of those was never applied there, and a file
+// holding one is corrupt rather than current. Salvaging what parses would leave this agent believing in a containment the extension
+// does not hold, and its lifeline refresh would then push that state back to the extension, containing a host on the strength of a
+// damaged file. The name grammar is left to the extension, which polices what it will hold: the agent only compares a name against
+// the endpoint it is configured for, which a malformed one cannot match.
+func adoptableAddresses(doc document) ([]netip.Addr, bool) {
+	if doc.Version <= 0 || doc.Server.Port < 1 || doc.Server.Port > maxPort {
+		return nil, false
+	}
+	if len(doc.Server.Addresses) == 0 || len(doc.Server.Addresses) > maxLifelineAddresses ||
+		len(doc.Server.Names) > maxLifelineNames {
+		return nil, false
+	}
+	addrs := make([]netip.Addr, 0, len(doc.Server.Addresses))
+	for _, a := range doc.Server.Addresses {
+		addr, err := netip.ParseAddr(a)
+		if err != nil {
+			return nil, false
+		}
+		if addr = addr.Unmap(); !addr.IsValid() || addr.IsUnspecified() || addr.Zone() != "" {
+			return nil, false
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, true
 }
 
 // describesTarget reports whether a persisted lifeline is the one this agent's configured endpoint would have. The port must match,
@@ -521,11 +544,17 @@ func (m *Manager) resolve(ctx context.Context) ([]netip.Addr, error) {
 	return out, nil
 }
 
+// What the extension accepts in a containment document, mirrored here so the agent adopts only what it would hold.
+const (
+	maxLifelineAddresses = 16
+	maxLifelineNames     = 4
+	maxPort              = 65535
+)
+
 // usableAddresses is what may become a lifeline: a valid address that is not the unspecified one, unmapped, unscoped and not already
 // present, up to the number the extension accepts. The unspecified address as a lifeline matches nothing, and a scope the extension
 // cannot parse costs the containment its whole document.
 func usableAddresses(addrs []netip.Addr) []netip.Addr {
-	const maxLifelineAddresses = 16 // the extension refuses more
 	out := make([]netip.Addr, 0, len(addrs))
 	for _, a := range addrs {
 		if a = a.Unmap(); a.IsValid() && !a.IsUnspecified() && a.Zone() == "" && !slices.Contains(out, a) {
