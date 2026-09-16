@@ -790,6 +790,12 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 		{name: "a containment naming no usable address", write: true,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["not-an-address"]}}`},
 		{name: "not a document", body: `{`, write: true},
+		// Parsing is not enough: the unspecified address matches nothing as a lifeline, and a scope the extension cannot parse would
+		// have cost the document its containment there, so neither is something to pin an enroll to.
+		{name: "a containment naming only the unspecified address", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["0.0.0.0","::"]}}`},
+		{name: "a containment naming only a scoped address", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["fe80::1%en0"]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

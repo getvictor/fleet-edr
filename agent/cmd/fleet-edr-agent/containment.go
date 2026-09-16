@@ -33,7 +33,8 @@ func baseServerDial() dialFunc {
 // shared agent transport and the control channel. While the host is contained, that dial reaches the server through the lifeline
 // addresses, because the system resolver answers nothing then. Only macOS has a network extension to contain with; elsewhere, and when
 // the server URL yields no lifeline target, there is no manager, set_network_containment reports failed, and the dial is base.
-func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, logger *slog.Logger) (*containment.Manager, dialFunc) {
+func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, logger *slog.Logger,
+	statePath string) (*containment.Manager, dialFunc) {
 	if runtime.GOOS != "darwin" || cfg.NetXPCService == "" {
 		return nil, base
 	}
@@ -45,7 +46,7 @@ func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, 
 	mgr := containment.New(containment.Options{Target: target, Send: send, Logger: logger})
 	// Before anything dials: an agent enrolling from scratch on a contained host has no other way to learn the lifeline, since the
 	// extension's status arrives on a receiver loop that starts after enrollment (issue #1065).
-	mgr.Seed(containment.ExtensionStatePath)
+	mgr.Seed(statePath)
 	return mgr, mgr.DialContext(base)
 }
 

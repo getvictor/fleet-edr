@@ -202,12 +202,15 @@ func (m *Manager) Seed(path string) {
 	if !doc.Contained || doc.Server == nil {
 		return
 	}
-	addrs := make([]netip.Addr, 0, len(doc.Server.Addresses))
+	parsed := make([]netip.Addr, 0, len(doc.Server.Addresses))
 	for _, a := range doc.Server.Addresses {
-		if parsed, perr := netip.ParseAddr(a); perr == nil {
-			addrs = append(addrs, parsed)
+		if addr, perr := netip.ParseAddr(a); perr == nil {
+			parsed = append(parsed, addr)
 		}
 	}
+	// The same rule a resolved lifeline goes through: a document naming only the unspecified address, or a scoped one, names nothing
+	// this agent can dial, and the extension would have refused it too.
+	addrs := usableAddresses(parsed)
 	if len(addrs) == 0 {
 		m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state names no usable address",
 			"path", path)
@@ -475,20 +478,28 @@ func (m *Manager) resolve(ctx context.Context) ([]netip.Addr, error) {
 	} else if addrs, err = m.opts.Resolver.LookupNetIP(ctx, "ip", m.opts.Target.Host); err != nil {
 		return nil, err
 	}
+	out := usableAddresses(addrs)
+	if len(out) == 0 {
+		return nil, errors.New("no usable addresses")
+	}
+	return out, nil
+}
+
+// usableAddresses is what may become a lifeline: a valid address that is not the unspecified one, unmapped, unscoped and not already
+// present, up to the number the extension accepts. The unspecified address as a lifeline matches nothing, and a scope the extension
+// cannot parse costs the containment its whole document.
+func usableAddresses(addrs []netip.Addr) []netip.Addr {
+	const maxLifelineAddresses = 16 // the extension refuses more
 	out := make([]netip.Addr, 0, len(addrs))
 	for _, a := range addrs {
 		if a = a.Unmap(); a.IsValid() && !a.IsUnspecified() && a.Zone() == "" && !slices.Contains(out, a) {
 			out = append(out, a)
 		}
+		if len(out) == maxLifelineAddresses {
+			break
+		}
 	}
-	if len(out) == 0 {
-		return nil, errors.New("no usable addresses")
-	}
-	const maxLifelineAddresses = 16 // the extension refuses more
-	if len(out) > maxLifelineAddresses {
-		out = out[:maxLifelineAddresses]
-	}
-	return out, nil
+	return out
 }
 
 func (m *Manager) wait(cmd *Command, addrs []netip.Addr) chan Status {
