@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -103,10 +101,6 @@ func TargetFor(serverURL string, proxy func(*http.Request) (*url.URL, error)) (T
 	return Target{Host: u.Hostname(), Port: port}, nil
 }
 
-// ExtensionStatePath is where the network extension persists the containment it holds. The agent reads it once at startup, before it
-// can be told the state over XPC, so a contained host's first connection to the server already goes to the lifeline addresses.
-const ExtensionStatePath = "/var/db/com.fleetdm.edr/network-containment.json"
-
 // Resolver resolves the lifeline target. Production uses net.Resolver with PreferGo, which queries the configured resolvers directly:
 // measured on macOS 26.3, mDNSResponder sends no query at all while the host is contained, so a getaddrinfo lookup would find nothing.
 type Resolver interface {
@@ -169,62 +163,6 @@ func New(opts Options) *Manager {
 		opts.Logger = slog.Default()
 	}
 	return &Manager{opts: opts, waiters: map[chan Status]struct{}{}}
-}
-
-// Seed adopts the containment the network extension persisted, pinning the lifeline addresses it holds.
-//
-// Why this exists (issue #1065). The manager otherwise learns containment only from the extension's status, which arrives on the
-// receiver loop the agent starts after enrolling. An agent with a saved token does not care, because loading it makes no network call,
-// but one that has to enroll from scratch, after a reinstall cleared its token while the host was contained, dials the server by name
-// before any status has arrived. On a contained host the system resolver answers nothing, the enroll fails, launchd restarts the agent,
-// and the host can no longer be released from the console. Reading the state the extension already persisted closes that.
-//
-// The extension's own word still wins: a state reported over XPC replaces this, and nothing is sent to the extension here. A file that
-// is missing, unreadable, not a containment, or names no usable address leaves the host uncontained, which is what it was before.
-func (m *Manager) Seed(path string) {
-	// #nosec G304 -- the path is this package's own constant in production and a test's temporary file otherwise; it is never
-	// attacker-supplied, and the file is written by the network extension as root.
-	data, err := os.ReadFile(path)
-	if err != nil {
-		// Missing is the ordinary case: a host that has never been contained has no file.
-		if !errors.Is(err, fs.ErrNotExist) {
-			m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state could not be read",
-				"path", path, "err", err)
-		}
-		return
-	}
-	var doc document
-	if err := json.Unmarshal(data, &doc); err != nil {
-		m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state could not be decoded",
-			"path", path, "err", err)
-		return
-	}
-	if !doc.Contained || doc.Server == nil {
-		return
-	}
-	addrs := make([]netip.Addr, 0, len(doc.Server.Addresses))
-	for _, a := range doc.Server.Addresses {
-		if parsed, perr := netip.ParseAddr(a); perr == nil {
-			addrs = append(addrs, parsed)
-		}
-	}
-	if len(addrs) == 0 {
-		m.opts.Logger.WarnContext(context.Background(), "network containment: the extension's persisted state names no usable address",
-			"path", path)
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.state != nil {
-		// The extension has already said what it holds, which is the live answer rather than what a restart left on disk.
-		return
-	}
-	m.state = &Command{Version: doc.Version, Epoch: doc.Epoch, Contained: true}
-	m.addresses = addrs
-	// sent stays empty: these addresses were sent by whichever agent run wrote them, over a connection this one does not hold, so the
-	// first status starts a refresh that sends what the target resolves to now.
-	m.opts.Logger.InfoContext(context.Background(), "network containment: adopted the state the extension persisted",
-		"version", doc.Version, "epoch", doc.Epoch, "addresses", doc.Server.Addresses)
 }
 
 // Apply runs a set_network_containment command: it resolves the lifeline for a containment, sends the extension its document, and
