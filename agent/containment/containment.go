@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // StatusEventType is the control event type the network extension reports its containment status under. Wire contract shared with
@@ -249,6 +250,11 @@ func adoptableAddresses(doc document) ([]netip.Addr, bool) {
 		len(doc.Server.Names) > maxLifelineNames {
 		return nil, false
 	}
+	for _, n := range doc.Server.Names {
+		if !isHostName(n) {
+			return nil, false
+		}
+	}
 	addrs := make([]netip.Addr, 0, len(doc.Server.Addresses))
 	for _, a := range doc.Server.Addresses {
 		addr, err := netip.ParseAddr(a)
@@ -261,6 +267,27 @@ func adoptableAddresses(doc document) ([]netip.Addr, bool) {
 		addrs = append(addrs, addr)
 	}
 	return addrs, true
+}
+
+// isHostName mirrors the extension's own grammar (NetworkContainment.isHostName in NetworkContainment.swift), which is the authority:
+// at most 253 bytes without a trailing root dot, of dot-separated labels of 1 to 63 bytes of ASCII letters, digits and hyphens that
+// neither start nor end with a hyphen. A name outside it costs the document its containment there, so a file holding one is corrupt.
+func isHostName(name string) bool {
+	trimmed := strings.TrimSuffix(name, ".")
+	if len(trimmed) > maxHostNameBytes {
+		return false
+	}
+	for label := range strings.SplitSeq(trimmed, ".") {
+		if label == "" || len(label) > maxLabelBytes || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if r > unicode.MaxASCII || (r != '-' && !unicode.IsLetter(r) && !unicode.IsDigit(r)) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // describesTarget reports whether a persisted lifeline is the one this agent's configured endpoint would have. The port must match,
@@ -548,11 +575,15 @@ func (m *Manager) resolve(ctx context.Context) ([]netip.Addr, error) {
 	return out, nil
 }
 
-// What the extension accepts in a containment document, mirrored here so the agent adopts only what it would hold.
+// What the extension accepts in a containment document, mirrored here so the agent adopts only what it would hold: a version, a port
+// in range, one to sixteen addresses it can all use, and at most four names it considers host names. The agent is stricter on one
+// point only, a version of zero, which the server never issues.
 const (
 	maxLifelineAddresses = 16
 	maxLifelineNames     = 4
 	maxPort              = 65535
+	maxHostNameBytes     = 253
+	maxLabelBytes        = 63
 )
 
 // usableAddresses is what may become a lifeline: a valid address that is not the unspecified one, unmapped, unscoped and not already

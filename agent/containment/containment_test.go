@@ -805,6 +805,9 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 		{name: "a containment naming more addresses than the extension accepts", write: true,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":` + manyAddresses(17) +
 				`,"names":["edr.example.com"]}}`},
+		{name: "a containment naming a name the extension would refuse", write: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":` +
+				`{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com","-bad"]}}`},
 		{name: "a containment with no version", write: true,
 			body: `{"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`},
 		{name: "a containment naming only a scoped address", write: true,
@@ -835,6 +838,35 @@ func TestSeed_LeavesTheHostUncontained(t *testing.T) {
 }
 
 // An IP literal target is written as its own address and carries no name, so that is what identifies it.
+// The grammar is the extension's, mirrored: a name outside it costs the document its containment there, so a file holding one is
+// corrupt rather than current.
+func TestIsHostName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{name: "edr.example.com", want: true},
+		{name: "edr.example.com.", want: true},
+		{name: "EDR-1.example.com", want: true},
+		{name: "localhost", want: true},
+		{name: "", want: false},
+		{name: "-bad.example.com", want: false},
+		{name: "bad-.example.com", want: false},
+		{name: "edr..example.com", want: false},
+		{name: "edr_1.example.com", want: false},
+		{name: "edr.exämple.com", want: false},
+		{name: strings.Repeat("a", 64) + ".example.com", want: false},
+		{name: strings.Repeat("a", 63) + ".example.com", want: true},
+		{name: strings.Repeat("a.", 127) + "b", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, isHostName(tc.name))
+		})
+	}
+}
+
 // manyAddresses renders a JSON array of n distinct addresses.
 func manyAddresses(n int) string {
 	out := make([]string, 0, n)
