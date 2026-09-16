@@ -24,9 +24,18 @@
 #
 # The scenario has no rules block: containment raises no alert, so it passes on this script's exit status alone.
 #
-# It never releases a containment it did not make. The host must be free when the run starts, the containment request must report
-# that it changed the state, and the exit trap releases only while the host still carries the version this run created. An
-# operator who contains the host in the moment between the check and the request keeps their containment, and the run stops.
+# It never releases a containment it did not make. The host's containment is one versioned state that anyone may change while the
+# run is in flight, so each moment an operator could change it is answered:
+#
+#   before the request      the run stops if the host is already contained, and says whose reason it carries.
+#   during the request      the request must report that it changed the state. A host contained by someone else in that moment
+#                           answers changed=false, and the run stops rather than adopting their containment.
+#   response lost           the state carries the reason the request was made with, tagged per run, so a containment this run
+#                           caused is still this run's to release.
+#   during the hold         both releases, the normal one and the trap's, read the state first and release only while the host
+#                           still carries the version this run created.
+#   during a release        unclosable here: the read and the request are two calls, and the request cannot name the version it
+#                           expects (#1076). One round trip wide, against a hold of tens of seconds.
 
 set -eEuo pipefail
 
@@ -41,7 +50,8 @@ uat_curl_args
 
 TAG=network-containment
 VM="$UAT_VM_SSH_TARGET"
-RUN_DIR="/tmp/edr-uat-containment-$(date +%s)-$$"
+RUN_TAG="$(date +%s)-$$"
+RUN_DIR="/tmp/edr-uat-containment-$RUN_TAG"
 PROBE_LOG="$RUN_DIR/probe.log"
 PROBE_STOP="$RUN_DIR/stop"
 
@@ -49,7 +59,9 @@ PROBE_STOP="$RUN_DIR/stop"
 # the control channel, and the agent completes it once the network extension reports the state applied.
 DELIVERY_TIMEOUT=120
 # HOLD_SECONDS is how long the host stays contained after it confirmed, so the probe takes several samples under containment.
-HOLD_SECONDS=20
+# Measured on edr-dev, a sample takes about two seconds while contained, because a dropped connection fails immediately. Sized
+# for a network that blackholes what it drops instead, where each sample waits out the outside probe's own timeout.
+HOLD_SECONDS=30
 # SSH_RETURN_TIMEOUT bounds how long SSH takes to come back after the release is confirmed.
 SSH_RETURN_TIMEOUT=60
 # PROBE_MAX_SECONDS stops a probe this script never got to stop, so no run leaves a sampler behind.
@@ -59,8 +71,8 @@ OUTSIDE_URL="https://1.1.1.1/"
 # OUTSIDE_NAME is a name that is not the server's, resolved with dig so the answer's status is visible.
 OUTSIDE_NAME="example.com"
 # CONTAIN_REASON identifies this run's containment on the state itself, for the case where the server applies a request whose
-# response never arrives.
-CONTAIN_REASON="uat network-containment"
+# response never arrives. The per-run tag keeps it this run's own, so two runs against one host cannot adopt each other's.
+CONTAIN_REASON="uat network-containment $RUN_TAG"
 
 containment() {
   uat_rest GET "/api/hosts/$UAT_HOST_ID/containment"
@@ -87,12 +99,16 @@ wait_for_delivery() {
     state=$(containment) || state="{}"
     if [[ $(jq -r --argjson v "$version" '.version == $v and .delivery.current == true' <<<"$state") == "true" ]]; then
       status=$(jq -r '.delivery.status' <<<"$state")
-      if [[ "$status" == "failed" ]]; then
-        uat_log "$TAG" "the host failed version $version: $(jq -c '.delivery.result' <<<"$state")"
+      # failed is the host's own refusal; cancelled and expired are the server withdrawing or ageing out the command. All three
+      # are terminal for this version, so waiting out the timeout would only delay the report.
+      if [[ "$status" == "failed" || "$status" == "cancelled" || "$status" == "expired" ]]; then
+        uat_log "$TAG" "version $version ended $status: $(jq -c '.delivery.result' <<<"$state")"
         return 1
       fi
       if [[ "$status" == "completed" ]]; then
-        if [[ $(jq -r --argjson c "$contained" '.delivery.result.applied == true and .delivery.result.contained == $c' <<<"$state") != "true" ]]; then
+        local applied
+        applied=$(jq -r --argjson c "$contained" '.delivery.result.applied == true and .delivery.result.contained == $c' <<<"$state")
+        if [[ "$applied" != "true" ]]; then
           uat_log "$TAG" "version $version completed without applying contained=$contained: $(jq -c '.delivery.result' <<<"$state")"
           return 1
         fi
@@ -121,20 +137,33 @@ adopt_lost_containment() {
   fi
 }
 
+# release_owned <reason>: releases only while the host still carries the containment this run made, and prints the version the
+# release was recorded at. It reads the state immediately before asking, so an operator who took the host over in the meantime
+# keeps their containment.
+#
+# The read and the request are two calls, so an operator who releases and re-contains between them is released by this run
+# anyway. Closing that needs the request to carry the version it expects, which the API does not offer yet (#1076). The window
+# is the round trip of one request, against a hold of tens of seconds, and every wider window is checked.
+release_owned() {
+  local reason="$1" state version out
+  state=$(containment 2>/dev/null) || state="{}"
+  version=$(jq -r '.version // 0' <<<"$state")
+  if [[ $(jq -r '.contained' <<<"$state") != "true" || "$version" != "$OWNED_VERSION" ]]; then
+    uat_log "$TAG" "WARNING: not releasing: the host no longer carries this run's containment (version $version); check the host"
+    return 1
+  fi
+  out=$(request_state false "$reason") || return 1
+  echo "${out%% *}"
+}
+
 cleanup() {
   if [[ -n "$OWNED_VERSION" ]]; then
-    local state version out
-    state=$(containment 2>/dev/null) || state="{}"
-    version=$(jq -r '.version // 0' <<<"$state")
-    if [[ $(jq -r '.contained' <<<"$state") == "true" && "$version" == "$OWNED_VERSION" ]]; then
-      uat_log "$TAG" "releasing the containment this run made"
-      if out=$(request_state false "uat network-containment cleanup"); then
-        wait_for_delivery "${out%% *}" false || uat_log "$TAG" "WARNING: the cleanup release was not confirmed; check the host"
-      else
-        uat_log "$TAG" "WARNING: the cleanup release was refused; release the host from its page"
-      fi
+    local version
+    uat_log "$TAG" "releasing the containment this run made"
+    if version=$(release_owned "uat network-containment cleanup $RUN_TAG"); then
+      wait_for_delivery "$version" false || uat_log "$TAG" "WARNING: the cleanup release was not confirmed; check the host"
     else
-      uat_log "$TAG" "WARNING: not releasing: the host no longer carries this run's containment (version $version); check the host"
+      uat_log "$TAG" "WARNING: the cleanup release did not go through; check the host"
     fi
   fi
   uat_ssh "$VM" "touch $PROBE_STOP 2>/dev/null; sleep 3; rm -rf $RUN_DIR" >/dev/null 2>&1 || true
@@ -159,7 +188,9 @@ fi
 # The phases are cut on this script's clock and the samples are stamped on the VM's, so measure the difference once. A suspended
 # VM can resume well behind the host.
 HOST_NOW=$(date +%s)
-VM_NOW=$(uat_ssh "$VM" 'date +%s')
+VM_NOW=$(uat_ssh "$VM" 'date +%s' | tr -dc '0-9')
+# An SSH banner or a failed connection would otherwise reach the arithmetic below as a shell syntax error rather than a report.
+[[ -n "$VM_NOW" ]] || uat_fail "$TAG" "could not read the VM clock; the samples could not be placed in a phase"
 CLOCK_OFFSET=$(( VM_NOW - HOST_NOW ))
 uat_log "$TAG" "VM clock offset ${CLOCK_OFFSET}s"
 
@@ -179,9 +210,12 @@ end=$(( $(date +%s) + max ))
 while [ ! -e "$stop" ] && [ -d "$(dirname "$out")" ] && [ "$(date +%s)" -lt "$end" ]; do
   t=$(date +%s)
   o=$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$outside" 2>/dev/null)
-  d=$(dig +time=2 +tries=1 "$name" A 2>/dev/null | sed -n 's/.*status: \([A-Z]*\).*/\1/p')
+  # Status and answer count together: NOERROR alone can carry an empty answer section, which would pass for resolution.
+  dig_out=$(dig +time=2 +tries=1 "$name" A 2>/dev/null)
+  d=$(printf '%s' "$dig_out" | sed -n 's/.*status: \([A-Z]*\).*/\1/p')
+  a=$(printf '%s' "$dig_out" | sed -n 's/.*ANSWER: \([0-9]*\).*/\1/p')
   s=$(curl -s -k -m 3 -o /dev/null -w '%{http_code}' "$server/livez" 2>/dev/null)
-  echo "$t $(date +%s) outside=${o:-000} dns=${d:-none} server=${s:-000}" >> "$out"
+  echo "$t $(date +%s) outside=${o:-000} dns=${d:-none}/${a:-0} server=${s:-000}" >> "$out"
   sleep 2
 done
 EOF
@@ -229,8 +263,8 @@ sleep "$HOLD_SECONDS"
 # ---------------------------------------------------------------------------
 
 RELEASE_AT=$(date +%s)
-RELEASE_RESULT=$(request_state false "uat network-containment release")
-RELEASE_VERSION="${RELEASE_RESULT%% *}"
+RELEASE_VERSION=$(release_owned "uat network-containment release $RUN_TAG") \
+  || uat_fail "$TAG" "the release did not go through; see the warning above"
 uat_log "$TAG" "release requested at version $RELEASE_VERSION; waiting for the contained host to confirm"
 wait_for_delivery "$RELEASE_VERSION" false
 OWNED_VERSION=""
@@ -291,14 +325,15 @@ expect() {
 }
 
 expect "before containment the outside, DNS and the server all answer" "$BEFORE_SAMPLES" 2 \
-  'outside=[1-5][0-9][0-9] dns=NOERROR server=[1-5][0-9][0-9]$'
+  'outside=[1-5][0-9][0-9] dns=NOERROR/[1-9][0-9]* server=[1-5][0-9][0-9]$'
 expect "while contained the outside fails, other names are refused, the server answers" "$CONTAINED_SAMPLES" 3 \
-  'outside=000 dns=REFUSED server=[1-5][0-9][0-9]$'
+  'outside=000 dns=REFUSED/0 server=[1-5][0-9][0-9]$'
 expect "after the release the outside and DNS answer again" "$AFTER_SAMPLES" 2 \
-  'outside=[1-5][0-9][0-9] dns=NOERROR server=[1-5][0-9][0-9]$'
+  'outside=[1-5][0-9][0-9] dns=NOERROR/[1-9][0-9]* server=[1-5][0-9][0-9]$'
 
 if (( FAILED == 1 )); then
-  uat_log "$TAG" "all samples (VM clock; contain requested $(( CONTAIN_AT + CLOCK_OFFSET )), confirmed $(( CONTAINED_AT + CLOCK_OFFSET )), release requested $(( RELEASE_AT + CLOCK_OFFSET )), confirmed $(( RELEASED_AT + CLOCK_OFFSET ))):"
+  uat_log "$TAG" "contain requested $(( CONTAIN_AT + CLOCK_OFFSET )), confirmed $(( CONTAINED_AT + CLOCK_OFFSET )); release" \
+    "requested $(( RELEASE_AT + CLOCK_OFFSET )), confirmed $(( RELEASED_AT + CLOCK_OFFSET )) (VM clock). All samples:"
   printf '%s\n' "$SAMPLES" >&2
   exit 1
 fi
