@@ -15,7 +15,7 @@ On edr-dev (macOS 26.3) with a measurement-only build, comparing the two ways a 
 | Provider stopped for 20 s | containment holds | new flows undecided |
 | Provider killed | containment holds through the restart | leaks for about 5 s |
 
-A narrow lifeline of the server address alone was not enough. A DHCP lease renewal during containment lost the host's address until release, and every name lookup failed, because all DNS passes through this product's DNS proxy, whose own forwards the filter drops unless a rule allows them.
+A narrow lifeline of the server address alone was not enough. A DHCP lease renewal during containment lost the host's address until release, and every name lookup failed, because all DNS on that host passed through this product's DNS proxy, which was running, and the filter drops its forwards unless a rule allows them.
 
 With DHCP and DNS in the lifeline, a direct query to the configured resolver (`dig`) resolves while the host is contained, but the system resolver does not: `mDNSResponder` sends no query at all (the DNS proxy sees none) and `getaddrinfo` callers get no address. The agent therefore resolves the server name with a direct resolver query while contained.
 
