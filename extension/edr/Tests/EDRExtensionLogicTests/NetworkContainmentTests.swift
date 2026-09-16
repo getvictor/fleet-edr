@@ -83,6 +83,27 @@ final class NetworkContainmentTests: XCTestCase {
         XCTAssertFalse(contained().refreshesLifeline(nil))
     }
 
+    // MARK: resolver lifeline
+
+    // The settings a filter starts with are built from the resolvers known at that moment, and that snapshot goes stale when the read
+    // warming it lands afterwards, or when the list moves while no filter is running. Nothing else asks for an apply in either case,
+    // so the comparison is what keeps a contained host's DNS from being left behind (issue #1069).
+    // spec:extension-network-response/containment-is-enforced-by-the-operating-system/resolvers-that-move-under-a-contained-host-apply
+    func testResolverLifelineAsksForAnApplyWhenTheListMoved() {
+        var lifeline = ResolverLifeline()
+        XCTAssertNil(lifeline.applied)
+        // Before anything is applied there is nothing to compare against, and an empty list is a real answer rather than an unknown.
+        XCTAssertTrue(lifeline.needsApply(for: []))
+
+        lifeline.recordApplied([])
+        XCTAssertFalse(lifeline.needsApply(for: []), "settings that name no resolver need no re-apply while none is known")
+        XCTAssertTrue(lifeline.needsApply(for: ["198.51.100.1"]), "a read landing after the filter started")
+
+        lifeline.recordApplied(["198.51.100.1"])
+        XCTAssertFalse(lifeline.needsApply(for: ["198.51.100.1"]))
+        XCTAssertTrue(lifeline.needsApply(for: ["198.51.100.9"]), "the list moved while the filter was down")
+    }
+
     // MARK: lifeline
 
     // spec:extension-network-response/containment-is-enforced-by-the-operating-system/a-contained-host-keeps-only-the-lifeline
@@ -124,6 +145,13 @@ final class NetworkContainmentTests: XCTestCase {
     func testResolverRulesDropWhatIsNotAnAddressAndCollapseRepeats() {
         let rules = NetworkContainment.resolverRules(for: ["198.51.100.1", "not-an-address", "198.51.100.1", "0.0.0.0", ""])
         XCTAssertEqual(rules.map(\.address), ["198.51.100.1", "198.51.100.1"])
+    }
+
+    // Two spellings of one address are one resolver. Collapsing them by string would let a host whose configuration writes an
+    // address both ways spend two of the eight slots on it, and crowd out a resolver it actually needs.
+    func testResolverRulesCollapseTwoSpellingsOfOneAddress() {
+        let rules = NetworkContainment.resolverRules(for: ["fd00::1", "fd00:0:0:0:0:0:0:1", "198.51.100.1"])
+        XCTAssertEqual(rules.map(\.address), ["fd00::1", "fd00::1", "198.51.100.1", "198.51.100.1"])
     }
 
     func testResolverRulesStopAtTheCap() {

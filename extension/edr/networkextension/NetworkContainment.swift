@@ -45,6 +45,28 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
     }
 }
 
+/// ResolverLifeline remembers which resolvers the filter settings in force were built from, so the DNS half of the lifeline cannot be
+/// left behind by a list that moved while no filter was running to carry it (issue #1069).
+///
+/// The settings are built from a snapshot of the host's configured resolvers, and that snapshot can go stale in two ways: the read
+/// that warms it lands after a starting filter already built its settings, and the list changes while the content filter is down. In
+/// both cases the state the extension holds is unchanged, so nothing else asks for the settings to be applied again; without this the
+/// host would keep whatever DNS rules it started with until its next containment change.
+struct ResolverLifeline {
+    /// The resolvers the settings in force name. Nil before any settings were applied, which is not the same as an empty list: a host
+    /// whose resolvers are genuinely unknown has settings that name none, and re-applying those would be work for nothing.
+    private(set) var applied: [String]?
+
+    mutating func recordApplied(_ resolvers: [String]) {
+        applied = resolvers
+    }
+
+    /// needsApply says whether settings built now would name different resolvers than the ones in force.
+    func needsApply(for current: [String]) -> Bool {
+        applied != current
+    }
+}
+
 /// LifelineRule is one flow a contained host may still carry, in the terms of an NENetworkRule: a remote address and prefix, a remote
 /// port (0 for any), a local port when the flow must come from one, a transport, and a direction.
 struct LifelineRule: Equatable, Sendable {
@@ -157,19 +179,23 @@ enum NetworkContainment {
 
     /// resolverRules allow DNS to each configured resolver, over UDP and TCP. Addresses that are not usable literals are dropped
     /// rather than refusing the containment: the list comes from the host's own configuration, not from the server, so one entry the
-    /// extension cannot turn into a rule must not cost the host its containment. Duplicates are collapsed so a list that repeats an
-    /// address cannot crowd out the rest under the cap.
+    /// extension cannot turn into a rule must not cost the host its containment. Duplicates are collapsed by VALUE, through the same
+    /// comparison the DNS failover path uses, so two spellings of one address (`fd00::1` and `fd00:0:0:0:0:0:0:1`) cannot take two of
+    /// the slots under the cap and crowd out a resolver the host actually needs.
     static func resolverRules(for resolvers: [String]) -> [LifelineRule] {
-        var seen = Set<String>()
-        var rules: [LifelineRule] = []
+        var accepted: [String] = []
         for address in resolvers where isUsableAddress(address) {
-            guard seen.insert(address).inserted else { continue }
-            guard seen.count <= maxResolvers else { break }
-            let prefix = isIPv6(address) ? ipv6HostPrefix : ipv4HostPrefix
-            rules.append(LifelineRule(address: address, prefix: prefix, port: dnsPort, transport: .udp, direction: .outbound))
-            rules.append(LifelineRule(address: address, prefix: prefix, port: dnsPort, transport: .tcp, direction: .outbound))
+            guard !accepted.contains(where: { DNSUpstreamFailover.sameAddress($0, address) }) else { continue }
+            accepted.append(address)
+            guard accepted.count < maxResolvers else { break }
         }
-        return rules
+        return accepted.flatMap { address -> [LifelineRule] in
+            let prefix = isIPv6(address) ? ipv6HostPrefix : ipv4HostPrefix
+            return [
+                LifelineRule(address: address, prefix: prefix, port: dnsPort, transport: .udp, direction: .outbound),
+                LifelineRule(address: address, prefix: prefix, port: dnsPort, transport: .tcp, direction: .outbound)
+            ]
+        }
     }
 
     /// serverRules are the lifeline's flows to the EDR server: TCP to each server address on the server port.

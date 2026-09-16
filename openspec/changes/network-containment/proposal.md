@@ -39,7 +39,7 @@ The work lands in steps, producer before consumer.
 
 ### DNS proxy
 
-- **A contained host resolves only the EDR server's name.** The containment document carries the lifeline's host names, and while the host is contained the DNS proxy forwards a single-question query only for one of them (case-insensitive, label by label), answers every other query locally with REFUSED, drops what is not a query, and resolves nothing over TCP. The filter's lifeline allows DNS so the agent can resolve the server; restricting names in the proxy, which every lookup passes through, is what keeps DNS from carrying traffic out of the host. Refused lookups are still recorded as `dns_query` events.
+- **A contained host resolves only the EDR server's name.** The containment document carries the lifeline's host names, and while the host is contained the DNS proxy forwards a single-question query only for one of them (case-insensitive, label by label), answers every other query locally with REFUSED, drops what is not a query, and resolves nothing over TCP. The filter's lifeline allows DNS so the agent can resolve the server, and only to the host's configured resolvers. The two layers restrict different things: the filter decides which resolvers a contained host may reach, always, and the proxy decides which names resolve, while it is running. A host contained with the proxy disabled or stopped can still resolve any name its own resolvers answer (#1078). Refused lookups are still recorded as `dns_query` events.
 
 ### Server
 

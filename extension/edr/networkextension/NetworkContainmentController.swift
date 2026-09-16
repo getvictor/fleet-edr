@@ -26,6 +26,7 @@ final class NetworkContainmentController: @unchecked Sendable {
     private let sequencer = ContainmentSequencer<NEFilterDataProvider>()
     private var tracker = ContainmentStatusTracker()
     private var released = ReleasedLifeline()
+    private var resolverLifeline = ResolverLifeline()
     /// The host's configured resolvers, which are the only DNS the lifeline allows (issue #1069). Read here rather than taken from
     /// the DNS proxy because containment does not require the proxy to be running, which is the case the restriction exists for.
     private let resolvers = SystemResolverCache()
@@ -37,7 +38,9 @@ final class NetworkContainmentController: @unchecked Sendable {
             guard let self else { return }
             self.queue.async {
                 guard self.store.current?.contained == true else { return }
-                self.applyLocked()
+                // Not a containment change: with no filter running there is nothing to report as failed, and the list is picked up by
+                // the comparison a starting filter makes.
+                self.applyLocked(forResolverChange: true)
             }
         }
     }
@@ -56,8 +59,9 @@ final class NetworkContainmentController: @unchecked Sendable {
         return queue.sync {
             let update = store.current
             released.filterStarting(with: update)
-            return (update, update.map { Self.settings(for: $0, released: [], resolvers: self.resolvers.addresses()) }
-                ?? Self.baselineSettings())
+            let snapshot = self.resolvers.addresses()
+            self.resolverLifeline.recordApplied(snapshot)
+            return (update, update.map { Self.settings(for: $0, released: [], resolvers: snapshot) } ?? Self.baselineSettings())
         }
     }
 
@@ -87,6 +91,11 @@ final class NetworkContainmentController: @unchecked Sendable {
             case .report:
                 self.tracker.confirmed(applied)
                 self.publishLocked()
+                // The startup settings enforce the held state, but they were built from the resolvers known at the time. A read that
+                // landed while this filter was starting, or a list that moved while none was running, is applied now.
+                if self.store.current?.contained == true, self.resolverLifeline.needsApply(for: self.resolvers.addresses()) {
+                    self.applyLocked()
+                }
             }
         }
     }
@@ -141,12 +150,15 @@ final class NetworkContainmentController: @unchecked Sendable {
         queue.async { self.publishLocked() }
     }
 
-    private func applyLocked() {
+    private func applyLocked(forResolverChange: Bool = false) {
         let update = store.current
         switch sequencer.requestApply() {
         case .deferred:
             return
         case .noFilter:
+            // A resolver list that moved with no filter running leaves the recorded snapshot stale on purpose: the next filter to
+            // start compares against it and applies the current list. The held state is unchanged, so it is not a failure.
+            guard !forResolverChange else { return }
             tracker.failed("content filter is not running")
             publishLocked()
         case .apply(let target):
@@ -157,6 +169,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 let allowed = resolverAddresses.isEmpty ? "none" : resolverAddresses.joined(separator: ",")
                 logger.info("network containment: DNS allowed to the configured resolvers: \(allowed, privacy: .public)")
             }
+            resolverLifeline.recordApplied(resolverAddresses)
             let settings = update.map { Self.settings(for: $0, released: released.rules, resolvers: resolverAddresses) }
                 ?? Self.baselineSettings()
             target.apply(settings) { error in
