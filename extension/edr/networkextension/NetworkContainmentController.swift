@@ -17,6 +17,14 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 /// completes, so settings can never take effect out of order. A result from a filter that has since stopped or been replaced is not
 /// reported, since it no longer describes the host. ContainmentSequencer holds that bookkeeping.
 final class NetworkContainmentController: @unchecked Sendable {
+    /// What a starting content filter needs: the state it must enforce, the settings that do, and the resolvers those settings name,
+    /// which it hands back when it has started.
+    struct StartupState {
+        let update: NetworkContainmentUpdate?
+        let settings: NEFilterSettings
+        let resolvers: [String]
+    }
+
     static let shared = NetworkContainmentController()
 
     private let store = NetworkContainmentStore()
@@ -26,26 +34,64 @@ final class NetworkContainmentController: @unchecked Sendable {
     private let sequencer = ContainmentSequencer<NEFilterDataProvider>()
     private var tracker = ContainmentStatusTracker()
     private var released = ReleasedLifeline()
+    private var resolverLifeline = ResolverLifeline()
+    /// Re-reads the host's configured resolvers while a host is contained. The cache refreshes only when it is read, and the only
+    /// reads are the ones that build settings, so without this the list would be re-read at whatever cadence the agent happens to
+    /// refresh the lifeline at, and not at all while the agent is down. The rules name those addresses, so a host that changed
+    /// network would keep rules for resolvers it can no longer reach.
+    private var resolverWatch: DispatchSourceTimer?
+    /// The host's configured resolvers, which are the only DNS the lifeline allows (issue #1069). Read here rather than taken from
+    /// the DNS proxy because containment does not require the proxy to be running, which is the case the restriction exists for.
+    private let resolvers = SystemResolverCache()
+
+    private init() {
+        // A read publishes a list the rules name, so settings that allowed the previous resolvers are re-applied against the new
+        // ones. Only while contained: a host that is not contained has no lifeline rules to move.
+        resolvers.onRefresh = { [weak self] _ in
+            guard let self else { return }
+            self.queue.async {
+                guard self.store.current?.contained == true else { return }
+                // Not a containment change: with no filter running there is nothing to report as failed, and the list is picked up by
+                // the comparison a starting filter makes.
+                self.applyLocked(forResolverChange: true)
+            }
+        }
+    }
+
+    /// How often a contained host's configured resolvers are re-read. Short enough that a host that changed network resolves again
+    /// without waiting for an operator, long enough that the steady cost is one configd read a minute.
+    private static let resolverWatchSeconds = 60
+    private static var resolverWatchInterval: DispatchTimeInterval { .seconds(resolverWatchSeconds) }
 
     /// baselineSettings are the filter's settings when the host is not contained.
     static func baselineSettings() -> NEFilterSettings {
         NEFilterSettings(rules: [], defaultAction: .filterData)
     }
 
-    /// startupState is the persisted state and the settings that enforce it, for a starting filter to apply as its first settings.
-    func startupState() -> (update: NetworkContainmentUpdate?, settings: NEFilterSettings) {
+    /// startupState is the persisted state, the settings that enforce it, and the resolvers those settings name, for a starting filter
+    /// to apply as its first settings. The caller hands the resolvers back to providerStarted: they belong to that filter's startup
+    /// rather than to the extension, because a filter replacing another can finish starting after an apply to the old one, and what
+    /// decides whether the new filter needs the current list is the list THIS filter started with.
+    func startupState() -> StartupState {
+        // Warm the resolver list while the filter starts, so a containment applied moments later already has the DNS half of its
+        // lifeline. A cold read costs the host nothing lasting: the refresh re-applies the settings when it lands.
+        resolvers.prime()
         // On the queue, so a release accepted after these settings were chosen is ordered after the kept rules were reset.
-        queue.sync {
+        return queue.sync {
             let update = store.current
             released.filterStarting(with: update)
-            return (update, update.map { Self.settings(for: $0, released: []) } ?? Self.baselineSettings())
+            let snapshot = self.resolvers.addresses()
+            self.watchResolversLocked()
+            let settings = update.map { Self.settings(for: $0, released: [], resolvers: snapshot) } ?? Self.baselineSettings()
+            return StartupState(update: update, settings: settings, resolvers: snapshot)
         }
     }
 
     /// providerStarted records the running content filter and the state its startup settings enforced. When an update was accepted
     /// while the filter was starting, or an apply is still in flight, the current state is applied to it. A filter whose startup
     /// settings failed is rejected by the framework, so it is not recorded, and the failure is reported.
-    func providerStarted(_ filter: NEFilterDataProvider, applied: NetworkContainmentUpdate?, error: Error?) {
+    func providerStarted(_ filter: NEFilterDataProvider, applied: NetworkContainmentUpdate?, resolvers startupResolvers: [String],
+                         error: Error?) {
         queue.async {
             if let error {
                 // The framework rejects a filter whose startup settings failed, so it never becomes the target.
@@ -68,6 +114,14 @@ final class NetworkContainmentController: @unchecked Sendable {
             case .report:
                 self.tracker.confirmed(applied)
                 self.publishLocked()
+                // This filter's settings are the ones in force, so what they name is what the extension holds. Recorded here rather
+                // than when they were built: a filter that never starts, or one replaced by another, never held anything.
+                self.resolverLifeline.recordApplied(startupResolvers)
+                // They were built from the resolvers known when this filter started. A read that landed while it was starting, or a
+                // list that moved while no filter was running, is applied now.
+                if self.store.current?.contained == true, self.resolverLifeline.needsApply(for: self.resolvers.addresses()) {
+                    self.applyLocked()
+                }
             }
         }
     }
@@ -94,6 +148,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 return
             }
             self.tracker.pending()
+            self.watchResolversLocked()
             self.released.accepted(update)
             logger.info("""
             network containment update accepted: contained=\(update.contained, privacy: .public) \
@@ -122,16 +177,29 @@ final class NetworkContainmentController: @unchecked Sendable {
         queue.async { self.publishLocked() }
     }
 
-    private func applyLocked() {
+    private func applyLocked(forResolverChange: Bool = false) {
         let update = store.current
         switch sequencer.requestApply() {
         case .deferred:
             return
         case .noFilter:
+            // A resolver list that moved with no filter running leaves the recorded snapshot stale on purpose: the next filter to
+            // start compares against it and applies the current list. The held state is unchanged, so it is not a failure.
+            guard !forResolverChange else { return }
             tracker.failed("content filter is not running")
             publishLocked()
         case .apply(let target):
-            target.apply(update.map { Self.settings(for: $0, released: released.rules) } ?? Self.baselineSettings()) { error in
+            let resolverAddresses = resolvers.addresses()
+            if update?.contained == true {
+                // The DNS half of the lifeline is the host's own configuration rather than anything the server sent, so it is worth
+                // saying which addresses it came to on the host itself.
+                let allowed = resolverAddresses.isEmpty ? "none" : resolverAddresses.joined(separator: ",")
+                logger.info("network containment: DNS allowed to the configured resolvers: \(allowed, privacy: .public)")
+            }
+            resolverLifeline.recordApplied(resolverAddresses)
+            let settings = update.map { Self.settings(for: $0, released: released.rules, resolvers: resolverAddresses) }
+                ?? Self.baselineSettings()
+            target.apply(settings) { error in
                 self.queue.async {
                     if let error {
                         logger.error("network containment settings not applied: \(error.localizedDescription, privacy: .public)")
@@ -155,6 +223,23 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// publishLocked sends the status of the held state. Nothing is sent before a containment state exists, so a host that has never
     /// been contained sends no status an agent without containment support would upload as telemetry.
+    /// watchResolversLocked keeps the configured resolvers under observation while the host is contained, and stops when it is not.
+    /// A read that publishes a different list re-applies the settings through onRefresh; one that publishes the same list does
+    /// nothing, so the steady state costs one dynamic-store read per interval and no applies.
+    private func watchResolversLocked() {
+        guard store.current?.contained == true else {
+            resolverWatch?.cancel()
+            resolverWatch = nil
+            return
+        }
+        guard resolverWatch == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.resolverWatchInterval, repeating: Self.resolverWatchInterval)
+        timer.setEventHandler { [weak self] in self?.resolvers.prime() }
+        timer.resume()
+        resolverWatch = timer
+    }
+
     private func publishLocked() {
         guard let held = store.current else { return }
         let status = tracker.status(held: held)
@@ -164,11 +249,12 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// settings turns a containment state into filter settings: the lifeline allowed and everything else dropped when contained, and
     /// otherwise the baseline's hand-every-flow-to-the-provider with the released server flows still allowed (see ReleasedLifeline).
-    static func settings(for update: NetworkContainmentUpdate, released: [LifelineRule]) -> NEFilterSettings {
+    static func settings(for update: NetworkContainmentUpdate, released: [LifelineRule], resolvers: [String]) -> NEFilterSettings {
         guard update.contained else {
             return NEFilterSettings(rules: allowRules(released), defaultAction: .filterData)
         }
-        return NEFilterSettings(rules: allowRules(NetworkContainment.lifeline(for: update)), defaultAction: .drop)
+        let lifeline = NetworkContainment.lifeline(for: update, resolvers: resolvers)
+        return NEFilterSettings(rules: allowRules(lifeline), defaultAction: .drop)
     }
 
     private static func allowRules(_ rules: [LifelineRule]) -> [NEFilterRule] {

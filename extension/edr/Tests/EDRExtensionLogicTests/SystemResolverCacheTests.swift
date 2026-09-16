@@ -92,6 +92,30 @@ final class SystemResolverCacheTests: XCTestCase {
         XCTAssertEqual(reads, 2)
     }
 
+    // The containment controller's filter rules name the resolvers, so it has to hear when they move (issue #1069). A read that
+    // publishes the same list is not a move, and re-applying settings for it would be work for nothing.
+    func testARefreshReportsOnlyAListThatChanged() {
+        let clock = FakeClock()
+        var reads = 0
+        let cache = makeCache(now: clock.now, read: { reads += 1; return reads >= 3 ? ["198.51.100.9"] : ["198.51.100.1"] })
+        var published: [[String]] = []
+        cache.onRefresh = { published.append($0) }
+
+        cache.prime()
+        awaitRefresh()
+        XCTAssertEqual(published, [["198.51.100.1"]])
+
+        clock.advance(10)
+        _ = cache.addresses()
+        awaitRefresh()
+        XCTAssertEqual(published, [["198.51.100.1"]], "the same list again is not a change")
+
+        clock.advance(10)
+        _ = cache.addresses()
+        awaitRefresh()
+        XCTAssertEqual(published, [["198.51.100.1"], ["198.51.100.9"]])
+    }
+
     func testAnEmptyReadIsCachedRatherThanRetriedPerQuery() {
         let clock = FakeClock()
         var reads = 0
