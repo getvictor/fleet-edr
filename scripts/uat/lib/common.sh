@@ -189,6 +189,24 @@ uat_server_warmup() {
   fi
 }
 
+# uat_rest <method> <path> [json_body]: authenticated admin REST call against
+# EDR_SERVER_URL, printing the response body. Returns curl's status, so a
+# non-2xx response fails the call with the body still on stdout
+# (--fail-with-body). Requires uat_server_warmup + uat_curl_args to have run in
+# this process, for UAT_COOKIE_HEADER, UAT_CSRF_TOKEN and UAT_CURL_ARGS.
+#
+# UAT_CURL_ARGS already carries --fail-with-body + -sS (+ -k under
+# UAT_INSECURE); do NOT re-add -f/-s here (-f conflicts with --fail-with-body).
+uat_rest() {
+  local method="$1" path="$2" body="${3:-}"
+  local args=("${UAT_CURL_ARGS[@]}" "${UAT_COOKIE_HEADER[@]}"
+    -H "X-Csrf-Token: $UAT_CSRF_TOKEN" -X "$method" "$EDR_SERVER_URL$path")
+  [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data "$body")
+  curl "${args[@]}"
+  # Explicit, so the call's status is plainly the function's: callers branch on a non-2xx response.
+  return
+}
+
 # uat_server_get <path> <out_file>: GET <EDR_SERVER_URL><path> with the
 # session cookie header. Returns 0 on 2xx, 1 otherwise; out_file always
 # contains the response body so the caller can inspect on failure.

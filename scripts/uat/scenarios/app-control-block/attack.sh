@@ -45,15 +45,10 @@ POLICY_ID=""
 # the fixture block refuses it. (Sourced from the extension's signing identity; see the XPC peer requirement in the extension.)
 EDR_OWN_TEAM="FDG8Q7N4CC"
 
-# rest METHOD PATH [JSON_BODY]: authenticated admin REST call.
+# rest METHOD PATH [JSON_BODY]: authenticated admin REST call. The construction lives in lib/common.sh so authentication and
+# error handling cannot drift between the scenarios that call the API.
 rest() {
-  local method="$1" path="$2" body="${3:-}"
-  # UAT_CURL_ARGS already carries --fail-with-body + -sS (+ -k under UAT_INSECURE);
-  # do NOT re-add -f/-s here (-f conflicts with --fail-with-body).
-  local args=("${UAT_CURL_ARGS[@]}" "${UAT_COOKIE_HEADER[@]}"
-    -H "X-Csrf-Token: $UAT_CSRF_TOKEN" -X "$method" "$EDR_SERVER_URL$path")
-  [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data "$body")
-  curl "${args[@]}"
+  uat_rest "$@"
 }
 
 cleanup() {

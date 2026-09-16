@@ -40,6 +40,8 @@
 - [x] Containment badges on the host list.
 - [x] Chrome: contain and release edr-dev from the host page.
 
-## Later steps
+## Acceptance
 
-- [ ] L5 system test on edr-qa, operator guide and CHANGELOG.
+- [x] L5 scenario `network-containment`: contain through the API, assert from a probe on the VM that only the server stays reachable and other names are refused, release, assert the network is back; passes on edr-dev, fails when the probed destination is inside the lifeline, and releases the host when it fails while contained.
+- [x] VM: containment holds through a reboot, and the rebooted host is released from the server.
+- [x] Operator guide (`docs/operations.md`), RC runbook step for edr-qa, and CHANGELOG.
