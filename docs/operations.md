@@ -389,7 +389,7 @@ Containing a host cuts it off from the network while it stays connected to the E
 - **DNS, only to the resolvers the Mac is configured with.** The lifeline allows port 53 to those addresses alone, so a process cannot take DNS to a resolver of its choosing, and a Mac with no resolver configured is allowed no DNS and reaches the server at the addresses containment pinned. Which names resolve is restricted separately, by the EDR's DNS proxy: while it is running it forwards lookups of the server's name and answers every other lookup with REFUSED.
 - **Loopback.**
 
-Everything else is dropped: new connections, and connections that were already open when containment took effect. While contained, the host records no `network_connect` events, since dropped connections never reach the filter; DNS lookups, including refused ones, and process and file events are still recorded and uploaded.
+Everything else is dropped: new connections, and connections that were already open when containment took effect. While contained, the host records no `network_connect` events, since dropped connections never reach the filter. Process and file events are still recorded and uploaded, and so are DNS lookups, including refused ones, while the EDR's DNS proxy is running: a Mac whose proxy is off records none, because its lookups go straight out to its resolvers.
 
 ### Contain and release
 

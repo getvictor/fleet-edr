@@ -32,7 +32,8 @@ final class NetworkFilter: NEFilterDataProvider {
                 logger.info("Network filter started")
                 ProviderStatus.shared.recordStarted(.contentFilter)
             }
-            NetworkContainmentController.shared.providerStarted(self, applied: startup.update, error: error)
+            NetworkContainmentController.shared.providerStarted(self, applied: startup.update, resolvers: startup.resolvers,
+                                                                 error: error)
             completionHandler(error)
         }
     }
