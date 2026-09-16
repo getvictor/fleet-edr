@@ -27,6 +27,11 @@ final class NetworkContainmentController: @unchecked Sendable {
     private var tracker = ContainmentStatusTracker()
     private var released = ReleasedLifeline()
     private var resolverLifeline = ResolverLifeline()
+    /// Re-reads the host's configured resolvers while a host is contained. The cache refreshes only when it is read, and the only
+    /// reads are the ones that build settings, so without this the list would be re-read at whatever cadence the agent happens to
+    /// refresh the lifeline at, and not at all while the agent is down. The rules name those addresses, so a host that changed
+    /// network would keep rules for resolvers it can no longer reach.
+    private var resolverWatch: DispatchSourceTimer?
     /// The host's configured resolvers, which are the only DNS the lifeline allows (issue #1069). Read here rather than taken from
     /// the DNS proxy because containment does not require the proxy to be running, which is the case the restriction exists for.
     private let resolvers = SystemResolverCache()
@@ -45,6 +50,11 @@ final class NetworkContainmentController: @unchecked Sendable {
         }
     }
 
+    /// How often a contained host's configured resolvers are re-read. Short enough that a host that changed network resolves again
+    /// without waiting for an operator, long enough that the steady cost is one configd read a minute.
+    private static let resolverWatchSeconds = 60
+    private static var resolverWatchInterval: DispatchTimeInterval { .seconds(resolverWatchSeconds) }
+
     /// baselineSettings are the filter's settings when the host is not contained.
     static func baselineSettings() -> NEFilterSettings {
         NEFilterSettings(rules: [], defaultAction: .filterData)
@@ -61,6 +71,7 @@ final class NetworkContainmentController: @unchecked Sendable {
             released.filterStarting(with: update)
             let snapshot = self.resolvers.addresses()
             self.resolverLifeline.recordApplied(snapshot)
+            self.watchResolversLocked()
             return (update, update.map { Self.settings(for: $0, released: [], resolvers: snapshot) } ?? Self.baselineSettings())
         }
     }
@@ -122,6 +133,7 @@ final class NetworkContainmentController: @unchecked Sendable {
                 return
             }
             self.tracker.pending()
+            self.watchResolversLocked()
             self.released.accepted(update)
             logger.info("""
             network containment update accepted: contained=\(update.contained, privacy: .public) \
@@ -196,6 +208,23 @@ final class NetworkContainmentController: @unchecked Sendable {
 
     /// publishLocked sends the status of the held state. Nothing is sent before a containment state exists, so a host that has never
     /// been contained sends no status an agent without containment support would upload as telemetry.
+    /// watchResolversLocked keeps the configured resolvers under observation while the host is contained, and stops when it is not.
+    /// A read that publishes a different list re-applies the settings through onRefresh; one that publishes the same list does
+    /// nothing, so the steady state costs one dynamic-store read per interval and no applies.
+    private func watchResolversLocked() {
+        guard store.current?.contained == true else {
+            resolverWatch?.cancel()
+            resolverWatch = nil
+            return
+        }
+        guard resolverWatch == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.resolverWatchInterval, repeating: Self.resolverWatchInterval)
+        timer.setEventHandler { [weak self] in self?.resolvers.prime() }
+        timer.resume()
+        resolverWatch = timer
+    }
+
     private func publishLocked() {
         guard let held = store.current else { return }
         let status = tracker.status(held: held)
