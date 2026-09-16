@@ -199,8 +199,11 @@ wait_for_samples() {
   local want="$1" what="$2" since="${3:-0}" deadline have
   deadline=$(( $(date +%s) + SAMPLE_WAIT_TIMEOUT ))
   while :; do
-    have=$(uat_ssh "$VM" "awk '\$1 >= $since' $PROBE_LOG 2>/dev/null | wc -l" | tr -dc '0-9')
-    [[ -n "$have" ]] || have=0
+    # Last line only, and it must be a bare count: a login banner would otherwise splice its own digits into the number, and a
+    # count that reads high would start the containment without a baseline. Anything else counts as nothing, so the wait
+    # continues and the timeout reports it.
+    have=$(uat_ssh "$VM" "awk '\$1 >= $since' $PROBE_LOG 2>/dev/null | wc -l" | tr -d ' \r' | tail -1)
+    [[ "$have" =~ ^[0-9]+$ ]] || have=0
     (( have >= want )) && return 0
     if (( $(date +%s) >= deadline )); then
       uat_fail "$TAG" "waited ${SAMPLE_WAIT_TIMEOUT}s for $what and got $have; is the probe running?"
