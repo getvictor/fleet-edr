@@ -826,11 +826,16 @@ func TestSeed_AnIPLiteralTargetIsIdentifiedByItsAddress(t *testing.T) {
 	t.Parallel()
 	literal := Target{Host: "203.0.113.7", Port: 8443}
 	for _, tc := range []struct {
-		name    string
-		body    string
+		name string
+		body string
+		// target overrides the IP literal endpoint, for a configuration that spells the same address differently.
+		target  Target
 		adopted bool
 	}{
 		{name: "the target's own address", adopted: true,
+			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
+		// The agent persists netip's canonical form, so the two sides need not be spelled alike.
+		{name: "the same address written as IPv4-mapped IPv6", adopted: true, target: Target{Host: "::ffff:203.0.113.7", Port: 8443},
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["203.0.113.7"]}}`},
 		{name: "another endpoint's address", adopted: false,
 			body: `{"version":8,"epoch":100,"contained":true,"server":{"port":8443,"addresses":["198.51.100.4"]}}`},
@@ -839,15 +844,34 @@ func TestSeed_AnIPLiteralTargetIsIdentifiedByItsAddress(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "network-containment.json")
 			require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
-			m, _, _ := newTestManager(t, literal, applies)
+			target := literal
+			if tc.target.Host != "" {
+				target = tc.target
+			}
+			m, _, _ := newTestManager(t, target, applies)
 			m.Seed(path)
+			dialed := net.JoinHostPort(target.Host, "8443")
 			if tc.adopted {
-				assert.NotEmpty(t, m.pinned("203.0.113.7:8443"))
+				assert.NotEmpty(t, m.pinned(dialed))
 			} else {
-				assert.Empty(t, m.pinned("203.0.113.7:8443"))
+				assert.Empty(t, m.pinned(dialed))
 			}
 		})
 	}
+}
+
+// A name is one endpoint however it is written: the configuration may carry the root dot the extension's comparison drops.
+func TestSeed_ANameWithTheRootDotIsTheSameEndpoint(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "network-containment.json")
+	body := `{"version":8,"epoch":100,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]}}`
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	m, _, _ := newTestManager(t, Target{Host: "EDR.example.com.", Port: 8443}, applies)
+	m.Seed(path)
+
+	assert.NotEmpty(t, m.pinned("EDR.example.com.:8443"))
 }
 
 // What the extension says now beats what a restart left on disk: a state already reported over XPC is the live answer.

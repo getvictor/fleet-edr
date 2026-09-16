@@ -247,10 +247,23 @@ func (m *Manager) describesTarget(s *server) bool {
 	if s.Port != m.opts.Target.Port {
 		return false
 	}
-	if _, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
-		return slices.ContainsFunc(s.Addresses, func(a string) bool { return strings.EqualFold(a, m.opts.Target.Host) })
+	// By value on both sides, because neither is written only one way: an address is persisted as netip's canonical form, so a
+	// configuration naming the same address as an IPv4-mapped or non-canonical IPv6 literal would not compare equal as text, and a
+	// name may carry the root dot that the extension's own comparison drops.
+	if target, err := netip.ParseAddr(m.opts.Target.Host); err == nil {
+		target = target.Unmap()
+		return slices.ContainsFunc(s.Addresses, func(a string) bool {
+			addr, perr := netip.ParseAddr(a)
+			return perr == nil && addr.Unmap() == target
+		})
 	}
-	return slices.ContainsFunc(s.Names, func(n string) bool { return strings.EqualFold(n, m.opts.Target.Host) })
+	host := normalizedName(m.opts.Target.Host)
+	return slices.ContainsFunc(s.Names, func(n string) bool { return normalizedName(n) == host })
+}
+
+// normalizedName is a host name as a comparison should see it: case folded, without the trailing root dot.
+func normalizedName(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
 }
 
 // Apply runs a set_network_containment command: it resolves the lifeline for a containment, sends the extension its document, and
