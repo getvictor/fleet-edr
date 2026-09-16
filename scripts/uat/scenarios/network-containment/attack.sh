@@ -31,7 +31,8 @@
 #   during the request      the request must report that it changed the state. A host contained by someone else in that moment
 #                           answers changed=false, and the run stops rather than adopting their containment.
 #   response lost           the state carries the reason the request was made with, tagged per run, so a containment this run
-#                           caused is still this run's to release.
+#   or interrupted          caused is still this run's to release, whether the response was lost or a signal ended the run
+#                           between the server recording the change and this script learning of it.
 #   during the hold         both releases, the normal one and the trap's, read the state first and release only while the host
 #                           still carries the version this run created.
 #   during a release        unclosable here: the read and the request are two calls, and the request cannot name the version it
@@ -137,6 +138,9 @@ wait_for_delivery() {
 # OWNED_VERSION is the containment version this run created, while it is still in force: empty before the containment and once
 # the release is confirmed. The exit trap releases only this.
 OWNED_VERSION=""
+# CONTAIN_ATTEMPTED says the containment request was issued, so the trap knows a containment may exist that this run never got to
+# record: a signal can end the run between the server applying the change and the response being read.
+CONTAIN_ATTEMPTED=0
 
 # adopt_lost_containment handles a containment request whose response never arrived: the server may have applied it. The state
 # carries the reason the request was made with, so a containment carrying this run's reason is this run's to release.
@@ -169,6 +173,9 @@ release_owned() {
 }
 
 cleanup() {
+  if [[ -z "$OWNED_VERSION" && "$CONTAIN_ATTEMPTED" == "1" ]]; then
+    adopt_lost_containment
+  fi
   if [[ -n "$OWNED_VERSION" ]]; then
     local version
     uat_log "$TAG" "releasing the containment this run made"
@@ -271,6 +278,7 @@ sleep "$PHASE_MARGIN"
 # ---------------------------------------------------------------------------
 
 CONTAIN_AT=$(date +%s)
+CONTAIN_ATTEMPTED=1
 if ! CONTAIN_RESULT=$(request_state true "$CONTAIN_REASON"); then
   adopt_lost_containment
   uat_fail "$TAG" "the containment request did not succeed"
