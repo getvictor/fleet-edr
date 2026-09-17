@@ -146,6 +146,8 @@ func TestHandler_AFailedActionCommitsNoAuditEntry(t *testing.T) {
 	})
 }
 
+// spec:server-admin-surface/operator-actions-commit-their-audit-entry/one-action-names-one-host
+//
 // One request, one host id, everywhere it is used. A host id with surrounding whitespace is stored trimmed, so a handler that passed
 // the raw value on would authorize against " host-a ", store a command for host-a, and write two audit rows naming different hosts
 // for the same operator action: the authorization decision under one and the issuance under the other, with nothing to correlate

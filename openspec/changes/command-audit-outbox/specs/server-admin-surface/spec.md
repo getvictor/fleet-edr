@@ -6,6 +6,8 @@ The audit entry for an operator issuing a command or withdrawing one SHALL be co
 
 Issuing a command and withdrawing one SHALL be recorded as distinct actions, `command.issue` and `command.cancel`, because the two rows otherwise name the same host, command type and command id and nothing would distinguish a command that was sent from one that was taken back.
 
+One operator action SHALL name one host throughout. The host a command is authorized against, the host it is stored against, and the host its audit entry names SHALL be the same identifier, so the authorization decision and the action it permitted can be correlated. The system SHALL therefore resolve the identifier at the request boundary, before authorizing, rather than letting each step normalize its own copy.
+
 #### Scenario: An issued command commits its audit entry
 
 - **GIVEN** an operator issuing a command to a host
@@ -17,6 +19,12 @@ Issuing a command and withdrawing one SHALL be recorded as distinct actions, `co
 - **GIVEN** an operator withdrawing a command no agent has picked up
 - **WHEN** the withdrawal commits
 - **THEN** a `command.cancel` entry has committed with it, naming the same host, command type and command id as the issuance did
+
+#### Scenario: One action names one host
+
+- **GIVEN** a request issuing a command whose host id carries surrounding whitespace
+- **WHEN** the command is queued
+- **THEN** the authorization decision, the stored command and the committed audit entry all name the same host
 
 #### Scenario: A refused action commits no audit entry
 

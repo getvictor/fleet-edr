@@ -111,3 +111,22 @@ func TestAuditedWrites_RefuseAWriteWithNoEntryBuilder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, cmds, "the command is not queued without the row recording who queued it")
 }
+
+// An audited write refuses to run without an outbox for the same reason it refuses a missing builder: it exists to commit the entry
+// with the change, and committing the change alone would be the guarantee silently not holding. The containment service states the
+// same invariant by requiring its outbox at construction.
+func TestAuditedWrites_RefuseAWriteWithNoOutbox(t *testing.T) {
+	t.Parallel()
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	store := mysql.NewStore(db)
+	svc := service.New(store, nil, nil) // SetAuditOutbox deliberately not called.
+
+	_, err := svc.InsertAudited(t.Context(), "host-a", "kill_process", []byte(`{"pid":1}`),
+		entryFor(t, identityapi.AuditCommandIssue))
+	require.Error(t, err)
+
+	cmds, err := store.ListForHost(t.Context(), "host-a", "")
+	require.NoError(t, err)
+	assert.Empty(t, cmds, "the command is not queued without the row recording who queued it")
+}

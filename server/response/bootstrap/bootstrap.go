@@ -48,8 +48,9 @@ type Deps struct {
 	// identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
-	// AuditSweepInterval is how often the containment audit outbox sweep delivers entries a request could not. Optional: zero or
-	// negative means auditoutbox.DefaultSweepInterval. Tests shorten it to watch a sweep deliver.
+	// AuditSweepInterval is how often this context's audit outbox sweep delivers entries a request could not, for every operator
+	// action that commits one: containment changes, and command issuance and withdrawal. Optional: zero or negative means
+	// auditoutbox.DefaultSweepInterval. Tests shorten it to watch a sweep deliver.
 	AuditSweepInterval time.Duration
 }
 
