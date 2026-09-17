@@ -40,6 +40,11 @@
 - [x] Containment badges on the host list.
 - [x] Chrome: contain and release edr-dev from the host page.
 
+## Ordering (issue #1073)
+
+- [x] Queue a host's command inside the transaction that records its state, under the host's lock, and notify the gateway after it commits.
+- [x] Have the catch-up queue under the same lock, against the state the host holds then.
+
 ## Acceptance
 
 - [x] L5 scenario `network-containment`: contain through the API, assert from a probe on the VM that only the server stays reachable and other names are refused, release, assert the network is back; passes on edr-dev, fails when the probed destination is inside the lifeline, and releases the host when it fails while contained.

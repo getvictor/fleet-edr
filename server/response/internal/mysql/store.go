@@ -73,7 +73,17 @@ func (r commandRow) toAPI() api.Command {
 
 // Insert appends a command row. Returns the new id.
 func (s *Store) Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
+	return InsertTx(ctx, s.db, hostID, commandType, payload)
+}
+
+// InsertTx queues a command through an existing transaction, so a caller that records state can queue the command carrying it under
+// the same lock and in the same commit. Containment does that: without it, two changes to one host can commit their states in one
+// order and queue their commands in the other, leaving the latest command carrying the older state (issue #1073).
+//
+// It takes the executor rather than the store's own handle for the same reason sqlx does: a *sqlx.Tx and a *sqlx.DB both satisfy it,
+// so the one statement serves both callers.
+func InsertTx(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error) {
+	res, err := q.ExecContext(ctx, `
 		INSERT INTO commands (host_id, command_type, payload)
 		VALUES (?, ?, ?)`,
 		hostID, commandType, payload,

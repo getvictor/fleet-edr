@@ -3,6 +3,8 @@
 package containment
 
 import (
+	"github.com/jmoiron/sqlx"
+
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -13,8 +15,12 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
-// CommandInserter queues one command for a host and returns its id.
-type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
+// CommandQueuer queues one command for a host through an existing transaction and returns its id, so a state and the command
+// carrying it are recorded together (issue #1073).
+type CommandQueuer func(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error)
+
+// Notifier tells the control gateway a host has a command waiting. Called after the transaction that queued it has committed.
+type Notifier func(hostID string)
 
 // LatestCommands returns each host's most recently queued command of a type; hosts with none are absent.
 type LatestCommands func(ctx context.Context, commandType string, hostIDs []string) (map[string]api.Command, error)
@@ -23,7 +29,8 @@ type LatestCommands func(ctx context.Context, commandType string, hostIDs []stri
 type Service struct {
 	store    *Store
 	enrolled api.HostEnrolledChecker
-	insert   CommandInserter
+	queue    CommandQueuer
+	notify   Notifier
 	latest   LatestCommands
 	audit    identityapi.AuditRecorder
 	logger   *slog.Logger
@@ -31,15 +38,15 @@ type Service struct {
 
 // NewService builds a Service. store, enrolled, insert and latest are required. audit may be nil outside production, which records
 // changes without audit events.
-func NewService(store *Store, enrolled api.HostEnrolledChecker, insert CommandInserter, latest LatestCommands,
+func NewService(store *Store, enrolled api.HostEnrolledChecker, queue CommandQueuer, notify Notifier, latest LatestCommands,
 	audit identityapi.AuditRecorder, logger *slog.Logger) *Service {
-	if store == nil || enrolled == nil || insert == nil || latest == nil {
-		panic("containment.NewService: store, enrolled, insert and latest are required")
+	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil {
+		panic("containment.NewService: store, enrolled, queue, notify and latest are required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{store: store, enrolled: enrolled, insert: insert, latest: latest, audit: audit, logger: logger}
+	return &Service{store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, audit: audit, logger: logger}
 }
 
 // commandPayload is the set_network_containment payload for a state. The change and the catch-up both build it here, so a host that is
@@ -120,18 +127,21 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	if !enrolled {
 		return api.ContainmentChange{}, api.ErrContainmentHostNotFound
 	}
-	state, changed, err := s.store.Set(ctx, hostID, contained, reason, actor.ID)
+	// The command is queued inside the transaction that records the state, so a change that cannot queue one records nothing: the
+	// operator is told it failed rather than left with a state whose command the catch-up has to notice (issue #1073).
+	state, changed, commandID, err := s.store.Set(ctx, hostID, contained, reason, actor.ID,
+		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+			return s.queue(ctx, q, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state))
+		})
 	if err != nil {
 		return api.ContainmentChange{}, err
 	}
-	change := api.ContainmentChange{State: state, Changed: changed}
+	change := api.ContainmentChange{State: state, Changed: changed, CommandID: commandID}
 	if !changed {
 		return change, nil
 	}
-	if change.CommandID, err = s.insert(ctx, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state)); err != nil {
-		s.logger.WarnContext(ctx, "containment: recorded but not queued; the catch-up will queue it", "host_id", hostID,
-			"version", state.Version, "err", err)
-	}
+	// After the commit: a gateway told earlier could look for a command that is not there yet.
+	s.notify(hostID)
 	s.recordAudit(ctx, actor, remoteAddr, change)
 	return change, nil
 }

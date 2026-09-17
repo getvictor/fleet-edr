@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
@@ -148,6 +150,29 @@ func (s *Service) ListForHost(ctx context.Context, hostID string, status api.Sta
 		cmds = []api.Command{}
 	}
 	return cmds, nil
+}
+
+// QueueTx queues a command through an existing transaction and returns its id. It deliberately does NOT notify the control gateway:
+// nothing outside the transaction may be told about a command that is not committed yet, so the caller notifies with Notify once it
+// has committed (issue #1073).
+func (s *Service) QueueTx(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error) {
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
+		return 0, fmt.Errorf("%w: host_id is required", api.ErrInvalidInsertRequest)
+	}
+	commandType = strings.TrimSpace(commandType)
+	if commandType == "" {
+		return 0, fmt.Errorf("%w: command_type is required", api.ErrInvalidInsertRequest)
+	}
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
+	}
+	return mysql.InsertTx(ctx, q, hostID, commandType, payload)
+}
+
+// Notify tells the control gateway a host has a command waiting, for a caller that queued one through QueueTx and has committed.
+func (s *Service) Notify(hostID string) {
+	s.fastNotify(hostID)
 }
 
 // ListDeliverableForHosts returns everything the given hosts are owed: their pending commands, and the ones they acknowledged inside

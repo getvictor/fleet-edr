@@ -1,6 +1,8 @@
 package containment
 
 import (
+	"github.com/jmoiron/sqlx"
+
 	"context"
 	"log/slog"
 	"time"
@@ -22,7 +24,8 @@ const failedRetryAfter = 6 * time.Hour
 // command could not be queued has none.
 type Converger struct {
 	store       *Store
-	insert      CommandInserter
+	queue       CommandQueuer
+	notify      Notifier
 	enrollments api.ActiveEnrollmentLister
 	latest      LatestCommands
 	logger      *slog.Logger
@@ -30,15 +33,30 @@ type Converger struct {
 }
 
 // NewConverger builds a Converger. Every dependency but logger is required.
-func NewConverger(store *Store, insert CommandInserter, enrollments api.ActiveEnrollmentLister, latest LatestCommands,
-	logger *slog.Logger) *Converger {
-	if store == nil || insert == nil || enrollments == nil || latest == nil {
-		panic("containment.NewConverger: store, insert, enrollments and latest are required")
+func NewConverger(store *Store, queue CommandQueuer, notify Notifier, enrollments api.ActiveEnrollmentLister,
+	latest LatestCommands, logger *slog.Logger) *Converger {
+	if store == nil || queue == nil || notify == nil || enrollments == nil || latest == nil {
+		panic("containment.NewConverger: store, queue, notify, enrollments and latest are required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Converger{store: store, insert: insert, enrollments: enrollments, latest: latest, logger: logger, now: time.Now}
+	return &Converger{store: store, queue: queue, notify: notify, enrollments: enrollments, latest: latest, logger: logger,
+		now: time.Now}
+}
+
+// queueCurrent queues one host's state through the store's locked re-read, logging a failure rather than ending the sweep: the other
+// hosts' states are still worth queuing, and this one is tried again on the next sweep.
+func (c *Converger) queueCurrent(ctx context.Context, state api.ContainmentState) (int64, bool) {
+	commandID, queued, err := c.store.QueueCurrent(ctx, state,
+		func(ctx context.Context, q sqlx.ExecerContext, current api.ContainmentState) (int64, error) {
+			return c.queue(ctx, q, current.HostID, api.CommandTypeSetNetworkContainment, commandPayload(current))
+		})
+	if err != nil {
+		c.logger.WarnContext(ctx, "containment: catch-up could not queue a host's state", "host_id", state.HostID, "err", err)
+		return 0, false
+	}
+	return commandID, queued
 }
 
 // Loop runs Converge every interval until ctx is cancelled; a zero or negative interval means DefaultConvergeInterval.
@@ -98,10 +116,13 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 		if !ok || !needsState(latest[state.HostID], state, at, now) {
 			continue
 		}
-		if _, err := c.insert(ctx, state.HostID, api.CommandTypeSetNetworkContainment, commandPayload(state)); err != nil {
-			c.logger.WarnContext(ctx, "containment: catch-up could not queue a host's state", "host_id", state.HostID, "err", err)
+		// Under the host's lock, against the state the host holds now: this sweep read its states some time ago, and a change that
+		// committed since has queued a command of its own, which this one must not be put behind (issue #1073).
+		_, ok = c.queueCurrent(ctx, state)
+		if !ok {
 			continue
 		}
+		c.notify(state.HostID)
 		queued++
 	}
 	if queued > 0 {
