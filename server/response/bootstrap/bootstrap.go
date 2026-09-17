@@ -40,8 +40,8 @@ type Deps struct {
 	// cmd/main wires it to detectionCtx.RecordHostSeen.
 	Heartbeat Heartbeat
 
-	// Audit is the operator-action recorder. Optional: nil disables audit emission for command issuance. cmd/main wires
-	// identityCtx.AuditRecorder().
+	// Audit is the operator-action recorder. Optional: an action still commits its audit entry without one, and the entry then waits
+	// in the outbox undelivered rather than being discarded. cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 
 	// AuthZ is the authorization chokepoint POST /api/commands and GET /api/commands/{id} gate on. Required. cmd/main wires
@@ -65,8 +65,9 @@ type Response struct {
 	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
 	containmentH         *operator.ContainmentHandler
 	containmentConverger *containment.Converger
-	// auditOutbox is where a containment change commits its audit entry, and auditDrain turns the entries into
-	// audit rows (issue #1070). The drain is nil without a recorder, which only non-production wiring omits.
+	// auditOutbox is where every operator action in this context commits its audit entry, containment changes and command issuance
+	// and withdrawal alike, and auditDrain turns the entries into audit rows (issue #1070). The drain is nil without a recorder,
+	// which only non-production wiring omits.
 	auditOutbox        *auditoutbox.Store
 	auditDrain         *auditoutbox.Drain
 	auditSweepInterval time.Duration

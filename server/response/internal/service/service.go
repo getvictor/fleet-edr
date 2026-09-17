@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -33,7 +34,9 @@ type Service struct {
 	// delivery to the gateway watch (and the agent poll fallback).
 	notify func(hostID string)
 	// outbox is where an operator action commits the audit entry recording it, and drain turns the entries into audit rows
-	// (issue #1070). Both nil outside production, which records the action without a row rather than refusing it.
+	// (issue #1070). The two nils mean different things and production sets both: with no drain an action still commits its entry
+	// and the entry waits in the outbox, while with no outbox the action commits with nothing recording it, which is why only a
+	// test that does not care about audit leaves the outbox unset. bootstrap.New always installs one.
 	outbox *auditoutbox.Store
 	drain  *auditoutbox.Drain
 	logger *slog.Logger
@@ -222,10 +225,16 @@ func (s *Service) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusR
 	return nil
 }
 
-// enqueueAudit builds the entry for the command just written and commits it through the same executor. A Service with no outbox is
-// non-production wiring, and it records nothing rather than failing the action.
+// enqueueAudit builds the entry for the command just written and commits it through the same executor.
+//
+// A nil builder is refused rather than treated as a no-audit mode: these methods exist to guarantee the entry commits with the
+// change, so silently committing one without the other would be the guarantee quietly not holding. A Service with no outbox is
+// different, and is the non-production wiring described on the field.
 func (s *Service) enqueueAudit(ctx context.Context, q sqlx.ExtContext, entry AuditEntryFor, cmd AuditedCommand) error {
-	if s.outbox == nil || entry == nil {
+	if entry == nil {
+		return errors.New("response service: an audited write needs an audit entry builder")
+	}
+	if s.outbox == nil {
 		return nil
 	}
 	e, err := entry(cmd)

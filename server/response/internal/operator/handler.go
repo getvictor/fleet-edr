@@ -89,8 +89,11 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// could authorize against " host-a ", store a command for host-a, and audit the two under different names, which is correlation
 	// between the authorization row and the action row silently broken. One boundary, one value, and the service's own trim is then
 	// a no-op for this caller.
+	//
+	// The command type is deliberately NOT trimmed. It is matched against a fixed set just below, so a padded one is not a spelling
+	// of a valid type but an invalid request, and it has always been refused as unsupported. Trimming it here would quietly widen
+	// what the API accepts, which is not this change's business.
 	body.HostID = strings.TrimSpace(body.HostID)
-	body.CommandType = strings.TrimSpace(body.CommandType)
 
 	action, ok := commandTypeToAction(body.CommandType)
 	if !ok {

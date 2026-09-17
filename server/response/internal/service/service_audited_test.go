@@ -93,3 +93,21 @@ func TestUpdateStatusAudited_AFailedEntryLeavesTheCommandAsItWas(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, api.StatusPending, cmd.Status, "the withdrawal rolled back with its entry")
 }
+
+// A nil entry builder is a wiring bug, not a no-audit mode. These methods exist to guarantee the entry commits with the change, so
+// letting one through would be the guarantee quietly not holding for whichever caller forgot it.
+func TestAuditedWrites_RefuseAWriteWithNoEntryBuilder(t *testing.T) {
+	t.Parallel()
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	store := mysql.NewStore(db)
+	svc := service.New(store, nil, nil)
+	svc.SetAuditOutbox(auditoutbox.NewStore(db, mysql.AuditOutboxTable), nil)
+
+	_, err := svc.InsertAudited(t.Context(), "host-a", "kill_process", []byte(`{"pid":1}`), nil)
+	require.Error(t, err)
+
+	cmds, err := store.ListForHost(t.Context(), "host-a", "")
+	require.NoError(t, err)
+	assert.Empty(t, cmds, "the command is not queued without the row recording who queued it")
+}

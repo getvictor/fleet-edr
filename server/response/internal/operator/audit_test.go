@@ -207,3 +207,18 @@ func TestHandler_CommandIssue_CarriesTheRequestTrace(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", entries[0].TraceID)
 }
+
+// A command type with surrounding whitespace is not a spelling of a valid type: it is matched against a fixed set, so it has always
+// been refused as unsupported and still is. Pinned because normalizing the host id at this boundary made it easy to normalize this
+// too and quietly widen what the API accepts.
+func TestHandler_CommandIssue_RefusesAPaddedCommandType(t *testing.T) {
+	t.Parallel()
+	var entries []identityapi.AuditEvent
+	svc := fakeService{entries: &entries}
+	srv := serveWithActor(t, New(svc, allowAllAuthZ{}, nil), identityapi.PrincipalRef{ID: "usr_7"})
+
+	assert.Equal(t, http.StatusBadRequest, post(t, srv, "/api/commands", map[string]any{
+		"host_id": "host-a", "command_type": " kill_process ", "payload": map[string]any{"pid": 1},
+	}))
+	assert.Empty(t, entries)
+}
