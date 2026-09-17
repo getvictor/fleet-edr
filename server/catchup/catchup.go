@@ -27,7 +27,7 @@ const DefaultInterval = 5 * time.Minute
 const FailedRetryAfter = 6 * time.Hour
 
 // Status is the part of a command's lifecycle this decision reads. Each context maps its own vocabulary onto it, so the policy below
-// is written once rather than against two spellings of the same five states.
+// is written once rather than against two spellings of the same six states.
 type Status string
 
 const (
