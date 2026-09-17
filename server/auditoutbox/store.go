@@ -23,6 +23,26 @@ var _ Outbox = (*Store)(nil)
 // is here so that stays true: a name from anywhere else cannot reach the SQL.
 var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// CreateTableSQL is the table a Store reads and writes, as the context adopting the outbox must migrate it.
+//
+// goose reads SQL files and not Go, so this does not generate a context's migration: what it does is give the migration and this
+// package one definition to agree on, and the conformance test at test/integration asserts every migrated outbox table matches what
+// this produces. Before that, the shape lived in each migration and again in this package's test fixture, where the two could drift
+// and the fixture would keep passing.
+//
+// held_until is part of the shape even for a context that writes no held entry, because PendingAuditEntries reads every outbox with
+// one query and a table without the column could not be read by it.
+func CreateTableSQL(table string) string {
+	return fmt.Sprintf(`CREATE TABLE %s (
+	id         BIGINT       NOT NULL AUTO_INCREMENT,
+	kind       VARCHAR(64)  NOT NULL,
+	payload    JSON         NOT NULL,
+	created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+	held_until TIMESTAMP(6) NULL,
+	PRIMARY KEY (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci`, table)
+}
+
 // NewStore builds a Store over table. Panics on a nil db or a table name that is not a plain identifier, both wiring bugs.
 func NewStore(db *sqlx.DB, table string) *Store {
 	if db == nil {

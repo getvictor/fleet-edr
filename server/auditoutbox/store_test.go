@@ -13,23 +13,15 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// testTable is created here rather than migrated from a context, so this package's tests describe the table shape the package
-// requires of whichever context adopts it. Each context's own integration tests exercise its migrated table through the same store.
+// testTable is built from the package's own CreateTableSQL rather than migrated from a context, so these tests neither depend on a
+// bounded context nor restate the table shape where it could drift from one. What binds the contexts' migrated tables to the same
+// definition is the conformance test at test/integration.
 const testTable = "test_audit_outbox"
-
-const testTableDDL = `CREATE TABLE ` + testTable + ` (
-	id         BIGINT       NOT NULL AUTO_INCREMENT,
-	kind       VARCHAR(64)  NOT NULL,
-	payload    JSON         NOT NULL,
-	created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-	held_until TIMESTAMP(6) NULL,
-	PRIMARY KEY (id)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci`
 
 func openOutbox(t *testing.T) (*auditoutbox.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
-	_, err := db.ExecContext(t.Context(), testTableDDL)
+	_, err := db.ExecContext(t.Context(), auditoutbox.CreateTableSQL(testTable))
 	require.NoError(t, err)
 	return auditoutbox.NewStore(db, testTable), db
 }
