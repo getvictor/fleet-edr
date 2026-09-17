@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -31,6 +32,13 @@ type fakeSource struct {
 	// acked are commands the host acknowledged and never reported an outcome for, by host, with the instant of the acknowledgement.
 	acked   map[string][]api.Command
 	updates []api.UpdateStatusRequest
+}
+
+// failingSource answers every delivery query with an error, for the path where the database is unreachable.
+type failingSource struct{ fakeSource }
+
+func (f *failingSource) ListDeliverableForHosts(context.Context, []string, time.Time, time.Time) ([]api.Command, error) {
+	return nil, errors.New("database unreachable")
 }
 
 func newFakeSource() *fakeSource {
@@ -531,7 +539,7 @@ func TestGateway(t *testing.T) {
 		require.Eventually(t, func() bool { return g.reg.len() == 1 }, 2*time.Second, 10*time.Millisecond)
 
 		// Queue the command AFTER connect with NO Notify: this models an operator action landing on a peer replica. The command reaches
-		// the stream only because the watch ticker calls ListPendingForHosts for the connected host and pushes it.
+		// the stream only because the watch ticker calls ListDeliverableForHosts for the connected host and pushes it.
 		src.addPending(api.Command{ID: 11, HostID: "host-a", CommandType: "isolate_host", Payload: []byte(`{"mode":"full"}`)})
 
 		cmd, err := recvCommand(t, stream)
@@ -647,6 +655,34 @@ func TestGatewayLeavesAnAcknowledgedCommandOutsideTheBounds(t *testing.T) {
 			requireNoCommandOffered(t, stream, 300*time.Millisecond)
 		})
 	}
+}
+
+// A delivery query that fails must leave the connection alone: the watch ticks again in a second, and tearing the stream down over a
+// database blip would cost the host its commands and its liveness signal for as long as the blip lasts.
+func TestGatewayKeepsTheConnectionWhenTheDeliveryQueryFails(t *testing.T) {
+	t.Parallel()
+	src := &failingSource{fakeSource: *newFakeSource()}
+	ver := newFakeVerifier()
+	ver.add("tok-a", "host-a")
+	_, dial := newTestGateway(t, src, ver)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
+	require.NoError(t, err)
+
+	requireNoCommandOffered(t, stream, 300*time.Millisecond)
+}
+
+// A command for a host that is not connected here is skipped rather than pushed: another replica holds that connection, or the host
+// is offline and the command waits in its backlog.
+func TestGatewayDeliverSkipsAHostWithNoConnection(t *testing.T) {
+	t.Parallel()
+	src := newFakeSource()
+	src.addPending(api.Command{ID: 11, HostID: "host-elsewhere", CommandType: "kill_process"})
+	g := New(Deps{Source: src, Verifier: newFakeVerifier()})
+
+	g.deliverPending(t.Context(), []string{"host-elsewhere"})
 }
 
 func TestGatewayServeAndStop(t *testing.T) {

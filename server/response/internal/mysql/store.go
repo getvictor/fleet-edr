@@ -163,8 +163,9 @@ func (s *Store) ListForHost(ctx context.Context, hostID, status string) ([]api.C
 //
 // It is the control gateway's watch query, run every second per connected host, so both halves are one round trip and one index range
 // each: scoping on host_id and status seeks idx_commands_host_status_acked (host_id, status, acked_at), whose third column is what
-// keeps the acknowledged half from scanning every command a fleet has ever stranded. An empty hostIDs slice returns no rows without
-// touching the database.
+// keeps the acknowledged half from scanning every command a fleet has ever stranded. That index supersedes idx_commands_host_status,
+// which is dropped a release later under ADR-0009's expand-contract rule (issue #1082). An empty hostIDs slice returns no rows
+// without touching the database.
 func (s *Store) ListDeliverableForHosts(ctx context.Context, hostIDs []string, ackedAfter,
 	ackedBefore time.Time) ([]api.Command, error) {
 	if len(hostIDs) == 0 {

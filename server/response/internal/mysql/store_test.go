@@ -284,11 +284,24 @@ func TestInsertBatch(t *testing.T) {
 	}
 }
 
-// TestListPendingForHosts locks the control gateway's watch query: it returns only pending commands, only for the requested hosts, in
-// creation order, and returns nothing (no error) for an empty host set.
+// A database that cannot answer produces an error rather than an empty answer: the gateway logs it and tries again on the next tick,
+// where treating the failure as "this host is owed nothing" would silently stop delivering commands.
+func TestListDeliverableForHostsReportsADatabaseFailure(t *testing.T) {
+	t.Parallel()
+	_, db := newTestStoreWithDB(t)
+	require.NoError(t, db.Close())
+	closed := mysql.NewStore(db)
+
+	_, err := closed.ListDeliverableForHosts(t.Context(), []string{"host-a"}, time.Now().Add(-time.Hour), time.Now())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list deliverable commands for hosts")
+}
+
 // farPast is a window that excludes every acknowledgement, so a caller can ask for pending commands alone.
 func farPast() time.Time { return time.Now().Add(-365 * 24 * time.Hour) }
 
+// TestListDeliverableForHosts locks the pending half of the control gateway's watch query: it returns the requested hosts' pending
+// commands, only theirs, in creation order, and nothing (no error) for an empty host set. The acknowledged half is the test below.
 func TestListDeliverableForHosts(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
