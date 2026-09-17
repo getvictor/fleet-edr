@@ -551,27 +551,38 @@ func TestStoreFailuresAreReported(t *testing.T) {
 		require.Error(t, err, "the catch-up cannot read the state it meant to queue")
 	})
 
+	// Two hosts, and only the first cannot be queued: the second is what shows the sweep carried on. With one host the same
+	// assertions would hold whether the sweep continued or stopped at the failure.
 	t.Run("a sweep carries on past a host it cannot queue", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
-		_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
-		require.NoError(t, err)
-		// Its command expires, so the catch-up means to queue the state again.
-		_, err = f.db.ExecContext(t.Context(), `UPDATE commands SET status = ? WHERE host_id = ?`, api.StatusExpired, "host-a")
+		for _, hostID := range []string{"host-a", "host-b"} {
+			_, err := f.svc.Set(t.Context(), operator, "", hostID, true, "beaconing")
+			require.NoError(t, err)
+		}
+		// Both commands expire, so the catch-up means to queue both states again.
+		_, err := f.db.ExecContext(t.Context(), `UPDATE commands SET status = ?`, api.StatusExpired)
 		require.NoError(t, err)
 
 		enrollments := func(context.Context) ([]api.HostEnrollment, error) {
-			return []api.HostEnrollment{{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]}}, nil
+			return []api.HostEnrollment{
+				{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]},
+				{HostID: "host-b", EnrolledAt: f.enrolled["host-b"]},
+			}, nil
 		}
-		failing := func(context.Context, sqlx.ExecerContext, string, string, []byte) (int64, error) {
-			return 0, errors.New("queue unavailable")
+		failFirst := func(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error) {
+			if hostID == "host-a" {
+				return 0, errors.New("queue unavailable")
+			}
+			return f.commands.QueueTx(ctx, q, hostID, commandType, payload)
 		}
-		converger := containment.NewConverger(f.store, failing, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
+		converger := containment.NewConverger(f.store, failFirst, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
 
 		queued, err := converger.Converge(t.Context())
 		require.NoError(t, err, "one host that cannot be queued does not end the sweep")
-		assert.Zero(t, queued)
-		assert.Equal(t, []string{"host-a"}, f.notified.recorded(), "only the change told the gateway; the failed queue did not")
+		assert.Equal(t, 1, queued, "the second host was queued after the first failed")
+		assert.Equal(t, []string{"host-a", "host-b", "host-b"}, f.notified.recorded(),
+			"the two changes told the gateway, then the sweep told it about host-b alone")
 	})
 
 	t.Run("a command that cannot be queued by the catch-up", func(t *testing.T) {
