@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/fleetdm/edr/server/catchup"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -42,8 +43,8 @@ func TestNeedsSet(t *testing.T) {
 		{"expired undelivered", queued(4, "expired", hourAgo, at(-time.Minute)), true},
 		{"cancelled", queued(4, "cancelled", hourAgo, at(-time.Minute)), true},
 		{"failed long enough ago to retry", queued(4, "failed", now.Add(-8*time.Hour), at(-7*time.Hour)), true},
-		{"failed exactly six hours ago", queued(4, "failed", now.Add(-7*time.Hour), at(-failedRetryAfter)), true},
-		{"failed just under six hours ago", queued(4, "failed", now.Add(-7*time.Hour), at(-failedRetryAfter+time.Second)), false},
+		{"failed exactly six hours ago", queued(4, "failed", now.Add(-7*time.Hour), at(-catchup.FailedRetryAfter)), true},
+		{"failed just under six hours ago", queued(4, "failed", now.Add(-7*time.Hour), at(-catchup.FailedRetryAfter+time.Second)), false},
 		{"failed recently", queued(4, "failed", hourAgo, at(-time.Hour)), false},
 		{"pending", queued(4, "pending", hourAgo, time.Time{}), false},
 		{"acked", queued(4, "acked", hourAgo, time.Time{}), false},

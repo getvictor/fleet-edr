@@ -7,17 +7,14 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/fleetdm/edr/server/catchup"
 	"github.com/fleetdm/edr/server/response/api"
 )
 
 // DefaultConvergeInterval is how often the catch-up runs. A host whose command expired, that re-enrolled, or whose command could not be
-// queued gets its state within this long of its next poll.
-const DefaultConvergeInterval = 5 * time.Minute
-
-// failedRetryAfter is how long a failed command counts as delivered before the state is queued again. A failure is usually an agent or
-// a host that cannot contain (an older agent, or no network extension), which fails it the same way every time, so retrying each sweep
-// would fill that host's command history; retrying rarely still reaches one that has since been upgraded.
-const failedRetryAfter = 6 * time.Hour
+// queued gets its state within this long of its next poll. The policy, including how long a failed command counts as delivered, is
+// shared with the watched-path catch-up (issue #1071).
+const DefaultConvergeInterval = catchup.DefaultInterval
 
 // Converger queues each host's containment state again when its latest command does not deliver it. It mirrors the watched-path
 // catch-up (#998) per host: a queued command lives an hour, a reinstall loses the extension's persisted state, and a change whose
@@ -64,21 +61,7 @@ func (c *Converger) queueCurrent(ctx context.Context, state api.ContainmentState
 // Not leader-gated, like the watched-path catch-up: replicas that sweep at the same moment can each queue a host's state, and the
 // extension turns the second copy away because it is not newer, so a race costs a duplicate command row rather than a wrong result.
 func (c *Converger) Loop(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = DefaultConvergeInterval
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := c.Converge(ctx); err != nil {
-				c.logger.WarnContext(ctx, "containment: catch-up failed; retrying next interval", "err", err)
-			}
-		}
-	}
+	catchup.Loop(ctx, "containment", c.Converge, interval, c.logger)
 }
 
 // Converge queues the state of every actively enrolled host with one whose latest command does not deliver it, and returns how many
@@ -131,28 +114,38 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 	return queued, nil
 }
 
-// needsState reports whether a host should be sent its state, given its latest set_network_containment command. The zero Command is a
-// host that has never been sent one.
-func needsState(cmd api.Command, state api.ContainmentState, enrolledAt, now time.Time) bool {
-	// The zero Command, a host never sent one, carries no state.
-	if !carries(cmd, state) {
-		return true
-	}
-	// Queued before, or at, the host's latest enrollment: a reinstall in between removed the extension's copy. Both times are on the
-	// database clock; a tie counts as before, since a duplicate copy is harmless and a missing one is not.
-	if !cmd.CreatedAt.After(enrolledAt) {
-		return true
-	}
-	switch cmd.Status {
-	case api.StatusExpired, api.StatusCancelled:
-		return true
+// catchupStatus maps this context's command lifecycle onto the one the shared decision reads.
+//
+// Written out rather than converted, though the two spellings are equal today: a cast would turn a rename on either side into a
+// status the decision does not recognize, and the decision leaves those alone, so every host would silently stop being caught up. A
+// switch plus the test that walks every api.Status turns that into a failure instead.
+func catchupStatus(s api.Status) catchup.Status {
+	switch s {
+	case api.StatusPending:
+		return catchup.StatusPending
+	case api.StatusAcked:
+		return catchup.StatusAcked
+	case api.StatusCompleted:
+		return catchup.StatusCompleted
 	case api.StatusFailed:
-		// Every failure is stamped with its completion time; one without it is not retried early.
-		return cmd.CompletedAt != nil && now.Sub(*cmd.CompletedAt) >= failedRetryAfter
-	case api.StatusPending, api.StatusAcked, api.StatusCompleted:
-		// On its way or delivered. An offline host keeps its command pending until it reconnects or the command ages out, so it is not
-		// sent a new copy every interval.
-		return false
+		return catchup.StatusFailed
+	case api.StatusExpired:
+		return catchup.StatusExpired
+	case api.StatusCancelled:
+		return catchup.StatusCancelled
 	}
-	return false
+	return ""
+}
+
+// needsState reports whether a host should be sent its state, given its latest set_network_containment command. The decision is
+// catchup's; what belongs here is what this context's command means, which is whether its payload carries the host's current state.
+// The zero Command is a host that has never been sent one, and carries nothing.
+func needsState(cmd api.Command, state api.ContainmentState, enrolledAt, now time.Time) bool {
+	return catchup.Needed(catchup.Latest{
+		Queued:      cmd.ID != 0,
+		Carries:     carries(cmd, state),
+		CreatedAt:   cmd.CreatedAt,
+		Status:      catchupStatus(cmd.Status),
+		CompletedAt: cmd.CompletedAt,
+	}, enrolledAt, now)
 }

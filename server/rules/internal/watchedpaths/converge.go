@@ -7,17 +7,14 @@ import (
 	"slices"
 	"time"
 
+	"github.com/fleetdm/edr/server/catchup"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
 // DefaultConvergeInterval is how often the catch-up runs. A host that enrolls, reinstalls, or comes back after its command aged out
-// gets the set within this long of its next poll.
-const DefaultConvergeInterval = 5 * time.Minute
-
-// failedRetryAfter is how long a failed command counts as delivered before the set is queued again. A failure is usually an agent
-// that predates the command, which fails it the same way every time, so retrying each sweep would fill that host's command history;
-// retrying rarely still reaches a host whose agent has since been upgraded, or whose extension was briefly unreachable.
-const failedRetryAfter = 6 * time.Hour
+// gets the set within this long of its next poll. The policy, including how long a failed command counts as delivered, is shared with
+// the containment catch-up (issue #1071).
+const DefaultConvergeInterval = catchup.DefaultInterval
 
 // Converger queues the current set for hosts that do not have it (issue #998). The push on a change reaches the hosts enrolled then,
 // but a queued command lives an hour, a host enrolled later has none, and a reinstall loses the extension's persisted set; this closes
@@ -49,21 +46,7 @@ func NewConverger(store *Store, commands func(ctx context.Context, hostIDs []str
 // second copy away because it is not newer than the first, so a race costs a duplicate command row rather than a wrong result; a
 // leader lock would hold a pooled connection for the life of the process to prevent that (issue #722).
 func (c *Converger) Loop(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = DefaultConvergeInterval
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := c.Converge(ctx); err != nil {
-				c.logger.WarnContext(ctx, "watchedpaths: catch-up failed; retrying next interval", "err", err)
-			}
-		}
-	}
+	catchup.Loop(ctx, "watchedpaths", c.Converge, interval, c.logger)
 }
 
 // Converge queues the current set for every enrolled host that needs it and returns how many hosts it queued it for. Nothing is queued
@@ -102,33 +85,29 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 	return inserted, err
 }
 
-// needsSet reports whether a host should be sent the current set, given its latest set_watched_paths command. The zero WatchedPathCommand
-// is a host that has never been sent one.
+// needsSet reports whether a host should be sent the current set, given its latest set_watched_paths command. The decision is
+// catchup's; what belongs here is what this context's command means, which is whether its payload carries the current set. The zero
+// WatchedPathCommand is a host that has never been sent one, and carries nothing.
 func needsSet(cmd api.WatchedPathCommand, e api.WatchedPathEnrollment, set api.WatchedPathSet, now time.Time) bool {
-	if cmd.Payload == nil {
-		return true
+	// This context records a terminal time as a zero value where the shared decision takes a nil, so an unfinished command reads as
+	// unfinished rather than as one that completed at the zero time.
+	var completedAt *time.Time
+	if !cmd.CompletedAt.IsZero() {
+		completedAt = &cmd.CompletedAt
 	}
-	// The same version with a different epoch is a different set, as after a database restore that sent versions backwards.
+	return catchup.Needed(catchup.Latest{
+		Queued:      cmd.Payload != nil,
+		Carries:     carriesSet(cmd, set),
+		CreatedAt:   cmd.CreatedAt,
+		Status:      catchup.Status(cmd.Status),
+		CompletedAt: completedAt,
+	}, e.EnrolledAt, now)
+}
+
+// carriesSet reports whether a command's payload delivers the current set. The same version with a different epoch is a different
+// set, as after a database restore that sent versions backwards.
+func carriesSet(cmd api.WatchedPathCommand, set api.WatchedPathSet) bool {
 	var queued api.SetWatchedPathsPayload
-	if json.Unmarshal(cmd.Payload, &queued) != nil || queued.Version != set.Version || queued.Epoch != set.UpdatedAt.UnixMicro() {
-		return true
-	}
-	// Queued before, or at, the host's latest enrollment: a reinstall in between removed the extension's copy. Both times are on the
-	// database clock (commands.created_at and enrollments.enrolled_at), so skew between replicas and the database cannot reorder them;
-	// a tie counts as before, since a duplicate copy is harmless and a missing one is not.
-	if !cmd.CreatedAt.After(e.EnrolledAt) {
-		return true
-	}
-	switch cmd.Status {
-	case "expired", "cancelled":
-		return true
-	case "failed":
-		// now is this replica's clock and completed_at the database's; skew of seconds is immaterial against a six-hour window.
-		return now.Sub(cmd.CompletedAt) >= failedRetryAfter
-	default:
-		// Pending, acked or completed: on its way or delivered. A host that is offline keeps its command pending until it reconnects,
-		// when the control stream delivers it or the poll ages it out (and the next sweep queues a fresh copy), so an offline host is
-		// not sent a new copy every interval.
-		return false
-	}
+	return json.Unmarshal(cmd.Payload, &queued) == nil &&
+		queued.Version == set.Version && queued.Epoch == set.UpdatedAt.UnixMicro()
 }
