@@ -99,7 +99,7 @@ func needsSet(cmd api.WatchedPathCommand, e api.WatchedPathEnrollment, set api.W
 		Queued:      cmd.Payload != nil,
 		Carries:     carriesSet(cmd, set),
 		CreatedAt:   cmd.CreatedAt,
-		Status:      catchup.Status(cmd.Status),
+		Status:      cmd.Status,
 		CompletedAt: completedAt,
 	}, e.EnrolledAt, now)
 }

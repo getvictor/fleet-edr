@@ -286,6 +286,9 @@ dependenciesRules:
   - package: "**.rules.api"
     shouldOnlyDependsOn:
       internal:
+        # catchup is the shared catch-up policy (issue #1071): the watched-path command carries its status already mapped
+        # onto that vocabulary, by the context that owns the lifecycle, rather than cast from its spelling here.
+        - "**.catchup"
         - "**.rules.api.**"
         - "**.detection.api"          # alias re-export of detection/api types
         - "**.attrkeys"
@@ -295,6 +298,9 @@ dependenciesRules:
   - package: "**.response.api"
     shouldOnlyDependsOn:
       internal:
+        # catchup is the shared catch-up policy (issue #1071): Status.Catchup maps this context's lifecycle onto it, here
+        # rather than at each consumer, because this is the file a rename happens in.
+        - "**.catchup"
         - "**.response.api.**"
         - "**.attrkeys"
         - "**.httpserver"

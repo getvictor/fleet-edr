@@ -758,7 +758,7 @@ func latestCommandsFromResponse(svc responseapi.Service) rulesapi.WatchedPathCom
 		}
 		out := make(map[string]rulesapi.WatchedPathCommand, len(latest))
 		for hostID, c := range latest {
-			cmd := rulesapi.WatchedPathCommand{Payload: c.Payload, Status: string(c.Status), CreatedAt: c.CreatedAt}
+			cmd := rulesapi.WatchedPathCommand{Payload: c.Payload, Status: c.Status.Catchup(), CreatedAt: c.CreatedAt}
 			if c.CompletedAt != nil {
 				cmd.CompletedAt = *c.CompletedAt
 			}

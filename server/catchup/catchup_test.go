@@ -62,8 +62,23 @@ func TestNeeded(t *testing.T) {
 		{"acked", func(c catchup.Latest) catchup.Latest { c.Status = catchup.StatusAcked; return c }, false},
 		{"completed", func(c catchup.Latest) catchup.Latest { c.Status = catchup.StatusCompleted; return c }, false},
 		// A status this version does not know was written by a newer one. Queueing against it would put a replica mid-upgrade in a
-		// fight with the replica that wrote it, so it is left alone.
+		// fight with the replica that wrote it, so it is left alone, and left alone whatever else this version thinks of the
+		// command: the newer version's payload may be a shape this one reads as the wrong state, and it may have been queued
+		// against an enrollment this one cannot see. Each of those, asked first, would resend.
 		{"a status this version does not know", func(c catchup.Latest) catchup.Latest { c.Status = "quarantined"; return c }, false},
+		{"an unknown status carrying what reads as another state", func(c catchup.Latest) catchup.Latest {
+			c.Status, c.Carries = "quarantined", false
+			return c
+		}, false},
+		{"an unknown status queued before the host enrolled", func(c catchup.Latest) catchup.Latest {
+			c.Status, c.CreatedAt = "quarantined", enrolledAt.Add(-time.Minute)
+			return c
+		}, false},
+		// A host that has never been sent one is resent whatever a newer version might know: there is no command to conflict with.
+		{"nothing queued, whatever the status field holds", func(c catchup.Latest) catchup.Latest {
+			c.Queued, c.Status = false, "quarantined"
+			return c
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

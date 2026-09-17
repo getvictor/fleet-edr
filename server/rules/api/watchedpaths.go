@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/fleetdm/edr/server/catchup"
 	"strings"
 	"time"
 )
@@ -77,8 +78,11 @@ type WatchedPathEnrollmentLister func(ctx context.Context) ([]WatchedPathEnrollm
 
 // WatchedPathCommand is what the watched-path catch-up needs to know about a host's latest set_watched_paths command.
 type WatchedPathCommand struct {
-	Payload   []byte
-	Status    string
+	Payload []byte
+	// Status is already the shared catch-up vocabulary, mapped by the context that owns the command lifecycle rather than cast from
+	// its spelling here (issue #1071). A cast would make a rename there an unrecognized status here, which the catch-up leaves
+	// alone, silently stopping the sweep for every host holding one.
+	Status    catchup.Status
 	CreatedAt time.Time
 	// CompletedAt is when the command reached a terminal status, and zero while it has not.
 	CompletedAt time.Time

@@ -61,8 +61,20 @@ type Latest struct {
 // enrolledAt is the host's latest enrollment and now this replica's clock. Both command times are the database's, so replica skew
 // cannot reorder a command against an enrollment; skew of seconds is immaterial against the six-hour failure window.
 func Needed(cmd Latest, enrolledAt, now time.Time) bool {
-	// Never sent one, or sent one carrying a state that is no longer the host's.
-	if !cmd.Queued || !cmd.Carries {
+	// Never sent one. Nothing exists to conflict with, whatever version wrote what.
+	if !cmd.Queued {
+		return true
+	}
+	// An unrecognized status is left alone, and this is checked BEFORE anything else about the command. A status this package does
+	// not know was written by a newer version, which also knows things this one does not: its payload may be a shape this version
+	// reads as carrying the wrong state, and it may have been queued against an enrollment this version cannot see. Asking those
+	// questions first and resending on the answer is how an older replica ends up fighting the newer one that wrote the command,
+	// which is the outcome leaving it alone exists to avoid.
+	if !recognized(cmd.Status) {
+		return false
+	}
+	// Sent one carrying a state that is no longer the host's.
+	if !cmd.Carries {
 		return true
 	}
 	// Queued before, or at, the host's latest enrollment: a reinstall in between removed the extension's copy. A tie counts as
@@ -82,8 +94,19 @@ func Needed(cmd Latest, enrolledAt, now time.Time) bool {
 		// or the poll ages it out and the next sweep queues a fresh copy, so an offline host is not sent a new copy every interval.
 		return false
 	}
-	// An unrecognized status is left alone rather than resent. A status this package does not know is one a newer version wrote, and
-	// queueing against it would mean a replica mid-upgrade fighting the one that wrote it.
+	// Unreachable: recognized() above admits exactly the six cases the switch covers, and this is here because the compiler cannot
+	// see that. A status that reached here would be one recognized() admits and the switch forgot, so it is left alone, as an
+	// unrecognized one is.
+	return false
+}
+
+// recognized reports whether this version knows what a status means. Every caller maps its own vocabulary onto these, so a status
+// that is not one of them came from a version that has more of them.
+func recognized(s Status) bool {
+	switch s {
+	case StatusPending, StatusAcked, StatusCompleted, StatusFailed, StatusExpired, StatusCancelled:
+		return true
+	}
 	return false
 }
 

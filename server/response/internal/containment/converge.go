@@ -114,29 +114,6 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 	return queued, nil
 }
 
-// catchupStatus maps this context's command lifecycle onto the one the shared decision reads.
-//
-// Written out rather than converted, though the two spellings are equal today: a cast would turn a rename on either side into a
-// status the decision does not recognize, and the decision leaves those alone, so every host would silently stop being caught up. A
-// switch plus the test that walks every api.Status turns that into a failure instead.
-func catchupStatus(s api.Status) catchup.Status {
-	switch s {
-	case api.StatusPending:
-		return catchup.StatusPending
-	case api.StatusAcked:
-		return catchup.StatusAcked
-	case api.StatusCompleted:
-		return catchup.StatusCompleted
-	case api.StatusFailed:
-		return catchup.StatusFailed
-	case api.StatusExpired:
-		return catchup.StatusExpired
-	case api.StatusCancelled:
-		return catchup.StatusCancelled
-	}
-	return ""
-}
-
 // needsState reports whether a host should be sent its state, given its latest set_network_containment command. The decision is
 // catchup's; what belongs here is what this context's command means, which is whether its payload carries the host's current state.
 // The zero Command is a host that has never been sent one, and carries nothing.
@@ -145,7 +122,7 @@ func needsState(cmd api.Command, state api.ContainmentState, enrolledAt, now tim
 		Queued:      cmd.ID != 0,
 		Carries:     carries(cmd, state),
 		CreatedAt:   cmd.CreatedAt,
-		Status:      catchupStatus(cmd.Status),
+		Status:      cmd.Status.Catchup(),
 		CompletedAt: cmd.CompletedAt,
 	}, enrolledAt, now)
 }
