@@ -108,8 +108,9 @@ func (s *Service) List(ctx context.Context) ([]api.ContainmentState, error) {
 }
 
 // Set asks for a host to be contained or released. A change is recorded, queued for the host and audited; a request for the state the
-// host already has changes nothing. The recorded state is authoritative once written, so a command that could not be queued does not
-// fail the change: the response carries no command id and the catch-up queues it.
+// host already has changes nothing. The state and its command are written in one transaction under the host's lock, so the commands
+// queued for a host are in the order of the states they carry, and a change whose command cannot be queued records nothing and is
+// refused rather than leaving a state for the catch-up to notice (issue #1073).
 func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, hostID string, contained bool,
 	reason string) (api.ContainmentChange, error) {
 	// The limit applies to the reason as sent, as the API schema states it; the recorded reason is the trimmed one.

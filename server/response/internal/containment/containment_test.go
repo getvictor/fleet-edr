@@ -51,6 +51,8 @@ type fixture struct {
 	converger *containment.Converger
 	commands  *service.Service
 	audit     *recordingAudit
+	// db is the test's own handle, for asking the database what another connection can see.
+	db *sqlx.DB
 	// notified records the hosts the control gateway was told about, in order, after their transactions committed.
 	notified *notifyRecorder
 	// enrolled is each enrolled host's enrollment time.
@@ -59,16 +61,36 @@ type fixture struct {
 
 var operator = identityapi.PrincipalRef{ID: "user:7", Type: "user", Label: "ir@example.com"}
 
-// notifyRecorder captures the gateway notifications a change or a sweep makes.
+// notifyRecorder captures the gateway notifications a change or a sweep makes, and what another connection could see of that host's
+// commands at the moment each notification was made. The gateway reads the command from its own connection, so a notification sent
+// before the transaction commits sends it looking for a row that is not there.
 type notifyRecorder struct {
-	mu    sync.Mutex
-	hosts []string
+	mu      sync.Mutex
+	hosts   []string
+	visible []int
+	db      *sqlx.DB
 }
 
 func (n *notifyRecorder) notify(hostID string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.hosts = append(n.hosts, hostID)
+	if n.db == nil {
+		return
+	}
+	var count int
+	if err := n.db.Get(&count,
+		`SELECT COUNT(*) FROM commands WHERE host_id = ? AND command_type = ?`, hostID, api.CommandTypeSetNetworkContainment); err != nil {
+		count = -1
+	}
+	n.visible = append(n.visible, count)
+}
+
+// commandsVisibleAtNotify is how many of the host's containment commands another connection could see at each notification.
+func (n *notifyRecorder) commandsVisibleAtNotify() []int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]int(nil), n.visible...)
 }
 
 func (n *notifyRecorder) recorded() []string {
@@ -83,7 +105,7 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	f := &fixture{
 		store: containment.NewStore(db), commands: service.New(mysql.NewStore(db), nil, nil), audit: &recordingAudit{},
-		notified: &notifyRecorder{},
+		notified: &notifyRecorder{db: db}, db: db,
 		enrolled: map[string]time.Time{"host-a": time.Now().Add(-time.Hour), "host-b": time.Now().Add(-time.Hour)},
 	}
 	isEnrolled := func(_ context.Context, hostID string) (bool, error) {
@@ -116,6 +138,25 @@ func (f *fixture) containmentCommands(t *testing.T, hostID string) []api.Command
 	}
 	slices.SortFunc(out, func(a, b api.Command) int { return cmp.Compare(a.ID, b.ID) })
 	return out
+}
+
+// waitForLockWait blocks until a transaction is waiting on a row lock, which is how this test knows the second change has reached the
+// host's row and not merely been started.
+func waitForLockWait(t *testing.T, db *sqlx.DB) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		require.NoError(t, db.GetContext(t.Context(), &waiting,
+			`SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT'`))
+		if waiting > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no transaction reached the host's row lock within 10s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // commandPayloadFor is the payload the service and the catch-up both queue, rebuilt here for the tests that drive the store directly.
@@ -420,6 +461,21 @@ func TestConverge(t *testing.T) {
 	})
 }
 
+// The control gateway is told after the transaction commits, not before: it reads the command through its own connection, so a
+// notification sent inside the transaction sends it looking for a row that is not there yet (issue #1073).
+func TestSet_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+	require.NoError(t, err)
+	require.True(t, change.Changed)
+
+	assert.Equal(t, []string{"host-a"}, f.notified.recorded())
+	assert.Equal(t, []int{1}, f.notified.commandsVisibleAtNotify(),
+		"another connection can see the queued command when the gateway is told about it")
+}
+
 // Two changes to one host at the same moment queue their commands in the order of the states they carry. Before the command was
 // queued inside the state's transaction, both could commit their states and then queue in the other order, leaving the newest command
 // carrying the older state until the catch-up noticed (issue #1073).
@@ -452,8 +508,9 @@ func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
 		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "release", "user:7", slow)
 		assert.NoError(t, err)
 	})
-	// Give the release time to reach the lock and block on it, so the test would fail if it could queue meanwhile.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the release to actually be blocked on the row lock, asked of the database rather than assumed from a sleep: a sleep
+	// that ran out before the release reached the lock would let this test pass without the race it exists for ever happening.
+	waitForLockWait(t, f.db)
 	close(release)
 	wg.Wait()
 
@@ -500,6 +557,7 @@ func TestConverge_AStateThatChangedSinceTheSweepReadItQueuesNothing(t *testing.T
 
 // A change whose command cannot be queued records nothing: the state and its command are written in one transaction, so the operator
 // is told the change failed rather than left with a state whose command the catch-up has to notice (issue #1073).
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-whose-command-cannot-be-queued-records-nothing
 func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

@@ -9,7 +9,12 @@ The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `containe
 - **GIVEN** two changes to one host's containment made at the same moment
 - **WHEN** each records its state and queues its command
 - **THEN** the command carrying the later state is queued after the command carrying the earlier one
-- **AND** a change whose command cannot be queued records no state
+
+#### Scenario: A change whose command cannot be queued records nothing
+
+- **GIVEN** an operator changing a host's containment
+- **WHEN** the command carrying the new state cannot be queued
+- **THEN** the request is refused, the host's state is unchanged, and nothing is audited
 
 #### Scenario: An operator contains a host
 
