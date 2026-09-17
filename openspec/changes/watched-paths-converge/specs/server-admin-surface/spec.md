@@ -4,9 +4,15 @@
 
 The server SHALL periodically queue the current watched-path set, as a `set_watched_paths` command carrying the same `{version, epoch, paths}` the push sends, for every host with an active enrollment whose latest `set_watched_paths` command does not already carry it. A host SHALL be sent the set when it has no such command, when that command carried a different version or epoch than the current set, when it was queued no later than the host's latest enrollment (both times read from the database clock, so skew between the server and the database cannot reorder them), when it expired or was cancelled, or when it failed at least six hours ago.
 
-A pending, acknowledged, or completed command at the current version, queued since the host's latest enrollment, SHALL count as delivered, so a host that is offline is not sent a new copy every time the server checks. A failed command SHALL count as delivered for six hours before the set is queued again, so a host whose agent cannot run the command does not accumulate a failed command every check.
+A pending, acknowledged, or completed command at the current version, queued since the host's latest enrollment, SHALL count as delivered, so a host that is offline is not sent a new copy every time the server checks. A failed command SHALL count as delivered for six hours before the set is queued again, so a host whose agent cannot run the command does not accumulate a failed command every check. A failed command with no recorded completion time SHALL count as delivered rather than being queued again immediately, since nothing says how long ago it failed and retrying on every check is what the six-hour wait exists to prevent.
 
 While the set has never been changed, the server SHALL queue nothing.
+
+#### Scenario: A failure with no completion time is not retried at once
+
+- **GIVEN** a host whose latest command for the current set failed with no recorded completion time
+- **WHEN** the server checks
+- **THEN** the set is not queued for it again
 
 #### Scenario: A host enrolled after a change gets the set
 

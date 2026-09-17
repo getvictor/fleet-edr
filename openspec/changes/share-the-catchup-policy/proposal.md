@@ -9,6 +9,10 @@ Issue #1071. Two contexts push a desired state to hosts as a command and then ha
 - **Each context keeps what is its own**: where the state comes from, what its command payload means, and how it queues one. A context maps its command onto the shared shape and asks.
 - **A status neither context knows is left alone rather than resent.** That was already both implementations' behavior; it is now stated, and each context's mapping onto the shared vocabulary is written out and covered, so a rename on either side fails a test instead of silently stopping the catch-up for every host.
 
+## The one behavior change
+
+Watched paths retried a failed command with no recorded completion time on every sweep: the zero timestamp went through the six-hour comparison as the year 1, which is always long enough ago. Containment did not, and the shared decision keeps containment's reading, since nothing about a command with no completion time says how long ago it failed and retrying every sweep is what the wait exists to prevent. The watched-path delta states it, and the case is covered in both that context's tests and the shared decision's.
+
 ## Out of scope
 
 - The application-control fan-out, which pushes a policy to hosts but has no per-host catch-up of this shape.

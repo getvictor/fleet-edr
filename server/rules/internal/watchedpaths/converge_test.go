@@ -11,6 +11,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
+// spec:server-admin-surface/hosts-that-miss-the-watched-path-push-get-the-set/a-failure-with-no-completion-time-is-not-retried-at-once
 func TestNeedsSet(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
