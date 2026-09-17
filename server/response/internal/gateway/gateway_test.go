@@ -34,8 +34,9 @@ type fakeSource struct {
 	updates []api.UpdateStatusRequest
 }
 
-// failingSource answers every delivery query with an error, for the path where the database is unreachable.
-type failingSource struct{ fakeSource }
+// failingSource answers every delivery query with an error, for the path where the database is unreachable. The embedded source is a
+// pointer: fakeSource carries a mutex, and a value embed would copy it.
+type failingSource struct{ *fakeSource }
 
 func (f *failingSource) ListDeliverableForHosts(context.Context, []string, time.Time, time.Time) ([]api.Command, error) {
 	return nil, errors.New("database unreachable")
@@ -661,7 +662,7 @@ func TestGatewayLeavesAnAcknowledgedCommandOutsideTheBounds(t *testing.T) {
 // database blip would cost the host its commands and its liveness signal for as long as the blip lasts.
 func TestGatewayKeepsTheConnectionWhenTheDeliveryQueryFails(t *testing.T) {
 	t.Parallel()
-	src := &failingSource{fakeSource: *newFakeSource()}
+	src := &failingSource{fakeSource: newFakeSource()}
 	ver := newFakeVerifier()
 	ver.add("tok-a", "host-a")
 	_, dial := newTestGateway(t, src, ver)
@@ -683,6 +684,36 @@ func TestGatewayDeliverSkipsAHostWithNoConnection(t *testing.T) {
 	g := New(Deps{Source: src, Verifier: newFakeVerifier()})
 
 	g.deliverPending(t.Context(), []string{"host-elsewhere"})
+}
+
+// A replayed outcome arrives as an acknowledgement and then a terminal frame. The acknowledgement must not free the command to be
+// offered again: the server refuses acked -> acked, so the row stays eligible, and a watch tick a second later would push it while
+// the frame that ends it is still in flight (issue #1062).
+func TestGatewayKeepsTheMarkUntilAnOutcomeIsTerminal(t *testing.T) {
+	t.Parallel()
+	src := newFakeSource()
+	ver := newFakeVerifier()
+	ver.add("tok-a", "host-a")
+	now := time.Now()
+	src.addAcked(api.Command{ID: 9, HostID: "host-a", CommandType: "kill_process"}, now.Add(-2*defaultUnreportedGrace))
+	g, dial := newTestGateway(t, src, ver)
+	g.now = func() time.Time { return now }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
+	require.NoError(t, err)
+
+	cmd, err := recvCommand(t, stream)
+	require.NoError(t, err)
+	require.NotNil(t, cmd)
+	require.Equal(t, int64(9), cmd.GetId())
+
+	// The agent re-acknowledges first, as a ledger replay does. The command must not come back while its outcome is on its way.
+	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: 9, Status: string(api.StatusAcked),
+	}}}))
+	requireNoCommandOffered(t, stream, 300*time.Millisecond)
 }
 
 func TestGatewayServeAndStop(t *testing.T) {

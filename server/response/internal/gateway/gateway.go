@@ -321,7 +321,14 @@ func (g *Gateway) recvLoop(ctx context.Context, stream control.ControlChannel_Co
 // applyOutcome records a reported outcome via the response service. Once any outcome lands the command leaves the pending state, so we
 // clear the in-flight mark. An invalid-transition error means a re-delivered, already-handled command: benign, logged at debug.
 func (g *Gateway) applyOutcome(ctx context.Context, c *conn, oc *control.Outcome) {
-	c.clearInflight(oc.Id)
+	// Only a terminal outcome frees the command to be offered again. An acknowledgement says the agent is running it, which is the
+	// one state where a second offer is certainly wrong, and for a command already acknowledged it moves nothing: the server refuses
+	// acked -> acked, so clearing the mark on it would leave the row eligible for the very next watch tick, a second apart, while the
+	// outcome that ends it is still on its way (issue #1062). The mark is per connection, so a host that drops mid-execution loses it
+	// with the connection and is offered the command again on its next one.
+	if api.Status(oc.Status) != api.StatusAcked {
+		c.clearInflight(oc.Id)
+	}
 	err := g.src.UpdateStatus(ctx, api.UpdateStatusRequest{
 		HostID: c.hostID,
 		ID:     oc.Id,
