@@ -165,9 +165,18 @@ func (s *Service) QueueTx(ctx context.Context, q sqlx.ExecerContext, hostID, com
 	return mysql.InsertTx(ctx, q, hostID, commandType, payload)
 }
 
-// AuditEntryFor builds the audit entry recording an operator action on the command that has just been written, given its id. It runs
-// inside the action's transaction, so an error from it refuses the action rather than leaving it recorded without a row.
-type AuditEntryFor func(id int64) (auditoutbox.Entry, error)
+// AuditedCommand is the command row an operator action has just written, as the audit entry describing it must see it: normalized
+// exactly as persisted, so the row and the entry cannot disagree about which host was affected. A caller that captured its own
+// request values instead would record " host-a " for a command stored against host-a.
+type AuditedCommand struct {
+	ID          int64
+	HostID      string
+	CommandType string
+}
+
+// AuditEntryFor builds the audit entry recording an operator action on the command that has just been written. It runs inside the
+// action's transaction, so an error from it refuses the action rather than leaving it recorded without a row.
+type AuditEntryFor func(cmd AuditedCommand) (auditoutbox.Entry, error)
 
 // InsertAudited queues a command and commits entry(id) with it, so an issued command and the row saying who issued it exist together
 // or not at all (issue #1070). The gateway is notified and the entry delivered after the commit, in that order, because nothing
@@ -184,7 +193,7 @@ func (s *Service) InsertAudited(ctx context.Context, hostID, commandType string,
 		if err != nil {
 			return err
 		}
-		return s.enqueueAudit(ctx, q, entry, id)
+		return s.enqueueAudit(ctx, q, entry, AuditedCommand{ID: id, HostID: hostID, CommandType: commandType})
 	}); err != nil {
 		return 0, err
 	}
@@ -201,10 +210,11 @@ func (s *Service) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusR
 		return err
 	}
 	if err := s.store.InTx(ctx, func(q sqlx.ExtContext) error {
-		if err := mysql.UpdateStatusTx(ctx, q, req.ID, req.HostID, current, req.Status, req.Result); err != nil {
+		if err := mysql.UpdateStatusTx(ctx, q, req.ID, req.HostID, current.Status, req.Status, req.Result); err != nil {
 			return err
 		}
-		return s.enqueueAudit(ctx, q, entry, req.ID)
+		// The command as stored, read back by transitionFrom, rather than as the request named it.
+		return s.enqueueAudit(ctx, q, entry, AuditedCommand{ID: current.ID, HostID: current.HostID, CommandType: current.CommandType})
 	}); err != nil {
 		return err
 	}
@@ -214,11 +224,11 @@ func (s *Service) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusR
 
 // enqueueAudit builds the entry for the command just written and commits it through the same executor. A Service with no outbox is
 // non-production wiring, and it records nothing rather than failing the action.
-func (s *Service) enqueueAudit(ctx context.Context, q sqlx.ExtContext, entry AuditEntryFor, id int64) error {
+func (s *Service) enqueueAudit(ctx context.Context, q sqlx.ExtContext, entry AuditEntryFor, cmd AuditedCommand) error {
 	if s.outbox == nil || entry == nil {
 		return nil
 	}
-	e, err := entry(id)
+	e, err := entry(cmd)
 	if err != nil {
 		return err
 	}
@@ -272,32 +282,34 @@ func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest)
 	if err != nil {
 		return err
 	}
-	// Pass current as the expected-from value so the store applies the WHERE clause atomically. If a concurrent caller advanced the
-	// row between our read and this write, the store returns ErrInvalidStatusTransition (not silently overwriting the newer state).
-	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current, req.Status, req.Result)
+	// Pass the stored status as the expected-from value so the store applies the WHERE clause atomically. If a concurrent caller
+	// advanced the row between our read and this write, the store returns ErrInvalidStatusTransition rather than silently
+	// overwriting the newer state.
+	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current.Status, req.Status, req.Result)
 }
 
-// transitionFrom checks that req is a move this command may make and returns the status to move it from, which the write then pins in
-// its WHERE clause. Shared with UpdateStatusAudited so an audited move cannot drift from an unaudited one.
-func (s *Service) transitionFrom(ctx context.Context, req api.UpdateStatusRequest) (api.Status, error) {
+// transitionFrom checks that req is a move this command may make and returns the command as stored. Its status is what the write pins
+// in its WHERE clause, and its host and type are what an audit entry describes, so neither is taken from the request. Shared with
+// UpdateStatusAudited so an audited move cannot drift from an unaudited one.
+func (s *Service) transitionFrom(ctx context.Context, req api.UpdateStatusRequest) (api.Command, error) {
 	if !validTargetStatus(req.Status) {
-		return "", fmt.Errorf("%w: status must be acked, completed, failed, cancelled, or expired (got %q)",
+		return api.Command{}, fmt.Errorf("%w: status must be acked, completed, failed, cancelled, or expired (got %q)",
 			api.ErrInvalidStatusTransition, req.Status)
 	}
 	// Load the current row to validate ownership + current state. store.Get returns ErrCommandNotFound when the id is unknown;
 	// we additionally collapse the wrong-host case to the same sentinel (probing-oracle defence).
 	current, err := s.store.Get(ctx, req.ID)
 	if err != nil {
-		return "", err
+		return api.Command{}, err
 	}
 	if current.HostID != req.HostID {
-		return "", api.ErrCommandNotFound
+		return api.Command{}, api.ErrCommandNotFound
 	}
 	if !canTransition(current.Status, req.Status) {
-		return "", fmt.Errorf("%w: cannot move from %q to %q",
+		return api.Command{}, fmt.Errorf("%w: cannot move from %q to %q",
 			api.ErrInvalidStatusTransition, current.Status, req.Status)
 	}
-	return current.Status, nil
+	return current, nil
 }
 
 // UndeliverableByHost reports which of hostIDs have commands that aged out undelivered recently (issue #732). The window boundary is

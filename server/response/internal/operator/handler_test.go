@@ -42,11 +42,11 @@ type fakeService struct {
 
 // audited runs the handler's entry builder the way the service does, inside the write, and records what it produced. A builder that
 // fails fails the write, as it does in production.
-func (f fakeService) audited(id int64, entry service.AuditEntryFor) error {
+func (f fakeService) audited(cmd service.AuditedCommand, entry service.AuditEntryFor) error {
 	if entry == nil || f.entries == nil {
 		return nil
 	}
-	e, err := entry(id)
+	e, err := entry(cmd)
 	if err != nil {
 		return err
 	}
@@ -58,20 +58,27 @@ func (f fakeService) audited(id int64, entry service.AuditEntryFor) error {
 	return nil
 }
 
+// Normalizes as the real service does, so a test that passes an unnormalized host id sees what the real write would record.
 func (f fakeService) InsertAudited(ctx context.Context, hostID, commandType string, payload []byte,
 	entry service.AuditEntryFor) (int64, error) {
 	id, err := f.Insert(ctx, hostID, commandType, payload)
 	if err != nil {
 		return 0, err
 	}
-	return id, f.audited(id, entry)
+	return id, f.audited(service.AuditedCommand{
+		ID: id, HostID: strings.TrimSpace(hostID), CommandType: strings.TrimSpace(commandType),
+	}, entry)
 }
 
 func (f fakeService) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusRequest, entry service.AuditEntryFor) error {
 	if err := f.UpdateStatus(ctx, req); err != nil {
 		return err
 	}
-	return f.audited(req.ID, entry)
+	cmd, err := f.Get(ctx, req.ID)
+	if err != nil {
+		return err
+	}
+	return f.audited(service.AuditedCommand{ID: cmd.ID, HostID: cmd.HostID, CommandType: cmd.CommandType}, entry)
 }
 
 func (f fakeService) Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error) {

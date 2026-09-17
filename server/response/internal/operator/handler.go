@@ -94,7 +94,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, err := h.svc.InsertAudited(ctx, body.HostID, body.CommandType, body.Payload,
-		h.auditEntry(r, identityapi.AuditCommandIssue, body.HostID, body.CommandType))
+		h.auditEntry(r, identityapi.AuditCommandIssue))
 	switch {
 	case errors.Is(err, api.ErrInvalidInsertRequest):
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_request")
@@ -172,7 +172,7 @@ func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
 	// HostID is the command's own, read back above: UpdateStatus enforces host ownership so a caller cannot move a command by id
 	// alone, and the operator path has to satisfy the same check the agent path does.
 	err := h.svc.UpdateStatusAudited(ctx, api.UpdateStatusRequest{ID: id, HostID: cmd.HostID, Status: api.StatusCancelled},
-		h.auditEntry(r, identityapi.AuditCommandCancel, cmd.HostID, cmd.CommandType))
+		h.auditEntry(r, identityapi.AuditCommandCancel))
 	switch {
 	case errors.Is(err, api.ErrInvalidStatusTransition):
 		// The agent already has it, or it already finished. Reporting success here would tell the operator nothing ran on the host
@@ -211,27 +211,30 @@ func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
 // withdrawal was recorded as an issuance and nothing in the trail told them apart.
 //
 // target = the host receiving the command; the payload carries command_type and command_id so a reviewer can reconstruct the exact
-// action without joining commands.
-func (h *Handler) auditEntry(r *http.Request, action identityapi.AuditAction, hostID, commandType string) service.AuditEntryFor {
+// action without joining commands. All three come from the write rather than from this request, so the row and the entry describing
+// it cannot disagree.
+func (h *Handler) auditEntry(r *http.Request, action identityapi.AuditAction) service.AuditEntryFor {
 	ctx := r.Context()
 	var actor identityapi.PrincipalRef
 	if a, ok := identityapi.ActorFromContext(ctx); ok {
 		actor = a.Principal
 	}
 	remoteAddr := httpserver.ClientIP(r)
-	return func(id int64) (auditoutbox.Entry, error) {
+	return func(cmd service.AuditedCommand) (auditoutbox.Entry, error) {
 		return auditoutbox.Encode(identityapi.AuditEvent{
 			Actor:      actor,
 			Action:     action,
 			TargetType: "host",
-			TargetID:   hostID,
+			// The host and type as the write persisted them, not as this request named them: a request naming " host-a " stores a
+			// command against host-a, and a row describing it must say the same.
+			TargetID:   cmd.HostID,
 			RemoteAddr: remoteAddr,
 			// Carried explicitly: the drain that delivers this entry may be another request's or the sweep's, and it detaches its
 			// own trace so it cannot stamp one request's trace onto another's row.
 			TraceID: identityapi.TraceIDFromContext(ctx),
 			Payload: map[string]any{
-				"command_type": commandType,
-				"command_id":   id,
+				"command_type": cmd.CommandType,
+				"command_id":   cmd.ID,
 			},
 		})
 	}

@@ -95,7 +95,9 @@ Size the per-replica limit with that in mind: divide the fleet-wide budget you w
 
 The audit log dual-emits: every event is written to MySQL AND to slog (the secondary durable sink). Writes, denials, and auth events take the synchronous path and are durable before the request returns. Only sampled read-audit events ride an in-memory async queue (~8192 deep) so the read hot path does not wait on an INSERT.
 
-On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a hard kill (SIGKILL, OOM) the in-flight queue is lost, but those same events were already emitted to slog, so they survive in your OTel/log backend. The append-only MySQL audit table can therefore miss sampled read rows after a hard crash; the slog stream is the recovery source. The current release accepts this rather than shipping a write-ahead audit outbox (a possible follow-up). Alert on the `audit dropped` / `audit async record failed` WARN logs (see [Auth + authz dashboard](#auth--authz-dashboard)) to catch sustained drops.
+On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a hard kill (SIGKILL, OOM) the in-flight queue is lost, but those same events were already emitted to slog, so they survive in your OTel/log backend. The append-only MySQL audit table can therefore miss sampled read rows after a hard crash; the slog stream is the recovery source. Alert on the `audit dropped` / `audit async record failed` WARN logs (see [Auth + authz dashboard](#auth--authz-dashboard)) to catch sustained drops.
+
+Changes you make, as opposed to reads, do not depend on that queue. Containing or releasing a host, issuing or withdrawing a command, editing rule content, and changing detection configuration each write their audit row into an outbox in the same transaction as the change itself, so the row exists if and only if the change does. The rows are handed to the audit log straight after the change commits, and a sweep every minute delivers any the request could not. A row can therefore arrive late, after an audit-store outage or a crash, but it is not lost and it never describes a change that did not happen.
 
 ## Upgrade agents
 

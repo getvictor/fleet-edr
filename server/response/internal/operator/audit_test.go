@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
@@ -142,4 +144,60 @@ func TestHandler_AFailedActionCommitsNoAuditEntry(t *testing.T) {
 		assert.Equal(t, http.StatusConflict, post(t, srv, "/api/commands/42/cancel", nil))
 		assert.Empty(t, entries)
 	})
+}
+
+// The entry describes the command as it was stored, not as the request spelled it. A host id with surrounding whitespace is stored
+// trimmed, and an entry built from the request's own copy would name a host that has no such command.
+func TestHandler_CommandIssue_AuditsTheHostTheCommandWasStoredAgainst(t *testing.T) {
+	t.Parallel()
+	var entries []identityapi.AuditEvent
+	var stored string
+	svc := fakeService{
+		insert: func(_ context.Context, hostID, _ string, _ []byte) (int64, error) {
+			stored = strings.TrimSpace(hostID)
+			return 99, nil
+		},
+		entries: &entries,
+	}
+	srv := serveWithActor(t, New(svc, allowAllAuthZ{}, nil), identityapi.PrincipalRef{ID: "usr_7"})
+
+	require.Equal(t, http.StatusCreated, post(t, srv, "/api/commands", map[string]any{
+		"host_id": "  host-a  ", "command_type": "kill_process", "payload": map[string]any{"pid": 1},
+	}))
+
+	require.Len(t, entries, 1)
+	assert.Equal(t, "host-a", stored)
+	assert.Equal(t, stored, entries[0].TargetID, "the entry names the host the command was stored against")
+}
+
+// The delivered row has to carry the trace of the request that made the change: the drain detaches its own so it cannot stamp one
+// request's trace onto another's row, so an entry that does not carry its own arrives without one. Deleting the assignment in
+// auditEntry would otherwise leave these tests green.
+func TestHandler_CommandIssue_CarriesTheRequestTrace(t *testing.T) {
+	t.Parallel()
+	var entries []identityapi.AuditEvent
+	svc := fakeService{
+		insert:  func(context.Context, string, string, []byte) (int64, error) { return 99, nil },
+		entries: &entries,
+	}
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	require.NoError(t, err)
+	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled})
+
+	mux := http.NewServeMux()
+	New(svc, allowAllAuthZ{}, nil).RegisterRoutes(mux)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{Principal: identityapi.PrincipalRef{ID: "usr_7"}})
+		mux.ServeHTTP(w, r.WithContext(trace.ContextWithSpanContext(ctx, spanCtx)))
+	}))
+	t.Cleanup(srv.Close)
+
+	require.Equal(t, http.StatusCreated, post(t, srv, "/api/commands", map[string]any{
+		"host_id": "H-1", "command_type": "kill_process", "payload": map[string]any{"pid": 1},
+	}))
+
+	require.Len(t, entries, 1)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", entries[0].TraceID)
 }

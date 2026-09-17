@@ -20,9 +20,9 @@ import (
 
 func entryFor(t *testing.T, action identityapi.AuditAction) service.AuditEntryFor {
 	t.Helper()
-	return func(id int64) (auditoutbox.Entry, error) {
+	return func(cmd service.AuditedCommand) (auditoutbox.Entry, error) {
 		return auditoutbox.Encode(identityapi.AuditEvent{
-			Action: action, TargetType: "host", TargetID: "host-a", Payload: map[string]any{"command_id": id},
+			Action: action, TargetType: "host", TargetID: cmd.HostID, Payload: map[string]any{"command_id": cmd.ID},
 		})
 	}
 }
@@ -63,7 +63,7 @@ func TestInsertAudited_AnEntryThatCannotBeBuiltRefusesTheAction(t *testing.T) {
 
 	boom := errors.New("cannot encode")
 	_, err := svc.InsertAudited(t.Context(), "host-a", "kill_process", []byte(`{"pid":1}`),
-		func(int64) (auditoutbox.Entry, error) { return auditoutbox.Entry{}, boom })
+		func(service.AuditedCommand) (auditoutbox.Entry, error) { return auditoutbox.Entry{}, boom })
 	require.ErrorIs(t, err, boom)
 
 	cmds, err := store.ListForHost(t.Context(), "host-a", "")
