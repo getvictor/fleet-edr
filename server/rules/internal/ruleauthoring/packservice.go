@@ -19,9 +19,8 @@ import (
 // It adds nothing to reading status, which changes nothing and needs no reason, so that method is a pass-through. The asymmetry
 // is deliberate: a reason is required exactly where something is being changed.
 type PackService struct {
-	packs  rulecontentapi.PackLifecycle
-	drain  *auditoutbox.Drain
-	logger *slog.Logger
+	packs rulecontentapi.PackLifecycle
+	drain *auditoutbox.Drain
 }
 
 // NewPackService builds a PackService. Every collaborator is required, the recorder included: a rollback that replaced every
@@ -40,7 +39,7 @@ func NewPackService(
 	if err != nil {
 		return nil, err
 	}
-	return &PackService{packs: packs, drain: drain, logger: logger}, nil
+	return &PackService{packs: packs, drain: drain}, nil
 }
 
 // Status reports which generation of shipped rules is installed and how it differs from the one this build carries.

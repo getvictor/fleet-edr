@@ -22,7 +22,6 @@ type Service struct {
 	author   rulecontentapi.Author
 	validate rulecontentapi.Validator
 	drain    *auditoutbox.Drain
-	logger   *slog.Logger
 }
 
 // New builds a Service. Every collaborator is required, the recorder included.
@@ -46,7 +45,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return &Service{author: author, validate: validate, drain: drain, logger: logger}, nil
+	return &Service{author: author, validate: validate, drain: drain}, nil
 }
 
 // ErrReasonRequired reports that a change arrived without a stated reason.
