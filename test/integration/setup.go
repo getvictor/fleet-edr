@@ -293,7 +293,7 @@ func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
 	// apart from the rule not firing.
 	detectionCtx.SetHealthEpisodeRecorder(endpointCtx.HealthEpisodeRecorder())
 	// Mirrors cmd/main (issue #948): host containment checks and lists enrollments through the endpoint context.
-	require.NoError(t, responseCtx.EnableContainment(
+	responseCtx.EnableContainment(
 		func(ctx context.Context, hostID string) (bool, error) {
 			e, err := endpointCtx.Service().Get(ctx, hostID)
 			if errors.Is(err, endpointapi.ErrNotFound) {
@@ -308,7 +308,7 @@ func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
 				out[i] = responseapi.HostEnrollment{HostID: e.HostID, EnrolledAt: e.EnrolledAt}
 			}
 			return out, err
-		}))
+		})
 
 	mux := buildMux(detectionCtx, endpointCtx, identityCtx, rulesCtx, responseCtx, logger)
 

@@ -500,8 +500,8 @@ func TestBootstrap_ContainmentIsMountedOnlyOnceEnabled(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, notMounted.StatusCode)
 	r.RunContainmentCatchUp(t.Context()) // returns at once: nothing to run
 
-	require.NoError(t, r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
-		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }))
+	r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
+		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil })
 	contained := serve(http.MethodPost, `{"contained":true,"reason":"wiring"}`)
 	defer contained.Body.Close()
 	require.Equal(t, http.StatusOK, contained.StatusCode)
@@ -973,8 +973,8 @@ func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *tes
 	r, err := bootstrap.New(bootstrap.Deps{DB: s, AuthZ: allowAllAuthZ{}, Audit: audit, AuditSweepInterval: 20 * time.Millisecond})
 	require.NoError(t, err)
 	require.NoError(t, r.ApplySchema(t.Context()))
-	require.NoError(t, r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
-		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }))
+	r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
+		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil })
 
 	mux := http.NewServeMux()
 	r.RegisterAuthedRoutes(mux)
