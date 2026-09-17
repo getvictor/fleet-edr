@@ -519,6 +519,76 @@ func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
 	assert.False(t, second.Contained)
 }
 
+// A database that cannot answer produces an error, not a quiet no-op. An operator who is told a host was contained must not have to
+// wonder whether it was, and the catch-up must report a sweep it could not complete rather than counting it as done.
+func TestStoreFailuresAreReported(t *testing.T) {
+	t.Parallel()
+	contained := api.ContainmentState{HostID: "host-a", Version: 1, Epoch: 1}
+	queueOK := func(context.Context, sqlx.ExecerContext, api.ContainmentState) (int64, error) { return 1, nil }
+
+	t.Run("a closed database", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		require.NoError(t, f.db.Close())
+
+		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "why", "user:7", queueOK)
+		require.Error(t, err)
+		_, _, err = f.store.QueueCurrent(t.Context(), contained, queueOK)
+		require.Error(t, err)
+	})
+
+	t.Run("a table that is not there", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		_, err := f.db.ExecContext(t.Context(), `DROP TABLE host_containment`)
+		require.NoError(t, err)
+
+		_, _, _, err = f.store.Set(t.Context(), "host-a", true, "why", "user:7", queueOK)
+		require.Error(t, err, "the containment cannot be created")
+		_, _, _, err = f.store.Set(t.Context(), "host-a", false, "why", "user:7", queueOK)
+		require.Error(t, err, "the state cannot be read")
+		_, _, err = f.store.QueueCurrent(t.Context(), contained, queueOK)
+		require.Error(t, err, "the catch-up cannot read the state it meant to queue")
+	})
+
+	t.Run("a sweep carries on past a host it cannot queue", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+		require.NoError(t, err)
+		// Its command expires, so the catch-up means to queue the state again.
+		_, err = f.db.ExecContext(t.Context(), `UPDATE commands SET status = ? WHERE host_id = ?`, api.StatusExpired, "host-a")
+		require.NoError(t, err)
+
+		enrollments := func(context.Context) ([]api.HostEnrollment, error) {
+			return []api.HostEnrollment{{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]}}, nil
+		}
+		failing := func(context.Context, sqlx.ExecerContext, string, string, []byte) (int64, error) {
+			return 0, errors.New("queue unavailable")
+		}
+		converger := containment.NewConverger(f.store, failing, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
+
+		queued, err := converger.Converge(t.Context())
+		require.NoError(t, err, "one host that cannot be queued does not end the sweep")
+		assert.Zero(t, queued)
+		assert.Equal(t, []string{"host-a"}, f.notified.recorded(), "only the change told the gateway; the failed queue did not")
+	})
+
+	t.Run("a command that cannot be queued by the catch-up", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+		require.NoError(t, err)
+
+		_, queued, err := f.store.QueueCurrent(t.Context(), change.State,
+			func(context.Context, sqlx.ExecerContext, api.ContainmentState) (int64, error) {
+				return 0, errors.New("queue unavailable")
+			})
+		require.Error(t, err)
+		assert.False(t, queued)
+	})
+}
+
 // The catch-up has its own transaction and its own notification, so the guarantee is checked there too: the command it queues is
 // visible to another connection by the time the gateway is told to look for it.
 func TestConverge_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
