@@ -22,7 +22,6 @@ type Service struct {
 	author   rulecontentapi.Author
 	validate rulecontentapi.Validator
 	drain    *auditoutbox.Drain
-	logger   *slog.Logger
 }
 
 // New builds a Service. Every collaborator is required, the recorder included.
@@ -46,7 +45,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return &Service{author: author, validate: validate, drain: drain, logger: logger}, nil
+	return &Service{author: author, validate: validate, drain: drain}, nil
 }
 
 // ErrReasonRequired reports that a change arrived without a stated reason.
@@ -148,11 +147,5 @@ func (s *Service) auditEntry(
 // logged and not returned: the operator's change succeeded and so did its record, and telling them otherwise would be the false
 // report the old ordering was trying to avoid.
 func (s *Service) deliver(ctx context.Context) {
-	if s.drain == nil {
-		return
-	}
-	if _, err := s.drain.Drain(ctx); err != nil {
-		s.logger.WarnContext(ctx, "rule content audit entry is committed but not yet delivered; the sweep will retry it",
-			"err", err)
-	}
+	s.drain.DeliverNow(ctx)
 }

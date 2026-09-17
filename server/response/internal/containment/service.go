@@ -7,10 +7,10 @@ import (
 
 	"context"
 	"encoding/json"
-	"log/slog"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 )
@@ -32,21 +32,19 @@ type Service struct {
 	queue    CommandQueuer
 	notify   Notifier
 	latest   LatestCommands
-	audit    identityapi.AuditRecorder
-	logger   *slog.Logger
+	outbox   *auditoutbox.Store
+	drain    *auditoutbox.Drain
 }
 
-// NewService builds a Service. store, enrolled, queue, notify and latest are required. audit may be nil outside production, which
-// records changes without audit events.
+// NewService builds a Service. store, enrolled, queue, notify, latest and outbox are required: the outbox is where a change's audit
+// entry commits with it, so a Service without one could record a containment with nothing saying who made it. drain may be nil outside
+// production, which leaves the entries in the outbox rather than turning them into audit rows.
 func NewService(store *Store, enrolled api.HostEnrolledChecker, queue CommandQueuer, notify Notifier, latest LatestCommands,
-	audit identityapi.AuditRecorder, logger *slog.Logger) *Service {
-	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil {
-		panic("containment.NewService: store, enrolled, queue, notify and latest are required")
+	outbox *auditoutbox.Store, drain *auditoutbox.Drain) *Service {
+	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil || outbox == nil {
+		panic("containment.NewService: store, enrolled, queue, notify, latest and outbox are required")
 	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-	return &Service{store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, audit: audit, logger: logger}
+	return &Service{store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, outbox: outbox, drain: drain}
 }
 
 // commandPayload is the set_network_containment payload for a state. The change and the catch-up both build it here, so a host that is
@@ -132,7 +130,21 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	// operator is told it failed rather than left with a state whose command the catch-up has to notice (issue #1073).
 	state, changed, commandID, err := s.store.Set(ctx, hostID, contained, reason, actor.ID,
 		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
-			return s.queue(ctx, q, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state))
+			id, qerr := s.queue(ctx, q, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state))
+			if qerr != nil {
+				return 0, qerr
+			}
+			// The audit entry commits with the change it records, so a host can never be found contained with nothing saying who
+			// did it or why (issue #1070). Everything the row needs is known here, including the id of the command queued just
+			// above, so the entry is written whole rather than held and completed later.
+			entry, eerr := auditEntry(ctx, actor, remoteAddr, api.ContainmentChange{State: state, Changed: true, CommandID: id})
+			if eerr != nil {
+				return 0, eerr
+			}
+			if eerr := s.outbox.Enqueue(ctx, q, entry); eerr != nil {
+				return 0, eerr
+			}
+			return id, nil
 		})
 	if err != nil {
 		return api.ContainmentChange{}, err
@@ -141,18 +153,17 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	if !changed {
 		return change, nil
 	}
-	// After the commit: a gateway told earlier could look for a command that is not there yet.
+	// Both after the commit: a gateway told earlier could look for a command that is not there yet, and the entry is not a row to
+	// deliver until the change it records is durable.
 	s.notify(hostID)
-	s.recordAudit(ctx, actor, remoteAddr, change)
+	s.drain.DeliverNow(ctx)
 	return change, nil
 }
 
-// recordAudit emits the change's audit event. The state row is authoritative, so a recorder failure is logged rather than returned,
-// as for command issuance.
-func (s *Service) recordAudit(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr string, change api.ContainmentChange) {
-	if s.audit == nil {
-		return
-	}
+// auditEntry encodes the change's audit event, ready to commit with it. An encoding failure fails the change rather than being
+// logged past: the point of committing the entry with the change is that neither exists without the other.
+func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr string,
+	change api.ContainmentChange) (auditoutbox.Entry, error) {
 	action := identityapi.AuditHostRelease
 	if change.State.Contained {
 		action = identityapi.AuditHostContain
@@ -161,9 +172,10 @@ func (s *Service) recordAudit(ctx context.Context, actor identityapi.PrincipalRe
 	if change.CommandID != 0 {
 		payload["command_id"] = change.CommandID
 	}
-	if err := s.audit.Record(ctx, identityapi.AuditEvent{
+	return auditoutbox.Encode(identityapi.AuditEvent{
 		Actor: actor, Action: action, TargetType: "host", TargetID: change.State.HostID, RemoteAddr: remoteAddr, Payload: payload,
-	}); err != nil {
-		s.logger.WarnContext(ctx, "audit record", "err", err, "action", string(action), "host_id", change.State.HostID)
-	}
+		// Carried explicitly. The drain that delivers this entry may be another request's or the sweep's, and it detaches its own
+		// trace so it cannot stamp one request's trace onto another's row, so an entry that does not carry its own arrives without.
+		TraceID: identityapi.TraceIDFromContext(ctx),
+	})
 }

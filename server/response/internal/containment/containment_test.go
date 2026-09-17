@@ -15,7 +15,9 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/containment"
@@ -25,17 +27,34 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// recordingAudit keeps every audit event recorded.
+// recordingAudit keeps every audit event recorded, and refuses them while unavailable, as a store that is down does.
 type recordingAudit struct {
-	mu     sync.Mutex
-	events []identityapi.AuditEvent
+	mu          sync.Mutex
+	events      []identityapi.AuditEvent
+	unavailable error
 }
 
 func (r *recordingAudit) Record(_ context.Context, e identityapi.AuditEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.unavailable != nil {
+		return r.unavailable
+	}
 	r.events = append(r.events, e)
 	return nil
+}
+
+// goesDown makes every later Record fail; comesBack lets them through again.
+func (r *recordingAudit) goesDown(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unavailable = err
+}
+
+func (r *recordingAudit) comesBack() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unavailable = nil
 }
 
 func (r *recordingAudit) recorded() []identityapi.AuditEvent {
@@ -51,6 +70,8 @@ type fixture struct {
 	converger *containment.Converger
 	commands  *service.Service
 	audit     *recordingAudit
+	outbox    *auditoutbox.Store
+	drain     *auditoutbox.Drain
 	// db is the test's own handle, for asking the database what another connection can see.
 	db *sqlx.DB
 	// notified records the hosts the control gateway was told about, in order, after their transactions committed.
@@ -105,7 +126,7 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	f := &fixture{
 		store: containment.NewStore(db), commands: service.New(mysql.NewStore(db), nil, nil), audit: &recordingAudit{},
-		notified: &notifyRecorder{db: db}, db: db,
+		outbox: auditoutbox.NewStore(db, mysql.AuditOutboxTable), notified: &notifyRecorder{db: db}, db: db,
 		enrolled: map[string]time.Time{"host-a": time.Now().Add(-time.Hour), "host-b": time.Now().Add(-time.Hour)},
 	}
 	isEnrolled := func(_ context.Context, hostID string) (bool, error) {
@@ -119,7 +140,10 @@ func newFixture(t *testing.T) *fixture {
 		}
 		return out, nil
 	}
-	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.audit, nil)
+	drain, err := auditoutbox.NewDrain(f.outbox, f.audit, "host containment", nil)
+	require.NoError(t, err)
+	f.drain = drain
+	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain)
 	f.converger = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments,
 		f.commands.LatestOfType, nil)
 	return f
@@ -157,6 +181,10 @@ func payloadOf(t *testing.T, cmd api.Command) api.SetNetworkContainmentPayload {
 
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/an-operator-contains-a-host
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/a-release-is-recorded-the-same-way
+// spec:server-host-containment/a-containment-change-commits-its-audit-entry/a-change-commits-with-its-audit-entry
+//
+// The audit assertions below read the rows the outbox delivered, so they are also what says the entry committed with the change:
+// the recorder is only reached through a drain, and a drain only ever sees an entry the change's transaction wrote.
 func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -194,12 +222,14 @@ func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 		assert.Equal(t, "host", e.TargetType)
 		assert.Equal(t, "host-a", e.TargetID)
 		assert.Equal(t, "203.0.113.5", e.RemoteAddr)
-		assert.Equal(t, int64(i+1), e.Payload["version"])
+		// EqualValues, not Equal: the entry commits as JSON and JSON has one number type, so a delivered payload's numbers arrive
+		// as float64 whatever Go type was put in. The stored row is the same either way; the value is what the test is about.
+		assert.EqualValues(t, i+1, e.Payload["version"])
 	}
-	assert.Equal(t, contain.State.Epoch, events[0].Payload["epoch"])
-	assert.Equal(t, release.State.Epoch, events[1].Payload["epoch"])
+	assert.EqualValues(t, contain.State.Epoch, events[0].Payload["epoch"])
+	assert.EqualValues(t, release.State.Epoch, events[1].Payload["epoch"])
 	assert.Equal(t, "beaconing to a known C2", events[0].Payload["reason"])
-	assert.Equal(t, contain.CommandID, events[0].Payload["command_id"])
+	assert.EqualValues(t, contain.CommandID, events[0].Payload["command_id"])
 }
 
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-without-a-reason-is-refused
@@ -668,7 +698,7 @@ func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 		return 0, errors.New("queue unavailable")
 	}
 	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
-		f.notified.notify, f.commands.LatestOfType, f.audit, nil)
+		f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 
 	_, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
 	require.Error(t, err)
@@ -688,7 +718,7 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	boom := errors.New("boom")
 	_, err := containment.NewService(f.store, func(context.Context, string) (bool, error) { return false, boom }, f.commands.QueueTx,
 		f.notified.notify,
-		f.commands.LatestOfType, nil, nil).Set(t.Context(), operator, "", "host-a", true, "x")
+		f.commands.LatestOfType, f.outbox, nil).Set(t.Context(), operator, "", "host-a", true, "x")
 	require.ErrorIs(t, err, boom)
 
 	_, err = f.svc.Set(t.Context(), operator, "", "host-a", true, "x")
@@ -696,7 +726,7 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
 		f.notified.notify,
-		latestFails, nil, nil).Get(t.Context(), "host-a")
+		latestFails, f.outbox, nil).Get(t.Context(), "host-a")
 	require.ErrorIs(t, err, boom)
 	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify,
 		func(context.Context) ([]api.HostEnrollment, error) { return nil, boom },
@@ -735,11 +765,14 @@ func TestConstructorsRequireTheirDependencies(t *testing.T) {
 	enrollments := func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }
 	assert.Panics(t, func() { containment.NewStore(nil) })
 	assert.Panics(t, func() {
-		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
+		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 	})
 	assert.Panics(t, func() {
-		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
+		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 	})
+	assert.Panics(t, func() {
+		containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
+	}, "a service without an outbox could record a containment with nothing saying who made it")
 	assert.Panics(t, func() {
 		containment.NewConverger(f.store, nil, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
 	})
@@ -788,7 +821,103 @@ func TestList_EveryHostWithAState(t *testing.T) {
 		latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 		_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
 			f.notified.notify,
-			latestFails, nil, nil).List(t.Context())
+			latestFails, f.outbox, nil).List(t.Context())
 		require.ErrorIs(t, err, boom)
 	})
+}
+
+// pendingAudit decodes the audit entries the outbox holds, oldest first.
+func (f *fixture) pendingAudit(t *testing.T) []identityapi.AuditEvent {
+	t.Helper()
+	pending, err := f.outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	require.NoError(t, err)
+	out := make([]identityapi.AuditEvent, 0, len(pending))
+	for _, p := range pending {
+		e, err := auditoutbox.Decode(p.Payload)
+		require.NoError(t, err)
+		out = append(out, e)
+	}
+	return out
+}
+
+// spec:server-host-containment/a-containment-change-commits-its-audit-entry/a-delivery-failure-delays-the-audit-row
+//
+// The audit row is what says who cut a host off the network and why, and before issue #1070 it was written after the change had
+// committed and only logged when it failed. Here the store is down for the change and back by the time the entry is delivered, and
+// the row still arrives whole: the actor, the address they acted from, the reason, and the command the change queued.
+func TestSet_ARecorderFailureDelaysTheAuditRowRatherThanLosingIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.audit.goesDown(errors.New("audit store unavailable"))
+
+	// A real change runs under the request's span, and the row has to name that trace however long the delivery takes.
+	spanTrace, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	require.NoError(t, err)
+	ctx := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: spanTrace, SpanID: spanID, TraceFlags: trace.FlagsSampled,
+	}))
+	traceID := identityapi.TraceIDFromContext(ctx)
+	require.NotEmpty(t, traceID, "the fixture must run under a real span or the assertion below proves nothing")
+
+	change, err := f.svc.Set(ctx, operator, "203.0.113.5", "host-a", true, "beaconing to a known C2")
+	require.NoError(t, err, "a change is not refused because its audit row could not be written")
+	assert.True(t, change.Changed)
+	assert.Empty(t, f.audit.recorded(), "the store is down, so no row yet")
+
+	held := f.pendingAudit(t)
+	require.Len(t, held, 1, "the entry committed with the change")
+	assert.Equal(t, identityapi.AuditHostContain, held[0].Action)
+
+	f.audit.comesBack()
+	delivered, err := f.drain.Drain(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, delivered)
+
+	events := f.audit.recorded()
+	require.Len(t, events, 1)
+	assert.Equal(t, identityapi.AuditHostContain, events[0].Action)
+	assert.Equal(t, operator, events[0].Actor)
+	assert.Equal(t, "host-a", events[0].TargetID)
+	assert.Equal(t, "203.0.113.5", events[0].RemoteAddr, "the address the operator acted from survives the outbox")
+	assert.Equal(t, "beaconing to a known C2", events[0].Payload["reason"])
+	assert.EqualValues(t, change.CommandID, events[0].Payload["command_id"])
+	assert.Equal(t, traceID, events[0].TraceID,
+		"the entry carries the trace of the request that made the change; the drain detaches its own so it cannot supply one")
+	assert.Empty(t, f.pendingAudit(t), "a delivered entry is cleared")
+}
+
+// spec:server-host-containment/a-containment-change-commits-its-audit-entry/a-refused-change-leaves-no-audit-entry
+//
+// The entry commits with the change, so a change that records nothing leaves nothing to deliver. Without this the outbox would turn a
+// refused containment into an audit row claiming a host was contained.
+//
+// The entry's own write is what fails here, through a service whose outbox names a table that does not exist, and the state and the
+// command are then asserted to have rolled back with it. That is the direction that proves the production enqueue runs inside the
+// change's transaction: a failing command queue would leave the outbox empty however the entry was written, and would pass even if
+// the service enqueued on its own connection.
+func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	enrolled := func(context.Context, string) (bool, error) { return true, nil }
+	svc := containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType,
+		auditoutbox.NewStore(f.db, "absent_audit_outbox"), f.drain)
+
+	_, err := svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "suspicious")
+	require.Error(t, err, "a change whose audit entry cannot be written is refused, not recorded without one")
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.Zero(t, state.Version, "the state rolled back with the entry")
+	assert.False(t, state.Contained)
+	assert.Empty(t, f.containmentCommands(t, "host-a"), "the command rolled back with the entry")
+	assert.Empty(t, f.pendingAudit(t))
+	assert.Empty(t, f.audit.recorded())
+
+	// A request for the state a host already has changes nothing, so it records nothing either.
+	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "already released")
+	require.NoError(t, err)
+	assert.Empty(t, f.pendingAudit(t))
+	assert.Empty(t, f.audit.recorded())
 }

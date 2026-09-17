@@ -168,11 +168,5 @@ func (s *Service) completeAudit(
 		s.logger.WarnContext(ctx, "watchedpaths: the push outlasted its audit entry's hold; the row is delivered without host counts",
 			"version", version)
 	}
-	if s.drain == nil {
-		s.logger.WarnContext(ctx, "watchedpaths: audit recorder not configured; audit entry left undelivered", "version", version)
-		return
-	}
-	if _, err := s.drain.Drain(ctx); err != nil {
-		s.logger.WarnContext(ctx, "watchedpaths: audit entry is committed but not yet delivered; the sweep will retry it", "err", err)
-	}
+	s.drain.DeliverNow(ctx)
 }

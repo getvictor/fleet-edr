@@ -290,9 +290,27 @@ func run() error {
 	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
 	go gw.Run(gwCtx)
-	// Re-queues hosts' containment states their latest command did not deliver (issue #948). Stops with the process context: a sweep
-	// missed during shutdown is made up by the next replica's.
-	go responseCtx.RunContainmentCatchUp(ctx)
+	// The response context's background loops: re-queueing hosts' containment states their latest command did not deliver (issue
+	// #948), and delivering the audit entries a containment change committed but whose request could not write out (issue #1070).
+	// What either misses during shutdown is made up by the next replica's.
+	//
+	// Cancelled and joined by a defer registered here, for the reason the backfill goroutine above carries: defers run
+	// last-registered-first and `db.Close()` is registered before this, so a loop riding the process context alone would still be
+	// querying the outbox while the pool closed under it. Bounded, because a shutdown must end.
+	responseLoopCtx, stopResponseLoops := context.WithCancel(ctx)
+	responseDone := make(chan struct{})
+	go func() {
+		defer close(responseDone)
+		responseCtx.Run(responseLoopCtx)
+	}()
+	defer func() {
+		stopResponseLoops()
+		select {
+		case <-responseDone:
+		case <-time.After(responseShutdownWait):
+			logger.WarnContext(ctx, "response background loops did not finish before shutdown; an audit entry may wait for the next sweep")
+		}
+	}()
 	// The deferred join above waits for the rules loops before this returns, so the shutdown flush (issue #837) completes rather
 	// than racing the process exit. Bounded, because a shutdown must end.
 	//
@@ -306,6 +324,11 @@ func run() error {
 // rulesShutdownWait bounds how long shutdown waits for the rules context's loops to return. Only has to outlast the eval-stats
 // flush's own timeout, which is what it is waiting for.
 const rulesShutdownWait = 10 * time.Second
+
+// responseShutdownWait bounds the join on the response loops. Shorter than the rules one because nothing is lost by giving up: an
+// entry the sweep did not deliver stays in the outbox for the next replica, where the rules flush is holding statistics that exist
+// nowhere else.
+const responseShutdownWait = 5 * time.Second
 
 // controlChannel adapts the response control gateway to httpserver.ControlMux so shutdown also ends the gateway's delivery loop. The
 // gateway's ServeHTTP is promoted from the embedded interface; Stop first cancels the delivery-loop context (started with SIGTERM
