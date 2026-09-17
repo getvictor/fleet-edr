@@ -71,24 +71,39 @@ func declaredStatuses(t *testing.T) map[string]string {
 	return out
 }
 
-// Every Status this package declares maps onto one the shared catch-up decision knows. A case missing from Status.Catchup fails here
-// rather than quietly taking one host's commands, or the whole fleet's, out of the sweep.
+// Every Status this package declares maps onto the right one of the shared catch-up vocabulary.
+//
+// Two halves, deliberately. The expectation below is written out, because only a person can say that a failed command should be
+// treated as failed: asserting merely that the result is one of the six would pass a mapping that sent StatusFailed to
+// catchup.StatusPending, which turns a six-hour retry into never retrying. The set it is checked against is parsed from this
+// package's source, because only the compiler knows what statuses exist: a hand-written list would go stale the moment one is added,
+// leaving the new status unmapped and its hosts out of the sweep.
 func TestStatus_CatchupMapsEveryDeclaredStatus(t *testing.T) {
 	t.Parallel()
-	known := map[catchup.Status]bool{
-		catchup.StatusPending: true, catchup.StatusAcked: true, catchup.StatusCompleted: true,
-		catchup.StatusFailed: true, catchup.StatusExpired: true, catchup.StatusCancelled: true,
+	want := map[string]catchup.Status{
+		"StatusPending":   catchup.StatusPending,
+		"StatusAcked":     catchup.StatusAcked,
+		"StatusCompleted": catchup.StatusCompleted,
+		"StatusFailed":    catchup.StatusFailed,
+		"StatusExpired":   catchup.StatusExpired,
+		"StatusCancelled": catchup.StatusCancelled,
 	}
 	declared := declaredStatuses(t)
-	// The six the command lifecycle has today. Pinned so a constant being REMOVED is also visible here, which the parse alone cannot
-	// tell from a constant that never existed.
-	assert.Len(t, declared, 6, "the command lifecycle gained or lost a status: %v", declared)
+
+	// Both directions. A status this package declares with no expectation is one nobody has decided the catch-up meaning of; an
+	// expectation for a status that no longer exists is a stale test pretending to cover something.
+	for name := range declared {
+		assert.Contains(t, want, name, "api.%s is declared but this test says nothing about how it should be treated", name)
+	}
+	for name := range want {
+		assert.Contains(t, declared, name, "this test expects api.%s, which this package no longer declares", name)
+	}
 
 	for name, value := range declared {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := api.Status(value).Catchup()
-			assert.True(t, known[got], "api.%s (%q) maps to %q, which the shared catch-up decision does not know", name, value, got)
+			assert.Equal(t, want[name], api.Status(value).Catchup(), "api.%s (%q) is not treated as %q by the catch-up",
+				name, value, want[name])
 		})
 	}
 }

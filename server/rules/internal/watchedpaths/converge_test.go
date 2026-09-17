@@ -46,6 +46,11 @@ func TestNeedsSet(t *testing.T) {
 		{"failed exactly six hours ago", queued(4, catchup.StatusFailed, now.Add(-7*time.Hour), at(-catchup.FailedRetryAfter)), true},
 		{"failed just under six hours ago", queued(4, catchup.StatusFailed, now.Add(-7*time.Hour), at(-catchup.FailedRetryAfter+time.Second)), false},
 		{"failed recently", queued(4, catchup.StatusFailed, hourAgo, at(-time.Hour)), false},
+		// This context records a terminal time as a zero value, and the shared decision takes a nil. Before issue #1071 the zero went
+		// through the six-hour comparison as the year 1, which is always long enough ago, so a failure with no completion time was
+		// retried on every sweep. Converting it to nil is the behavior change, and this is the case that holds it: passing the zero
+		// through as a non-nil time would retry immediately again and the shared decision's own tests would stay green.
+		{"failed with no completion time", queued(4, catchup.StatusFailed, hourAgo, time.Time{}), false},
 		{"pending", queued(4, catchup.StatusPending, hourAgo, time.Time{}), false},
 		{"acked", queued(4, catchup.StatusAcked, hourAgo, time.Time{}), false},
 		{"completed", queued(4, catchup.StatusCompleted, hourAgo, at(-time.Hour)), false},

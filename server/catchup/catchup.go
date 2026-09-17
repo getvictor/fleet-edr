@@ -70,7 +70,8 @@ func Needed(cmd Latest, enrolledAt, now time.Time) bool {
 	// reads as carrying the wrong state, and it may have been queued against an enrollment this version cannot see. Asking those
 	// questions first and resending on the answer is how an older replica ends up fighting the newer one that wrote the command,
 	// which is the outcome leaving it alone exists to avoid.
-	if !recognized(cmd.Status) {
+	needed, known := classify(cmd, now)
+	if !known {
 		return false
 	}
 	// Sent one carrying a state that is no longer the host's.
@@ -82,32 +83,27 @@ func Needed(cmd Latest, enrolledAt, now time.Time) bool {
 	if !cmd.CreatedAt.After(enrolledAt) {
 		return true
 	}
+	return needed
+}
+
+// classify answers both questions about a status at once: whether this version knows what it means, and if so whether it leaves the
+// state owed. One switch rather than two, because two over the same closed set drift: a status added to a recognition list but not to
+// the handling list would be admitted and then fall through to whatever the handler's default happened to be, silently.
+func classify(cmd Latest, now time.Time) (needed, known bool) {
 	switch cmd.Status {
 	case StatusExpired, StatusCancelled:
 		// Stopped being live without the host acting on it, so nothing delivered the state.
-		return true
+		return true, true
 	case StatusFailed:
 		// A failure with no completion time is not retried early; nothing says how long ago it failed.
-		return cmd.CompletedAt != nil && now.Sub(*cmd.CompletedAt) >= FailedRetryAfter
+		return cmd.CompletedAt != nil && now.Sub(*cmd.CompletedAt) >= FailedRetryAfter, true
 	case StatusPending, StatusAcked, StatusCompleted:
 		// On its way or delivered. An offline host keeps its command pending until it reconnects, when the control stream delivers it
 		// or the poll ages it out and the next sweep queues a fresh copy, so an offline host is not sent a new copy every interval.
-		return false
+		return false, true
 	}
-	// Unreachable: recognized() above admits exactly the six cases the switch covers, and this is here because the compiler cannot
-	// see that. A status that reached here would be one recognized() admits and the switch forgot, so it is left alone, as an
-	// unrecognized one is.
-	return false
-}
-
-// recognized reports whether this version knows what a status means. Every caller maps its own vocabulary onto these, so a status
-// that is not one of them came from a version that has more of them.
-func recognized(s Status) bool {
-	switch s {
-	case StatusPending, StatusAcked, StatusCompleted, StatusFailed, StatusExpired, StatusCancelled:
-		return true
-	}
-	return false
+	// A status this version does not know, which the caller leaves alone.
+	return false, false
 }
 
 // Sweep is one pass of a context's catch-up, reporting how many hosts it queued the state for.
