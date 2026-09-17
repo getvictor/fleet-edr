@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/attrkeys"
+	"github.com/fleetdm/edr/server/auditoutbox"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 )
@@ -31,7 +33,19 @@ type Service struct {
 	// locally-held connection immediately instead of waiting for the gateway watch tick. It is a callback, not stored state; nil leaves
 	// delivery to the gateway watch (and the agent poll fallback).
 	notify func(hostID string)
+	// outbox is where an operator action commits the audit entry recording it, and drain turns the entries into audit rows
+	// (issue #1070). bootstrap.New always installs the outbox, and an audited write refuses to run without one rather than commit a
+	// change nothing records. The drain is the one that may be nil, in wiring with no audit recorder: the entry still commits and
+	// waits in the outbox for a replica that has one.
+	outbox *auditoutbox.Store
+	drain  *auditoutbox.Drain
 	logger *slog.Logger
+}
+
+// SetAuditOutbox installs the outbox an operator action commits its audit entry into and the drain that delivers it. Called once at
+// bootstrap, before serving, for the same reason SetNotifier is: the drain needs the recorder, which is another context's.
+func (s *Service) SetAuditOutbox(outbox *auditoutbox.Store, drain *auditoutbox.Drain) {
+	s.outbox, s.drain = outbox, drain
 }
 
 // SetNotifier registers the control-gateway fast-path callback. Called once at bootstrap, before serving, to break the
@@ -154,6 +168,83 @@ func (s *Service) QueueTx(ctx context.Context, q sqlx.ExecerContext, hostID, com
 	return mysql.InsertTx(ctx, q, hostID, commandType, payload)
 }
 
+// AuditedCommand is the command row an operator action has just written, as the audit entry describing it must see it: normalized
+// exactly as persisted, so the row and the entry cannot disagree about which host was affected. A caller that captured its own
+// request values instead would record " host-a " for a command stored against host-a.
+type AuditedCommand struct {
+	ID          int64
+	HostID      string
+	CommandType string
+}
+
+// AuditEntryFor builds the audit entry recording an operator action on the command that has just been written. It runs inside the
+// action's transaction, so an error from it refuses the action rather than leaving it recorded without a row.
+type AuditEntryFor func(cmd AuditedCommand) (auditoutbox.Entry, error)
+
+// InsertAudited queues a command and commits entry(id) with it, so an issued command and the row saying who issued it exist together
+// or not at all (issue #1070). The gateway is notified and the entry delivered after the commit, in that order, because nothing
+// outside the transaction may be told about a command that is not committed yet.
+func (s *Service) InsertAudited(ctx context.Context, hostID, commandType string, payload []byte,
+	entry AuditEntryFor) (int64, error) {
+	hostID, commandType, err := insertable(hostID, commandType, payload)
+	if err != nil {
+		return 0, err
+	}
+	var id int64
+	if err := s.store.InTx(ctx, func(q sqlx.ExtContext) error {
+		id, err = mysql.InsertTx(ctx, q, hostID, commandType, payload)
+		if err != nil {
+			return err
+		}
+		return s.enqueueAudit(ctx, q, entry, AuditedCommand{ID: id, HostID: hostID, CommandType: commandType})
+	}); err != nil {
+		return 0, err
+	}
+	s.fastNotify(hostID)
+	s.drain.DeliverNow(ctx)
+	return id, nil
+}
+
+// UpdateStatusAudited moves a command and commits entry(id) with the move, for the operator paths that have to say who made it. The
+// transition matrix is checked first, as in UpdateStatus, so an illegal move is refused before anything is written.
+func (s *Service) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusRequest, entry AuditEntryFor) error {
+	current, err := s.transitionFrom(ctx, req)
+	if err != nil {
+		return err
+	}
+	if err := s.store.InTx(ctx, func(q sqlx.ExtContext) error {
+		if err := mysql.UpdateStatusTx(ctx, q, req.ID, req.HostID, current.Status, req.Status, req.Result); err != nil {
+			return err
+		}
+		// The command as stored, read back by transitionFrom, rather than as the request named it.
+		return s.enqueueAudit(ctx, q, entry, AuditedCommand{ID: current.ID, HostID: current.HostID, CommandType: current.CommandType})
+	}); err != nil {
+		return err
+	}
+	s.drain.DeliverNow(ctx)
+	return nil
+}
+
+// enqueueAudit builds the entry for the command just written and commits it through the same executor.
+//
+// Neither a missing builder nor a missing outbox is tolerated: these methods exist to guarantee the entry commits with the change, so
+// committing the change without the entry would be the guarantee quietly not holding for whichever caller is short a dependency. The
+// containment service refuses the same way, by requiring its outbox at construction. A nil drain is different and is fine: the entry
+// still commits and waits in the outbox for a replica that has a recorder.
+func (s *Service) enqueueAudit(ctx context.Context, q sqlx.ExtContext, entry AuditEntryFor, cmd AuditedCommand) error {
+	if entry == nil {
+		return errors.New("response service: an audited write needs an audit entry builder")
+	}
+	if s.outbox == nil {
+		return errors.New("response service: an audited write needs an audit outbox; call SetAuditOutbox at bootstrap")
+	}
+	e, err := entry(cmd)
+	if err != nil {
+		return err
+	}
+	return s.outbox.Enqueue(ctx, q, e)
+}
+
 // insertable normalizes and checks what a command queued for one host needs, so the transactional path cannot drift from the
 // ordinary one.
 func insertable(hostID, commandType string, payload []byte) (string, string, error) {
@@ -197,28 +288,38 @@ func (s *Service) ListDeliverableForHosts(ctx context.Context, hostIDs []string,
 // UpdateStatus enforces the status-transition matrix on top of the store's row write. Loads the current row to validate ownership +
 // current status before persisting; collapses both "wrong host" and "unknown id" to api.ErrCommandNotFound at the boundary.
 func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest) error {
+	current, err := s.transitionFrom(ctx, req)
+	if err != nil {
+		return err
+	}
+	// Pass the stored status as the expected-from value so the store applies the WHERE clause atomically. If a concurrent caller
+	// advanced the row between our read and this write, the store returns ErrInvalidStatusTransition rather than silently
+	// overwriting the newer state.
+	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current.Status, req.Status, req.Result)
+}
+
+// transitionFrom checks that req is a move this command may make and returns the command as stored. Its status is what the write pins
+// in its WHERE clause, and its host and type are what an audit entry describes, so neither is taken from the request. Shared with
+// UpdateStatusAudited so an audited move cannot drift from an unaudited one.
+func (s *Service) transitionFrom(ctx context.Context, req api.UpdateStatusRequest) (api.Command, error) {
 	if !validTargetStatus(req.Status) {
-		return fmt.Errorf("%w: status must be acked, completed, failed, cancelled, or expired (got %q)",
+		return api.Command{}, fmt.Errorf("%w: status must be acked, completed, failed, cancelled, or expired (got %q)",
 			api.ErrInvalidStatusTransition, req.Status)
 	}
-
 	// Load the current row to validate ownership + current state. store.Get returns ErrCommandNotFound when the id is unknown;
 	// we additionally collapse the wrong-host case to the same sentinel (probing-oracle defence).
 	current, err := s.store.Get(ctx, req.ID)
 	if err != nil {
-		return err
+		return api.Command{}, err
 	}
 	if current.HostID != req.HostID {
-		return api.ErrCommandNotFound
+		return api.Command{}, api.ErrCommandNotFound
 	}
 	if !canTransition(current.Status, req.Status) {
-		return fmt.Errorf("%w: cannot move from %q to %q",
+		return api.Command{}, fmt.Errorf("%w: cannot move from %q to %q",
 			api.ErrInvalidStatusTransition, current.Status, req.Status)
 	}
-
-	// Pass current.Status as the expected-from value so the store applies the WHERE clause atomically. If a concurrent caller advanced the
-	// row between our read and this write, the store returns ErrInvalidStatusTransition (not silently overwriting the newer state).
-	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current.Status, req.Status, req.Result)
+	return current, nil
 }
 
 // UndeliverableByHost reports which of hostIDs have commands that aged out undelivered recently (issue #732). The window boundary is

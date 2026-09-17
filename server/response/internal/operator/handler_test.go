@@ -14,8 +14,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
+	"github.com/fleetdm/edr/server/response/internal/service"
 )
 
 // allowAllAuthZ stubs identityapi.AuthZ as an unconditional grant. Tests in this package focus on response semantics; the per-action
@@ -33,6 +35,50 @@ type fakeService struct {
 	get          func(ctx context.Context, id int64) (api.Command, error)
 	listForHost  func(ctx context.Context, hostID string, status api.Status) ([]api.Command, error)
 	updateStatus func(ctx context.Context, req api.UpdateStatusRequest) error
+	// entries records what each audited write was asked to commit with its change, so a test can read back the audit row the
+	// handler built without a database. The id is the one the write reports, as the real transaction supplies it.
+	entries *[]identityapi.AuditEvent
+}
+
+// audited runs the handler's entry builder the way the service does, inside the write, and records what it produced. A builder that
+// fails fails the write, as it does in production.
+func (f fakeService) audited(cmd service.AuditedCommand, entry service.AuditEntryFor) error {
+	if entry == nil || f.entries == nil {
+		return nil
+	}
+	e, err := entry(cmd)
+	if err != nil {
+		return err
+	}
+	decoded, err := auditoutbox.Decode(e.Payload)
+	if err != nil {
+		return err
+	}
+	*f.entries = append(*f.entries, decoded)
+	return nil
+}
+
+// Normalizes as the real service does, so a test that passes an unnormalized host id sees what the real write would record.
+func (f fakeService) InsertAudited(ctx context.Context, hostID, commandType string, payload []byte,
+	entry service.AuditEntryFor) (int64, error) {
+	id, err := f.Insert(ctx, hostID, commandType, payload)
+	if err != nil {
+		return 0, err
+	}
+	return id, f.audited(service.AuditedCommand{
+		ID: id, HostID: strings.TrimSpace(hostID), CommandType: strings.TrimSpace(commandType),
+	}, entry)
+}
+
+func (f fakeService) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusRequest, entry service.AuditEntryFor) error {
+	if err := f.UpdateStatus(ctx, req); err != nil {
+		return err
+	}
+	cmd, err := f.Get(ctx, req.ID)
+	if err != nil {
+		return err
+	}
+	return f.audited(service.AuditedCommand{ID: cmd.ID, HostID: cmd.HostID, CommandType: cmd.CommandType}, entry)
 }
 
 func (f fakeService) Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error) {
@@ -74,7 +120,7 @@ func (fakeService) UndeliverableByHost(context.Context, []string) (map[string]ap
 	panic("fakeService.UndeliverableByHost must not be called from the operator handler")
 }
 
-func newOperatorServer(t *testing.T, svc api.Service) *httptest.Server {
+func newOperatorServer(t *testing.T, svc Commands) *httptest.Server {
 	t.Helper()
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()

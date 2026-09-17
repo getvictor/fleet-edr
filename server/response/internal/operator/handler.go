@@ -12,31 +12,44 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/attrkeys"
+	"github.com/fleetdm/edr/server/auditoutbox"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
+	"github.com/fleetdm/edr/server/response/internal/service"
 )
 
 // createBodyCap caps POST /api/commands. Payload is operator-supplied JSON; 64 KiB is generous enough for a kill_process or any
 // reasonable IR command without inviting a DoS vector via a session-authed endpoint.
 const createBodyCap = 64 << 10
 
+// Commands is what the operator routes need of the response service: the cross-context surface, plus the two writes that commit an
+// operator action's audit entry in the same transaction as the action (issue #1070).
+//
+// Declared here rather than added to api.Service because no other context issues or withdraws a command on an operator's behalf, and
+// the audited writes carry an encoded audit entry, which is not something the cross-context surface should have to name.
+type Commands interface {
+	api.Service
+	InsertAudited(ctx context.Context, hostID, commandType string, payload []byte, entry service.AuditEntryFor) (int64, error)
+	UpdateStatusAudited(ctx context.Context, req api.UpdateStatusRequest, entry service.AuditEntryFor) error
+}
+
 // Handler serves the operator-facing command routes.
 type Handler struct {
-	svc    api.Service
+	svc    Commands
 	authz  identityapi.AuthZ
-	audit  identityapi.AuditRecorder
 	logger *slog.Logger
 }
 
 // New builds an operator handler. Panics if svc or authz is nil. authz is the authorization chokepoint POST /api/commands and GET
 // /api/commands/{id} gate on; a nil one would silently bypass the role matrix.
-func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
+func New(svc Commands, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 	if svc == nil {
 		panic("response operator.New: api.Service must not be nil")
 	}
@@ -48,10 +61,6 @@ func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler
 	}
 	return &Handler{svc: svc, authz: authz, logger: logger}
 }
-
-// SetAudit installs the operator audit recorder. Optional: when not
-// set, command issuance still works but no audit row is written.
-func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the operator routes on the given mux.
 // Caller wraps in identity.Session + identity.CSRF before mounting.
@@ -76,6 +85,16 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalized here, before anything uses it. The service trims what it stores, so leaving the raw value in play meant one request
+	// could authorize against " host-a ", store a command for host-a, and audit the two under different names, which is correlation
+	// between the authorization row and the action row silently broken. One boundary, one value, and the service's own trim is then
+	// a no-op for this caller.
+	//
+	// The command type is deliberately NOT trimmed. It is matched against a fixed set just below, so a padded one is not a spelling
+	// of a valid type but an invalid request, and it has always been refused as unsupported. Trimming it here would quietly widen
+	// what the API accepts, which is not this change's business.
+	body.HostID = strings.TrimSpace(body.HostID)
+
 	action, ok := commandTypeToAction(body.CommandType)
 	if !ok {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "unsupported_command_type")
@@ -85,7 +104,8 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := h.svc.Insert(ctx, body.HostID, body.CommandType, body.Payload)
+	id, err := h.svc.InsertAudited(ctx, body.HostID, body.CommandType, body.Payload,
+		h.auditEntry(r, identityapi.AuditCommandIssue))
 	switch {
 	case errors.Is(err, api.ErrInvalidInsertRequest):
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_request")
@@ -109,7 +129,6 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		"edr.command.id", id,
 	)
 
-	h.recordCommandAudit(r, body.HostID, body.CommandType, id)
 	writeJSON(ctx, h.logger, w, http.StatusCreated, map[string]int64{"id": id})
 }
 
@@ -163,7 +182,8 @@ func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
 
 	// HostID is the command's own, read back above: UpdateStatus enforces host ownership so a caller cannot move a command by id
 	// alone, and the operator path has to satisfy the same check the agent path does.
-	err := h.svc.UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: cmd.HostID, Status: api.StatusCancelled})
+	err := h.svc.UpdateStatusAudited(ctx, api.UpdateStatusRequest{ID: id, HostID: cmd.HostID, Status: api.StatusCancelled},
+		h.auditEntry(r, identityapi.AuditCommandCancel))
 	switch {
 	case errors.Is(err, api.ErrInvalidStatusTransition):
 		// The agent already has it, or it already finished. Reporting success here would tell the operator nothing ran on the host
@@ -191,37 +211,43 @@ func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
 		"edr.command.type", cmd.CommandType,
 		"edr.command.id", id,
 	)
-	h.recordCommandAudit(r, cmd.HostID, cmd.CommandType, id)
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]string{"status": string(api.StatusCancelled)})
 }
 
-// recordCommandAudit emits one audit row for the just-committed command issuance. target = the host receiving the command; payload
-// carries command_type + command_id so a reviewer can reconstruct the exact action without joining commands. Soft-fail on audit error:
-// the command row is authoritative.
-func (h *Handler) recordCommandAudit(r *http.Request, hostID, commandType string, commandID int64) {
-	if h.audit == nil {
-		return
-	}
+// auditEntry builds the encoder for the audit row recording this operator action, to be committed in the action's own transaction
+// once the command id is known (issue #1070). Before that the row was written after the change and a failure only logged, so a
+// recorder failure or a crash between the two left an issued or withdrawn command with nothing recording who did it.
+//
+// action is the caller's rather than a constant, which is issue #1085: both routes shared one helper that named command.issue, so a
+// withdrawal was recorded as an issuance and nothing in the trail told them apart.
+//
+// target = the host receiving the command; the payload carries command_type and command_id so a reviewer can reconstruct the exact
+// action without joining commands. All three come from the write rather than from this request, so the row and the entry describing
+// it cannot disagree.
+func (h *Handler) auditEntry(r *http.Request, action identityapi.AuditAction) service.AuditEntryFor {
 	ctx := r.Context()
 	var actor identityapi.PrincipalRef
 	if a, ok := identityapi.ActorFromContext(ctx); ok {
 		actor = a.Principal
 	}
-	if err := h.audit.Record(ctx, identityapi.AuditEvent{
-		Actor:      actor,
-		Action:     identityapi.AuditCommandIssue,
-		TargetType: "host",
-		TargetID:   hostID,
-		RemoteAddr: httpserver.ClientIP(r),
-		Payload: map[string]any{
-			"command_type": commandType,
-			"command_id":   commandID,
-		},
-	}); err != nil {
-		h.logger.WarnContext(ctx, "audit record",
-			"err", err, "action", string(identityapi.AuditCommandIssue),
-			attrkeys.HostID, hostID,
-		)
+	remoteAddr := httpserver.ClientIP(r)
+	return func(cmd service.AuditedCommand) (auditoutbox.Entry, error) {
+		return auditoutbox.Encode(identityapi.AuditEvent{
+			Actor:      actor,
+			Action:     action,
+			TargetType: "host",
+			// The host and type as the write persisted them, not as this request named them: a request naming " host-a " stores a
+			// command against host-a, and a row describing it must say the same.
+			TargetID:   cmd.HostID,
+			RemoteAddr: remoteAddr,
+			// Carried explicitly: the drain that delivers this entry may be another request's or the sweep's, and it detaches its
+			// own trace so it cannot stamp one request's trace onto another's row.
+			TraceID: identityapi.TraceIDFromContext(ctx),
+			Payload: map[string]any{
+				"command_type": cmd.CommandType,
+				"command_id":   cmd.ID,
+			},
+		})
 	}
 }
 

@@ -40,16 +40,17 @@ type Deps struct {
 	// cmd/main wires it to detectionCtx.RecordHostSeen.
 	Heartbeat Heartbeat
 
-	// Audit is the operator-action recorder. Optional: nil disables audit emission for command issuance. cmd/main wires
-	// identityCtx.AuditRecorder().
+	// Audit is the operator-action recorder. Optional: an action still commits its audit entry without one, and the entry then waits
+	// in the outbox undelivered rather than being discarded. cmd/main wires identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 
 	// AuthZ is the authorization chokepoint POST /api/commands and GET /api/commands/{id} gate on. Required. cmd/main wires
 	// identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
-	// AuditSweepInterval is how often the containment audit outbox sweep delivers entries a request could not. Optional: zero or
-	// negative means auditoutbox.DefaultSweepInterval. Tests shorten it to watch a sweep deliver.
+	// AuditSweepInterval is how often this context's audit outbox sweep delivers entries a request could not, for every operator
+	// action that commits one: containment changes, and command issuance and withdrawal. Optional: zero or negative means
+	// auditoutbox.DefaultSweepInterval. Tests shorten it to watch a sweep deliver.
 	AuditSweepInterval time.Duration
 }
 
@@ -65,11 +66,12 @@ type Response struct {
 	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
 	containmentH         *operator.ContainmentHandler
 	containmentConverger *containment.Converger
-	// containmentOutbox is where a containment change commits its audit entry, and containmentAuditDrain turns the entries into
-	// audit rows (issue #1070). The drain is nil without a recorder, which only non-production wiring omits.
-	containmentOutbox     *auditoutbox.Store
-	containmentAuditDrain *auditoutbox.Drain
-	auditSweepInterval    time.Duration
+	// auditOutbox is where every operator action in this context commits its audit entry, containment changes and command issuance
+	// and withdrawal alike, and auditDrain turns the entries into audit rows (issue #1070). The drain is nil without a recorder,
+	// which only non-production wiring omits.
+	auditOutbox        *auditoutbox.Store
+	auditDrain         *auditoutbox.Drain
+	auditSweepInterval time.Duration
 }
 
 // New wires the response context. Does NOT apply the schema (call
@@ -88,19 +90,18 @@ func New(deps Deps) (*Response, error) {
 	store := mysql.NewStore(deps.DB)
 	svc := service.New(store, deps.Heartbeat, logger)
 	opH := operator.New(svc, deps.AuthZ, logger)
-	opH.SetAudit(deps.Audit)
-	// A containment change commits its audit entry with the change (issue #1070); this drain turns the entries into audit rows. Built
-	// here rather than in EnableContainment because entries outlive the wiring that wrote them: a replica configured without the
-	// containment routes still has to sweep what an earlier one left behind.
-	containmentOutbox := auditoutbox.NewStore(deps.DB, mysql.AuditOutboxTable)
-	var containmentAuditDrain *auditoutbox.Drain
+	// Every operator action in this context commits its audit entry with the change (issue #1070); this drain turns the entries into
+	// audit rows. Built here rather than where each action is wired because entries outlive the wiring that wrote them: a replica
+	// configured without the containment routes still has to sweep what an earlier one left behind.
+	responseOutbox := auditoutbox.NewStore(deps.DB, mysql.AuditOutboxTable)
+	var responseAuditDrain *auditoutbox.Drain
 	if deps.Audit != nil {
 		var derr error
-		if containmentAuditDrain, derr = auditoutbox.NewDrain(containmentOutbox, deps.Audit, "host containment",
-			logger); derr != nil {
-			return nil, fmt.Errorf("build containment audit drain: %w", derr)
+		if responseAuditDrain, derr = auditoutbox.NewDrain(responseOutbox, deps.Audit, "response actions", logger); derr != nil {
+			return nil, fmt.Errorf("build response audit drain: %w", derr)
 		}
 	}
+	svc.SetAuditOutbox(responseOutbox, responseAuditDrain)
 	return &Response{
 		svc:       svc,
 		agentH:    agent.New(svc, logger),
@@ -109,9 +110,9 @@ func New(deps Deps) (*Response, error) {
 		logger:    logger,
 		authz:     deps.AuthZ,
 
-		containmentOutbox:     containmentOutbox,
-		containmentAuditDrain: containmentAuditDrain,
-		auditSweepInterval:    deps.AuditSweepInterval,
+		auditOutbox:        responseOutbox,
+		auditDrain:         responseAuditDrain,
+		auditSweepInterval: deps.AuditSweepInterval,
 	}, nil
 }
 
@@ -120,23 +121,23 @@ func New(deps Deps) (*Response, error) {
 // Until it is called the routes are not mounted and the catch-up does nothing.
 func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) {
 	store := containment.NewStore(r.db)
-	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, r.containmentOutbox,
-		r.containmentAuditDrain)
+	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, r.auditOutbox,
+		r.auditDrain)
 	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
 	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
 		r.logger)
 }
 
-// RunContainmentAuditSweep delivers audit entries a containment change committed but whose request could not write out, until ctx is
-// cancelled. It returns at once when no recorder is wired.
+// RunAuditSweep delivers audit entries an operator action committed but whose request could not write out, until ctx is cancelled.
+// It returns at once when no recorder is wired.
 //
 // Registered even where the containment routes are not mounted, because entries outlive the wiring that wrote them: a replica
 // configured without the routes still has to drain what an earlier one left, and a sweep over an empty table costs one query a minute.
-func (r *Response) RunContainmentAuditSweep(ctx context.Context) {
-	if r.containmentAuditDrain == nil {
+func (r *Response) RunAuditSweep(ctx context.Context) {
+	if r.auditDrain == nil {
 		return
 	}
-	r.containmentAuditDrain.SweepLoop(ctx, r.auditSweepInterval)
+	r.auditDrain.SweepLoop(ctx, r.auditSweepInterval)
 }
 
 // Run starts the context's background loops and returns once ctx is cancelled and every one of them has stopped.
@@ -147,7 +148,7 @@ func (r *Response) RunContainmentAuditSweep(ctx context.Context) {
 // is wired.
 func (r *Response) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for _, loop := range []func(context.Context){r.RunContainmentCatchUp, r.RunContainmentAuditSweep} {
+	for _, loop := range []func(context.Context){r.RunContainmentCatchUp, r.RunAuditSweep} {
 		wg.Go(func() { loop(ctx) })
 	}
 	wg.Wait()

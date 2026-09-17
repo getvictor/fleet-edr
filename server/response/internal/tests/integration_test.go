@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/fleetdm/edr/server/response/internal/service"
 	"github.com/jmoiron/sqlx"
 	"net"
@@ -1015,4 +1016,75 @@ func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *tes
 	assert.Equal(t, "host-a", recorded.TargetID)
 	assert.Equal(t, "beaconing to a known C2", recorded.Payload["reason"])
 	assert.NotEmpty(t, recorded.RemoteAddr, "the address the request came from survives the outbox")
+}
+
+// spec:server-admin-surface/operator-actions-commit-their-audit-entry/an-issued-command-commits-its-audit-entry
+// spec:server-admin-surface/operator-actions-commit-their-audit-entry/a-withdrawn-command-is-audited-as-a-withdrawal
+// spec:server-admin-surface/operator-actions-commit-their-audit-entry/a-delivery-failure-delays-the-audit-row
+//
+// A command issued and then withdrawn through the real routes, against a real database, with the audit store down for both. Both
+// entries survive that and are delivered by a later drain, naming the two actions apart: before issue #1085 the withdrawal recorded a
+// row claiming the command had been issued, and before #1070 neither row existed at all once the recorder failed.
+func TestBootstrap_CommandIssueAndCancelCommitTheirAuditEntries(t *testing.T) {
+	t.Parallel()
+	s := full.Open(t)
+	audit := &recordingAudit{unavailable: errors.New("audit store unavailable")}
+	r, err := bootstrap.New(bootstrap.Deps{DB: s, AuthZ: allowAllAuthZ{}, Audit: audit, AuditSweepInterval: 20 * time.Millisecond})
+	require.NoError(t, err)
+	require.NoError(t, r.ApplySchema(t.Context()))
+
+	mux := http.NewServeMux()
+	r.RegisterAuthedRoutes(mux)
+	actor := identityapi.PrincipalRef{ID: "usr_7", Type: identityapi.PrincipalUser, Label: "ada"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mux.ServeHTTP(w, req.WithContext(identityapi.WithActor(req.Context(), &identityapi.Actor{Principal: actor})))
+	}))
+	t.Cleanup(srv.Close)
+
+	issue, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/commands",
+		strings.NewReader(`{"host_id":"host-a","command_type":"kill_process","payload":{"pid":1234}}`))
+	require.NoError(t, err)
+	issued, err := srv.Client().Do(issue)
+	require.NoError(t, err, "an action is not refused because its audit row could not be written")
+	defer issued.Body.Close()
+	require.Equal(t, http.StatusCreated, issued.StatusCode)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	require.NoError(t, json.NewDecoder(issued.Body).Decode(&created))
+	require.NotZero(t, created.ID)
+
+	cancel, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		fmt.Sprintf("%s/api/commands/%d/cancel", srv.URL, created.ID), nil)
+	require.NoError(t, err)
+	cancelled, err := srv.Client().Do(cancel)
+	require.NoError(t, err)
+	defer cancelled.Body.Close()
+	require.Equal(t, http.StatusOK, cancelled.StatusCode)
+
+	require.Empty(t, audit.recorded(), "the store is down, so neither request delivered anything")
+
+	audit.comesBack()
+	runCtx, stop := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { r.Run(runCtx); close(done) }()
+	t.Cleanup(func() {
+		stop()
+		<-done
+	})
+
+	require.Eventually(t, func() bool { return len(audit.recorded()) == 2 }, 5*time.Second, 20*time.Millisecond,
+		"both entries outlived the recorder being down")
+	events := audit.recorded()
+	assert.Equal(t, identityapi.AuditCommandIssue, events[0].Action)
+	assert.Equal(t, identityapi.AuditCommandCancel, events[1].Action,
+		"the withdrawal is its own action; recording it as command.issue is what issue #1085 reported")
+	for _, e := range events {
+		assert.Equal(t, actor, e.Actor)
+		assert.Equal(t, "host", e.TargetType)
+		assert.Equal(t, "host-a", e.TargetID)
+		assert.Equal(t, "kill_process", e.Payload["command_type"])
+		assert.EqualValues(t, created.ID, e.Payload["command_id"])
+		assert.NotEmpty(t, e.RemoteAddr, "the address the request came from survives the outbox")
+	}
 }

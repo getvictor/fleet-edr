@@ -39,9 +39,10 @@ const AuthzReasonHeader = "X-Edr-Authz-Reason"
 // on deny so a real "not allowed" doesn't bounce the operator to the
 // login screen and lose their work.
 //
-// The chokepoint records its own audit row; this helper does NOT
-// record one. Subsequent state-change audits remain the handler's
-// responsibility (the AuditRecorder.Record call at commit time).
+// The chokepoint records its own audit row; this helper does NOT record one. Recording what the action then changed remains the
+// handler's responsibility, by whichever route its context takes: a direct AuditRecorder.Record after the change, or an entry
+// committed with the change and delivered afterwards, which the response and rules contexts do (issue #1070). Either way the row this
+// helper's caller produced and the row the action produced name the same resource, so the two correlate.
 func HTTPGate(
 	ctx context.Context,
 	w http.ResponseWriter,

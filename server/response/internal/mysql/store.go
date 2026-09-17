@@ -30,12 +30,31 @@ type Store struct {
 	db *sqlx.DB
 }
 
-// AuditOutboxTable is this context's audit outbox. A containment change commits its audit entry into it, in the transaction that
-// records the change and queues its command (issue #1070). Command issuance still records its row after the insert and does not use
-// this table yet; adopting it is the other half of that issue.
+// InTx runs fn inside one transaction, committing when it returns nil and rolling back otherwise.
 //
-// One table for the context rather than one per action, so the actions that do adopt it share an order: a drain reads an outbox
-// oldest first, so a reader sees the context's audit rows in the order the changes happened rather than interleaved by two drains.
+// Here rather than in the service because the handle is the store's. What it buys is that an operator action and the audit entry
+// recording it commit together or not at all (issue #1070): fn queues the change and the entry through the same executor, and a
+// failure to write either leaves neither.
+func (s *Store) InTx(ctx context.Context, fn func(q sqlx.ExtContext) error) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin command transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit command transaction: %w", err)
+	}
+	return nil
+}
+
+// AuditOutboxTable is this context's audit outbox. Every operator action commits its audit entry into it, in the transaction that
+// makes the change (issue #1070): containing or releasing a host, and issuing or withdrawing a command.
+//
+// One table for the context rather than one per action, so those actions share an order: a drain reads an outbox oldest first, so a
+// reader sees the context's audit rows in the order the changes happened rather than interleaved by two drains.
 const AuditOutboxTable = "response_audit_outbox"
 
 // NewStore returns a Store over an existing sqlx.DB handle.
@@ -246,6 +265,14 @@ func (s *Store) Get(ctx context.Context, id int64) (api.Command, error) {
 //     current status no longer equals expectedFrom (race: a
 //     concurrent agent already advanced the row).
 func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expectedFrom, status api.Status, result json.RawMessage) error {
+	return UpdateStatusTx(ctx, s.db, id, hostID, expectedFrom, status, result)
+}
+
+// UpdateStatusTx is UpdateStatus through a caller-supplied executor, so an operator action can move a command and commit its audit
+// entry in one transaction (issue #1070). sqlx.ExtContext rather than ExecerContext because the failure path reads the row back to
+// tell "wrong host" from "lost the race", and a *sqlx.Tx and a *sqlx.DB both satisfy it.
+func UpdateStatusTx(ctx context.Context, q sqlx.ExtContext, id int64, hostID string, expectedFrom, status api.Status,
+	result json.RawMessage) error {
 	var (
 		res sql.Result
 		err error
@@ -256,13 +283,13 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 		// which stamped completed_at when it stopped being live, and reopening it without clearing that would leave a row saying the
 		// agent has the command AND that it finished. For the ordinary pending -> acked case the column is already NULL, so this is
 		// a no-op there.
-		res, err = s.db.ExecContext(ctx,
+		res, err = q.ExecContext(ctx,
 			"UPDATE commands SET status = ?, acked_at = NOW(6), completed_at = NULL, result = NULL WHERE id = ? AND host_id = ? AND status = ?",
 			string(status), id, hostID, string(expectedFrom))
 	case api.StatusCompleted, api.StatusFailed, api.StatusCancelled, api.StatusExpired:
 		// cancelled and expired are terminal like completed and failed, and stamp completed_at for the same reason: it is the moment
 		// the command stopped being live. They differ only in that no agent ran them, which the status itself records.
-		res, err = s.db.ExecContext(ctx,
+		res, err = q.ExecContext(ctx,
 			"UPDATE commands SET status = ?, completed_at = NOW(6), result = ? WHERE id = ? AND host_id = ? AND status = ?",
 			string(status), result, id, hostID, string(expectedFrom))
 	default:
@@ -276,7 +303,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 		// Disambiguate "wrong (id, host)" from "lost the race": one SELECT settles it. The cost is paid only on the failure
 		// path; the happy path stays a single UPDATE.
 		var owner string
-		err := s.db.GetContext(ctx, &owner,
+		err := sqlx.GetContext(ctx, q, &owner,
 			"SELECT host_id FROM commands WHERE id = ?", id)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && owner != hostID) {
 			return api.ErrCommandNotFound

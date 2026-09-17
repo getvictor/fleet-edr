@@ -44,8 +44,11 @@ const (
 	AuditAlertResolve     AuditAction = "alert.resolve"
 	AuditAlertReopen      AuditAction = "alert.reopen"
 
-	// Command issuance (response context).
-	AuditCommandIssue AuditAction = "command.issue"
+	// Command issuance and withdrawal (response context). Two actions, not one: both rows name the same host and carry the same
+	// command_type and command_id, so recording a cancel as an issuance left the trail unable to say whether a kill_process was sent
+	// or taken back, and a count of issued response actions over-reported by every withdrawal (issue #1085).
+	AuditCommandIssue  AuditAction = "command.issue"
+	AuditCommandCancel AuditAction = "command.cancel"
 
 	// Host network containment (response context, issue #948). Records an operator containing or releasing a host, with the reason,
 	// the state's version and epoch, and the command queued to deliver it. A request for the state a host already has records nothing.
