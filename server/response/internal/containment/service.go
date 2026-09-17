@@ -163,7 +163,7 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	// Both after the commit: a gateway told earlier could look for a command that is not there yet, and the entry is not a row to
 	// deliver until the change it records is durable.
 	s.notify(hostID)
-	s.deliverAudit(ctx)
+	s.drain.DeliverNow(ctx)
 	return change, nil
 }
 
@@ -185,17 +185,4 @@ func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr 
 		// trace so it cannot stamp one request's trace onto another's row, so an entry that does not carry its own arrives without.
 		TraceID: identityapi.TraceIDFromContext(ctx),
 	})
-}
-
-// deliverAudit turns the entry the change just committed into an audit row now, rather than on the next sweep. The entry is already
-// durable, so a failure here delays the row and is logged rather than failing a change that succeeded; the sweep delivers it.
-func (s *Service) deliverAudit(ctx context.Context) {
-	if s.drain == nil {
-		// No recorder wired (non-production / tests): the entry stays in the outbox, and saying so keeps the missing row visible.
-		s.logger.WarnContext(ctx, "containment: audit recorder not configured; audit entry left undelivered")
-		return
-	}
-	if _, err := s.drain.Drain(ctx); err != nil {
-		s.logger.WarnContext(ctx, "containment: audit entry is committed but not yet delivered; the sweep will retry it", "err", err)
-	}
 }

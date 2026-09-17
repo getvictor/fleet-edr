@@ -996,9 +996,16 @@ func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *tes
 
 	// Through Run, which is what cmd/main starts, rather than through the sweep method directly. Calling the loop by name would
 	// prove the loop works and say nothing about whether anything starts it, which is exactly how this shipped unstarted.
+	//
+	// Waited on rather than left to a deferred cancel: full.Open closes the database in its own cleanup, and a sweep still querying
+	// the outbox while that happens would race it.
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go r.Run(ctx)
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	audit.comesBack()
 
 	require.Eventually(t, func() bool { return len(audit.recorded()) == 1 }, 5*time.Second, 20*time.Millisecond,

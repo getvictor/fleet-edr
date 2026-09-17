@@ -30,11 +30,12 @@ type Store struct {
 	db *sqlx.DB
 }
 
-// AuditOutboxTable is this context's audit outbox, which every response action commits its audit entry into, in the transaction that
-// makes the change (issue #1070).
+// AuditOutboxTable is this context's audit outbox. A containment change commits its audit entry into it, in the transaction that
+// records the change and queues its command (issue #1070). Command issuance still records its row after the insert and does not use
+// this table yet; adopting it is the other half of that issue.
 //
-// One table for the context rather than one per action: a drain reads an outbox oldest first, so sharing it gives the context's audit
-// rows a single order, and an auditor sees a containment and the command issuance around it in the order they happened.
+// One table for the context rather than one per action, so the actions that do adopt it share an order: a drain reads an outbox
+// oldest first, so a reader sees the context's audit rows in the order the changes happened rather than interleaved by two drains.
 const AuditOutboxTable = "response_audit_outbox"
 
 // NewStore returns a Store over an existing sqlx.DB handle.

@@ -213,6 +213,26 @@ func (d *Drain) Drain(ctx context.Context) (int, error) {
 	return len(delivered), stopErr
 }
 
+// DeliverNow turns the entries a change just committed into audit rows, rather than leaving them to the next sweep, and is what every
+// caller runs immediately after its transaction commits.
+//
+// A failure is logged and not returned. The entry is already durable and the change it records already succeeded, so failing the
+// caller here would report a problem the operator has not got: the row is late, not lost, and the sweep delivers it.
+//
+// A nil Drain is the wiring with no audit recorder, which only non-production setups have. It says so rather than returning silently,
+// because the entry then waits in the outbox and this is the only thing that would report a change with no audit row. It logs through
+// the default logger, having no configured one of its own, which is acceptable for a path production does not take.
+func (d *Drain) DeliverNow(ctx context.Context) {
+	if d == nil {
+		slog.Default().WarnContext(ctx, "audit entry is committed but not delivered: no audit recorder is wired")
+		return
+	}
+	if _, err := d.Drain(ctx); err != nil {
+		d.logger.WarnContext(ctx, "audit entry is committed but not yet delivered; the sweep will retry it",
+			"subject", d.subject, "err", err)
+	}
+}
+
 // DefaultSweepInterval is how often the sweep looks for entries the request that wrote them could not deliver.
 //
 // A minute rather than seconds. The steady state is an empty table: an entry is written by an operator action and delivered by

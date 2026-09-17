@@ -220,15 +220,7 @@ func auditEntry(
 // deliverAudit turns the audit entry a mutation just committed into an audit row now, rather than on the next sweep. The entry is
 // already durable, so a failure here delays the row and is logged rather than failing a change that succeeded; the sweep delivers it.
 func (s *Service) deliverAudit(ctx context.Context) {
-	if s.drain == nil {
-		// No recorder wired (non-production / tests): the entry stays in the outbox, and saying so keeps the missing row visible.
-		// Production always wires the recorder.
-		s.logger.WarnContext(ctx, "detectionconfig: audit recorder not configured; audit entry left undelivered")
-		return
-	}
-	if _, err := s.drain.Drain(ctx); err != nil {
-		s.logger.WarnContext(ctx, "detectionconfig: audit entry is committed but not yet delivered; the sweep will retry it", "err", err)
-	}
+	s.drain.DeliverNow(ctx)
 }
 
 // actorIdentifier renders the acting principal id recorded as created_by / actor_email (usr_<id> for a user, svc_<id> for a service
