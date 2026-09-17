@@ -7,7 +7,6 @@ import (
 
 	"context"
 	"encoding/json"
-	"log/slog"
 	"strings"
 	"unicode/utf8"
 
@@ -35,23 +34,17 @@ type Service struct {
 	latest   LatestCommands
 	outbox   *auditoutbox.Store
 	drain    *auditoutbox.Drain
-	logger   *slog.Logger
 }
 
 // NewService builds a Service. store, enrolled, queue, notify, latest and outbox are required: the outbox is where a change's audit
 // entry commits with it, so a Service without one could record a containment with nothing saying who made it. drain may be nil outside
 // production, which leaves the entries in the outbox rather than turning them into audit rows.
 func NewService(store *Store, enrolled api.HostEnrolledChecker, queue CommandQueuer, notify Notifier, latest LatestCommands,
-	outbox *auditoutbox.Store, drain *auditoutbox.Drain, logger *slog.Logger) *Service {
+	outbox *auditoutbox.Store, drain *auditoutbox.Drain) *Service {
 	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil || outbox == nil {
 		panic("containment.NewService: store, enrolled, queue, notify, latest and outbox are required")
 	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-	return &Service{
-		store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, outbox: outbox, drain: drain, logger: logger,
-	}
+	return &Service{store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, outbox: outbox, drain: drain}
 }
 
 // commandPayload is the set_network_containment payload for a state. The change and the catch-up both build it here, so a host that is

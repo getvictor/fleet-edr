@@ -61,7 +61,6 @@ type Response struct {
 	operatorH *operator.Handler
 	db        *sqlx.DB
 	logger    *slog.Logger
-	audit     identityapi.AuditRecorder
 	authz     identityapi.AuthZ
 	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
 	containmentH         *operator.ContainmentHandler
@@ -108,7 +107,6 @@ func New(deps Deps) (*Response, error) {
 		operatorH: opH,
 		db:        deps.DB,
 		logger:    logger,
-		audit:     deps.Audit,
 		authz:     deps.AuthZ,
 
 		containmentOutbox:     containmentOutbox,
@@ -123,7 +121,7 @@ func New(deps Deps) (*Response, error) {
 func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) {
 	store := containment.NewStore(r.db)
 	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, r.containmentOutbox,
-		r.containmentAuditDrain, r.logger)
+		r.containmentAuditDrain)
 	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
 	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
 		r.logger)

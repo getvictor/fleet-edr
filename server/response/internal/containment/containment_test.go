@@ -143,8 +143,7 @@ func newFixture(t *testing.T) *fixture {
 	drain, err := auditoutbox.NewDrain(f.outbox, f.audit, "host containment", nil)
 	require.NoError(t, err)
 	f.drain = drain
-	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox,
-		f.drain, nil)
+	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain)
 	f.converger = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments,
 		f.commands.LatestOfType, nil)
 	return f
@@ -699,7 +698,7 @@ func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 		return 0, errors.New("queue unavailable")
 	}
 	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
-		f.notified.notify, f.commands.LatestOfType, f.outbox, nil, nil)
+		f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 
 	_, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
 	require.Error(t, err)
@@ -719,7 +718,7 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	boom := errors.New("boom")
 	_, err := containment.NewService(f.store, func(context.Context, string) (bool, error) { return false, boom }, f.commands.QueueTx,
 		f.notified.notify,
-		f.commands.LatestOfType, f.outbox, nil, nil).Set(t.Context(), operator, "", "host-a", true, "x")
+		f.commands.LatestOfType, f.outbox, nil).Set(t.Context(), operator, "", "host-a", true, "x")
 	require.ErrorIs(t, err, boom)
 
 	_, err = f.svc.Set(t.Context(), operator, "", "host-a", true, "x")
@@ -727,7 +726,7 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
 		f.notified.notify,
-		latestFails, f.outbox, nil, nil).Get(t.Context(), "host-a")
+		latestFails, f.outbox, nil).Get(t.Context(), "host-a")
 	require.ErrorIs(t, err, boom)
 	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify,
 		func(context.Context) ([]api.HostEnrollment, error) { return nil, boom },
@@ -766,13 +765,13 @@ func TestConstructorsRequireTheirDependencies(t *testing.T) {
 	enrollments := func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }
 	assert.Panics(t, func() { containment.NewStore(nil) })
 	assert.Panics(t, func() {
-		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil, nil)
+		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 	})
 	assert.Panics(t, func() {
-		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil, nil)
+		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 	})
 	assert.Panics(t, func() {
-		containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil, nil)
+		containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
 	}, "a service without an outbox could record a containment with nothing saying who made it")
 	assert.Panics(t, func() {
 		containment.NewConverger(f.store, nil, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
@@ -822,7 +821,7 @@ func TestList_EveryHostWithAState(t *testing.T) {
 		latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 		_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
 			f.notified.notify,
-			latestFails, f.outbox, nil, nil).List(t.Context())
+			latestFails, f.outbox, nil).List(t.Context())
 		require.ErrorIs(t, err, boom)
 	})
 }
@@ -908,7 +907,7 @@ func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 		return 0, errors.New("queue unavailable")
 	}
 	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
-		f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain, nil)
+		f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain)
 
 	_, err := svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "suspicious")
 	require.Error(t, err)
