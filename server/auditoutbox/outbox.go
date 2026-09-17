@@ -4,6 +4,10 @@
 // own transaction. The change's transaction instead writes an outbox entry, which commits if and only if the change does, and a
 // drain turns entries into audit rows afterwards. Rule content (issue #886) and detection configuration (issue #1022) both write
 // entries in this encoding, each into its own table, and each drains its table with a Drain.
+//
+// The package sits beside sqlhelpers and httpserver rather than inside a context because more than one context needs it, and it
+// names identity/api, the one context dependency any encoding of an audit event must have (ADR-0021). A context supplies only its
+// own table, so a second context writing entries adds a table and a wiring line rather than another copy of this file.
 package auditoutbox
 
 import (

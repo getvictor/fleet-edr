@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // PackService is the pack lifecycle with an actor, a reason and an audit row attached.

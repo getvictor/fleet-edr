@@ -64,6 +64,9 @@ dependenciesRules:
   - package: "**.rules.internal.**"
     shouldOnlyDependsOn:
       internal:
+        # auditoutbox is shared server platform code (issue #1070 moved it out of this context so response could use it too);
+        # detection-config changes and watched-path replacements commit their audit entries through it.
+        - "**.auditoutbox"
         - "**.rules.api"
         - "**.rules.api.**"
         - "**.rules.internal.**"
@@ -362,6 +365,17 @@ dependenciesRules:
   - package: "github.com/fleetdm/edr/server/sqlhelpers"
     shouldOnlyDependsOn:
       internal: *platform_allow
+
+  # auditoutbox sits with the platform packages but carries ONE context dependency, deliberately: the audit event it encodes and the
+  # recorder a drain delivers to are identity's contract (ADR-0021), so no encoding of an audit row can be written without naming
+  # them. It is listed apart from *platform_allow rather than folded into it so that exception stays visible: a second context
+  # dependency here would mean the package had stopped being platform code.
+  - package: "github.com/fleetdm/edr/server/auditoutbox"
+    shouldOnlyDependsOn:
+      internal:
+        - "github.com/fleetdm/edr/server/identity/api"
+        - "github.com/fleetdm/edr/server/sqlhelpers"
+        - "github.com/fleetdm/edr/server/testdb"
 
   # NOTE: server/testdb itself is a Go-leaf and imports no context, but its
   # sub-package server/testdb/full is the cross-context fixture composer and
