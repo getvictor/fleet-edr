@@ -13,7 +13,8 @@
 //     host-token middleware on agent-route tests);
 //   - other contexts' bootstrap packages (for cross-context end-to-end
 //     coverage, e.g. wiring rules.bootstrap with
-//     response.Service().Insert as the CommandInserter closure);
+//     response.Service().InsertBatch as the CommandBatchInserter
+//     closure);
 //   - platform + standard library + approved third-party.
 //
 // Other contexts' internal packages are off-limits; the Go compiler

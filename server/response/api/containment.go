@@ -44,7 +44,8 @@ type ContainmentDelivery struct {
 }
 
 // ContainmentChange is the result of asking for a containment state: the state after the request, whether it changed, and the id of
-// the command queued for it (zero when nothing changed or the command could not be queued, which the catch-up repairs).
+// the command queued for it, which is zero only when nothing changed. A change and its command are recorded in one transaction, so a
+// change that is reported as made has a command (issue #1073).
 type ContainmentChange struct {
 	State     ContainmentState `json:"state"`
 	Changed   bool             `json:"changed"`

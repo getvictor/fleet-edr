@@ -2,7 +2,19 @@
 
 ### Requirement: An operator contains or releases a host
 
-The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `contained` and a `reason`, authorized as `host.isolate` on that host, which for an interactive session requires a recent authentication. A request with a blank reason SHALL be refused with `reason_required`, a reason longer than 1024 characters with `reason_too_long`, and a request for a host with no active enrollment with `host_not_found`, changing nothing. A request that changes the host's containment SHALL record the new desired state (contained, reason, actor and time) at the host's next version, queue a `set_network_containment` command carrying that version, the state's epoch (the change time in microseconds, so ordering survives a database restore that sends versions backwards) and `contained`, audit the change as `host.contain` or `host.release` with the reason, version and epoch and, when the command was queued, its id, and return the state with the queued command's id. The recorded state is authoritative: a command that cannot be queued SHALL NOT fail the change, which the catch-up then delivers. A request for the state the host already has SHALL change nothing, queue nothing and return the current state. The generic `POST /api/commands` SHALL refuse `set_network_containment` and `isolate`, so containment changes only through this state.
+The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `contained` and a `reason`, authorized as `host.isolate` on that host, which for an interactive session requires a recent authentication. A request with a blank reason SHALL be refused with `reason_required`, a reason longer than 1024 characters with `reason_too_long`, and a request for a host with no active enrollment with `host_not_found`, changing nothing. A request that changes the host's containment SHALL record the new desired state (contained, reason, actor and time) at the host's next version, queue a `set_network_containment` command carrying that version, the state's epoch (the change time in microseconds, so ordering survives a database restore that sends versions backwards) and `contained`, audit the change as `host.contain` or `host.release` with the reason, version and epoch and, when the command was queued, its id, and return the state with the queued command's id. The state and its command SHALL be recorded together, under the host's lock, so the commands queued for a host are in the order of the states they carry: a change whose command cannot be queued SHALL record nothing and be refused, rather than leaving a state the catch-up has to notice. A request for the state the host already has SHALL change nothing, queue nothing and return the current state. The generic `POST /api/commands` SHALL refuse `set_network_containment` and `isolate`, so containment changes only through this state.
+
+#### Scenario: Commands are queued in the order of the states they carry
+
+- **GIVEN** two changes to one host's containment made at the same moment
+- **WHEN** each records its state and queues its command
+- **THEN** the command carrying the later state is queued after the command carrying the earlier one
+
+#### Scenario: A change whose command cannot be queued records nothing
+
+- **GIVEN** an operator changing a host's containment
+- **WHEN** the command carrying the new state cannot be queued
+- **THEN** the request is refused, the host's state is unchanged, and nothing is audited
 
 #### Scenario: An operator contains a host
 
@@ -67,7 +79,13 @@ The server SHALL expose `GET /api/hosts/{host_id}/containment`, authorized as `h
 
 ### Requirement: Hosts converge on their containment state
 
-The server SHALL, every five minutes, queue the current containment state again for each actively enrolled host that has one and whose latest `set_network_containment` command does not deliver it: there is none, it carries a different version or epoch, it expired or was cancelled, it failed at least six hours ago, or it was queued at or before the host's latest enrollment. A pending, acknowledged or completed command carrying the current state, or one that failed less than six hours ago, SHALL NOT be queued again, and a host that has never had a containment state SHALL receive nothing.
+The server SHALL, every five minutes, queue the current containment state again for each actively enrolled host that has one and whose latest `set_network_containment` command does not deliver it: there is none, it carries a different version or epoch, it expired or was cancelled, it failed at least six hours ago, or it was queued at or before the host's latest enrollment. A pending, acknowledged or completed command carrying the current state, or one that failed less than six hours ago, SHALL NOT be queued again, and a host that has never had a containment state SHALL receive nothing. The catch-up SHALL queue under the host's lock and against the state it holds then, so a state it read at the start of a sweep that has since changed queues nothing rather than a command carrying the older state.
+
+#### Scenario: A concurrent change is not overtaken by the catch-up
+
+- **GIVEN** a host whose containment state changed after the catch-up read it
+- **WHEN** the catch-up comes to queue the state it read
+- **THEN** it queues nothing, because the host no longer holds that state
 
 #### Scenario: A host whose command expired is sent the state again
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -50,11 +51,53 @@ type fixture struct {
 	converger *containment.Converger
 	commands  *service.Service
 	audit     *recordingAudit
+	// db is the test's own handle, for asking the database what another connection can see.
+	db *sqlx.DB
+	// notified records the hosts the control gateway was told about, in order, after their transactions committed.
+	notified *notifyRecorder
 	// enrolled is each enrolled host's enrollment time.
 	enrolled map[string]time.Time
 }
 
 var operator = identityapi.PrincipalRef{ID: "user:7", Type: "user", Label: "ir@example.com"}
+
+// notifyRecorder captures the gateway notifications a change or a sweep makes, and what another connection could see of that host's
+// commands at the moment each notification was made. The gateway reads the command from its own connection, so a notification sent
+// before the transaction commits sends it looking for a row that is not there.
+type notifyRecorder struct {
+	mu      sync.Mutex
+	hosts   []string
+	visible []int
+	db      *sqlx.DB
+}
+
+func (n *notifyRecorder) notify(hostID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.hosts = append(n.hosts, hostID)
+	if n.db == nil {
+		return
+	}
+	var count int
+	if err := n.db.Get(&count,
+		`SELECT COUNT(*) FROM commands WHERE host_id = ? AND command_type = ?`, hostID, api.CommandTypeSetNetworkContainment); err != nil {
+		count = -1
+	}
+	n.visible = append(n.visible, count)
+}
+
+// commandsVisibleAtNotify is how many of the host's containment commands another connection could see at each notification.
+func (n *notifyRecorder) commandsVisibleAtNotify() []int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]int(nil), n.visible...)
+}
+
+func (n *notifyRecorder) recorded() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.hosts...)
+}
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
@@ -62,6 +105,7 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	f := &fixture{
 		store: containment.NewStore(db), commands: service.New(mysql.NewStore(db), nil, nil), audit: &recordingAudit{},
+		notified: &notifyRecorder{db: db}, db: db,
 		enrolled: map[string]time.Time{"host-a": time.Now().Add(-time.Hour), "host-b": time.Now().Add(-time.Hour)},
 	}
 	isEnrolled := func(_ context.Context, hostID string) (bool, error) {
@@ -75,8 +119,9 @@ func newFixture(t *testing.T) *fixture {
 		}
 		return out, nil
 	}
-	f.svc = containment.NewService(f.store, isEnrolled, f.commands.Insert, f.commands.LatestOfType, f.audit, nil)
-	f.converger = containment.NewConverger(f.store, f.commands.Insert, enrollments, f.commands.LatestOfType, nil)
+	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.audit, nil)
+	f.converger = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments,
+		f.commands.LatestOfType, nil)
 	return f
 }
 
@@ -93,6 +138,14 @@ func (f *fixture) containmentCommands(t *testing.T, hostID string) []api.Command
 	}
 	slices.SortFunc(out, func(a, b api.Command) int { return cmp.Compare(a.ID, b.ID) })
 	return out
+}
+
+// commandPayloadFor is the payload the service and the catch-up both queue, rebuilt here for the tests that drive the store directly.
+func commandPayloadFor(state api.ContainmentState) []byte {
+	payload, _ := json.Marshal(api.SetNetworkContainmentPayload{
+		Version: state.Version, Epoch: state.Epoch, Contained: state.Contained,
+	})
+	return payload
 }
 
 func payloadOf(t *testing.T, cmd api.Command) api.SetNetworkContainmentPayload {
@@ -382,36 +435,250 @@ func TestConverge(t *testing.T) {
 		enrollments := func(context.Context) ([]api.HostEnrollment, error) {
 			return []api.HostEnrollment{{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]}}, nil
 		}
-		_, err := containment.NewConverger(f.store, f.commands.Insert, enrollments, latest, nil).Converge(t.Context())
+		_, err := containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments, latest,
+			nil).Converge(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, [][]string{{"host-a"}}, asked)
 	})
 }
 
-// A change whose command could not be queued is still recorded and audited: the state is authoritative and the catch-up queues it.
-func TestSet_ACommandThatCannotBeQueuedDoesNotFailTheChange(t *testing.T) {
+// The control gateway is told after the transaction commits, not before: it reads the command through its own connection, so a
+// notification sent inside the transaction sends it looking for a row that is not there yet (issue #1073).
+func TestSet_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	failing := func(context.Context, string, string, []byte) (int64, error) {
-		return 0, errors.New("queue unavailable")
-	}
-	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
-		f.commands.LatestOfType, f.audit, nil)
 
-	change, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
 	require.NoError(t, err)
-	assert.True(t, change.Changed)
-	assert.Zero(t, change.CommandID)
-	state, err := f.store.Get(t.Context(), "host-a")
+	require.True(t, change.Changed)
+
+	assert.Equal(t, []string{"host-a"}, f.notified.recorded())
+	assert.Equal(t, []int{1}, f.notified.commandsVisibleAtNotify(),
+		"another connection can see the queued command when the gateway is told about it")
+}
+
+// Two changes to one host at the same moment queue their commands in the order of the states they carry. Before the command was
+// queued inside the state's transaction, both could commit their states and then queue in the other order, leaving the newest command
+// carrying the older state until the catch-up noticed (issue #1073).
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/commands-are-queued-in-the-order-of-the-states-they-carry
+func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	// The contain runs first and holds its transaction open inside the queue callback, which is where the release would have to slip
+	// through to queue out of order. reachedQueue fires when the release reaches the point of queuing its own command: while the
+	// contain is held that must not happen, because the contain still holds the host's row. Queuing after the commit, as the code did
+	// before this change, releases that row early and the release gets there at once, which is the ordering this test is about.
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	reachedQueue := make(chan struct{}, 1)
+	slow := func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+		if state.Contained {
+			close(holding)
+			<-release
+		} else {
+			select {
+			case reachedQueue <- struct{}{}:
+			default:
+			}
+		}
+		return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "contain", "user:7", slow)
+		assert.NoError(t, err)
+	})
+
+	<-holding
+	wg.Go(func() {
+		// Blocks on the host's row lock until the contain commits.
+		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "release", "user:7", slow)
+		assert.NoError(t, err)
+	})
+	// The release must not get as far as queuing while the contain is held. Under the ordering this replaces it gets there in
+	// milliseconds, so this wait fails fast on a regression rather than resting on a sleep being long enough.
+	select {
+	case <-reachedQueue:
+		close(release)
+		wg.Wait()
+		t.Fatal("the release queued its command while the contain had not committed: the host's row was not held")
+	case <-time.After(2 * time.Second):
+	}
+	close(release)
+	wg.Wait()
+
+	cmds := f.containmentCommands(t, "host-a")
+	require.Len(t, cmds, 2)
+	first := payloadOf(t, cmds[0])
+	second := payloadOf(t, cmds[1])
+	assert.Less(t, cmds[0].ID, cmds[1].ID)
+	assert.Less(t, first.Version, second.Version, "the later state's command is queued after the earlier one's")
+	assert.True(t, first.Contained)
+	assert.False(t, second.Contained)
+}
+
+// A database that cannot answer produces an error, not a quiet no-op. An operator who is told a host was contained must not have to
+// wonder whether it was, and the catch-up must report a sweep it could not complete rather than counting it as done.
+func TestStoreFailuresAreReported(t *testing.T) {
+	t.Parallel()
+	contained := api.ContainmentState{HostID: "host-a", Version: 1, Epoch: 1}
+	queueOK := func(context.Context, sqlx.ExecerContext, api.ContainmentState) (int64, error) { return 1, nil }
+
+	t.Run("a closed database", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		require.NoError(t, f.db.Close())
+
+		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "why", "user:7", queueOK)
+		require.Error(t, err)
+		_, _, err = f.store.QueueCurrent(t.Context(), contained, queueOK)
+		require.Error(t, err)
+	})
+
+	t.Run("a table that is not there", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		_, err := f.db.ExecContext(t.Context(), `DROP TABLE host_containment`)
+		require.NoError(t, err)
+
+		_, _, _, err = f.store.Set(t.Context(), "host-a", true, "why", "user:7", queueOK)
+		require.Error(t, err, "the containment cannot be created")
+		_, _, _, err = f.store.Set(t.Context(), "host-a", false, "why", "user:7", queueOK)
+		require.Error(t, err, "the state cannot be read")
+		_, _, err = f.store.QueueCurrent(t.Context(), contained, queueOK)
+		require.Error(t, err, "the catch-up cannot read the state it meant to queue")
+	})
+
+	// Two hosts, and only the first cannot be queued: the second is what shows the sweep carried on. With one host the same
+	// assertions would hold whether the sweep continued or stopped at the failure.
+	t.Run("a sweep carries on past a host it cannot queue", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		for _, hostID := range []string{"host-a", "host-b"} {
+			_, err := f.svc.Set(t.Context(), operator, "", hostID, true, "beaconing")
+			require.NoError(t, err)
+		}
+		// Both commands expire, so the catch-up means to queue both states again.
+		_, err := f.db.ExecContext(t.Context(), `UPDATE commands SET status = ?`, api.StatusExpired)
+		require.NoError(t, err)
+
+		enrollments := func(context.Context) ([]api.HostEnrollment, error) {
+			return []api.HostEnrollment{
+				{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]},
+				{HostID: "host-b", EnrolledAt: f.enrolled["host-b"]},
+			}, nil
+		}
+		failFirst := func(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error) {
+			if hostID == "host-a" {
+				return 0, errors.New("queue unavailable")
+			}
+			return f.commands.QueueTx(ctx, q, hostID, commandType, payload)
+		}
+		converger := containment.NewConverger(f.store, failFirst, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
+
+		queued, err := converger.Converge(t.Context())
+		require.NoError(t, err, "one host that cannot be queued does not end the sweep")
+		assert.Equal(t, 1, queued, "the second host was queued after the first failed")
+		assert.Equal(t, []string{"host-a", "host-b", "host-b"}, f.notified.recorded(),
+			"the two changes told the gateway, then the sweep told it about host-b alone")
+	})
+
+	t.Run("a command that cannot be queued by the catch-up", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t)
+		change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+		require.NoError(t, err)
+
+		_, queued, err := f.store.QueueCurrent(t.Context(), change.State,
+			func(context.Context, sqlx.ExecerContext, api.ContainmentState) (int64, error) {
+				return 0, errors.New("queue unavailable")
+			})
+		require.Error(t, err)
+		assert.False(t, queued)
+	})
+}
+
+// The catch-up has its own transaction and its own notification, so the guarantee is checked there too: the command it queues is
+// visible to another connection by the time the gateway is told to look for it.
+func TestConverge_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
 	require.NoError(t, err)
-	assert.True(t, state.Contained)
-	events := f.audit.recorded()
-	require.Len(t, events, 1)
-	assert.NotContains(t, events[0].Payload, "command_id")
+	require.True(t, change.Changed)
+	// The change's command expires, which is one of the states the catch-up queues again.
+	_, err = f.db.ExecContext(t.Context(), `UPDATE commands SET status = ? WHERE id = ?`, api.StatusExpired, change.CommandID)
+	require.NoError(t, err)
 
 	queued, err := f.converger.Converge(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, 1, queued, "the catch-up queues the state the change could not")
+	require.Equal(t, 1, queued)
+
+	assert.Equal(t, []string{"host-a", "host-a"}, f.notified.recorded(), "the change and the catch-up each told the gateway")
+	assert.Equal(t, []int{1, 2}, f.notified.commandsVisibleAtNotify(),
+		"the catch-up's command is visible to another connection when the gateway is told about it")
+}
+
+// The catch-up reads every host's state at the start of a sweep and queues some time later. A host whose state changed in between has
+// a command for the newer state already, and the sweep must not put the older one behind it.
+// spec:server-host-containment/hosts-converge-on-their-containment-state/a-concurrent-change-is-not-overtaken-by-the-catch-up
+func TestConverge_AStateThatChangedSinceTheSweepReadItQueuesNothing(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	contained, _, _, err := f.store.Set(t.Context(), "host-a", true, "contain", "user:7",
+		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+			return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
+		})
+	require.NoError(t, err)
+
+	// The host moves on, as a concurrent change would between the sweep's read and its queue.
+	_, _, _, err = f.store.Set(t.Context(), "host-a", false, "release", "user:7",
+		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+			return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
+		})
+	require.NoError(t, err)
+
+	before := len(f.containmentCommands(t, "host-a"))
+	id, queued, err := f.store.QueueCurrent(t.Context(), contained,
+		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+			return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
+		})
+	require.NoError(t, err)
+	assert.False(t, queued, "the host no longer holds the state the sweep read")
+	assert.Zero(t, id)
+	assert.Len(t, f.containmentCommands(t, "host-a"), before, "no command was queued")
+}
+
+// A change whose command cannot be queued records nothing: the state and its command are written in one transaction, so the operator
+// is told the change failed rather than left with a state whose command the catch-up has to notice (issue #1073).
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-whose-command-cannot-be-queued-records-nothing
+func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	// The command is written through the transaction and the callback then fails, which is the case that proves the all-or-nothing
+	// contract: a callback that failed before inserting would only show the state rolling back.
+	failing := func(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error) {
+		if _, err := f.commands.QueueTx(ctx, q, hostID, commandType, payload); err != nil {
+			return 0, err
+		}
+		return 0, errors.New("queue unavailable")
+	}
+	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
+		f.notified.notify, f.commands.LatestOfType, f.audit, nil)
+
+	_, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+	require.Error(t, err)
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.False(t, state.Contained, "the state rolled back with the command")
+	assert.Zero(t, state.Version)
+	assert.Empty(t, f.audit.recorded(), "nothing happened, so nothing is audited")
+	assert.Empty(t, f.notified.recorded(), "the gateway is told nothing")
+	assert.Empty(t, f.containmentCommands(t, "host-a"), "the command written through the transaction rolled back with the state")
 }
 
 // Failures reading enrollment or commands fail the request rather than being treated as an answer.
@@ -419,23 +686,26 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	boom := errors.New("boom")
-	_, err := containment.NewService(f.store, func(context.Context, string) (bool, error) { return false, boom }, f.commands.Insert,
+	_, err := containment.NewService(f.store, func(context.Context, string) (bool, error) { return false, boom }, f.commands.QueueTx,
+		f.notified.notify,
 		f.commands.LatestOfType, nil, nil).Set(t.Context(), operator, "", "host-a", true, "x")
 	require.ErrorIs(t, err, boom)
 
 	_, err = f.svc.Set(t.Context(), operator, "", "host-a", true, "x")
 	require.NoError(t, err)
 	latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
-	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.Insert,
+	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
+		f.notified.notify,
 		latestFails, nil, nil).Get(t.Context(), "host-a")
 	require.ErrorIs(t, err, boom)
-	_, err = containment.NewConverger(f.store, f.commands.Insert, func(context.Context) ([]api.HostEnrollment, error) { return nil, boom },
+	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify,
+		func(context.Context) ([]api.HostEnrollment, error) { return nil, boom },
 		f.commands.LatestOfType, nil).Converge(t.Context())
 	require.ErrorIs(t, err, boom)
 	onlyHostA := func(context.Context) ([]api.HostEnrollment, error) {
 		return []api.HostEnrollment{{HostID: "host-a"}}, nil
 	}
-	_, err = containment.NewConverger(f.store, f.commands.Insert, onlyHostA, latestFails, nil).Converge(t.Context())
+	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, onlyHostA, latestFails, nil).Converge(t.Context())
 	require.ErrorIs(t, err, boom)
 }
 
@@ -464,10 +734,18 @@ func TestConstructorsRequireTheirDependencies(t *testing.T) {
 	enrolled := func(context.Context, string) (bool, error) { return true, nil }
 	enrollments := func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }
 	assert.Panics(t, func() { containment.NewStore(nil) })
-	assert.Panics(t, func() { containment.NewService(nil, enrolled, f.commands.Insert, f.commands.LatestOfType, nil, nil) })
-	assert.Panics(t, func() { containment.NewService(f.store, nil, f.commands.Insert, f.commands.LatestOfType, nil, nil) })
-	assert.Panics(t, func() { containment.NewConverger(f.store, nil, enrollments, f.commands.LatestOfType, nil) })
-	assert.Panics(t, func() { containment.NewConverger(f.store, f.commands.Insert, nil, f.commands.LatestOfType, nil) })
+	assert.Panics(t, func() {
+		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
+	})
+	assert.Panics(t, func() {
+		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
+	})
+	assert.Panics(t, func() {
+		containment.NewConverger(f.store, nil, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
+	})
+	assert.Panics(t, func() {
+		containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, nil, f.commands.LatestOfType, nil)
+	})
 }
 
 // spec:server-host-containment/the-containment-state-is-readable/the-host-list-shows-every-host-with-a-state
@@ -508,7 +786,8 @@ func TestList_EveryHostWithAState(t *testing.T) {
 		require.NoError(t, err)
 		boom := errors.New("boom")
 		latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
-		_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.Insert,
+		_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
+			f.notified.notify,
 			latestFails, nil, nil).List(t.Context())
 		require.ErrorIs(t, err, boom)
 	})

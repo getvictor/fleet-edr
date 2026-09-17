@@ -93,9 +93,10 @@ func New(deps Deps) (*Response, error) {
 // Until it is called the routes are not mounted and the catch-up does nothing.
 func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) {
 	store := containment.NewStore(r.db)
-	svc := containment.NewService(store, enrolled, r.svc.Insert, r.svc.LatestOfType, r.audit, r.logger)
+	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, r.audit, r.logger)
 	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
-	r.containmentConverger = containment.NewConverger(store, r.svc.Insert, enrollments, r.svc.LatestOfType, r.logger)
+	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
+		r.logger)
 }
 
 // RunContainmentCatchUp re-queues hosts' containment states every containment.DefaultConvergeInterval until ctx is cancelled. It returns

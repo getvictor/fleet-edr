@@ -398,10 +398,12 @@ paths:
       description: |
         Records the desired containment with a reason, queues a
         `set_network_containment` command for the host, and audits the change
-        as `host.contain` or `host.release`. The recorded state is
-        authoritative: when the command cannot be queued the change still
-        succeeds without a `command_id`, and the catch-up queues it. Asking for
-        the state the host already has changes nothing. Requires `host.isolate`, which for an
+        as `host.contain` or `host.release`. The state and its command are
+        recorded together, so the commands queued for a host are in the order
+        of the states they carry; a change whose command cannot be queued
+        records nothing and is refused. Asking for
+        the state the host already has changes nothing and returns no
+        `command_id`. Requires `host.isolate`, which for an
         interactive session requires a recent authentication. Hosts that miss
         the command are sent it again by a catch-up every five minutes.
       security:
@@ -441,7 +443,7 @@ paths:
                   command_id:
                     type: integer
                     format: int64
-                    description: The queued command; absent when nothing changed or the command could not be queued.
+                    description: The queued command; absent only when nothing changed, since a change and its command are recorded together.
         "400":
           description: "`bad_body`, `reason_required` or `reason_too_long`"
         "403":
