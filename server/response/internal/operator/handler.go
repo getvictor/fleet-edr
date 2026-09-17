@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -83,6 +84,13 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
 		return
 	}
+
+	// Normalized here, before anything uses it. The service trims what it stores, so leaving the raw value in play meant one request
+	// could authorize against " host-a ", store a command for host-a, and audit the two under different names, which is correlation
+	// between the authorization row and the action row silently broken. One boundary, one value, and the service's own trim is then
+	// a no-op for this caller.
+	body.HostID = strings.TrimSpace(body.HostID)
+	body.CommandType = strings.TrimSpace(body.CommandType)
 
 	action, ok := commandTypeToAction(body.CommandType)
 	if !ok {

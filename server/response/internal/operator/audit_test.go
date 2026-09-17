@@ -146,8 +146,10 @@ func TestHandler_AFailedActionCommitsNoAuditEntry(t *testing.T) {
 	})
 }
 
-// The entry describes the command as it was stored, not as the request spelled it. A host id with surrounding whitespace is stored
-// trimmed, and an entry built from the request's own copy would name a host that has no such command.
+// One request, one host id, everywhere it is used. A host id with surrounding whitespace is stored trimmed, so a handler that passed
+// the raw value on would authorize against " host-a ", store a command for host-a, and write two audit rows naming different hosts
+// for the same operator action: the authorization decision under one and the issuance under the other, with nothing to correlate
+// them. This asserts the chokepoint, the stored command and the committed entry all see the same value.
 func TestHandler_CommandIssue_AuditsTheHostTheCommandWasStoredAgainst(t *testing.T) {
 	t.Parallel()
 	var entries []identityapi.AuditEvent
@@ -159,15 +161,19 @@ func TestHandler_CommandIssue_AuditsTheHostTheCommandWasStoredAgainst(t *testing
 		},
 		entries: &entries,
 	}
-	srv := serveWithActor(t, New(svc, allowAllAuthZ{}, nil), identityapi.PrincipalRef{ID: "usr_7"})
+	authz := &recordingAuthZ{allow: true}
+	srv := serveWithActor(t, New(svc, authz, nil), identityapi.PrincipalRef{ID: "usr_7"})
 
 	require.Equal(t, http.StatusCreated, post(t, srv, "/api/commands", map[string]any{
 		"host_id": "  host-a  ", "command_type": "kill_process", "payload": map[string]any{"pid": 1},
 	}))
 
 	require.Len(t, entries, 1)
+	require.Len(t, authz.decisions, 1)
 	assert.Equal(t, "host-a", stored)
 	assert.Equal(t, stored, entries[0].TargetID, "the entry names the host the command was stored against")
+	assert.Equal(t, "host.kill_process host:host-a", authz.decisions[0],
+		"the chokepoint decided about the same host, so its row and the issuance row correlate")
 }
 
 // The delivered row has to carry the trace of the request that made the change: the drain detaches its own so it cannot stamp one
