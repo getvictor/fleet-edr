@@ -182,6 +182,10 @@ func payloadOf(t *testing.T, cmd api.Command) api.SetNetworkContainmentPayload {
 
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/an-operator-contains-a-host
 // spec:server-host-containment/an-operator-contains-or-releases-a-host/a-release-is-recorded-the-same-way
+// spec:server-host-containment/a-containment-change-commits-its-audit-entry/a-change-commits-with-its-audit-entry
+//
+// The audit assertions below read the rows the outbox delivered, so they are also what says the entry committed with the change:
+// the recorder is only reached through a drain, and a drain only ever sees an entry the change's transaction wrote.
 func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
