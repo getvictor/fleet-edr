@@ -189,5 +189,15 @@ func TestNewStore_PanicsOnWiringItCannotUse(t *testing.T) {
 	for _, table := range []string{"", "audit outbox", "outbox; DROP TABLE hosts", "Outbox", "1_outbox", "db.outbox"} {
 		assert.Panics(t, func() { auditoutbox.NewStore(db, table) }, "table %q", table)
 	}
-	assert.NotPanics(t, func() { auditoutbox.NewStore(db, "response_audit_outbox") })
+	assert.NotPanics(t, func() { auditoutbox.NewStore(db, "containment_audit_outbox") })
+}
+
+// CreateTableSQL puts the name into statement text too, so it applies the same check. Without this the exported helper would be the
+// way a name NewStore refuses reaches SQL.
+func TestCreateTableSQL_RejectsATableNameItCannotInterpolate(t *testing.T) {
+	t.Parallel()
+	for _, table := range []string{"", "audit outbox", "outbox; DROP TABLE hosts", "Outbox", "1_outbox", "db.outbox"} {
+		assert.Panics(t, func() { auditoutbox.CreateTableSQL(table) }, "table %q", table)
+	}
+	assert.Contains(t, auditoutbox.CreateTableSQL("containment_audit_outbox"), "CREATE TABLE containment_audit_outbox (")
 }
