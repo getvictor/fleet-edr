@@ -348,6 +348,24 @@ func setupReplicaWith(t *testing.T, db *sqlx.DB, cfg setupConfig) *Stack {
 		}
 	})
 
+	// The response context's loops, for the same reason and with the same lifecycle. This fixture mirrors cmd/main, and a loop it
+	// does not start is a loop no cross-context test can notice the absence of: the comment above records that happening to rules
+	// once already. Joined rather than left to the deferred cancel, because the audit sweep queries the outbox and the fixture is
+	// free to drop the schema out from under it otherwise.
+	responseDone := make(chan struct{})
+	go func() {
+		defer close(responseDone)
+		responseCtx.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-responseDone:
+		case <-time.After(30 * time.Second):
+			t.Error("response.Run did not return; its audit sweep may still be reading a schema about to be dropped")
+		}
+	})
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &Stack{
