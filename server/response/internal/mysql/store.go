@@ -21,7 +21,7 @@ import (
 const insertBatchChunkSize = 256
 
 // listPendingChunkSize bounds the host-id IN(...) set per watch query, so a gateway holding many connections does not emit one
-// statement with thousands of placeholders. Each chunk still index-seeks on idx_commands_host_status.
+// statement with thousands of placeholders. Each chunk still index-seeks on idx_commands_host_status_acked.
 const listPendingChunkSize = 500
 
 // Store owns the commands table. All public methods take the row's fields directly (rather than a pre-constructed struct) so callers
@@ -152,11 +152,21 @@ func (s *Store) ListForHost(ctx context.Context, hostID, status string) ([]api.C
 	return out, nil
 }
 
-// ListPendingForHosts returns every pending command for the given host ids, in creation order (oldest first, so a connected agent
-// receives its backlog in the order it was queued). It is the control gateway's watch query: scoping on host_id lets the
-// idx_commands_host_status (host_id, status) index serve the lookup and transfers only the rows this gateway can deliver, rather than
-// scanning the whole pending backlog. An empty hostIDs slice returns no rows without touching the database.
-func (s *Store) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]api.Command, error) {
+// ListDeliverableForHosts returns everything the given hosts are owed, in creation order (oldest first, so a connected agent receives
+// its backlog in the order it was queued): their pending commands, and the commands they acknowledged between ackedAfter and
+// ackedBefore whose outcome never arrived.
+//
+// The second half is how an outcome lost with its connection is recovered (issue #1062). The agent's ledger records every command's
+// terminal outcome and replays it on re-delivery, so offering the command again is all the server has to do; without that nothing ever
+// asks, and the command stays acknowledged for good. Both bounds are real: a command acknowledged moments ago is usually still
+// running, and one acknowledged longer ago than the agent keeps outcomes would have its side effect repeated rather than replayed.
+//
+// It is the control gateway's watch query, run every second per connected host, so both halves are one round trip and one index range
+// each: scoping on host_id and status seeks idx_commands_host_status_acked (host_id, status, acked_at), whose third column is what
+// keeps the acknowledged half from scanning every command a fleet has ever stranded. An empty hostIDs slice returns no rows without
+// touching the database.
+func (s *Store) ListDeliverableForHosts(ctx context.Context, hostIDs []string, ackedAfter,
+	ackedBefore time.Time) ([]api.Command, error) {
 	if len(hostIDs) == 0 {
 		return []api.Command{}, nil
 	}
@@ -167,47 +177,17 @@ func (s *Store) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]ap
 		end := min(start+listPendingChunkSize, len(hostIDs))
 		query, args, err := sqlx.In(
 			`SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
-				FROM commands WHERE status = 'pending' AND host_id IN (?) ORDER BY created_at ASC`, hostIDs[start:end])
+				FROM commands
+				WHERE host_id IN (?)
+					AND (status = ? OR (status = ? AND acked_at > ? AND acked_at <= ?))
+				ORDER BY created_at ASC`,
+			hostIDs[start:end], api.StatusPending, api.StatusAcked, ackedAfter, ackedBefore)
 		if err != nil {
-			return nil, fmt.Errorf("expand pending host ids: %w", err)
+			return nil, fmt.Errorf("expand deliverable host ids: %w", err)
 		}
 		var rows []commandRow
 		if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
-			return nil, fmt.Errorf("list pending commands for hosts: %w", err)
-		}
-		for i := range rows {
-			out = append(out, rows[i].toAPI())
-		}
-	}
-	return out, nil
-}
-
-// ListUnreportedForHosts returns every command of the given hosts that the agent acknowledged and never reported an outcome for,
-// acknowledged between ackedAfter and ackedBefore, oldest first. It is how an outcome lost with a connection is recovered: the
-// command is offered again and the agent replays the outcome its ledger recorded (issue #1062).
-//
-// The bounds are both real. A command acknowledged moments ago is usually still running, and offering it again would be the server
-// being impatient rather than the outcome being lost. One acknowledged long ago may have left the agent's ledger, and an agent that
-// has forgotten a command repeats its side effect instead of replaying an outcome, so past that age the command is left as it is.
-//
-// Chunked and indexed like ListPendingForHosts: the same idx_commands_host_status (host_id, status) serves it.
-func (s *Store) ListUnreportedForHosts(ctx context.Context, hostIDs []string, ackedAfter, ackedBefore time.Time) ([]api.Command, error) {
-	if len(hostIDs) == 0 {
-		return []api.Command{}, nil
-	}
-	var out []api.Command
-	for start := 0; start < len(hostIDs); start += listPendingChunkSize {
-		end := min(start+listPendingChunkSize, len(hostIDs))
-		query, args, err := sqlx.In(
-			`SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
-				FROM commands WHERE status = ? AND host_id IN (?) AND acked_at > ? AND acked_at <= ?
-				ORDER BY created_at ASC`, api.StatusAcked, hostIDs[start:end], ackedAfter, ackedBefore)
-		if err != nil {
-			return nil, fmt.Errorf("expand unreported host ids: %w", err)
-		}
-		var rows []commandRow
-		if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
-			return nil, fmt.Errorf("list unreported commands for hosts: %w", err)
+			return nil, fmt.Errorf("list deliverable commands for hosts: %w", err)
 		}
 		for i := range rows {
 			out = append(out, rows[i].toAPI())
@@ -321,7 +301,7 @@ func (s *Store) ExpirePendingOlderThan(ctx context.Context, hostID string, cutof
 }
 
 // LatestOfType returns, per host in hostIDs, the most recently queued command of commandType: the one with the highest id, which is
-// the order commands are inserted in. Hosts with no such command are absent. Chunked like ListPendingForHosts, and each host's latest id is
+// the order commands are inserted in. Hosts with no such command are absent. Chunked like ListDeliverableForHosts, and each host's latest id is
 // the last entry of its range in idx_commands_host_type_id (host_id, command_type, id).
 func (s *Store) LatestOfType(ctx context.Context, commandType string, hostIDs []string) (map[string]api.Command, error) {
 	out := make(map[string]api.Command, len(hostIDs))

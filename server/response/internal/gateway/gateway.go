@@ -55,8 +55,7 @@ const (
 // CommandSource is the slice of the response service the gateway needs: list a connected host's pending commands (to push) and apply an
 // outcome reported over the stream (reusing the unchanged status-transition rules). Satisfied by the response service.
 type CommandSource interface {
-	ListPendingForHosts(ctx context.Context, hostIDs []string) ([]api.Command, error)
-	ListUnreportedForHosts(ctx context.Context, hostIDs []string, ackedAfter, ackedBefore time.Time) ([]api.Command, error)
+	ListDeliverableForHosts(ctx context.Context, hostIDs []string, ackedAfter, ackedBefore time.Time) ([]api.Command, error)
 	UpdateStatus(ctx context.Context, req api.UpdateStatusRequest) error
 }
 
@@ -203,17 +202,11 @@ func (g *Gateway) deliverPending(ctx context.Context, hostIDs []string) {
 	if len(hostIDs) == 0 {
 		return
 	}
-	cmds, err := g.src.ListPendingForHosts(ctx, hostIDs)
-	if err != nil {
-		g.logger.WarnContext(ctx, "control gateway list pending", "err", err)
-		return
-	}
 	now := g.now()
-	unreported, err := g.src.ListUnreportedForHosts(ctx, hostIDs, now.Add(-g.unreportedWindow), now.Add(-g.unreportedGrace))
+	cmds, err := g.src.ListDeliverableForHosts(ctx, hostIDs, now.Add(-g.unreportedWindow), now.Add(-g.unreportedGrace))
 	if err != nil {
-		g.logger.WarnContext(ctx, "control gateway list unreported", "err", err)
-	} else {
-		cmds = append(cmds, unreported...)
+		g.logger.WarnContext(ctx, "control gateway list deliverable", "err", err)
+		return
 	}
 	for i := range cmds {
 		cmd := cmds[i]

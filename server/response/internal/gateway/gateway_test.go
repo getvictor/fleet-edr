@@ -53,23 +53,15 @@ func (f *fakeSource) addPending(cmd api.Command) {
 	f.pending[cmd.HostID] = append(f.pending[cmd.HostID], cmd)
 }
 
-func (f *fakeSource) ListPendingForHosts(_ context.Context, hostIDs []string) ([]api.Command, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []api.Command
-	for _, h := range hostIDs {
-		out = append(out, f.pending[h]...)
-	}
-	return out, nil
-}
-
-// ListUnreportedForHosts answers with the acknowledgements inside (ackedAfter, ackedBefore], as the store's query does.
-func (f *fakeSource) ListUnreportedForHosts(_ context.Context, hostIDs []string, ackedAfter,
+// ListDeliverableForHosts answers with each host's pending commands and the acknowledgements inside (ackedAfter, ackedBefore], as
+// the store's query does.
+func (f *fakeSource) ListDeliverableForHosts(_ context.Context, hostIDs []string, ackedAfter,
 	ackedBefore time.Time) ([]api.Command, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []api.Command
 	for _, h := range hostIDs {
+		out = append(out, f.pending[h]...)
 		for _, cmd := range f.acked[h] {
 			if cmd.AckedAt.After(ackedAfter) && !cmd.AckedAt.After(ackedBefore) {
 				out = append(out, cmd)
@@ -557,28 +549,36 @@ func TestGateway(t *testing.T) {
 // grpc.Server.ServeHTTP behind a net/http HTTP/2 server (how cmd/main multiplexes it onto the shared HTTPS listener), so it pins that
 // the long-lived bidi control stream works over net/http's HTTP/2 (the documented ServeHTTP caveat), not only over gRPC's own
 // transport. TLS is terminated upstream in production; here the server speaks cleartext HTTP/2 (h2c) and the client dials insecure.
-// noCommandOffered reports whether the stream carried no command frame for d, which many watch ticks fit inside. The positive
-// direction has recvCommand; this is for asserting that a command the gateway must leave alone is never pushed.
-func noCommandOffered(t *testing.T, stream control.ControlChannel_ConnectClient, d time.Duration) bool {
+// requireNoCommandOffered fails unless the stream stayed open and carried no command frame for d, which many watch ticks fit inside.
+// The positive direction has recvCommand; this is for asserting that a command the gateway must leave alone is never pushed.
+//
+// A receive error fails the test rather than counting as silence: a regression that closed the stream would otherwise satisfy every
+// assertion here while delivering nothing at all.
+func requireNoCommandOffered(t *testing.T, stream control.ControlChannel_ConnectClient, d time.Duration) {
 	t.Helper()
-	got := make(chan struct{}, 1)
+	type received struct {
+		offered bool
+		err     error
+	}
+	got := make(chan received, 1)
 	go func() {
 		for {
 			frame, err := stream.Recv()
 			if err != nil {
+				got <- received{err: err}
 				return
 			}
 			if frame.GetCommand() != nil {
-				got <- struct{}{}
+				got <- received{offered: true}
 				return
 			}
 		}
 	}()
 	select {
-	case <-got:
-		return false
+	case r := <-got:
+		require.NoError(t, r.err, "the stream closed instead of staying open with nothing to offer")
+		assert.False(t, r.offered, "nothing is offered")
 	case <-time.After(d):
-		return true
 	}
 }
 
@@ -644,7 +644,7 @@ func TestGatewayLeavesAnAcknowledgedCommandOutsideTheBounds(t *testing.T) {
 			stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
 			require.NoError(t, err)
 
-			assert.True(t, noCommandOffered(t, stream, 300*time.Millisecond), "nothing is offered")
+			requireNoCommandOffered(t, stream, 300*time.Millisecond)
 		})
 	}
 }

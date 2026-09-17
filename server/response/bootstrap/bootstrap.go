@@ -140,7 +140,7 @@ func (r *Response) Service() api.Service { return r.svc }
 // host-token verifier from endpoint, the last-seen closure from detection), multiplexes the returned gateway's gRPC server onto the
 // main HTTPS listener, and runs its watch loop. TLS is terminated once at that shared listener (or by the front proxy), so the gateway
 // runs without its own transport credentials. The gateway uses the concrete service (which carries the gateway-only
-// ListPendingForHosts query), so this stays inside the response context rather than widening the public api.Service.
+// ListDeliverableForHosts query), so this stays inside the response context rather than widening the public api.Service.
 func (r *Response) BuildControlGateway(verifier gateway.TokenVerifier, heartbeat gateway.Heartbeat) *gateway.Gateway {
 	gw := gateway.New(gateway.Deps{
 		Source:    r.svc,
