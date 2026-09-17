@@ -892,26 +892,27 @@ func TestSet_ARecorderFailureDelaysTheAuditRowRatherThanLosingIt(t *testing.T) {
 //
 // The entry commits with the change, so a change that records nothing leaves nothing to deliver. Without this the outbox would turn a
 // refused containment into an audit row claiming a host was contained.
+//
+// The entry's own write is what fails here, through a service whose outbox names a table that does not exist, and the state and the
+// command are then asserted to have rolled back with it. That is the direction that proves the production enqueue runs inside the
+// change's transaction: a failing command queue would leave the outbox empty however the entry was written, and would pass even if
+// the service enqueued on its own connection.
 func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	// Writes an entry into the outbox through the change's own transaction and then fails, so what clears the entry is the
-	// rollback and nothing else. A queue that fails before writing anything would leave the outbox empty however the entry was
-	// written, and would pass even if the service enqueued outside the transaction.
-	failing := func(ctx context.Context, q sqlx.ExecerContext, _, _ string, _ []byte) (int64, error) {
-		entry, err := auditoutbox.Encode(identityapi.AuditEvent{
-			Actor: operator, Action: identityapi.AuditHostContain, TargetType: "host", TargetID: "host-a",
-		})
-		require.NoError(t, err)
-		require.NoError(t, f.outbox.Enqueue(ctx, q, entry))
-		return 0, errors.New("queue unavailable")
-	}
-	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
-		f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain)
+	enrolled := func(context.Context, string) (bool, error) { return true, nil }
+	svc := containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType,
+		auditoutbox.NewStore(f.db, "absent_audit_outbox"), f.drain)
 
 	_, err := svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "suspicious")
-	require.Error(t, err)
-	assert.Empty(t, f.pendingAudit(t), "the entry rolled back with the change")
+	require.Error(t, err, "a change whose audit entry cannot be written is refused, not recorded without one")
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.Zero(t, state.Version, "the state rolled back with the entry")
+	assert.False(t, state.Contained)
+	assert.Empty(t, f.containmentCommands(t, "host-a"), "the command rolled back with the entry")
+	assert.Empty(t, f.pendingAudit(t))
 	assert.Empty(t, f.audit.recorded())
 
 	// A request for the state a host already has changes nothing, so it records nothing either.

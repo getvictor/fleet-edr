@@ -98,11 +98,5 @@ func (s *PackService) Rollback(
 // deliver turns the entry this rollback just committed into an audit row, now rather than on the next sweep. Best effort: the
 // entry is already durable, so a failure delays the row rather than losing it.
 func (s *PackService) deliver(ctx context.Context) {
-	if s.drain == nil {
-		return
-	}
-	if _, err := s.drain.Drain(ctx); err != nil {
-		s.logger.WarnContext(ctx, "rule pack audit entry is committed but not yet delivered; the sweep will retry it",
-			"err", err)
-	}
+	s.drain.DeliverNow(ctx)
 }
