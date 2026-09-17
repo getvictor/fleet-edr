@@ -290,9 +290,10 @@ func run() error {
 	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
 	go gw.Run(gwCtx)
-	// Re-queues hosts' containment states their latest command did not deliver (issue #948). Stops with the process context: a sweep
-	// missed during shutdown is made up by the next replica's.
-	go responseCtx.RunContainmentCatchUp(ctx)
+	// The response context's background loops: re-queueing hosts' containment states their latest command did not deliver (issue
+	// #948), and delivering the audit entries a containment change committed but whose request could not write out (issue #1070).
+	// Both stop with the process context, and what either misses during shutdown is made up by the next replica's.
+	go responseCtx.Run(ctx)
 	// The deferred join above waits for the rules loops before this returns, so the shutdown flush (issue #837) completes rather
 	// than racing the process exit. Bounded, because a shutdown must end.
 	//

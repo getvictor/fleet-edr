@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -138,6 +139,20 @@ func (r *Response) RunContainmentAuditSweep(ctx context.Context) {
 		return
 	}
 	r.containmentAuditDrain.SweepLoop(ctx, r.auditSweepInterval)
+}
+
+// Run starts the context's background loops and returns once ctx is cancelled and every one of them has stopped.
+//
+// One entry point rather than a method per loop, deliberately. A loop cmd/main has to remember to start separately is a loop that can
+// be added and never started, and that is not hypothetical: the containment audit sweep was written, tested by calling it directly,
+// and left unstarted in production until review caught it. A loop with nothing to do returns at once, so this is safe to call whatever
+// is wired.
+func (r *Response) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for _, loop := range []func(context.Context){r.RunContainmentCatchUp, r.RunContainmentAuditSweep} {
+		wg.Go(func() { loop(ctx) })
+	}
+	wg.Wait()
 }
 
 // RunContainmentCatchUp re-queues hosts' containment states every containment.DefaultConvergeInterval until ctx is cancelled. It returns

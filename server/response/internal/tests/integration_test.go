@@ -966,6 +966,8 @@ func (r *recordingAudit) recorded() []identityapi.AuditEvent {
 // The request that makes a change delivers its own audit entry, so the sweep exists for what a crash or an unavailable store left
 // behind. Here the store is down while the request runs and comes back with no further request touching the host, which is the
 // condition the sweep is the only thing that covers.
+//
+// Driven through Run, the single entry point cmd/main calls, so dropping the sweep from it fails this test.
 func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *testing.T) {
 	t.Parallel()
 	s := full.Open(t)
@@ -992,9 +994,11 @@ func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *tes
 	require.Equal(t, http.StatusOK, contained.StatusCode)
 	require.Empty(t, audit.recorded(), "the store is down, so the request delivered nothing")
 
+	// Through Run, which is what cmd/main starts, rather than through the sweep method directly. Calling the loop by name would
+	// prove the loop works and say nothing about whether anything starts it, which is exactly how this shipped unstarted.
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	go r.RunContainmentAuditSweep(ctx)
+	go r.Run(ctx)
 	audit.comesBack()
 
 	require.Eventually(t, func() bool { return len(audit.recorded()) == 1 }, 5*time.Second, 20*time.Millisecond,
