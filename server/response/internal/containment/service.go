@@ -36,8 +36,8 @@ type Service struct {
 	logger   *slog.Logger
 }
 
-// NewService builds a Service. store, enrolled, insert and latest are required. audit may be nil outside production, which records
-// changes without audit events.
+// NewService builds a Service. store, enrolled, queue, notify and latest are required. audit may be nil outside production, which
+// records changes without audit events.
 func NewService(store *Store, enrolled api.HostEnrolledChecker, queue CommandQueuer, notify Notifier, latest LatestCommands,
 	audit identityapi.AuditRecorder, logger *slog.Logger) *Service {
 	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil {
