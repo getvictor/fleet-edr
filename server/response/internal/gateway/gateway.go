@@ -37,7 +37,10 @@ import (
 // Fixed operational intervals, compiled constants rather than operator knobs (server-configuration spec): the cross-replica command
 // watch, the connection-presence last-seen bump, and the per-connection token revocation re-check.
 const (
-	defaultWatchInterval    = 1 * time.Second
+	defaultWatchInterval = 1 * time.Second
+	// A command is offered again this long after it was acknowledged with no outcome, and no longer than this after it.
+	defaultUnreportedGrace  = 60 * time.Second
+	defaultUnreportedWindow = 7 * 24 * time.Hour
 	defaultLivenessInterval = 30 * time.Second
 	// lastSeenWriteTimeout bounds the per-tick last-seen write so a slow database cannot hold the connection's maintenance loop, and
 	// therefore cannot stop that host's heartbeats. Well under the agent's silence deadline by design.
@@ -53,6 +56,7 @@ const (
 // outcome reported over the stream (reusing the unchanged status-transition rules). Satisfied by the response service.
 type CommandSource interface {
 	ListPendingForHosts(ctx context.Context, hostIDs []string) ([]api.Command, error)
+	ListUnreportedForHosts(ctx context.Context, hostIDs []string, ackedAfter, ackedBefore time.Time) ([]api.Command, error)
 	UpdateStatus(ctx context.Context, req api.UpdateStatusRequest) error
 }
 
@@ -89,7 +93,15 @@ type Gateway struct {
 	notifyCh chan string
 	grpc     *grpc.Server
 
-	watchInterval      time.Duration
+	watchInterval time.Duration
+	// unreportedGrace is how long after an acknowledgement a missing outcome counts as lost rather than as a command still running.
+	// Longer than any command takes: set_network_containment waits up to 15 seconds for the extension to confirm.
+	unreportedGrace time.Duration
+	// unreportedWindow is how far back an unreported command is still offered. Shorter than the agent's ledger retention, since an
+	// agent that has pruned a command's outcome repeats its side effect rather than replaying it.
+	unreportedWindow time.Duration
+	// now is the clock, injected so a test can place an acknowledgement inside or outside the bounds without waiting.
+	now                func() time.Time
 	livenessInterval   time.Duration
 	revocationInterval time.Duration
 
@@ -119,6 +131,9 @@ func New(deps Deps) *Gateway {
 		reg:                newRegistry(),
 		notifyCh:           make(chan string, notifyBuffer),
 		watchInterval:      defaultWatchInterval,
+		unreportedGrace:    defaultUnreportedGrace,
+		unreportedWindow:   defaultUnreportedWindow,
+		now:                time.Now,
 		livenessInterval:   defaultLivenessInterval,
 		revocationInterval: defaultRevocationInterval,
 	}
@@ -181,7 +196,9 @@ func (g *Gateway) Notify(hostID string) {
 	}
 }
 
-// deliverPending queries pending commands for the given hosts and pushes each to its connection, skipping commands already in flight.
+// deliverPending queries the commands the given hosts are owed and pushes each to its connection, skipping commands already in
+// flight. That is their pending backlog, and the ones they acknowledged and never reported an outcome for: an outcome written to a
+// connection that was already dead is lost, and offering the command again is how the agent's ledger gets to replay it (issue #1062).
 func (g *Gateway) deliverPending(ctx context.Context, hostIDs []string) {
 	if len(hostIDs) == 0 {
 		return
@@ -190,6 +207,13 @@ func (g *Gateway) deliverPending(ctx context.Context, hostIDs []string) {
 	if err != nil {
 		g.logger.WarnContext(ctx, "control gateway list pending", "err", err)
 		return
+	}
+	now := g.now()
+	unreported, err := g.src.ListUnreportedForHosts(ctx, hostIDs, now.Add(-g.unreportedWindow), now.Add(-g.unreportedGrace))
+	if err != nil {
+		g.logger.WarnContext(ctx, "control gateway list unreported", "err", err)
+	} else {
+		cmds = append(cmds, unreported...)
 	}
 	for i := range cmds {
 		cmd := cmds[i]

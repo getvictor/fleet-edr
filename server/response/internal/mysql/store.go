@@ -182,6 +182,40 @@ func (s *Store) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]ap
 	return out, nil
 }
 
+// ListUnreportedForHosts returns every command of the given hosts that the agent acknowledged and never reported an outcome for,
+// acknowledged between ackedAfter and ackedBefore, oldest first. It is how an outcome lost with a connection is recovered: the
+// command is offered again and the agent replays the outcome its ledger recorded (issue #1062).
+//
+// The bounds are both real. A command acknowledged moments ago is usually still running, and offering it again would be the server
+// being impatient rather than the outcome being lost. One acknowledged long ago may have left the agent's ledger, and an agent that
+// has forgotten a command repeats its side effect instead of replaying an outcome, so past that age the command is left as it is.
+//
+// Chunked and indexed like ListPendingForHosts: the same idx_commands_host_status (host_id, status) serves it.
+func (s *Store) ListUnreportedForHosts(ctx context.Context, hostIDs []string, ackedAfter, ackedBefore time.Time) ([]api.Command, error) {
+	if len(hostIDs) == 0 {
+		return []api.Command{}, nil
+	}
+	var out []api.Command
+	for start := 0; start < len(hostIDs); start += listPendingChunkSize {
+		end := min(start+listPendingChunkSize, len(hostIDs))
+		query, args, err := sqlx.In(
+			`SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
+				FROM commands WHERE status = ? AND host_id IN (?) AND acked_at > ? AND acked_at <= ?
+				ORDER BY created_at ASC`, api.StatusAcked, hostIDs[start:end], ackedAfter, ackedBefore)
+		if err != nil {
+			return nil, fmt.Errorf("expand unreported host ids: %w", err)
+		}
+		var rows []commandRow
+		if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
+			return nil, fmt.Errorf("list unreported commands for hosts: %w", err)
+		}
+		for i := range rows {
+			out = append(out, rows[i].toAPI())
+		}
+	}
+	return out, nil
+}
+
 // Get returns a single command by id. Returns api.ErrCommandNotFound
 // when the row doesn't exist.
 func (s *Store) Get(ctx context.Context, id int64) (api.Command, error) {

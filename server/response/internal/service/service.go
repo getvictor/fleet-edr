@@ -157,6 +157,14 @@ func (s *Service) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]
 	return s.store.ListPendingForHosts(ctx, hostIDs)
 }
 
+// ListUnreportedForHosts returns the given hosts' commands that were acknowledged inside the window and whose outcome never arrived,
+// so the gateway can offer them again (issue #1062). Like ListPendingForHosts it does not bump last-seen: the connection is the
+// liveness signal, not this read.
+func (s *Service) ListUnreportedForHosts(ctx context.Context, hostIDs []string, ackedAfter, ackedBefore time.Time) ([]api.Command,
+	error) {
+	return s.store.ListUnreportedForHosts(ctx, hostIDs, ackedAfter, ackedBefore)
+}
+
 // UpdateStatus enforces the status-transition matrix on top of the store's row write. Loads the current row to validate ownership +
 // current status before persisting; collapses both "wrong host" and "unknown id" to api.ErrCommandNotFound at the boundary.
 func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest) error {

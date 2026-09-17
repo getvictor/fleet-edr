@@ -325,6 +325,58 @@ func TestListPendingForHosts(t *testing.T) {
 	})
 }
 
+// ListUnreportedForHosts answers with the commands a host acknowledged and never reported an outcome for, inside the window the
+// caller asks about (issue #1062). The bounds are how the gateway tells an outcome that was lost from a command still running, and
+// from one so old the agent's ledger may no longer hold its outcome.
+func TestListUnreportedForHosts(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	acked, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":1}`))
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateStatus(ctx, acked, "host-a", api.StatusPending, api.StatusAcked, nil))
+	completed, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":2}`))
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateStatus(ctx, completed, "host-a", api.StatusPending, api.StatusAcked, nil))
+	require.NoError(t, s.UpdateStatus(ctx, completed, "host-a", api.StatusAcked, api.StatusCompleted, json.RawMessage(`{"ok":true}`)))
+	stillPending, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":3}`))
+	require.NoError(t, err)
+	otherHost, err := s.Insert(ctx, "host-b", "kill_process", json.RawMessage(`{"n":4}`))
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateStatus(ctx, otherHost, "host-b", api.StatusPending, api.StatusAcked, nil))
+
+	t.Run("only the acknowledged command with no outcome, scoped to the host", func(t *testing.T) {
+		t.Parallel()
+		cmds, err := s.ListUnreportedForHosts(ctx, []string{"host-a"}, time.Now().Add(-time.Hour), time.Now().Add(time.Minute))
+		require.NoError(t, err)
+		require.Len(t, cmds, 1, "the completed one reported its outcome and the pending one was never acknowledged")
+		assert.Equal(t, acked, cmds[0].ID)
+		assert.Equal(t, api.StatusAcked, cmds[0].Status)
+		assert.NotEqual(t, stillPending, cmds[0].ID)
+	})
+
+	t.Run("outside the window, nothing", func(t *testing.T) {
+		t.Parallel()
+		// Acknowledged moments ago, so a window that ended before that holds nothing: the command may still be running.
+		cmds, err := s.ListUnreportedForHosts(ctx, []string{"host-a"}, time.Now().Add(-time.Hour), time.Now().Add(-time.Minute))
+		require.NoError(t, err)
+		assert.Empty(t, cmds)
+
+		// And a window that starts after the acknowledgement holds nothing either: too old to replay from the agent's ledger.
+		cmds, err = s.ListUnreportedForHosts(ctx, []string{"host-a"}, time.Now().Add(time.Minute), time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, cmds)
+	})
+
+	t.Run("empty host set returns no rows without error", func(t *testing.T) {
+		t.Parallel()
+		cmds, err := s.ListUnreportedForHosts(ctx, nil, time.Now().Add(-time.Hour), time.Now())
+		require.NoError(t, err)
+		assert.Empty(t, cmds)
+	})
+}
+
 // LatestOfType answers per host with the newest command of the asked type, whatever its status, and ignores other types.
 func TestLatestOfType(t *testing.T) {
 	t.Parallel()
