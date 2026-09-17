@@ -23,6 +23,14 @@ var _ Outbox = (*Store)(nil)
 // is here so that stays true: a name from anywhere else cannot reach the SQL.
 var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// mustBeTableName panics unless table is a plain identifier. Every exported function that puts a table name into statement text goes
+// through it, so the check cannot be had by one entry point and missed by another.
+func mustBeTableName(caller, table string) {
+	if !tableName.MatchString(table) {
+		panic("auditoutbox." + caller + ": table must be a plain identifier, got " + table)
+	}
+}
+
 // CreateTableSQL is the table a Store reads and writes, as the context adopting the outbox must migrate it.
 //
 // goose reads SQL files and not Go, so this does not generate a context's migration: what it does is give the migration and this
@@ -33,6 +41,7 @@ var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // held_until is part of the shape even for a context that writes no held entry, because PendingAuditEntries reads every outbox with
 // one query and a table without the column could not be read by it.
 func CreateTableSQL(table string) string {
+	mustBeTableName("CreateTableSQL", table)
 	return fmt.Sprintf(`CREATE TABLE %s (
 	id         BIGINT       NOT NULL AUTO_INCREMENT,
 	kind       VARCHAR(64)  NOT NULL,
@@ -48,9 +57,7 @@ func NewStore(db *sqlx.DB, table string) *Store {
 	if db == nil {
 		panic("auditoutbox.NewStore: db must not be nil")
 	}
-	if !tableName.MatchString(table) {
-		panic("auditoutbox.NewStore: table must be a plain identifier, got " + table)
-	}
+	mustBeTableName("NewStore", table)
 	return &Store{db: db, table: table}
 }
 
