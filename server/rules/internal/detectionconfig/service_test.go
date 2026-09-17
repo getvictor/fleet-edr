@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 )
 
@@ -34,7 +34,7 @@ func newService(t *testing.T, audit identityapi.AuditRecorder) *detectionconfig.
 	var drain *auditoutbox.Drain
 	if audit != nil {
 		var err error
-		drain, err = auditoutbox.NewDrain(auditoutbox.NewStore(db), audit, "detection config", nil)
+		drain, err = auditoutbox.NewDrain(auditoutbox.NewStore(db, detectionconfig.AuditOutboxTable), audit, "detection config", nil)
 		require.NoError(t, err)
 	}
 	svc := detectionconfig.NewService(store, nil, drain, nil)
@@ -300,7 +300,7 @@ func TestService_AChangeCommitsItsAuditEntryAndAnOutageOnlyDelaysTheRow(t *testi
 	t.Parallel()
 	store, db := openStore(t)
 	audit := &switchableAudit{down: true}
-	outbox := auditoutbox.NewStore(db)
+	outbox := auditoutbox.NewStore(db, detectionconfig.AuditOutboxTable)
 	drain, err := auditoutbox.NewDrain(outbox, audit, "detection config", nil)
 	require.NoError(t, err)
 	svc := detectionconfig.NewService(store, nil, drain, nil)
@@ -351,7 +351,7 @@ func TestService_AChangeCommitsItsAuditEntryAndAnOutageOnlyDelaysTheRow(t *testi
 func TestService_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	t.Parallel()
 	store, db := openStore(t)
-	outbox := auditoutbox.NewStore(db)
+	outbox := auditoutbox.NewStore(db, detectionconfig.AuditOutboxTable)
 	svc := detectionconfig.NewService(store, nil, nil, nil)
 	svc.SetRuleExclusionSupport(map[string][]api.ExclusionMatchType{"sudoers_tamper": {api.ExclusionMatchPathGlob}})
 	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(7, "ops@fleetdm.com")}

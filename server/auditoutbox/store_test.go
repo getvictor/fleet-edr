@@ -8,21 +8,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
-	"github.com/fleetdm/edr/server/migrations/runner"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
-	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 	"github.com/fleetdm/edr/server/testdb"
 )
+
+// testTable is created here rather than migrated from a context, so this package's tests describe the table shape the package
+// requires of whichever context adopts it. Each context's own integration tests exercise its migrated table through the same store.
+const testTable = "test_audit_outbox"
+
+const testTableDDL = `CREATE TABLE ` + testTable + ` (
+	id         BIGINT       NOT NULL AUTO_INCREMENT,
+	kind       VARCHAR(64)  NOT NULL,
+	payload    JSON         NOT NULL,
+	created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+	held_until TIMESTAMP(6) NULL,
+	PRIMARY KEY (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci`
 
 func openOutbox(t *testing.T) (*auditoutbox.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
-	require.NoError(t, runner.Up(t.Context(), db, rulesmigrations.FS, runner.Options{
-		Context:   "rules",
-		TableName: "rules_goose_db_version",
-	}))
-	return auditoutbox.NewStore(db), db
+	_, err := db.ExecContext(t.Context(), testTableDDL)
+	require.NoError(t, err)
+	return auditoutbox.NewStore(db, testTable), db
 }
 
 func entryFor(t *testing.T, targetID string) auditoutbox.Entry {
@@ -60,8 +69,8 @@ func TestStore_AnEnqueuedEntryIsPendingOnceCommittedAndGoneOnceDeleted(t *testin
 	t.Parallel()
 	s, db := openOutbox(t)
 	inTx(t, db, func(tx *sqlx.Tx) {
-		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "first")))
-		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "second")))
+		require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "first")))
+		require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "second")))
 	})
 
 	pending, err := s.PendingAuditEntries(t.Context(), 10)
@@ -79,7 +88,7 @@ func TestStore_AnEntryInARolledBackTransactionIsNeverPending(t *testing.T) {
 	s, db := openOutbox(t)
 	tx, err := db.BeginTxx(t.Context(), nil)
 	require.NoError(t, err)
-	require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "rolled back")))
+	require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "rolled back")))
 	require.NoError(t, tx.Rollback())
 
 	assert.Empty(t, pendingTargets(t, s))
@@ -94,11 +103,11 @@ func TestStore_AHeldEntryWaitsForItsSealOrItsHold(t *testing.T) {
 	var sealedID int64
 	inTx(t, db, func(tx *sqlx.Tx) {
 		var err error
-		sealedID, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "held then sealed"), time.Hour)
+		sealedID, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "held then sealed"), time.Hour)
 		require.NoError(t, err)
-		_, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "held, writer gone"), time.Hour)
+		_, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "held, writer gone"), time.Hour)
 		require.NoError(t, err)
-		_, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "hold passed"), -time.Second)
+		_, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "hold passed"), -time.Second)
 		require.NoError(t, err)
 	})
 
@@ -124,16 +133,16 @@ func TestStore_ADrainWaitsForASealInFlight(t *testing.T) {
 	var id int64
 	inTx(t, db, func(tx *sqlx.Tx) {
 		var err error
-		id, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
+		id, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
 		require.NoError(t, err)
-		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "written after it")))
+		require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "written after it")))
 	})
 
 	sealing, err := db.BeginTxx(t.Context(), nil)
 	require.NoError(t, err)
 	defer func() { _ = sealing.Rollback() }()
 	sealed := entryFor(t, "with counts")
-	_, err = sealing.ExecContext(t.Context(), `UPDATE detection_config_audit_outbox SET payload = ?, held_until = NULL WHERE id = ?`,
+	_, err = sealing.ExecContext(t.Context(), `UPDATE `+testTable+` SET payload = ?, held_until = NULL WHERE id = ?`,
 		string(sealed.Payload), id)
 	require.NoError(t, err)
 
@@ -171,7 +180,7 @@ func TestStore_AnEntryPastItsHoldCannotBeSealed(t *testing.T) {
 	var lapsedID int64
 	inTx(t, db, func(tx *sqlx.Tx) {
 		var err error
-		lapsedID, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
+		lapsedID, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
 		require.NoError(t, err)
 	})
 
@@ -181,7 +190,12 @@ func TestStore_AnEntryPastItsHoldCannotBeSealed(t *testing.T) {
 	assert.Equal(t, []string{"as first written"}, pendingTargets(t, s))
 }
 
-func TestNewStore_PanicsWithoutADatabase(t *testing.T) {
+func TestNewStore_PanicsOnWiringItCannotUse(t *testing.T) {
 	t.Parallel()
-	assert.Panics(t, func() { auditoutbox.NewStore(nil) })
+	assert.Panics(t, func() { auditoutbox.NewStore(nil, testTable) }, "a nil database")
+	db := testdb.Open(t)
+	for _, table := range []string{"", "audit outbox", "outbox; DROP TABLE hosts", "Outbox", "1_outbox", "db.outbox"} {
+		assert.Panics(t, func() { auditoutbox.NewStore(db, table) }, "table %q", table)
+	}
+	assert.NotPanics(t, func() { auditoutbox.NewStore(db, "response_audit_outbox") })
 }

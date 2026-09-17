@@ -14,13 +14,13 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/export"
@@ -182,7 +182,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	if deps.Audit != nil {
 		var derr error
 		if detectionConfigAuditDrain, derr = auditoutbox.NewDrain(
-			auditoutbox.NewStore(deps.DB), deps.Audit, "detection config", logger); derr != nil {
+			auditoutbox.NewStore(deps.DB, detectionconfig.AuditOutboxTable), deps.Audit, "detection config", logger); derr != nil {
 			return nil, fmt.Errorf("build detection config audit drain: %w", derr)
 		}
 	}

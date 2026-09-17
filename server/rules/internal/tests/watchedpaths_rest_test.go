@@ -18,10 +18,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
+	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/watchedpaths"
 )
 
@@ -348,7 +349,7 @@ func TestWatchedPathsREST_RefusesAnInvalidSetWithoutStoringOrPushing(t *testing.
 	assert.Equal(t, int64(0), r.watchedPaths(t).Version)
 	assert.Empty(t, r.inserter.snapshot())
 	assert.Empty(t, r.audit.snapshot())
-	pending, err := auditoutbox.NewStore(r.db).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	pending, err := auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
 	require.NoError(t, err)
 	assert.Empty(t, pending, "and left no audit entry behind")
 }
@@ -360,7 +361,7 @@ func TestWatchedPathsAudit_TheEntryWaitsForThePushCounts(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
 	store := watchedpaths.NewStore(r.db)
-	outbox := auditoutbox.NewStore(r.db)
+	outbox := auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable)
 	encode := func(targetID string) auditoutbox.Entry {
 		entry, err := auditoutbox.Encode(identityapi.AuditEvent{
 			Action: identityapi.AuditDetectionConfigWatchedPathsUpdate, TargetType: "watched_path_set", TargetID: targetID,

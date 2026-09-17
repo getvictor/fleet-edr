@@ -9,8 +9,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // ErrInvalidRequest is returned when a mutation carries an invalid match type, mode, or a missing required field. REST handlers map
@@ -21,8 +21,13 @@ var ErrInvalidRequest = errors.New("detectionconfig: invalid request")
 // version counter. Every mutation bumps the version in the same transaction so a reader can detect a change and reload the in-memory
 // Snapshot. The rules bootstrap constructs it and shares it with the REST handler + the snapshot-reload path.
 type Store struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	outbox *auditoutbox.Store
 }
+
+// AuditOutboxTable is the rules context's outbox table. Detection-config changes and watched-path replacements both commit their
+// audit entries into it, because a watched-path set is detection configuration (issue #1022).
+const AuditOutboxTable = "detection_config_audit_outbox"
 
 // NewStore builds a Store. Panics on a nil db: cmd/main is the only production caller and a nil handle is a wiring bug, not a
 // recoverable state.
@@ -30,7 +35,7 @@ func NewStore(db *sqlx.DB) *Store {
 	if db == nil {
 		panic("detectionconfig.NewStore: db must not be nil")
 	}
-	return &Store{db: db}
+	return &Store{db: db, outbox: auditoutbox.NewStore(db, AuditOutboxTable)}
 }
 
 // CreateExclusionInput is the create-exclusion contract. HostGroupID is api.GlobalScope for a global entry. Actor is recorded as
@@ -165,7 +170,7 @@ func (s *Store) CreateExclusion(
 		if err != nil {
 			return err
 		}
-		if err := auditoutbox.Enqueue(ctx, tx, entry); err != nil {
+		if err := s.outbox.Enqueue(ctx, tx, entry); err != nil {
 			return err
 		}
 		return bumpVersion(ctx, tx)
@@ -191,7 +196,7 @@ func (s *Store) DeleteExclusion(ctx context.Context, id int64, audit auditoutbox
 		if n == 0 {
 			return sql.ErrNoRows
 		}
-		if err := auditoutbox.Enqueue(ctx, tx, audit); err != nil {
+		if err := s.outbox.Enqueue(ctx, tx, audit); err != nil {
 			return err
 		}
 		return bumpVersion(ctx, tx)
@@ -230,7 +235,7 @@ func (s *Store) UpsertRuleSetting(ctx context.Context, in UpsertSettingInput, au
 		if err != nil {
 			return fmt.Errorf("upsert rule setting: %w", err)
 		}
-		if err := auditoutbox.Enqueue(ctx, tx, audit); err != nil {
+		if err := s.outbox.Enqueue(ctx, tx, audit); err != nil {
 			return err
 		}
 		return bumpVersion(ctx, tx)
