@@ -126,7 +126,7 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	f := &fixture{
 		store: containment.NewStore(db), commands: service.New(mysql.NewStore(db), nil, nil), audit: &recordingAudit{},
-		outbox: auditoutbox.NewStore(db, containment.AuditOutboxTable), notified: &notifyRecorder{db: db}, db: db,
+		outbox: auditoutbox.NewStore(db, mysql.AuditOutboxTable), notified: &notifyRecorder{db: db}, db: db,
 		enrolled: map[string]time.Time{"host-a": time.Now().Add(-time.Hour), "host-b": time.Now().Add(-time.Hour)},
 	}
 	isEnrolled := func(_ context.Context, hostID string) (bool, error) {

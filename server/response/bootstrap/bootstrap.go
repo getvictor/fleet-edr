@@ -93,7 +93,7 @@ func New(deps Deps) (*Response, error) {
 	// A containment change commits its audit entry with the change (issue #1070); this drain turns the entries into audit rows. Built
 	// here rather than in EnableContainment because entries outlive the wiring that wrote them: a replica configured without the
 	// containment routes still has to sweep what an earlier one left behind.
-	containmentOutbox := auditoutbox.NewStore(deps.DB, containment.AuditOutboxTable)
+	containmentOutbox := auditoutbox.NewStore(deps.DB, mysql.AuditOutboxTable)
 	var containmentAuditDrain *auditoutbox.Drain
 	if deps.Audit != nil {
 		var derr error

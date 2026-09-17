@@ -30,6 +30,13 @@ type Store struct {
 	db *sqlx.DB
 }
 
+// AuditOutboxTable is this context's audit outbox, which every response action commits its audit entry into, in the transaction that
+// makes the change (issue #1070).
+//
+// One table for the context rather than one per action: a drain reads an outbox oldest first, so sharing it gives the context's audit
+// rows a single order, and an auditor sees a containment and the command issuance around it in the order they happened.
+const AuditOutboxTable = "response_audit_outbox"
+
 // NewStore returns a Store over an existing sqlx.DB handle.
 func NewStore(db *sqlx.DB) *Store {
 	if db == nil {

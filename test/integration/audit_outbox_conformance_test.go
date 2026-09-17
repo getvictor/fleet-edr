@@ -59,7 +59,7 @@ func TestAuditOutboxTablesMatchTheSharedDefinition(t *testing.T) {
 	want := columnsOf(t, db, reference)
 
 	// Every outbox table a context migrates. A context adopting the outbox adds its table here.
-	for _, table := range []string{"detection_config_audit_outbox", "containment_audit_outbox"} {
+	for _, table := range []string{"detection_config_audit_outbox", "response_audit_outbox"} {
 		t.Run(table, func(t *testing.T) {
 			assert.Equal(t, want, columnsOf(t, db, table),
 				"%s has drifted from auditoutbox.CreateTableSQL, which the shared store's statements assume", table)
