@@ -659,7 +659,12 @@ func TestConverge_AStateThatChangedSinceTheSweepReadItQueuesNothing(t *testing.T
 func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	failing := func(context.Context, sqlx.ExecerContext, string, string, []byte) (int64, error) {
+	// The command is written through the transaction and the callback then fails, which is the case that proves the all-or-nothing
+	// contract: a callback that failed before inserting would only show the state rolling back.
+	failing := func(ctx context.Context, q sqlx.ExecerContext, hostID, commandType string, payload []byte) (int64, error) {
+		if _, err := f.commands.QueueTx(ctx, q, hostID, commandType, payload); err != nil {
+			return 0, err
+		}
 		return 0, errors.New("queue unavailable")
 	}
 	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
@@ -673,6 +678,7 @@ func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 	assert.Zero(t, state.Version)
 	assert.Empty(t, f.audit.recorded(), "nothing happened, so nothing is audited")
 	assert.Empty(t, f.notified.recorded(), "the gateway is told nothing")
+	assert.Empty(t, f.containmentCommands(t, "host-a"), "the command written through the transaction rolled back with the state")
 }
 
 // Failures reading enrollment or commands fail the request rather than being treated as an answer.

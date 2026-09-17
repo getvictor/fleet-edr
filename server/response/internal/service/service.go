@@ -90,15 +90,13 @@ func (s *Service) fastNotify(hostID string) {
 // defensive work; a malformed entry surfaces as a store error rather than being silently dropped, which would understate the
 // fan-out count.
 func (s *Service) InsertBatch(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error) {
+	// The host list is this path's own check; what a command carries is the same question on every path.
 	if len(hostIDs) == 0 {
 		return 0, fmt.Errorf("%w: at least one host_id is required", api.ErrInvalidInsertRequest)
 	}
-	commandType = strings.TrimSpace(commandType)
-	if commandType == "" {
-		return 0, fmt.Errorf("%w: command_type is required", api.ErrInvalidInsertRequest)
-	}
-	if len(payload) == 0 {
-		return 0, fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
+	commandType, err := queueable(commandType, payload)
+	if err != nil {
+		return 0, err
 	}
 	n, err := s.store.InsertBatch(ctx, hostIDs, commandType, payload)
 	if err == nil {
@@ -156,20 +154,31 @@ func (s *Service) QueueTx(ctx context.Context, q sqlx.ExecerContext, hostID, com
 	return mysql.InsertTx(ctx, q, hostID, commandType, payload)
 }
 
-// insertable normalizes and checks what every queued command needs, so the transactional path cannot drift from the ordinary one.
+// insertable normalizes and checks what a command queued for one host needs, so the transactional path cannot drift from the
+// ordinary one.
 func insertable(hostID, commandType string, payload []byte) (string, string, error) {
 	hostID = strings.TrimSpace(hostID)
 	if hostID == "" {
 		return "", "", fmt.Errorf("%w: host_id is required", api.ErrInvalidInsertRequest)
 	}
-	commandType = strings.TrimSpace(commandType)
-	if commandType == "" {
-		return "", "", fmt.Errorf("%w: command_type is required", api.ErrInvalidInsertRequest)
-	}
-	if len(payload) == 0 {
-		return "", "", fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
+	commandType, err := queueable(commandType, payload)
+	if err != nil {
+		return "", "", err
 	}
 	return hostID, commandType, nil
+}
+
+// queueable normalizes and checks what every queued command carries, whoever queues it: one host, a batch of them, or a caller
+// holding a transaction.
+func queueable(commandType string, payload []byte) (string, error) {
+	commandType = strings.TrimSpace(commandType)
+	if commandType == "" {
+		return "", fmt.Errorf("%w: command_type is required", api.ErrInvalidInsertRequest)
+	}
+	if len(payload) == 0 {
+		return "", fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
+	}
+	return commandType, nil
 }
 
 // Notify tells the control gateway a host has a command waiting, for a caller that queued one through QueueTx and has committed.
