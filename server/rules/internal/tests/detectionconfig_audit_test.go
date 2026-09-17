@@ -11,9 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
+	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 )
 
 // Detection-config changes made over the REST surface reach the audit store through the outbox the rules context wires, and leave
@@ -36,7 +37,7 @@ func TestDetectionConfigAudit_RESTChangesAreDelivered(t *testing.T) {
 	assert.Equal(t, identityapi.AuditDetectionConfigExclusionCreate, events[0].Action)
 	assert.Equal(t, "ci runner", events[0].Payload["reason"])
 	assert.Equal(t, identityapi.AuditDetectionConfigRuleSettingUpdate, events[1].Action)
-	pending, err := auditoutbox.NewStore(r.db).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
+	pending, err := auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 }
@@ -54,7 +55,7 @@ func TestDetectionConfigAudit_TheSweepDeliversWhatARequestLeftBehind(t *testing.
 	require.NoError(t, err)
 	tx, err := r.db.BeginTxx(t.Context(), nil)
 	require.NoError(t, err)
-	require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entry))
+	require.NoError(t, auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable).Enqueue(t.Context(), tx, entry))
 	require.NoError(t, tx.Commit())
 
 	ctx, cancel := context.WithCancel(t.Context())

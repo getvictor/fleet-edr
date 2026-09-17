@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
 )
 
 // ErrReasonRequired is returned for a change without a reason. Every change is audited with its reason, and a blank one would leave

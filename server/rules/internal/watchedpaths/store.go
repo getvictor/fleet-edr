@@ -12,8 +12,9 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
+	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 )
 
 // Store reads and replaces the single watched_path_set row.
@@ -27,7 +28,7 @@ func NewStore(db *sqlx.DB) *Store {
 	if db == nil {
 		panic("watchedpaths.NewStore: db must not be nil")
 	}
-	return &Store{db: db, outbox: auditoutbox.NewStore(db)}
+	return &Store{db: db, outbox: auditoutbox.NewStore(db, detectionconfig.AuditOutboxTable)}
 }
 
 // ErrVersionConflict is returned for a conditional replacement of a set that has changed since the caller read it.
@@ -118,7 +119,7 @@ func (s *Store) Replace(
 	if err != nil {
 		return api.WatchedPathSet{}, api.WatchedPathSet{}, 0, err
 	}
-	if auditID, err = auditoutbox.EnqueueHeld(ctx, tx, entry, auditHold); err != nil {
+	if auditID, err = s.outbox.EnqueueHeld(ctx, tx, entry, auditHold); err != nil {
 		return api.WatchedPathSet{}, api.WatchedPathSet{}, 0, err
 	}
 	if err := tx.Commit(); err != nil {

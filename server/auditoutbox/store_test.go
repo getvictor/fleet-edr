@@ -8,21 +8,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
-	"github.com/fleetdm/edr/server/migrations/runner"
-	"github.com/fleetdm/edr/server/rules/internal/auditoutbox"
-	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 	"github.com/fleetdm/edr/server/testdb"
 )
+
+// testTable is built from the package's own CreateTableSQL rather than migrated from a context, so these tests neither depend on a
+// bounded context nor restate the table shape where it could drift from one. What binds the contexts' migrated tables to the same
+// definition is the conformance test at test/integration.
+const testTable = "test_audit_outbox"
 
 func openOutbox(t *testing.T) (*auditoutbox.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
-	require.NoError(t, runner.Up(t.Context(), db, rulesmigrations.FS, runner.Options{
-		Context:   "rules",
-		TableName: "rules_goose_db_version",
-	}))
-	return auditoutbox.NewStore(db), db
+	_, err := db.ExecContext(t.Context(), auditoutbox.CreateTableSQL(testTable))
+	require.NoError(t, err)
+	return auditoutbox.NewStore(db, testTable), db
 }
 
 func entryFor(t *testing.T, targetID string) auditoutbox.Entry {
@@ -60,8 +61,8 @@ func TestStore_AnEnqueuedEntryIsPendingOnceCommittedAndGoneOnceDeleted(t *testin
 	t.Parallel()
 	s, db := openOutbox(t)
 	inTx(t, db, func(tx *sqlx.Tx) {
-		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "first")))
-		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "second")))
+		require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "first")))
+		require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "second")))
 	})
 
 	pending, err := s.PendingAuditEntries(t.Context(), 10)
@@ -79,7 +80,7 @@ func TestStore_AnEntryInARolledBackTransactionIsNeverPending(t *testing.T) {
 	s, db := openOutbox(t)
 	tx, err := db.BeginTxx(t.Context(), nil)
 	require.NoError(t, err)
-	require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "rolled back")))
+	require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "rolled back")))
 	require.NoError(t, tx.Rollback())
 
 	assert.Empty(t, pendingTargets(t, s))
@@ -94,11 +95,11 @@ func TestStore_AHeldEntryWaitsForItsSealOrItsHold(t *testing.T) {
 	var sealedID int64
 	inTx(t, db, func(tx *sqlx.Tx) {
 		var err error
-		sealedID, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "held then sealed"), time.Hour)
+		sealedID, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "held then sealed"), time.Hour)
 		require.NoError(t, err)
-		_, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "held, writer gone"), time.Hour)
+		_, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "held, writer gone"), time.Hour)
 		require.NoError(t, err)
-		_, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "hold passed"), -time.Second)
+		_, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "hold passed"), -time.Second)
 		require.NoError(t, err)
 	})
 
@@ -124,16 +125,16 @@ func TestStore_ADrainWaitsForASealInFlight(t *testing.T) {
 	var id int64
 	inTx(t, db, func(tx *sqlx.Tx) {
 		var err error
-		id, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
+		id, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
 		require.NoError(t, err)
-		require.NoError(t, auditoutbox.Enqueue(t.Context(), tx, entryFor(t, "written after it")))
+		require.NoError(t, s.Enqueue(t.Context(), tx, entryFor(t, "written after it")))
 	})
 
 	sealing, err := db.BeginTxx(t.Context(), nil)
 	require.NoError(t, err)
 	defer func() { _ = sealing.Rollback() }()
 	sealed := entryFor(t, "with counts")
-	_, err = sealing.ExecContext(t.Context(), `UPDATE detection_config_audit_outbox SET payload = ?, held_until = NULL WHERE id = ?`,
+	_, err = sealing.ExecContext(t.Context(), `UPDATE `+testTable+` SET payload = ?, held_until = NULL WHERE id = ?`,
 		string(sealed.Payload), id)
 	require.NoError(t, err)
 
@@ -171,7 +172,7 @@ func TestStore_AnEntryPastItsHoldCannotBeSealed(t *testing.T) {
 	var lapsedID int64
 	inTx(t, db, func(tx *sqlx.Tx) {
 		var err error
-		lapsedID, err = auditoutbox.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
+		lapsedID, err = s.EnqueueHeld(t.Context(), tx, entryFor(t, "as first written"), -time.Second)
 		require.NoError(t, err)
 	})
 
@@ -181,7 +182,22 @@ func TestStore_AnEntryPastItsHoldCannotBeSealed(t *testing.T) {
 	assert.Equal(t, []string{"as first written"}, pendingTargets(t, s))
 }
 
-func TestNewStore_PanicsWithoutADatabase(t *testing.T) {
+func TestNewStore_PanicsOnWiringItCannotUse(t *testing.T) {
 	t.Parallel()
-	assert.Panics(t, func() { auditoutbox.NewStore(nil) })
+	assert.Panics(t, func() { auditoutbox.NewStore(nil, testTable) }, "a nil database")
+	db := testdb.Open(t)
+	for _, table := range []string{"", "audit outbox", "outbox; DROP TABLE hosts", "Outbox", "1_outbox", "db.outbox"} {
+		assert.Panics(t, func() { auditoutbox.NewStore(db, table) }, "table %q", table)
+	}
+	assert.NotPanics(t, func() { auditoutbox.NewStore(db, "containment_audit_outbox") })
+}
+
+// CreateTableSQL puts the name into statement text too, so it applies the same check. Without this the exported helper would be the
+// way a name NewStore refuses reaches SQL.
+func TestCreateTableSQL_RejectsATableNameItCannotInterpolate(t *testing.T) {
+	t.Parallel()
+	for _, table := range []string{"", "audit outbox", "outbox; DROP TABLE hosts", "Outbox", "1_outbox", "db.outbox"} {
+		assert.Panics(t, func() { auditoutbox.CreateTableSQL(table) }, "table %q", table)
+	}
+	assert.Contains(t, auditoutbox.CreateTableSQL("containment_audit_outbox"), "CREATE TABLE containment_audit_outbox (")
 }
