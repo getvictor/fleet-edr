@@ -92,6 +92,9 @@ dependenciesRules:
   - package: "**.response.internal.**"
     shouldOnlyDependsOn:
       internal:
+        # auditoutbox is the shared transactional audit outbox (issue #1070): a containment change commits its audit entry in the
+        # transaction that records the change and queues its command, rather than recording the row afterwards.
+        - "**.auditoutbox"
         - "**.response.api"
         - "**.response.api.**"
         - "**.response.internal.**"

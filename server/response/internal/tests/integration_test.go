@@ -500,8 +500,8 @@ func TestBootstrap_ContainmentIsMountedOnlyOnceEnabled(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, notMounted.StatusCode)
 	r.RunContainmentCatchUp(t.Context()) // returns at once: nothing to run
 
-	r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
-		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil })
+	require.NoError(t, r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
+		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }))
 	contained := serve(http.MethodPost, `{"contained":true,"reason":"wiring"}`)
 	defer contained.Body.Close()
 	require.Equal(t, http.StatusOK, contained.StatusCode)
@@ -930,4 +930,78 @@ func TestALateAckCorrectsACommandExpiredWhileInFlight(t *testing.T) {
 	assert.Equal(t, api.StatusAcked, cmd.Status)
 	assert.Nil(t, cmd.CompletedAt,
 		"reopening clears the completion stamp left by the expiry, or the row reads as both in flight and finished")
+}
+
+// recordingAudit keeps every audit event recorded, and refuses them while unavailable, as a store that is down does.
+type recordingAudit struct {
+	mu          sync.Mutex
+	events      []identityapi.AuditEvent
+	unavailable error
+}
+
+func (r *recordingAudit) Record(_ context.Context, e identityapi.AuditEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unavailable != nil {
+		return r.unavailable
+	}
+	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *recordingAudit) comesBack() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unavailable = nil
+}
+
+func (r *recordingAudit) recorded() []identityapi.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]identityapi.AuditEvent(nil), r.events...)
+}
+
+// spec:server-host-containment/a-containment-change-commits-its-audit-entry/the-sweep-delivers-what-a-request-left-behind
+//
+// The request that makes a change delivers its own audit entry, so the sweep exists for what a crash or an unavailable store left
+// behind. Here the store is down while the request runs and comes back with no further request touching the host, which is the
+// condition the sweep is the only thing that covers.
+func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *testing.T) {
+	t.Parallel()
+	s := full.Open(t)
+	audit := &recordingAudit{unavailable: errors.New("audit store unavailable")}
+	r, err := bootstrap.New(bootstrap.Deps{DB: s, AuthZ: allowAllAuthZ{}, Audit: audit, AuditSweepInterval: 20 * time.Millisecond})
+	require.NoError(t, err)
+	require.NoError(t, r.ApplySchema(t.Context()))
+	require.NoError(t, r.EnableContainment(func(context.Context, string) (bool, error) { return true, nil },
+		func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }))
+
+	mux := http.NewServeMux()
+	r.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		actor := &identityapi.Actor{Principal: identityapi.PrincipalRef{ID: "user:1", Type: "user"}}
+		mux.ServeHTTP(w, req.WithContext(identityapi.WithActor(req.Context(), actor)))
+	}))
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/hosts/host-a/containment",
+		strings.NewReader(`{"contained":true,"reason":"beaconing to a known C2"}`))
+	require.NoError(t, err)
+	contained, err := srv.Client().Do(req)
+	require.NoError(t, err, "a change is not refused because its audit row could not be written")
+	defer contained.Body.Close()
+	require.Equal(t, http.StatusOK, contained.StatusCode)
+	require.Empty(t, audit.recorded(), "the store is down, so the request delivered nothing")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go r.RunContainmentAuditSweep(ctx)
+	audit.comesBack()
+
+	require.Eventually(t, func() bool { return len(audit.recorded()) == 1 }, 5*time.Second, 20*time.Millisecond,
+		"the sweep delivers the entry the request could not")
+	recorded := audit.recorded()[0]
+	assert.Equal(t, identityapi.AuditHostContain, recorded.Action)
+	assert.Equal(t, "host-a", recorded.TargetID)
+	assert.Equal(t, "beaconing to a known C2", recorded.Payload["reason"])
+	assert.NotEmpty(t, recorded.RemoteAddr, "the address the request came from survives the outbox")
 }

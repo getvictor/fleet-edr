@@ -3,11 +3,14 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
@@ -43,6 +46,10 @@ type Deps struct {
 	// AuthZ is the authorization chokepoint POST /api/commands and GET /api/commands/{id} gate on. Required. cmd/main wires
 	// identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
+
+	// AuditSweepInterval is how often the containment audit outbox sweep delivers entries a request could not. Optional: zero or
+	// negative means auditoutbox.DefaultSweepInterval. Tests shorten it to watch a sweep deliver.
+	AuditSweepInterval time.Duration
 }
 
 // Response is the handle cmd/main holds for the response bounded
@@ -58,6 +65,10 @@ type Response struct {
 	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
 	containmentH         *operator.ContainmentHandler
 	containmentConverger *containment.Converger
+	// containmentAuditDrain delivers the audit entries containment changes commit (issue #1070). Nil without a recorder, which only
+	// non-production wiring omits.
+	containmentAuditDrain *auditoutbox.Drain
+	auditSweepInterval    time.Duration
 }
 
 // New wires the response context. Does NOT apply the schema (call
@@ -85,18 +96,43 @@ func New(deps Deps) (*Response, error) {
 		logger:    logger,
 		audit:     deps.Audit,
 		authz:     deps.AuthZ,
+
+		auditSweepInterval: deps.AuditSweepInterval,
 	}, nil
 }
 
 // EnableContainment wires host network containment (#948): the containment routes and the catch-up that re-queues a host's state.
 // cmd/main calls it once the endpoint context is open, since whether a host is enrolled, and when it last enrolled, are endpoint's.
 // Until it is called the routes are not mounted and the catch-up does nothing.
-func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) {
+func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) error {
 	store := containment.NewStore(r.db)
-	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, r.audit, r.logger)
+	// A containment change commits its audit entry with the change (issue #1070); this drain turns the entries into audit rows.
+	outbox := auditoutbox.NewStore(r.db, containment.AuditOutboxTable)
+	if r.audit != nil {
+		drain, err := auditoutbox.NewDrain(outbox, r.audit, "host containment", r.logger)
+		if err != nil {
+			return fmt.Errorf("build containment audit drain: %w", err)
+		}
+		r.containmentAuditDrain = drain
+	}
+	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, outbox,
+		r.containmentAuditDrain, r.logger)
 	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
 	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
 		r.logger)
+	return nil
+}
+
+// RunContainmentAuditSweep delivers audit entries a containment change committed but whose request could not write out, until ctx is
+// cancelled. It returns at once when no recorder is wired.
+//
+// Registered even where the containment routes are not mounted, because entries outlive the wiring that wrote them: a replica
+// configured without the routes still has to drain what an earlier one left, and a sweep over an empty table costs one query a minute.
+func (r *Response) RunContainmentAuditSweep(ctx context.Context) {
+	if r.containmentAuditDrain == nil {
+		return
+	}
+	r.containmentAuditDrain.SweepLoop(ctx, r.auditSweepInterval)
 }
 
 // RunContainmentCatchUp re-queues hosts' containment states every containment.DefaultConvergeInterval until ctx is cancelled. It returns

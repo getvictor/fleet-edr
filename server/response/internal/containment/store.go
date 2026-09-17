@@ -12,6 +12,10 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
+// AuditOutboxTable is the response context's outbox table. A containment change commits its audit entry into it, in the transaction
+// that records the change and queues its command (issue #1070).
+const AuditOutboxTable = "containment_audit_outbox"
+
 // Store owns the host_containment table.
 type Store struct {
 	db *sqlx.DB

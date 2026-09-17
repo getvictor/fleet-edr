@@ -400,8 +400,10 @@ func openContexts(
 		return
 	}
 	// Host containment checks and lists enrollments, which are endpoint's, so it is enabled once endpoint is open (issue #948).
-	responseCtx.EnableContainment(hostEnrolledFromEndpoint(endpointCtx.Service()),
-		containmentEnrollmentsFromEndpoint(endpointCtx.Service()))
+	if err = responseCtx.EnableContainment(hostEnrolledFromEndpoint(endpointCtx.Service()),
+		containmentEnrollmentsFromEndpoint(endpointCtx.Service())); err != nil {
+		return
+	}
 	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx, ruleContentCtx, endpointCtx); err != nil {
 		return
 	}

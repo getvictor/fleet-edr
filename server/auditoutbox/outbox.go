@@ -68,11 +68,16 @@ const DrainBatch = 100
 // request's trace onto somebody else's audit row. Carrying the writer's own trace, or none at all, is the only honest answer, and
 // the drain detaches its context so the fallback cannot fire.
 //
-// RemoteAddr is not carried: nothing in an outbox-delivered row uses it, and adding a field to a persisted format for a value no reader
-// asks for is not free.
+// RemoteAddr IS carried, as of the response context adopting this outbox (issue #1070): a containment change records the address the
+// operator made it from, and delivering that row without the address would make the outbox a downgrade from recording it afterwards.
+// The field is optional and the kind is unchanged, deliberately. Adding it is a compatible extension in the direction that matters: an
+// entry a newer replica wrote and an older replica delivers loses only the address, never the row, and the exposure is one entry whose
+// writer could not deliver it during a rolling deploy. A new kind would instead strand every entry already written as v1, because a
+// drain leaves what it does not recognise.
 type auditEntryV1 struct {
 	ActorID    string         `json:"actor_id"`
 	TraceID    string         `json:"trace_id,omitempty"`
+	RemoteAddr string         `json:"remote_addr,omitempty"`
 	ActorType  string         `json:"actor_type"`
 	ActorLabel string         `json:"actor_label"`
 	Action     string         `json:"action"`
@@ -89,6 +94,7 @@ func Encode(e identityapi.AuditEvent) (Entry, error) {
 	payload, err := json.Marshal(auditEntryV1{
 		ActorID:    e.Actor.ID,
 		TraceID:    e.TraceID,
+		RemoteAddr: e.RemoteAddr,
 		ActorType:  string(e.Actor.Type),
 		ActorLabel: e.Actor.Label,
 		Action:     string(e.Action),
@@ -115,6 +121,7 @@ func Decode(payload []byte) (identityapi.AuditEvent, error) {
 			Label: stored.ActorLabel,
 		},
 		TraceID:    stored.TraceID,
+		RemoteAddr: stored.RemoteAddr,
 		Action:     identityapi.AuditAction(stored.Action),
 		TargetType: stored.TargetType,
 		TargetID:   stored.TargetID,
