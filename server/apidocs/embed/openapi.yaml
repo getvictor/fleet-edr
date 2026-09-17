@@ -443,7 +443,7 @@ paths:
                   command_id:
                     type: integer
                     format: int64
-                    description: The queued command; absent when nothing changed or the command could not be queued.
+                    description: The queued command; absent only when nothing changed, since a change and its command are recorded together.
         "400":
           description: "`bad_body`, `reason_required` or `reason_too_long`"
         "403":

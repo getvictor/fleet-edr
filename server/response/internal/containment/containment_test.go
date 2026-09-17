@@ -140,25 +140,6 @@ func (f *fixture) containmentCommands(t *testing.T, hostID string) []api.Command
 	return out
 }
 
-// waitForLockWait blocks until a transaction is waiting on a row lock, which is how this test knows the second change has reached the
-// host's row and not merely been started.
-func waitForLockWait(t *testing.T, db *sqlx.DB) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting int
-		require.NoError(t, db.GetContext(t.Context(), &waiting,
-			`SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT'`))
-		if waiting > 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no transaction reached the host's row lock within 10s")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 // commandPayloadFor is the payload the service and the catch-up both queue, rebuilt here for the tests that drive the store directly.
 func commandPayloadFor(state api.ContainmentState) []byte {
 	payload, _ := json.Marshal(api.SetNetworkContainmentPayload{
@@ -485,13 +466,21 @@ func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
 	f := newFixture(t)
 
 	// The contain runs first and holds its transaction open inside the queue callback, which is where the release would have to slip
-	// through to queue out of order. The release starts while it is held and can only proceed once the lock is released.
+	// through to queue out of order. reachedQueue fires when the release reaches the point of queuing its own command: while the
+	// contain is held that must not happen, because the contain still holds the host's row. Queuing after the commit, as the code did
+	// before this change, releases that row early and the release gets there at once, which is the ordering this test is about.
 	holding := make(chan struct{})
 	release := make(chan struct{})
+	reachedQueue := make(chan struct{}, 1)
 	slow := func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
 		if state.Contained {
 			close(holding)
 			<-release
+		} else {
+			select {
+			case reachedQueue <- struct{}{}:
+			default:
+			}
 		}
 		return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
 	}
@@ -508,9 +497,15 @@ func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
 		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "release", "user:7", slow)
 		assert.NoError(t, err)
 	})
-	// Wait for the release to actually be blocked on the row lock, asked of the database rather than assumed from a sleep: a sleep
-	// that ran out before the release reached the lock would let this test pass without the race it exists for ever happening.
-	waitForLockWait(t, f.db)
+	// The release must not get as far as queuing while the contain is held. Under the ordering this replaces it gets there in
+	// milliseconds, so this wait fails fast on a regression rather than resting on a sleep being long enough.
+	select {
+	case <-reachedQueue:
+		close(release)
+		wg.Wait()
+		t.Fatal("the release queued its command while the contain had not committed: the host's row was not held")
+	case <-time.After(2 * time.Second):
+	}
 	close(release)
 	wg.Wait()
 
@@ -522,6 +517,28 @@ func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
 	assert.Less(t, first.Version, second.Version, "the later state's command is queued after the earlier one's")
 	assert.True(t, first.Contained)
 	assert.False(t, second.Contained)
+}
+
+// The catch-up has its own transaction and its own notification, so the guarantee is checked there too: the command it queues is
+// visible to another connection by the time the gateway is told to look for it.
+func TestConverge_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+	require.NoError(t, err)
+	require.True(t, change.Changed)
+	// The change's command expires, which is one of the states the catch-up queues again.
+	_, err = f.db.ExecContext(t.Context(), `UPDATE commands SET status = ? WHERE id = ?`, api.StatusExpired, change.CommandID)
+	require.NoError(t, err)
+
+	queued, err := f.converger.Converge(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, queued)
+
+	assert.Equal(t, []string{"host-a", "host-a"}, f.notified.recorded(), "the change and the catch-up each told the gateway")
+	assert.Equal(t, []int{1, 2}, f.notified.commandsVisibleAtNotify(),
+		"the catch-up's command is visible to another connection when the gateway is told about it")
 }
 
 // The catch-up reads every host's state at the start of a sweep and queues some time later. A host whose state changed in between has
