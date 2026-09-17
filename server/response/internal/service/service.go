@@ -150,11 +150,12 @@ func (s *Service) ListForHost(ctx context.Context, hostID string, status api.Sta
 	return cmds, nil
 }
 
-// ListPendingForHosts returns every pending command queued for the given hosts. Unlike ListForHost it does NOT bump last-seen: the
-// caller is the control gateway, whose connection presence (not this query) is the liveness signal. Used by the gateway's watch loop
-// and its per-host fast path to push queued work to connected agents.
-func (s *Service) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]api.Command, error) {
-	return s.store.ListPendingForHosts(ctx, hostIDs)
+// ListDeliverableForHosts returns everything the given hosts are owed: their pending commands, and the ones they acknowledged inside
+// the window whose outcome never arrived, which the gateway offers again so the agent can replay it (issue #1062). Unlike ListForHost
+// it does NOT bump last-seen: the connection is the liveness signal, not this read.
+func (s *Service) ListDeliverableForHosts(ctx context.Context, hostIDs []string, ackedAfter,
+	ackedBefore time.Time) ([]api.Command, error) {
+	return s.store.ListDeliverableForHosts(ctx, hostIDs, ackedAfter, ackedBefore)
 }
 
 // UpdateStatus enforces the status-transition matrix on top of the store's row write. Loads the current row to validate ownership +

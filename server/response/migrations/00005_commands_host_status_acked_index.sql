@@ -1,0 +1,23 @@
+-- +goose Up
+-- Index backing the control gateway's delivery read (issue #1062), which asks for two things at once: a host's pending commands, and
+-- the ones it acknowledged inside a window and never reported an outcome for. The gateway runs that read every second for every
+-- connected host.
+--
+-- idx_commands_host_status (host_id, status) seeks the equality but leaves the acknowledgement-time range to be applied row by row,
+-- and the rows of that range are the ones that accumulate: a command whose outcome never arrived stays acknowledged for good,
+-- deliberately, since past the redelivery window the agent can no longer replay it. Without the timestamp in the index, every command
+-- a fleet has ever stranded is examined on every sweep, so the watch gets slower the longer a deployment runs.
+--
+-- (host_id, status, acked_at) makes both halves index ranges: the pending half stops at the status prefix, the acknowledged half
+-- seeks straight to the window.
+--
+-- This supersedes idx_commands_host_status, whose columns are its leftmost prefix, but that one is NOT dropped here. ADR-0009 puts
+-- drops in tier 2, so expand and contract belong to different releases: a rolling upgrade runs binary N and N+1 against one database.
+-- The contract migration is issue #1082.
+--
+-- A secondary-index add, built online, so it ships single-step under ADR-0009. The algorithm and lock are stated so MySQL refuses the
+-- statement rather than falling back to a plan that blocks command inserts while it builds. No down section, per the same ADR.
+
+-- +goose StatementBegin
+CREATE INDEX idx_commands_host_status_acked ON commands (host_id, status, acked_at) ALGORITHM=INPLACE LOCK=NONE;
+-- +goose StatementEnd

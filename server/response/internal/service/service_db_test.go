@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,8 +25,8 @@ func newSvc(t *testing.T) *service.Service {
 	return service.New(mysql.NewStore(db), nil, nil)
 }
 
-// TestServiceListPendingForHosts covers the control gateway's pending query through the service passthrough.
-func TestServiceListPendingForHosts(t *testing.T) {
+// TestServiceListDeliverableForHosts covers the control gateway's delivery query through the service passthrough.
+func TestServiceListDeliverableForHosts(t *testing.T) {
 	t.Parallel()
 	svc := newSvc(t)
 	ctx := t.Context()
@@ -35,7 +36,7 @@ func TestServiceListPendingForHosts(t *testing.T) {
 	_, err = svc.Insert(ctx, "host-b", "kill_process", json.RawMessage(`{"n":2}`))
 	require.NoError(t, err)
 
-	cmds, err := svc.ListPendingForHosts(ctx, []string{"host-a"})
+	cmds, err := svc.ListDeliverableForHosts(ctx, []string{"host-a"}, time.Now().Add(-time.Hour), time.Now())
 	require.NoError(t, err)
 	require.Len(t, cmds, 1)
 	assert.Equal(t, "host-a", cmds[0].HostID)

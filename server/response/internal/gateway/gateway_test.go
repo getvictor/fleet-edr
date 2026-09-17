@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -28,10 +29,31 @@ import (
 type fakeSource struct {
 	mu      sync.Mutex
 	pending map[string][]api.Command
+	// acked are commands the host acknowledged and never reported an outcome for, by host, with the instant of the acknowledgement.
+	acked   map[string][]api.Command
 	updates []api.UpdateStatusRequest
 }
 
-func newFakeSource() *fakeSource { return &fakeSource{pending: make(map[string][]api.Command)} }
+// failingSource answers every delivery query with an error, for the path where the database is unreachable. The embedded source is a
+// pointer: fakeSource carries a mutex, and a value embed would copy it.
+type failingSource struct{ *fakeSource }
+
+func (f *failingSource) ListDeliverableForHosts(context.Context, []string, time.Time, time.Time) ([]api.Command, error) {
+	return nil, errors.New("database unreachable")
+}
+
+func newFakeSource() *fakeSource {
+	return &fakeSource{pending: make(map[string][]api.Command), acked: make(map[string][]api.Command)}
+}
+
+// addAcked records a command acknowledged at ackedAt whose outcome never arrived.
+func (f *fakeSource) addAcked(cmd api.Command, ackedAt time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cmd.Status = api.StatusAcked
+	cmd.AckedAt = &ackedAt
+	f.acked[cmd.HostID] = append(f.acked[cmd.HostID], cmd)
+}
 
 func (f *fakeSource) addPending(cmd api.Command) {
 	f.mu.Lock()
@@ -40,12 +62,20 @@ func (f *fakeSource) addPending(cmd api.Command) {
 	f.pending[cmd.HostID] = append(f.pending[cmd.HostID], cmd)
 }
 
-func (f *fakeSource) ListPendingForHosts(_ context.Context, hostIDs []string) ([]api.Command, error) {
+// ListDeliverableForHosts answers with each host's pending commands and the acknowledgements inside (ackedAfter, ackedBefore], as
+// the store's query does.
+func (f *fakeSource) ListDeliverableForHosts(_ context.Context, hostIDs []string, ackedAfter,
+	ackedBefore time.Time) ([]api.Command, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []api.Command
 	for _, h := range hostIDs {
 		out = append(out, f.pending[h]...)
+		for _, cmd := range f.acked[h] {
+			if cmd.AckedAt.After(ackedAfter) && !cmd.AckedAt.After(ackedBefore) {
+				out = append(out, cmd)
+			}
+		}
 	}
 	return out, nil
 }
@@ -510,7 +540,7 @@ func TestGateway(t *testing.T) {
 		require.Eventually(t, func() bool { return g.reg.len() == 1 }, 2*time.Second, 10*time.Millisecond)
 
 		// Queue the command AFTER connect with NO Notify: this models an operator action landing on a peer replica. The command reaches
-		// the stream only because the watch ticker calls ListPendingForHosts for the connected host and pushes it.
+		// the stream only because the watch ticker calls ListDeliverableForHosts for the connected host and pushes it.
 		src.addPending(api.Command{ID: 11, HostID: "host-a", CommandType: "isolate_host", Payload: []byte(`{"mode":"full"}`)})
 
 		cmd, err := recvCommand(t, stream)
@@ -528,6 +558,164 @@ func TestGateway(t *testing.T) {
 // grpc.Server.ServeHTTP behind a net/http HTTP/2 server (how cmd/main multiplexes it onto the shared HTTPS listener), so it pins that
 // the long-lived bidi control stream works over net/http's HTTP/2 (the documented ServeHTTP caveat), not only over gRPC's own
 // transport. TLS is terminated upstream in production; here the server speaks cleartext HTTP/2 (h2c) and the client dials insecure.
+// requireNoCommandOffered fails unless the stream stayed open and carried no command frame for d, which many watch ticks fit inside.
+// The positive direction has recvCommand; this is for asserting that a command the gateway must leave alone is never pushed.
+//
+// A receive error fails the test rather than counting as silence: a regression that closed the stream would otherwise satisfy every
+// assertion here while delivering nothing at all.
+func requireNoCommandOffered(t *testing.T, stream control.ControlChannel_ConnectClient, d time.Duration) {
+	t.Helper()
+	type received struct {
+		offered bool
+		err     error
+	}
+	got := make(chan received, 1)
+	go func() {
+		for {
+			frame, err := stream.Recv()
+			if err != nil {
+				got <- received{err: err}
+				return
+			}
+			if frame.GetCommand() != nil {
+				got <- received{offered: true}
+				return
+			}
+		}
+	}()
+	select {
+	case r := <-got:
+		require.NoError(t, r.err, "the stream closed instead of staying open with nothing to offer")
+		assert.False(t, r.offered, "nothing is offered")
+	case <-time.After(d):
+	}
+}
+
+// An outcome written to a connection that was already dead is lost, and the command stays acked with nothing asking for it again
+// (issue #1062). The gateway offers such a command once the grace period has passed, so the agent's ledger can replay the outcome.
+// spec:agent-control-channel/delivery-is-at-least-once-and-idempotent-by-command-identity/an-acknowledged-command-is-re-offered
+func TestGatewayOffersAnAcknowledgedCommandWithNoOutcome(t *testing.T) {
+	t.Parallel()
+	src := newFakeSource()
+	ver := newFakeVerifier()
+	ver.add("tok-a", "host-a")
+	now := time.Now()
+	// Acknowledged before the grace period, so its outcome counts as lost rather than still on its way.
+	src.addAcked(api.Command{ID: 9, HostID: "host-a", CommandType: "kill_process", Payload: []byte(`{"pid":42}`)},
+		now.Add(-2*defaultUnreportedGrace))
+	g, dial := newTestGateway(t, src, ver)
+	g.now = func() time.Time { return now }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
+	require.NoError(t, err)
+
+	cmd, err := recvCommand(t, stream)
+	require.NoError(t, err)
+	require.NotNil(t, cmd)
+	assert.Equal(t, int64(9), cmd.GetId(), "the acknowledged command is offered again")
+
+	// The agent's ledger replays the recorded outcome, which moves the command out of acked.
+	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: 9, Status: string(api.StatusCompleted), Result: []byte(`{"killed_pid":42}`),
+	}}}))
+	require.Eventually(t, func() bool { return src.updateCount() == 1 }, 2*time.Second, 10*time.Millisecond)
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	assert.Equal(t, api.StatusCompleted, src.updates[0].Status)
+}
+
+// spec:agent-control-channel/delivery-is-at-least-once-and-idempotent-by-command-identity/an-acknowledged-command-is-re-offered
+func TestGatewayLeavesAnAcknowledgedCommandOutsideTheBounds(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		ackedAt time.Time
+	}{
+		// Still running: set_network_containment waits on the extension, and the server being impatient would offer it twice.
+		{name: "inside the grace period", ackedAt: now.Add(-defaultUnreportedGrace / 2)},
+		// Past the window the agent's ledger covers: it would repeat the side effect rather than replay the outcome.
+		{name: "older than the redelivery window", ackedAt: now.Add(-2 * defaultUnreportedWindow)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src := newFakeSource()
+			ver := newFakeVerifier()
+			ver.add("tok-a", "host-a")
+			src.addAcked(api.Command{ID: 9, HostID: "host-a", CommandType: "kill_process"}, tc.ackedAt)
+			g, dial := newTestGateway(t, src, ver)
+			g.now = func() time.Time { return now }
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
+			require.NoError(t, err)
+
+			requireNoCommandOffered(t, stream, 300*time.Millisecond)
+		})
+	}
+}
+
+// A delivery query that fails must leave the connection alone: the watch ticks again in a second, and tearing the stream down over a
+// database blip would cost the host its commands and its liveness signal for as long as the blip lasts.
+func TestGatewayKeepsTheConnectionWhenTheDeliveryQueryFails(t *testing.T) {
+	t.Parallel()
+	src := &failingSource{fakeSource: newFakeSource()}
+	ver := newFakeVerifier()
+	ver.add("tok-a", "host-a")
+	_, dial := newTestGateway(t, src, ver)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
+	require.NoError(t, err)
+
+	requireNoCommandOffered(t, stream, 300*time.Millisecond)
+}
+
+// A command for a host that is not connected here is skipped rather than pushed: another replica holds that connection, or the host
+// is offline and the command waits in its backlog.
+func TestGatewayDeliverSkipsAHostWithNoConnection(t *testing.T) {
+	t.Parallel()
+	src := newFakeSource()
+	src.addPending(api.Command{ID: 11, HostID: "host-elsewhere", CommandType: "kill_process"})
+	g := New(Deps{Source: src, Verifier: newFakeVerifier()})
+
+	g.deliverPending(t.Context(), []string{"host-elsewhere"})
+}
+
+// A replayed outcome arrives as an acknowledgement and then a terminal frame. The acknowledgement must not free the command to be
+// offered again: the server refuses acked -> acked, so the row stays eligible, and a watch tick a second later would push it while
+// the frame that ends it is still in flight (issue #1062).
+func TestGatewayKeepsTheMarkUntilAnOutcomeIsTerminal(t *testing.T) {
+	t.Parallel()
+	src := newFakeSource()
+	ver := newFakeVerifier()
+	ver.add("tok-a", "host-a")
+	now := time.Now()
+	src.addAcked(api.Command{ID: 9, HostID: "host-a", CommandType: "kill_process"}, now.Add(-2*defaultUnreportedGrace))
+	g, dial := newTestGateway(t, src, ver)
+	g.now = func() time.Time { return now }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
+	require.NoError(t, err)
+
+	cmd, err := recvCommand(t, stream)
+	require.NoError(t, err)
+	require.NotNil(t, cmd)
+	require.Equal(t, int64(9), cmd.GetId())
+
+	// The agent re-acknowledges first, as a ledger replay does. The command must not come back while its outcome is on its way.
+	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: 9, Status: string(api.StatusAcked),
+	}}}))
+	requireNoCommandOffered(t, stream, 300*time.Millisecond)
+}
+
 func TestGatewayServeAndStop(t *testing.T) {
 	t.Parallel()
 	src := newFakeSource()
@@ -590,6 +778,27 @@ func TestGatewayWatchIntervalIsCompiledConstant(t *testing.T) {
 
 	assert.Equal(t, defaultWatchInterval, g.watchInterval, "the command-watch interval is compiled, not an operator knob")
 	assert.Equal(t, time.Second, g.watchInterval, "the compiled watch interval is one second")
+}
+
+// The two bounds on re-offering an acknowledged command are values, not preferences, and each is pinned to what makes it correct.
+//
+// The grace period has to outlast the longest command: set_network_containment waits up to 15 seconds for the network extension to
+// confirm, so a shorter grace would have the server offer a command again while the agent is still running it. The window has to stay
+// inside the agent's own record of outcomes, which config.DefaultCommandLedgerRetention keeps for 30 days; past that an agent has
+// pruned the outcome and would repeat the side effect instead of replaying it. The retention is named here rather than imported
+// because the response context may not depend on agent packages; if it changes, this test is the reminder.
+func TestGatewayUnreportedBoundsAreCompiledConstants(t *testing.T) {
+	t.Parallel()
+
+	g := New(Deps{Source: newFakeSource(), Verifier: newFakeVerifier()})
+
+	assert.Equal(t, defaultUnreportedGrace, g.unreportedGrace, "the grace period is compiled, not an operator knob")
+	assert.Equal(t, defaultUnreportedWindow, g.unreportedWindow, "the redelivery window is compiled, not an operator knob")
+	assert.Equal(t, time.Minute, defaultUnreportedGrace, "a minute, comfortably past the 15 seconds a containment can take")
+
+	const agentLedgerRetention = 30 * 24 * time.Hour // config.DefaultCommandLedgerRetention
+	assert.Equal(t, 7*24*time.Hour, defaultUnreportedWindow, "a week")
+	assert.Less(t, defaultUnreportedWindow, agentLedgerRetention, "an agent must still hold the outcome it is asked to replay")
 }
 
 // A heartbeat must never displace a queued command, and must never block the connection's maintenance loop.

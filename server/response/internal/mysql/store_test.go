@@ -2,6 +2,7 @@ package mysql_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -283,9 +284,25 @@ func TestInsertBatch(t *testing.T) {
 	}
 }
 
-// TestListPendingForHosts locks the control gateway's watch query: it returns only pending commands, only for the requested hosts, in
-// creation order, and returns nothing (no error) for an empty host set.
-func TestListPendingForHosts(t *testing.T) {
+// A database that cannot answer produces an error rather than an empty answer: the gateway logs it and tries again on the next tick,
+// where treating the failure as "this host is owed nothing" would silently stop delivering commands.
+func TestListDeliverableForHostsReportsADatabaseFailure(t *testing.T) {
+	t.Parallel()
+	_, db := newTestStoreWithDB(t)
+	require.NoError(t, db.Close())
+	closed := mysql.NewStore(db)
+
+	_, err := closed.ListDeliverableForHosts(t.Context(), []string{"host-a"}, time.Now().Add(-time.Hour), time.Now())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list deliverable commands for hosts")
+}
+
+// farPast is a window that excludes every acknowledgement, so a caller can ask for pending commands alone.
+func farPast() time.Time { return time.Now().Add(-365 * 24 * time.Hour) }
+
+// TestListDeliverableForHosts locks the pending half of the control gateway's watch query: it returns the requested hosts' pending
+// commands, only theirs, in creation order, and nothing (no error) for an empty host set. The acknowledged half is the test below.
+func TestListDeliverableForHosts(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
@@ -304,7 +321,7 @@ func TestListPendingForHosts(t *testing.T) {
 
 	t.Run("scopes to requested hosts, pending only, creation order", func(t *testing.T) {
 		t.Parallel()
-		cmds, err := s.ListPendingForHosts(ctx, []string{"host-a", "host-b"})
+		cmds, err := s.ListDeliverableForHosts(ctx, []string{"host-a", "host-b"}, farPast(), farPast())
 		require.NoError(t, err)
 		require.Len(t, cmds, 2)
 		// Oldest first: host-a's still-pending second command, then host-b's.
@@ -319,10 +336,118 @@ func TestListPendingForHosts(t *testing.T) {
 
 	t.Run("empty host set returns no rows without error", func(t *testing.T) {
 		t.Parallel()
-		cmds, err := s.ListPendingForHosts(ctx, nil)
+		cmds, err := s.ListDeliverableForHosts(ctx, nil, farPast(), time.Now())
 		require.NoError(t, err)
 		assert.Empty(t, cmds)
 	})
+}
+
+// The deliverable read also answers with the commands a host acknowledged and never reported an outcome for, inside the window the
+// caller asks about (issue #1062). The bounds are how the gateway tells an outcome that was lost from a command still running, and
+// from one so old the agent's ledger may no longer hold its outcome.
+func TestListDeliverableForHostsIncludesUnreported(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
+	ctx := t.Context()
+
+	acked, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":1}`))
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateStatus(ctx, acked, "host-a", api.StatusPending, api.StatusAcked, nil))
+	completed, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":2}`))
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateStatus(ctx, completed, "host-a", api.StatusPending, api.StatusAcked, nil))
+	require.NoError(t, s.UpdateStatus(ctx, completed, "host-a", api.StatusAcked, api.StatusCompleted, json.RawMessage(`{"ok":true}`)))
+	stillPending, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":3}`))
+	require.NoError(t, err)
+	otherHost, err := s.Insert(ctx, "host-b", "kill_process", json.RawMessage(`{"n":4}`))
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateStatus(ctx, otherHost, "host-b", api.StatusPending, api.StatusAcked, nil))
+
+	t.Run("the pending command and the acknowledged one with no outcome, scoped to the host", func(t *testing.T) {
+		t.Parallel()
+		cmds, err := s.ListDeliverableForHosts(ctx, []string{"host-a"}, time.Now().Add(-time.Hour), time.Now().Add(time.Minute))
+		require.NoError(t, err)
+		require.Len(t, cmds, 2, "the completed one reported its outcome; the other host's is not asked for")
+		assert.Equal(t, acked, cmds[0].ID, "oldest first")
+		assert.Equal(t, api.StatusAcked, cmds[0].Status)
+		assert.Equal(t, stillPending, cmds[1].ID)
+		assert.Equal(t, api.StatusPending, cmds[1].Status)
+	})
+
+	t.Run("outside the window, only what is pending", func(t *testing.T) {
+		t.Parallel()
+		// Acknowledged moments ago, so a window that ended before that excludes it: the command may still be running.
+		cmds, err := s.ListDeliverableForHosts(ctx, []string{"host-a"}, time.Now().Add(-time.Hour), time.Now().Add(-time.Minute))
+		require.NoError(t, err)
+		require.Len(t, cmds, 1)
+		assert.Equal(t, stillPending, cmds[0].ID)
+
+		// And a window that starts after the acknowledgement excludes it too: too old to replay from the agent's ledger.
+		cmds, err = s.ListDeliverableForHosts(ctx, []string{"host-a"}, time.Now().Add(time.Minute), time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		require.Len(t, cmds, 1)
+		assert.Equal(t, stillPending, cmds[0].ID)
+	})
+
+	t.Run("empty host set returns no rows without error", func(t *testing.T) {
+		t.Parallel()
+		cmds, err := s.ListDeliverableForHosts(ctx, nil, time.Now().Add(-time.Hour), time.Now())
+		require.NoError(t, err)
+		assert.Empty(t, cmds)
+	})
+
+	// The gateway runs this every second per connected host, and the acknowledged rows it reads accumulate for good, so the window
+	// has to be an index range rather than a filter applied to every command a fleet has ever stranded (issue #1062).
+	t.Run("the window is served by the index", func(t *testing.T) {
+		t.Parallel()
+		query, args, err := sqlx.In(
+			`SELECT id FROM commands WHERE host_id IN (?) AND (status = ? OR (status = ? AND acked_at > ? AND acked_at <= ?))`,
+			[]string{"host-a"}, api.StatusPending, api.StatusAcked, time.Now().Add(-time.Hour), time.Now())
+		require.NoError(t, err)
+		var plan []map[string]any
+		rows, err := db.QueryxContext(ctx, "EXPLAIN "+db.Rebind(query), args...)
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			row := map[string]any{}
+			require.NoError(t, rows.MapScan(row))
+			plan = append(plan, row)
+		}
+		require.NoError(t, rows.Err())
+		require.NotEmpty(t, plan)
+		// possible_keys rather than key: the optimizer picks between the host-scoped indexes on cost, and on a table this size that
+		// choice is arbitrary. What this pins is the schema, that an index applies to this predicate at all, which is what keeps the
+		// acknowledged half from being a filter over every command a fleet has ever stranded.
+		assert.Contains(t, asString(plan[0]["possible_keys"]), "idx_commands_host_status_acked",
+			"the acked window is servable by an index, plan: %v", plan)
+		assert.NotEqual(t, "ALL", asString(plan[0]["type"]), "no full scan, plan: %v", plan)
+
+		// And the index covers the column the window is on. possible_keys would name it either way, since the predicate's first two
+		// columns alone make it applicable, so the plan cannot tell whether acked_at is in it; the schema can.
+		var columns []string
+		cols, err := db.QueryxContext(ctx, "SHOW INDEX FROM commands WHERE Key_name = ?", "idx_commands_host_status_acked")
+		require.NoError(t, err)
+		defer func() { _ = cols.Close() }()
+		for cols.Next() {
+			row := map[string]any{}
+			require.NoError(t, cols.MapScan(row))
+			columns = append(columns, asString(row["Column_name"]))
+		}
+		require.NoError(t, cols.Err())
+		assert.Equal(t, []string{"host_id", "status", "acked_at"}, columns, "the window is an index range, not a filter")
+	})
+}
+
+// asString renders a MySQL EXPLAIN cell, which arrives as []byte or nil.
+func asString(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case []byte:
+		return string(t)
+	default:
+		return fmt.Sprintf("%v", t)
+	}
 }
 
 // LatestOfType answers per host with the newest command of the asked type, whatever its status, and ignores other types.
