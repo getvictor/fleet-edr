@@ -144,7 +144,7 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 			// The audit entry commits with the change it records, so a host can never be found contained with nothing saying who
 			// did it or why (issue #1070). Everything the row needs is known here, including the id of the command queued just
 			// above, so the entry is written whole rather than held and completed later.
-			entry, eerr := auditEntry(actor, remoteAddr, api.ContainmentChange{State: state, Changed: true, CommandID: id})
+			entry, eerr := auditEntry(ctx, actor, remoteAddr, api.ContainmentChange{State: state, Changed: true, CommandID: id})
 			if eerr != nil {
 				return 0, eerr
 			}
@@ -169,7 +169,8 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 
 // auditEntry encodes the change's audit event, ready to commit with it. An encoding failure fails the change rather than being
 // logged past: the point of committing the entry with the change is that neither exists without the other.
-func auditEntry(actor identityapi.PrincipalRef, remoteAddr string, change api.ContainmentChange) (auditoutbox.Entry, error) {
+func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr string,
+	change api.ContainmentChange) (auditoutbox.Entry, error) {
 	action := identityapi.AuditHostRelease
 	if change.State.Contained {
 		action = identityapi.AuditHostContain
@@ -180,6 +181,9 @@ func auditEntry(actor identityapi.PrincipalRef, remoteAddr string, change api.Co
 	}
 	return auditoutbox.Encode(identityapi.AuditEvent{
 		Actor: actor, Action: action, TargetType: "host", TargetID: change.State.HostID, RemoteAddr: remoteAddr, Payload: payload,
+		// Carried explicitly. The drain that delivers this entry may be another request's or the sweep's, and it detaches its own
+		// trace so it cannot stamp one request's trace onto another's row, so an entry that does not carry its own arrives without.
+		TraceID: identityapi.TraceIDFromContext(ctx),
 	})
 }
 

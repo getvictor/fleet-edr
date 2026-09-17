@@ -15,6 +15,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
@@ -846,7 +847,18 @@ func TestSet_ARecorderFailureDelaysTheAuditRowRatherThanLosingIt(t *testing.T) {
 	f := newFixture(t)
 	f.audit.goesDown(errors.New("audit store unavailable"))
 
-	change, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing to a known C2")
+	// A real change runs under the request's span, and the row has to name that trace however long the delivery takes.
+	spanTrace, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	require.NoError(t, err)
+	ctx := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: spanTrace, SpanID: spanID, TraceFlags: trace.FlagsSampled,
+	}))
+	traceID := identityapi.TraceIDFromContext(ctx)
+	require.NotEmpty(t, traceID, "the fixture must run under a real span or the assertion below proves nothing")
+
+	change, err := f.svc.Set(ctx, operator, "203.0.113.5", "host-a", true, "beaconing to a known C2")
 	require.NoError(t, err, "a change is not refused because its audit row could not be written")
 	assert.True(t, change.Changed)
 	assert.Empty(t, f.audit.recorded(), "the store is down, so no row yet")
@@ -868,6 +880,8 @@ func TestSet_ARecorderFailureDelaysTheAuditRowRatherThanLosingIt(t *testing.T) {
 	assert.Equal(t, "203.0.113.5", events[0].RemoteAddr, "the address the operator acted from survives the outbox")
 	assert.Equal(t, "beaconing to a known C2", events[0].Payload["reason"])
 	assert.EqualValues(t, change.CommandID, events[0].Payload["command_id"])
+	assert.Equal(t, traceID, events[0].TraceID,
+		"the entry carries the trace of the request that made the change; the drain detaches its own so it cannot supply one")
 	assert.Empty(t, f.pendingAudit(t), "a delivered entry is cleared")
 }
 
