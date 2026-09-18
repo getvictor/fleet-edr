@@ -10,7 +10,7 @@ An entry SHALL name a destination as an IP address or a CIDR range, and MAY narr
 
 The system SHALL refuse an entry that would leave containment meaningless, and SHALL refuse the whole replacement rather than storing the entries around it, because a responder who asked for four destinations and silently got three would discover it during an incident. Refusing only the default routes would be insufficient, since two half-sized ranges cover the same space, so the refusal SHALL be expressed as a floor on how broad any single range may be, set where a legitimate operator range still fits. The system SHALL also refuse a destination listed twice, a port outside the valid range, a transport it cannot express as a filter rule, and a set larger than a fixed cap. Each refusal SHALL identify which entry was refused, so an operator editing a long set is told what to fix.
 
-Replacing the set SHALL require a reason, and SHALL be audited with it, as containing a host is. The audit record SHALL carry the acting principal, the reason, the new version, and which destinations the replacement added and removed, because a set that gained one destination is otherwise indistinguishable from the same set saved again.
+Replacing the set SHALL require a reason, and SHALL be audited with it, as containing a host is. The audit record SHALL carry the acting principal, the reason, the new version, which destinations the replacement added and removed, and which destinations kept their place but were renamed, because a set that gained one destination is otherwise indistinguishable from the same set saved again, and a renamed one from an untouched one. Each destination in that record SHALL be carried as its own fields rather than as rendered text, because an operator's own label for a destination is part of it: rendered into a sentence, a label could be written to make one change read as another in the record of who widened containment.
 
 Replacing the set SHALL be a distinct permission from containing a host, held by fewer roles than containment itself, and SHALL require a recently authenticated interactive session. An operator containing a host decides about that host; an operator editing this set decides what every contained host, present and future, can still talk to, which is the one edit that weakens a containment already in force.
 
@@ -35,7 +35,8 @@ A replacement MAY name the version the operator read before editing. When it doe
 
 - **GIVEN** an operator replacing the set with a different destination
 - **WHEN** the replacement is stored
-- **THEN** an audit record names the acting principal, the reason, the new version, and the destinations added and removed
+- **THEN** an audit record names the acting principal, the reason, the new version, and the destinations added, removed and renamed, each as its own fields
+- **AND** a destination whose label alone changed is recorded as renamed rather than as one leaving and another arriving
 - **AND** a replacement with no reason is refused and stores nothing
 
 #### Scenario: Editing the set is its own permission

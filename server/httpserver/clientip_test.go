@@ -243,21 +243,35 @@ func TestClientIPResolver_MiddlewareSurvivesNilRequestContext(t *testing.T) {
 // over-broad one is over-broad in earnest.
 func TestClientIPResolver_MappedTrustedPrefixMeansTheIPv4RangeItSpells(t *testing.T) {
 	t.Parallel()
-	const hop = "10.0.0.5"
 	const realClient = "198.51.100.7"
 
-	resolver, err := httpserver.NewClientIPResolver([]string{"::ffff:10.0.0.0/104"})
-	require.NoError(t, err)
+	cases := []struct {
+		desc string
+		peer string
+		want string
+	}{
+		{
+			desc: "a peer inside the range it spells is trusted",
+			peer: "10.0.0.5",
+			want: realClient,
+		},
+		{
+			// The conversion widens nothing beyond the range the operator wrote.
+			desc: "a peer outside it is not",
+			peer: "192.0.2.9",
+			want: "192.0.2.9",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			resolver, err := httpserver.NewClientIPResolver([]string{"::ffff:10.0.0.0/104"})
+			require.NoError(t, err)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
-	req.RemoteAddr = hop + ":5555"
-	req.Header.Set("X-Forwarded-For", realClient)
-	assert.Equal(t, realClient, resolver.ClientIP(req),
-		"a mapped /104 is the IPv4 /8 it spells, so the hop inside it is trusted and its forwarded client is used")
-
-	// And a peer outside the range it spells is still not trusted: the conversion widens nothing beyond what the operator wrote.
-	outside := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
-	outside.RemoteAddr = "192.0.2.9:5555"
-	outside.Header.Set("X-Forwarded-For", realClient)
-	assert.Equal(t, "192.0.2.9", resolver.ClientIP(outside))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+			req.RemoteAddr = tc.peer + ":5555"
+			req.Header.Set("X-Forwarded-For", realClient)
+			assert.Equal(t, tc.want, resolver.ClientIP(req))
+		})
+	}
 }

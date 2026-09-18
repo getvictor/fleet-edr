@@ -117,7 +117,8 @@ func TestReachableHandler_PassesTheRequestThrough(t *testing.T) {
 	assert.Equal(t, []api.ReachableAddress{{CIDR: "192.0.2.7", Port: 443, Transport: "tcp", Note: "MDM"}}, svc.addresses)
 	assert.Equal(t, "why", svc.reason)
 	assert.Equal(t, identityapi.PrincipalRef{ID: "user:7", Type: "user"}, svc.actor)
-	require.NotNil(t, svc.expected, "the version the operator edited against must reach the service, or their edit lands on a set they never saw")
+	require.NotNil(t, svc.expected,
+		"the version the operator edited against must reach the service, or their edit lands on a set they never saw")
 	assert.Equal(t, expected, *svc.expected)
 
 	var got api.ReachableSet

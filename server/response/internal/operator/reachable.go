@@ -108,6 +108,13 @@ func (h *ReachableHandler) handleReplace(w http.ResponseWriter, r *http.Request)
 	}
 	set, err := h.svc.Replace(ctx, actor, httpserver.ClientIP(r), *body.Addresses, body.Reason, body.ExpectedVersion)
 	if err != nil {
+		// Logged with what was ATTEMPTED, not only what went wrong. A replacement that fails after its audit entry could not be
+		// committed leaves no durable record at all, and an operator reporting "my change did not save" is asking about a request
+		// this line is then the only trace of: who asked, for how many destinations, and against which version.
+		h.logger.WarnContext(ctx, "admin containment reachable addresses refused",
+			attrkeys.AdminAction, "containment_reachable_update", "edr.actor.id", actor.ID,
+			"edr.containment.reachable_count", len(*body.Addresses), "edr.containment.reachable_expected_version", body.ExpectedVersion,
+			"err", err)
 		h.writeReplaceErr(ctx, w, err)
 		return
 	}
@@ -146,6 +153,6 @@ func (h *ReachableHandler) writeReplaceErr(ctx context.Context, w http.ResponseW
 			return
 		}
 	}
-	h.logger.ErrorContext(ctx, "replace reachable addresses", "err", err)
+	// The caller above has already logged this with the request's own context, so only the answer is written here.
 	writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 }
