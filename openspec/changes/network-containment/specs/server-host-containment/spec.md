@@ -45,6 +45,13 @@ The server SHALL expose `POST /api/hosts/{host_id}/containment` taking `containe
 - **WHEN** the operator posts a containment change for a host with no active enrollment
 - **THEN** the server responds `host_not_found` and changes nothing
 
+#### Scenario: A change naming a version the host has moved past is refused
+
+- **GIVEN** an operator who read a host's containment and then asks for a change naming that version
+- **WHEN** another operator has changed the host in between
+- **THEN** the request is refused as a conflict, the host keeps the other operator's state, and nothing is queued or audited
+- **AND** the refusal carries the state as it now stands
+
 #### Scenario: Asking for the current state changes nothing
 
 - **GIVEN** a contained host

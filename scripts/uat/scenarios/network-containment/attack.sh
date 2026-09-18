@@ -93,9 +93,15 @@ containment() {
 
 # request_state <true|false> <reason>: asks for a state and prints "<version> <changed>". `changed` is false when the host was
 # already in the state asked for, which for a containment means someone else contained it first.
+# request_state <true|false> <reason> [expected-version]: asks for a state, optionally only while the host is still at the version
+# given. Without a version it asks for the state whatever the host holds, which is what a first containment wants.
 request_state() {
-  local contained="$1" reason="$2" out
-  if ! out=$(uat_rest POST "/api/hosts/$UAT_HOST_ID/containment" "{\"contained\":$contained,\"reason\":\"$reason\"}"); then
+  local contained="$1" reason="$2" expected="${3:-}" body out
+  body="{\"contained\":$contained,\"reason\":\"$reason\"}"
+  if [[ -n "$expected" ]]; then
+    body="{\"contained\":$contained,\"reason\":\"$reason\",\"expected_version\":$expected}"
+  fi
+  if ! out=$(uat_rest POST "/api/hosts/$UAT_HOST_ID/containment" "$body"); then
     uat_log "$TAG" "containment request refused: $out"
     uat_log "$TAG" "(reauth_required means EDR_SESSION_COOKIE's session authenticated longer ago than EDR_REAUTH_WINDOW)"
     return 1
@@ -154,12 +160,11 @@ adopt_lost_containment() {
 }
 
 # release_owned <reason>: releases only while the host still carries the containment this run made, and prints the version the
-# release was recorded at. It reads the state immediately before asking, so an operator who took the host over in the meantime
-# keeps their containment.
+# release was recorded at. It reads the state first so it can report which version it declined to release, and then asks for the
+# release naming that version, so the server refuses it under the host's lock if anyone changed the host in between.
 #
-# The read and the request are two calls, so an operator who releases and re-contains between them is released by this run
-# anyway. Closing that needs the request to carry the version it expects, which the API does not offer yet (#1076). The window
-# is the round trip of one request, against a hold of tens of seconds, and every wider window is checked.
+# The read is therefore a courtesy rather than the check: an operator who releases and re-contains between the read and the request
+# is protected by the server, which sees a version this run never held (#1076).
 release_owned() {
   local reason="$1" state version out
   state=$(containment 2>/dev/null) || state="{}"
@@ -168,7 +173,7 @@ release_owned() {
     uat_log "$TAG" "WARNING: not releasing: the host no longer carries this run's containment (version $version); check the host"
     return 1
   fi
-  out=$(request_state false "$reason") || return 1
+  out=$(request_state false "$reason" "$OWNED_VERSION") || return 1
   echo "${out%% *}"
 }
 

@@ -1022,7 +1022,7 @@ export class ContainmentVersionConflictError extends Error {
 // conflictState reads the state a version conflict reports alongside its code. A body without one leaves the page to re-read.
 function conflictState(body: unknown): ContainmentState | null {
   if (typeof body !== "object" || body === null || !("state" in body)) return null;
-  const state = (body as { state: unknown }).state;
+  const state = body.state;
   return typeof state === "object" && state !== null ? (state as ContainmentState) : null;
 }
 
