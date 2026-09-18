@@ -949,3 +949,72 @@ func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
 
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
 }
+
+// spec:agent-command-executor/the-agent-refreshes-a-contained-hosts-lifeline/dials-follow-the-lifeline-the-extension-confirms
+//
+// The defect this covers (issue #1066): an XPC send only hands the message off. If the extension refuses the refresh or its filter
+// apply fails, the filter still allows the addresses it holds, so an agent that pinned dials to what it sent would dial addresses the
+// filter drops, closing the lifeline the refresh exists to keep open.
+func TestObserve_DialsFollowTheLifelineTheExtensionConfirms(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	// The server is already at .9 while the extension holds .7, so the first status both confirms .7 and starts a refresh that sends
+	// .9. That ordering is the point: the assertion below is made while a send is outstanding and unconfirmed, which is the only
+	// moment the difference between pinning what was sent and what was confirmed is visible.
+	res.set("203.0.113.9")
+	holds := func(addrs ...string) Status {
+		return Status{Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: addrs}
+	}
+
+	m.Observe(t.Context(), holds("203.0.113.7"))
+	require.Len(t, ext.sent(), 1, "the new lifeline was sent")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"dials stay on the lifeline the filter holds while the one just sent is unconfirmed")
+
+	m.Observe(t.Context(), holds("203.0.113.9"))
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"),
+		"the confirmation moves the pins")
+}
+
+// spec:agent-command-executor/the-agent-refreshes-a-contained-hosts-lifeline/a-refresh-the-extension-did-not-apply-is-sent-again
+//
+// Before this, a refusal was permanent: the agent recorded the addresses as sent, and every later refresh resolved the same answer,
+// found it equal to what was sent, and stopped. The host kept a lifeline pointing at a server that had moved.
+func TestObserve_ARefreshTheExtensionDidNotApplyIsSentAgain(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	// The server is at .9 and the extension keeps reporting .7: it refused each refresh, or its filter apply failed each time.
+	res.set("203.0.113.9")
+	holds := func(addrs ...string) Status {
+		return Status{Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: addrs}
+	}
+
+	for range 3 {
+		m.Observe(t.Context(), holds("203.0.113.7"))
+	}
+	assert.Len(t, ext.sent(), 3, "each status that does not confirm the new lifeline sends it again")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"and dials stay on the one the filter still holds")
+}
+
+// An extension that does not report the lifeline it applied is one older than this agent. The agent keeps doing what it did before,
+// because refusing to pin would send dials through the system resolver, which answers nothing while the host is contained.
+func TestObserve_AnExtensionThatDoesNotReportItsLifelineStillPins(t *testing.T) {
+	t.Parallel()
+	m, _, res := newTestManager(t, serverTarget, nil)
+	res.set("203.0.113.7")
+	silent := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+
+	m.Observe(t.Context(), silent)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"what was sent, as before this change: there is no confirmation coming, and pinning nothing would leave the agent unable to "+
+			"dial the server at all")
+
+	// A reconnect forgets what was sent, so the next status sends the lifeline again. Against a silent extension that send is what
+	// the pins follow, which is the behavior an agent had before this change and must keep against an older extension.
+	res.set("203.0.113.9")
+	m.Reconnected()
+	m.Observe(t.Context(), silent)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"),
+		"a refresh against such an extension pins what it sent")
+}

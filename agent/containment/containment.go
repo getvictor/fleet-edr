@@ -49,6 +49,10 @@ type Status struct {
 	Epoch     int64  `json:"epoch"`
 	Applied   bool   `json:"applied"`
 	Error     string `json:"error"`
+	// AppliedAddresses are the server addresses of the lifeline the extension's filter was confirmed to enforce, absent when none
+	// was. A refresh sends the same version and epoch with different addresses, so this is the only thing that tells one lifeline
+	// from another, and it is what the agent pins its dials to (issue #1066).
+	AppliedAddresses []string `json:"appliedAddresses"`
 }
 
 // document is the network_containment.update the extension decodes: the command plus the lifeline.
@@ -140,9 +144,14 @@ type Manager struct {
 
 	mu    sync.Mutex
 	state *Command
-	// addresses are the lifeline addresses dials of the target are pinned to. sent are the ones sent over the current connection to
-	// the extension, which a reconnect forgets: a send reports no delivery, so addresses sent over a dropped connection may never
-	// have arrived.
+	// addresses are the lifeline addresses dials of the target are pinned to: the ones the extension has CONFIRMED its filter
+	// enforces. sent are the ones sent over the current connection to the extension, which a reconnect forgets: a send reports no
+	// delivery, so addresses sent over a dropped connection may never have arrived.
+	//
+	// The two are separate because an XPC send only hands the message off (issue #1066). Dialing what was sent rather than what was
+	// confirmed means that when the extension refuses an update or its filter apply fails, the agent dials addresses the filter is
+	// still not allowing while the filter still allows the ones it holds, which is the lifeline closed by the thing meant to keep it
+	// open.
 	addresses []netip.Addr
 	sent      []netip.Addr
 	// generation counts reconnects to the extension, so a send that completes over a connection that has since been replaced is not
@@ -152,7 +161,12 @@ type Manager struct {
 	pending          *Command
 	pendingAddresses []netip.Addr
 	refreshed        bool
-	waiters          map[chan Status]struct{}
+	// reportsLifeline records that a status from this extension named the lifeline its filter enforces, which an extension older
+	// than this agent never does (issue #1066). It decides whether a refresh may pin what it sent: against an extension that
+	// reports, dials wait for the confirmation, and against one that does not there is nothing to wait for and waiting would leave
+	// the agent unable to dial the server at all.
+	reportsLifeline bool
+	waiters         map[chan Status]struct{}
 }
 
 // New returns a Manager. The host starts uncontained until the extension or a command says otherwise.
@@ -418,12 +432,42 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 		m.refreshed = false
 		m.addresses, m.sent = nil, nil
 		if m.pending != nil && *m.pending == *m.state {
-			// The command this agent just sent: the extension holds exactly the addresses sent with it. Any other state, such as a
-			// containment held across an agent restart, leaves the addresses unknown, and the refresh below sends what the target
-			// resolves to now.
-			m.addresses, m.sent = m.pendingAddresses, m.pendingAddresses
+			// The command this agent just sent. Any other state, such as a containment held across an agent restart, leaves what the
+			// extension holds to be read from the status below.
+			m.sent = m.pendingAddresses
+		}
+	}
+	// What the extension says its filter enforces is the authority on what may be dialed, and the only thing that distinguishes one
+	// lifeline from another: a refresh keeps the version and the epoch and changes only the addresses (issue #1066).
+	if s.Applied && s.Contained {
+		switch applied, reported := parseAddrs(s.AppliedAddresses); {
+		case reported:
+			m.reportsLifeline = true
+			m.addresses = applied
+			if slices.Equal(applied, m.sent) {
+				// What this agent sent is what the filter enforces.
+				m.refreshed = true
+			} else {
+				// The extension holds a different lifeline: it refused the update, or its filter apply failed, or the send never
+				// arrived. Forgetting what was sent is what makes the refresh below send again rather than find these addresses
+				// already sent and stop.
+				m.sent = nil
+				m.refreshed = false
+			}
+		case len(m.sent) > 0:
+			// An extension that does not report the lifeline it applied, which is one older than this agent. Trusting what was sent
+			// is what that agent did, and it is what this must keep doing: refusing to pin would leave dials to go through the system
+			// resolver, which answers nothing while the host is contained, so the check meant to protect the lifeline would close it.
+			// The confirmation this change adds is available against an extension that reports, and only there.
+			m.addresses = m.sent
 			m.refreshed = true
 		}
+	}
+	if s.Contained && !s.Applied && s.Error != "" {
+		// A failed apply. The filter still enforces whatever it last confirmed, so the pins stay; what was sent is forgotten so the
+		// next refresh sends it again rather than treating it as delivered.
+		m.sent = nil
+		m.refreshed = false
 	}
 	refresh := s.Contained && s.Applied && !m.refreshed
 	m.mu.Unlock()
@@ -496,10 +540,19 @@ func (m *Manager) refresh(ctx context.Context) {
 	}
 	m.mu.Lock()
 	if m.state != nil && *m.state == state && m.generation == generation {
-		m.addresses, m.sent = addrs, addrs
+		// Recorded as sent, and pinned only against an extension that cannot confirm it. The send handed the document off and says
+		// nothing about whether the extension accepted it or its filter applied it, so against an extension that reports the
+		// lifeline it enforces, dials stay where they are until a status names these addresses (issue #1066). Against one that does
+		// not report, there is no confirmation coming and pinning nothing would leave the agent unable to dial the server at all, so
+		// this keeps what that agent already did.
+		m.sent = addrs
+		if !m.reportsLifeline {
+			m.addresses = addrs
+		}
 	}
 	m.mu.Unlock()
-	m.opts.Logger.InfoContext(ctx, "network containment lifeline refreshed", "addresses", doc.Server.Addresses)
+	m.opts.Logger.InfoContext(ctx, "network containment lifeline sent; awaiting the extension's confirmation",
+		"addresses", doc.Server.Addresses)
 }
 
 // DialContext wraps a dialer so connections to the lifeline target go to the lifeline addresses while the host is contained. The
@@ -629,6 +682,27 @@ func DecodeStatus(data []byte) Status {
 		return Status{Error: "undecodable containment status"}
 	}
 	return envelope.Payload
+}
+
+// parseAddrs turns the addresses a status reports into the form dials are pinned to, reporting false when the status carries none or
+// one it cannot read.
+//
+// An unreadable address makes the whole list unusable rather than a shorter one: the lifeline is the set of addresses the filter
+// allows, and pinning dials to part of it would send traffic to an address that happens to parse while the one the extension actually
+// allows is dropped.
+func parseAddrs(in []string) ([]netip.Addr, bool) {
+	if len(in) == 0 {
+		return nil, false
+	}
+	out := make([]netip.Addr, 0, len(in))
+	for _, a := range in {
+		addr, err := netip.ParseAddr(a)
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, addr)
+	}
+	return out, true
 }
 
 func addrStrings(addrs []netip.Addr) []string {

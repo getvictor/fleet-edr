@@ -296,6 +296,12 @@ struct NetworkContainmentStatus: Codable, Equatable, Sendable {
     let epoch: Int64
     let applied: Bool
     let error: String?
+    /// appliedAddresses are the server addresses of the lifeline the running filter was confirmed to enforce, and nil when none was.
+    ///
+    /// Here because a lifeline refresh sends the same version and epoch with different addresses, so without it two different
+    /// lifelines report an identical status and the agent cannot tell which one the filter holds (issue #1066). The agent pins its
+    /// dials to the addresses named here, so it never dials an address the filter is not yet allowing.
+    let appliedAddresses: [String]?
 
     /// eventType is the control event type the agent filters on, as it does for provider status.
     static let eventType = "ne_containment_status"
@@ -463,6 +469,6 @@ struct ContainmentStatusTracker {
     func status(held: NetworkContainmentUpdate) -> NetworkContainmentStatus {
         // Confirming clears the error and failing clears the confirmation, so an applied state never carries one.
         NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: held == applied,
-                                 error: error)
+                                 error: error, appliedAddresses: applied?.serverAddresses)
     }
 }
