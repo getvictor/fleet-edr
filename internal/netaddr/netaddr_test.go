@@ -35,6 +35,23 @@ func TestParsePrefix(t *testing.T) {
 			given: "::ffff:192.0.2.7",
 			want:  "192.0.2.7/32",
 		},
+		{
+			// Inside the mapped block, so the remaining bits ARE the IPv4 prefix length and the conversion loses nothing. Left
+			// mapped, this would never match an address (callers unmap the address first) and its /104 would read as a narrow
+			// IPv6 range rather than the IPv4 /8 it is.
+			desc:  "a mapped range becomes the IPv4 range it is",
+			given: "::ffff:10.0.0.0/104",
+			want:  "10.0.0.0/8",
+		},
+		{desc: "a mapped host prefix becomes an IPv4 /32", given: "::ffff:192.0.2.7/128", want: "192.0.2.7/32"},
+		{desc: "the mapped block itself is the whole of IPv4", given: "::ffff:0.0.0.0/96", want: "0.0.0.0/0"},
+		{
+			// One bit wider reaches outside the block, so it is not an IPv4 range and is left as the IPv6 range it is. A caller
+			// judging breadth has to notice separately that it CONTAINS every IPv4 address.
+			desc:  "a range wider than the block stays IPv6",
+			given: "::ffff:0.0.0.0/95",
+			want:  "::fffe:0:0/95",
+		},
 		{desc: "the IPv4 default route parses, and is the caller's to refuse", given: "0.0.0.0/0", want: "0.0.0.0/0"},
 	}
 	for _, tc := range cases {

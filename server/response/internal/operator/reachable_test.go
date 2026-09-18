@@ -187,6 +187,41 @@ func TestReachableHandler_ReportsEachRefusal(t *testing.T) {
 	}
 }
 
+// A body with no address list is a malformed request, not a request to clear the set. The difference matters more here than it
+// usually does: decoding an absent list into an empty slice would cut every contained host back to the bare lifeline, which is the
+// opposite of what a caller who misspelled a field wanted. Clearing stays available, spelled explicitly.
+func TestReachableHandler_WillNotClearTheSetByOmission(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{
+		`{"reason":"why"}`,
+		`{"reason":"why","addresses":null}`,
+		`{"reason":"why","address":[{"cidr":"192.0.2.7"}]}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeReachable{}
+			resp := serveReachable(t, svc, &recordingAuthZ{allow: true}, http.MethodPut, body)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			assert.Equal(t, "bad_body", errorCode(t, resp))
+			assert.Empty(t, svc.calls, "nothing reached the service, so nothing could have been cleared")
+		})
+	}
+
+	// And the explicit spelling still clears it. Its own subtest, because this test is parallel and its subtests outlive its body,
+	// so a response closed here would be closed before they ran.
+	t.Run("an explicit empty list still clears the set", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeReachable{}
+		resp := serveReachable(t, svc, &recordingAuthZ{allow: true}, http.MethodPut, `{"reason":"done","addresses":[]}`)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, []string{"replace"}, svc.calls)
+		assert.Empty(t, svc.addresses)
+	})
+}
+
 func TestReachableHandler_RefusesABodyThatIsNotASet(t *testing.T) {
 	t.Parallel()
 	svc := &fakeReachable{}

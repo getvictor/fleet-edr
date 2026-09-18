@@ -29,6 +29,27 @@ func TestNormalizeRefusesWhatWouldUndoContainment(t *testing.T) {
 		},
 		{desc: "a /7, one bit broader than the floor", entry: api.ReachableAddress{CIDR: "10.0.0.0/7"}, wantErr: api.ErrReachableTooBroad},
 		{desc: "an IPv6 /31, one bit broader than its floor", entry: api.ReachableAddress{CIDR: "2001::/31"}, wantErr: api.ErrReachableTooBroad},
+		{
+			// The IPv4-mapped block, which is every IPv4 address wearing an IPv6 spelling. As a /96 it clears the IPv6 floor of
+			// /32 by a mile, so without canonicalisation this is 0.0.0.0/0 written in a way the breadth check waves through.
+			desc:    "the whole of IPv4 written as its mapped block",
+			entry:   api.ReachableAddress{CIDR: "::ffff:0.0.0.0/96"},
+			wantErr: api.ErrReachableTooBroad,
+		},
+		{
+			// And a range one bit wider, which cannot be canonicalised to IPv4 because it reaches outside the block, so it is
+			// refused on the containment rather than converted.
+			desc:    "a range that contains the mapped block",
+			entry:   api.ReachableAddress{CIDR: "::ffff:0.0.0.0/95"},
+			wantErr: api.ErrReachableTooBroad,
+		},
+		{
+			// A mapped range that IS expressible as IPv4 is judged as the IPv4 range it is: /104 is an IPv4 /8, at the floor's
+			// edge, and /103 is an IPv4 /7, past it.
+			desc:    "a mapped range that is broader than the IPv4 floor once read as IPv4",
+			entry:   api.ReachableAddress{CIDR: "::ffff:10.0.0.0/103"},
+			wantErr: api.ErrReachableTooBroad,
+		},
 		{desc: "not an address at all", entry: api.ReachableAddress{CIDR: "mdm.example.com"}, wantErr: api.ErrReachableInvalidCIDR},
 		{desc: "an address with a port stuck on it", entry: api.ReachableAddress{CIDR: "192.0.2.7:443"}, wantErr: api.ErrReachableInvalidCIDR},
 		{desc: "an empty address", entry: api.ReachableAddress{CIDR: ""}, wantErr: api.ErrReachableInvalidCIDR},
@@ -91,6 +112,18 @@ func TestNormalizeAcceptsTheRangesOperatorsActuallyRun(t *testing.T) {
 			want:  api.ReachableAddress{CIDR: "2001:db8::/32"},
 		},
 		{
+			// A mapped range inside the block is the IPv4 range it is, so it is judged and stored as one. Without this it would
+			// be a second spelling of an IPv4 destination that the duplicate check could not see.
+			desc:  "a mapped range becomes the IPv4 range it is",
+			given: api.ReachableAddress{CIDR: "::ffff:10.0.0.0/104"},
+			want:  api.ReachableAddress{CIDR: "10.0.0.0/8"},
+		},
+		{
+			desc:  "a mapped host becomes the IPv4 address it is",
+			given: api.ReachableAddress{CIDR: "::ffff:192.0.2.7/128"},
+			want:  api.ReachableAddress{CIDR: "192.0.2.7/32"},
+		},
+		{
 			desc:  "a port and transport are kept, and the transport is folded to lower case",
 			given: api.ReachableAddress{CIDR: "192.0.2.7", Port: 443, Transport: "TCP"},
 			want:  api.ReachableAddress{CIDR: "192.0.2.7/32", Port: 443, Transport: api.TransportTCP},
@@ -123,6 +156,13 @@ func TestNormalizeRefusesOneDestinationWrittenTwice(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrReachableDuplicate)
 	assert.Contains(t, err.Error(), "address 2")
 	assert.Contains(t, err.Error(), "address 1", "the operator is told which pair collided, not just that one did")
+
+	// Including across address families: an IPv4 destination and its IPv4-mapped spelling are one destination, and one filter rule.
+	_, err = Normalize([]api.ReachableAddress{
+		{CIDR: "192.0.2.7", Note: "MDM"},
+		{CIDR: "::ffff:192.0.2.7/128", Note: "MDM again"},
+	})
+	require.ErrorIs(t, err, api.ErrReachableDuplicate)
 
 	// The port and transport are part of the destination, so the same address on two ports is two entries and not a duplicate.
 	got, err := Normalize([]api.ReachableAddress{

@@ -16,6 +16,11 @@ type ReachableAddress struct {
 	CIDR string `json:"cidr"`
 	// Port is the single destination port this entry allows, or 0 for every port. A range is not offered: the systems a responder
 	// keeps reachable are named services, and a range is the shape that turns an allowance into a hole nobody reviews.
+	//
+	// 0 carries the "every port" meaning rather than naming a destination, and an omitted port is indistinguishable from an
+	// explicit 0. That collapse is safe rather than merely convenient: port 0 is reserved and nothing is reachable on it, so there
+	// is no entry an operator can write that this loses. Tracking presence separately would buy the ability to refuse an input that
+	// names a port nothing can listen on.
 	Port int `json:"port,omitempty"`
 	// Transport is "tcp", "udp", or "" for both. An entry written without one allows both, which is what an operator naming an
 	// address and no protocol means.

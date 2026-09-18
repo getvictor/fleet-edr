@@ -54,8 +54,12 @@ func (h *ReachableHandler) RegisterRoutes(mux httpserver.Router) {
 type reachableRequest struct {
 	// Addresses is the whole set, not a delta. The set is replaced whole because it is versioned and delivered whole, and a
 	// caller sending only what it wants added could not express a removal.
-	Addresses []api.ReachableAddress `json:"addresses"`
-	Reason    string                 `json:"reason"`
+	//
+	// A pointer so an ABSENT list is distinguishable from an empty one. Clearing the set is a real request and stays available as
+	// an explicit `"addresses": []`, but a body that omits the field, sends null, or misspells it is a malformed request, and
+	// decoding those into an empty slice would silently cut every contained host back to the bare lifeline.
+	Addresses *[]api.ReachableAddress `json:"addresses"`
+	Reason    string                  `json:"reason"`
 	// ExpectedVersion is the set version the caller read before editing. Optional; with it, a set someone else changed in the
 	// meantime is reported as a conflict rather than having this operator's edit applied over theirs.
 	ExpectedVersion *int64 `json:"expected_version"`
@@ -90,7 +94,7 @@ func (h *ReachableHandler) handleReplace(w http.ResponseWriter, r *http.Request)
 	case outcome == httpserver.BodyTooLarge:
 		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return
-	case outcome != httpserver.BodyOK:
+	case outcome != httpserver.BodyOK || body.Addresses == nil:
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "bad_body")
 		return
 	}
@@ -98,7 +102,7 @@ func (h *ReachableHandler) handleReplace(w http.ResponseWriter, r *http.Request)
 	if a, ok := identityapi.ActorFromContext(ctx); ok {
 		actor = a.Principal
 	}
-	set, err := h.svc.Replace(ctx, actor, httpserver.ClientIP(r), body.Addresses, body.Reason, body.ExpectedVersion)
+	set, err := h.svc.Replace(ctx, actor, httpserver.ClientIP(r), *body.Addresses, body.Reason, body.ExpectedVersion)
 	if err != nil {
 		h.writeReplaceErr(ctx, w, err)
 		return

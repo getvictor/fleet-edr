@@ -52,6 +52,8 @@ func normalizeOne(entry api.ReachableAddress) (api.ReachableAddress, error) {
 	if err := checkBreadth(prefix); err != nil {
 		return api.ReachableAddress{}, err
 	}
+	// 0 is the "every port" sentinel and is therefore accepted here, not treated as a destination port. Nothing is lost by that:
+	// port 0 is reserved, nothing can be reached on it, so there is no entry an operator can write that this collapses.
 	if entry.Port < 0 || entry.Port > 65535 {
 		return api.ReachableAddress{}, fmt.Errorf("%w: %d", api.ErrReachableInvalidPort, entry.Port)
 	}
@@ -69,6 +71,12 @@ func normalizeOne(entry api.ReachableAddress) (api.ReachableAddress, error) {
 // checkBreadth refuses a range broad enough to make containment meaningless. See MinReachablePrefixBitsV4 for why the floors sit
 // where they do, and why a floor rather than a list of forbidden prefixes.
 func checkBreadth(prefix netip.Prefix) error {
+	// An IPv6 range that contains the IPv4-mapped block reaches every IPv4 address, so it is 0.0.0.0/0 wearing a different family
+	// and the IPv6 floor would wave it through: "::ffff:0:0/95" is a /95, comfortably past a floor of /32. A mapped range that lies
+	// INSIDE the block is not this case, because the parser has already turned it into the IPv4 prefix it is.
+	if prefix.Addr().Is6() && prefix.Overlaps(netaddr.MappedBlock) && prefix.Bits() < netaddr.MappedBlock.Bits() {
+		return fmt.Errorf("%w: /%d reaches every IPv4 address through the IPv4-mapped block", api.ErrReachableTooBroad, prefix.Bits())
+	}
 	floor := api.MinReachablePrefixBitsV4
 	if prefix.Addr().Is6() {
 		floor = api.MinReachablePrefixBitsV6

@@ -511,9 +511,15 @@ paths:
         single-address prefix (`/32` or `/128`) and a range is masked, so one
         destination has one spelling.
 
+        `addresses` must be present. A body that omits it, sends null, or
+        misspells it is refused with 400 rather than read as a request to clear
+        the set, which would cut every contained host back to the bare lifeline.
+        Clearing is spelled `"addresses": []`.
+
         The whole set is refused, and nothing stored, when any entry is invalid.
         An entry is refused when its `cidr` is not an IP address or CIDR range;
-        when its range is broader than `/8` for IPv4 or `/32` for IPv6, which
+        when its range is broader than `/8` for IPv4 or `/32` for IPv6, or
+        reaches every IPv4 address through the IPv4-mapped block, which
         would leave containment meaningless; when its `port` is outside
         0..65535; when its `transport` is neither `tcp` nor `udp`; when its
         `note` is over 200 characters; or when it repeats another entry's
@@ -2179,11 +2185,14 @@ components:
           type: string
           description: |
             The destination, as an IP address or a CIDR range. Stored canonically: a bare address reads back as its
-            single-address prefix and a range reads back masked.
+            single-address prefix, a range reads back masked, and an IPv4-mapped form reads back as the IPv4 address or range it
+            is, so one destination has one spelling.
           example: 192.0.2.7/32
         port:
           type: integer
-          description: The single destination port allowed, or absent for every port.
+          description: |
+            The single destination port allowed. Absent, or 0, means every port: port 0 is reserved and nothing is reachable on it,
+            so it carries the "every port" meaning rather than naming a destination.
           minimum: 0
           maximum: 65535
         transport:
