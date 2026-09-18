@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -13,7 +12,6 @@ import (
 	"runtime"
 	"time"
 
-	"golang.org/x/net/proxy"
 	"google.golang.org/grpc"
 
 	"github.com/fleetdm/edr/agent/config"
@@ -70,13 +68,28 @@ func controlDialOptions(cfg *config.Config, target string, mgr *containment.Mana
 	if mgr == nil {
 		return target, nil
 	}
+	proxyURL := serverProxy(cfg.ServerURL, proxy)
+	if proxyURL != nil && !tunnelable(proxyURL) {
+		// A proxy this build does not speak keeps gRPC's own dialing, which is what every proxied server had before this change:
+		// the channel still cannot reconnect while the host is contained, and commands arrive by polling. Taking the dial over
+		// without speaking the protocol would be worse than that, not better, since an unsupported scheme would be sent a request
+		// it cannot parse, carrying the credentials the operator configured on it.
+		return target, nil
+	}
 	return "passthrough:///" + target, []grpc.DialOption{
-		grpc.WithContextDialer(controlDial(dial, serverProxy(cfg.ServerURL, proxy), mgr.Target().Address())),
+		grpc.WithContextDialer(controlDial(dial, proxyURL, mgr.Target().Address())),
 	}
 }
 
-// controlDial is the dialer gRPC is handed: straight through dial for a direct server, and through the proxy for a proxied one.
-// Named rather than inline so a test can drive the choice it makes, which is the whole of the wiring.
+// tunnelable reports whether this build can establish a tunnel through the proxy, which today means an HTTP proxy speaking CONNECT.
+// A scheme is opted IN rather than ruled out: net/http hands back whatever an operator put in the environment, `ftp://proxy` included,
+// so a default branch would eventually be handed a scheme nobody considered.
+func tunnelable(proxyURL *url.URL) bool {
+	return proxyURL.Scheme == "http"
+}
+
+// controlDial is the dialer gRPC is handed: straight through dial for a direct server, and a tunnel for a proxied one. Named rather
+// than inline so a test can drive the choice it makes, which is the whole of the wiring.
 //
 // proxyAddr comes from the containment manager's own target rather than from the proxy URL, because the pin is matched by address.
 // Composing it here from the URL would mean two places deciding a scheme's default port, and a disagreement would dial unpinned,
@@ -86,50 +99,8 @@ func controlDial(dial dialFunc, proxyURL *url.URL, proxyAddr string) func(ctx co
 		if proxyURL == nil {
 			return dial(ctx, "tcp", addr)
 		}
-		// The schemes a proxy URL can carry here are the ones containment.TargetFor already understands, so they are enumerated
-		// against that rather than guessed: anything else would have yielded no lifeline target and no manager.
-		switch proxyURL.Scheme {
-		case "socks5", "socks5h":
-			return dialThroughSOCKS(ctx, dial, proxyURL, proxyAddr, addr)
-		default:
-			return dialThroughProxy(ctx, dial, proxyURL, proxyAddr, addr)
-		}
+		return dialThroughProxy(ctx, dial, proxyURL, proxyAddr, addr)
 	}
-}
-
-// dialThroughSOCKS reaches addr through a SOCKS5 proxy. The proxy is dialed through dial, so on a contained host it is reached at
-// its pinned lifeline address; the server's name travels inside the SOCKS request, where no resolver on this host sees it.
-func dialThroughSOCKS(ctx context.Context, dial dialFunc, proxyURL *url.URL, proxyAddr, addr string) (net.Conn, error) {
-	var auth *proxy.Auth
-	if user := proxyURL.User; user != nil {
-		password, _ := user.Password()
-		auth = &proxy.Auth{User: user.Username(), Password: password}
-	}
-	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, forwardDialer(dial))
-	if err != nil {
-		return nil, fmt.Errorf("build SOCKS dialer for %s: %w", proxyURL.Host, err)
-	}
-	contextual, ok := dialer.(proxy.ContextDialer)
-	if !ok {
-		return nil, fmt.Errorf("SOCKS dialer for %s does not take a context", proxyURL.Host)
-	}
-	conn, err := contextual.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("dial %s through SOCKS proxy %s: %w", addr, proxyURL.Host, err)
-	}
-	return conn, nil
-}
-
-// forwardDialer adapts the agent's dial to what x/net/proxy wants for reaching the proxy itself. It implements ContextDialer, which
-// is the form SOCKS5 prefers, so the containment manager's deadline handling and address pinning are not lost on the way.
-type forwardDialer dialFunc
-
-func (f forwardDialer) Dial(network, addr string) (net.Conn, error) {
-	return f(context.Background(), network, addr)
-}
-
-func (f forwardDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	return f(ctx, network, addr)
 }
 
 // serverProxy returns the proxy the server URL goes through, or nil for a direct connection.
@@ -153,17 +124,6 @@ func dialThroughProxy(ctx context.Context, dial dialFunc, proxyURL *url.URL, pro
 	conn, err := dial(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("dial proxy %s: %w", proxyURL.Host, err)
-	}
-	// An https:// proxy speaks TLS before it will read a request, and the credentials below would otherwise be written in the clear
-	// to a proxy an operator configured precisely so they would not be. The handshake is to the PROXY's own name, which is separate
-	// from the TLS gRPC then runs to the server inside this tunnel.
-	if proxyURL.Scheme == "https" {
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: proxyURL.Hostname(), MinVersion: tls.VersionTLS12})
-		if herr := tlsConn.HandshakeContext(ctx); herr != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("TLS handshake with proxy %s: %w", proxyURL.Host, herr)
-		}
-		conn = tlsConn
 	}
 	buffered, err := connectThrough(ctx, conn, proxyURL, addr)
 	if err != nil {

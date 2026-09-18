@@ -16,6 +16,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/containment"
 )
 
 // fakeProxy is a listener that answers one CONNECT the way a proxy does, records what it was asked, and then hands the connection
@@ -297,112 +300,34 @@ func TestDialThroughProxyFailsWhenTheProxySaysNothing(t *testing.T) {
 	assert.Contains(t, err.Error(), "read CONNECT response")
 }
 
-// fakeSOCKS answers one SOCKSv5 connect the way a proxy does and records the destination it was asked for.
-type fakeSOCKS struct {
-	listener net.Listener
-	mu       sync.Mutex
-	asked    string
-	methods  []byte
-}
-
-func newFakeSOCKS(t *testing.T) *fakeSOCKS {
-	t.Helper()
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	s := &fakeSOCKS{listener: listener}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		conn, aerr := listener.Accept()
-		if aerr != nil {
-			return
-		}
-		s.handle(conn)
-	}()
-	return s
-}
-
-func (s *fakeSOCKS) handle(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
-	greeting := make([]byte, 2)
-	if _, err := io.ReadFull(conn, greeting); err != nil {
-		return
-	}
-	methods := make([]byte, greeting[1])
-	if _, err := io.ReadFull(conn, methods); err != nil {
-		return
-	}
-	s.mu.Lock()
-	s.methods = methods
-	s.mu.Unlock()
-	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil { // version 5, no authentication
-		return
-	}
-	header := make([]byte, 4) // VER, CMD, RSV, ATYP
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return
-	}
-	nameLen := make([]byte, 1)
-	if _, err := io.ReadFull(conn, nameLen); err != nil {
-		return
-	}
-	name := make([]byte, int(nameLen[0])+2) // the name plus its two port bytes
-	if _, err := io.ReadFull(conn, name); err != nil {
-		return
-	}
-	s.mu.Lock()
-	s.asked = string(name[:len(name)-2]) + ":" + strconv.Itoa(int(name[len(name)-2])<<8|int(name[len(name)-1]))
-	s.mu.Unlock()
-	// Success, bound to 0.0.0.0:0, which is what a proxy answers when the caller does not need the bound address.
-	_, _ = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-	// Held open so the caller has a connection to close.
-	buf := make([]byte, 1)
-	_, _ = conn.Read(buf)
-}
-
-func (s *fakeSOCKS) destination() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.asked
-}
-
-// A SOCKS proxy gets a SOCKS handshake, not an HTTP CONNECT. containment.TargetFor already treats socks5 as a proxy the lifeline
-// keeps reachable, so a contained host can be configured this way, and writing CONNECT at it would simply not connect.
+// A proxy this build does not speak keeps gRPC's own dialing rather than being handed a request it cannot parse. That is not a
+// solution for those deployments, and it is not meant to be: it is what every proxied server did before this change, so the channel
+// still cannot reconnect while contained and commands arrive by polling. Taking the dial over regardless would be worse, since an
+// unsupported proxy would be sent an HTTP CONNECT carrying the credentials the operator configured on it.
 //
-// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/a-proxied-control-channel-tunnels-through-the-proxy
-func TestControlDialSpeaksSOCKSToASOCKSProxy(t *testing.T) {
+// Opted in by scheme rather than ruled out, because net/http hands back whatever is in the environment: `ftp://proxy` parses.
+func TestControlDialOptionsLeavesUnspokenProxiesAlone(t *testing.T) {
 	t.Parallel()
-	socksProxy := newFakeSOCKS(t)
-	var mu sync.Mutex
-	var dialed []string
+	cfg := &config.Config{ServerURL: "https://edr.example.com:8443"}
+	mgr := containment.New(containment.Options{
+		Target: containment.Target{Host: "proxy.corp", Port: 3128},
+		Send:   func([]byte) error { return nil },
+	})
+	dial := func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("unused") }
 
-	proxyURL, err := url.Parse("socks5://" + socksProxy.listener.Addr().String())
-	require.NoError(t, err)
-	conn, err := controlDial(recordingDial(&dialed, &mu), proxyURL, proxyURL.Host)(t.Context(), "edr.example.com:8443")
-	require.NoError(t, err)
-	defer func() { _ = conn.Close() }()
+	for _, scheme := range []string{"socks5", "socks5h", "https", "ftp"} {
+		t.Run(scheme, func(t *testing.T) {
+			t.Parallel()
+			proxied := func(*http.Request) (*url.URL, error) { return url.Parse(scheme + "://ir:s3cret@proxy.corp:3128") }
+			target, opts := controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, proxied)
+			assert.Equal(t, "edr.example.com:8443", target, "gRPC resolves and dials it, as it did before this change")
+			assert.Empty(t, opts, "no dialer of ours, so nothing writes a request this proxy cannot parse")
+		})
+	}
 
-	assert.Equal(t, "edr.example.com:8443", socksProxy.destination(),
-		"the server is named inside the SOCKS request, so no resolver on this host is asked for it")
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, []string{socksProxy.listener.Addr().String()}, dialed, "and the proxy itself is reached through the pinned dial")
-}
-
-// An https:// proxy is spoken to over TLS. Writing the request in the clear would hand the operator's proxy credentials to anyone
-// on the path, which is the opposite of what configuring an https proxy asks for, so a proxy that cannot complete a handshake fails
-// the dial rather than falling back.
-func TestDialThroughProxyDoesNotSendCredentialsInTheClearToAnHTTPSProxy(t *testing.T) {
-	t.Parallel()
-	plain := newFakeProxy(t, http.StatusOK, "")
-	var mu sync.Mutex
-	var dialed []string
-
-	// An https URL pointed at a proxy that speaks no TLS: the handshake must fail before anything is written.
-	proxyURL, err := url.Parse("https://ir:s3cret@" + plain.listener.Addr().String())
-	require.NoError(t, err)
-	_, err = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "TLS handshake with proxy")
-	assert.Nil(t, plain.seen(), "no request reached the proxy, so no credentials were written")
+	// The scheme this build does speak is still taken over.
+	http1 := func(*http.Request) (*url.URL, error) { return url.Parse("http://proxy.corp:3128") }
+	target, opts := controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, http1)
+	assert.Equal(t, "passthrough:///edr.example.com:8443", target)
+	assert.Len(t, opts, 1)
 }
