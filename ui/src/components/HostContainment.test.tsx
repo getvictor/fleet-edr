@@ -294,6 +294,47 @@ describe("HostContainment", () => {
     expect(screen.getByRole("note")).toBeVisible();
   });
 
+  // The disclosure belongs to the containment it was opened on. An operator releases a host, contains it again, and the sentence they
+  // read once must not be sitting open on the new containment: nobody pressed anything this time. The version changes on every
+  // change, which is what the open state is keyed to, so this also covers the reason changing from one caveat to the other.
+  it("collapses the explanation when the host is released and contained again", async () => {
+    const health = healthWith([{ type: "dns_proxy", status: "healthy", reason: "provider_disabled", last_transition_ns: 0 }]);
+    const released: ContainmentState = { host_id: HOST, contained: false, version: 2, epoch: 200, reason: "cleared",
+      delivery: { command_id: 8, status: "completed", current: true } };
+    const again: ContainmentState = { ...contained, version: 3, epoch: 300, reason: "again" };
+    vi.spyOn(api, "getHostContainment").mockResolvedValueOnce(contained).mockResolvedValueOnce(released).mockResolvedValue(again);
+    const set = vi
+      .spyOn(api, "setHostContainment")
+      .mockResolvedValueOnce({ state: released, changed: true })
+      .mockResolvedValueOnce({ state: again, changed: true });
+    renderControl(["host.read", "host.isolate"], health);
+
+    fireEvent.click(await screen.findByRole("button", { name: /DNS by destination only/ }));
+    expect(screen.getByRole("note")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Release host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "done" } });
+    fireEvent.click(lastButton("Release host"));
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledWith(HOST, false, "done", 1);
+    });
+    // Released: there is no caveat to be open, and the badge is gone.
+    await waitFor(() => {
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Contain host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "again" } });
+    fireEvent.click(lastButton("Contain host"));
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledWith(HOST, true, "again", 2);
+    });
+
+    // The caveat is back, and it is closed. A bare boolean would have carried the first press across both changes.
+    expect(await screen.findByRole("button", { name: /DNS by destination only/ })).toBeVisible();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   // The server's derived condition, which arrives in its own list. This is the case a lifecycle state cannot see, a proxy that
   // wedged while still reporting itself running, and reading only the agent's list would miss it entirely. It says LESS than the
   // disabled case, because the server infers it from silence that a skewed clock or an ingest backlog could also explain.

@@ -41,7 +41,8 @@ func TestGradeProviders(t *testing.T) {
 		},
 		{
 			// DNS proxying is opt-in. A host that never enabled it reports only the filter, and that is a healthy host, not a
-			// degraded one. The extension reports a deliberately-disabled provider as absent for precisely this reason.
+			// degraded one. A proxy switched off since this build arrived reports `disabled` instead (covered below); one that
+			// was never on, or one on an extension predating issue #1078, is absent, and absence has to stay benign.
 			desc:      "an absent provider is opt-out, not a fault",
 			providers: map[string]string{"content_filter": ProviderRunning},
 			status:    StatusHealthy,
@@ -71,6 +72,34 @@ func TestGradeProviders(t *testing.T) {
 			status:    StatusUnhealthy,
 			reason:    reasonProviderStopped,
 			message:   "Network extension stopped capturing: content_filter",
+		},
+		{
+			// The reported opt-out (issue #1078). `disabled` is a state, not a fault, so the component stays healthy and the
+			// message says nothing about it. GradeProviders reaches that by counting neither arm, which is quiet enough that
+			// only this case would notice it changing.
+			desc:      "a disabled provider leaves a capturing extension healthy",
+			providers: map[string]string{"content_filter": ProviderRunning, "dns_proxy": ProviderDisabled},
+			status:    StatusHealthy,
+			reason:    reasonActivated,
+			message:   "Network extension connected",
+		},
+		{
+			// And it is not listed among the stops. An operator reading "stopped capturing: content_filter, dns_proxy" would
+			// go looking for a fault on a provider they switched off themselves.
+			desc:      "a disabled provider is not named as stopped beside a real stop",
+			providers: map[string]string{"content_filter": ProviderStopped, "dns_proxy": ProviderDisabled},
+			status:    StatusUnhealthy,
+			reason:    reasonProviderStopped,
+			message:   "Network extension stopped capturing: content_filter",
+		},
+		{
+			// Nor does it count as capture. An extension reporting only a disabled provider has nothing running, and the
+			// mandatory content filter is missing from that report, so this is the no-capture case rather than a healthy one.
+			desc:      "a disabled provider alone is not capture",
+			providers: map[string]string{"dns_proxy": ProviderDisabled},
+			status:    StatusUnhealthy,
+			reason:    reasonNoProvidersRunning,
+			message:   "Network extension is running but no capture provider started",
 		},
 		{
 			// Forward compatibility: a provider state this agent does not know counts as neither running nor stopped, so a

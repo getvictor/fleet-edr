@@ -6,3 +6,5 @@
 - [x] Qualify a contained host whose health says the proxy is disabled, or whose derived condition says no DNS capture arrived.
 - [x] Make the explanation reachable by keyboard rather than on hover.
 - [x] Cover the three stop outcomes, the disabled grading, the two health conditions, and what must NOT be shown.
+- [x] Remember across an extension restart which providers were switched off, so a rebooted host does not report the provider absent again.
+- [x] Sweep every consumer that stated the old contract: the sensor-tamper and recovery-failed rules, their generated operator documentation, the self-heal eligibility rule, and the requirements naming the opt-out as absence.

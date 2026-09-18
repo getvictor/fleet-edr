@@ -51,8 +51,11 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
   // not announced, so the region says Released to assistive technology instead. A host already released when the page opened says
   // nothing.
   const [released, setReleased] = useState(false);
-  // The caveat's explanation is revealed on press rather than on hover, so a keyboard reaches it.
-  const [caveatOpen, setCaveatOpen] = useState(false);
+  // The caveat's explanation is revealed on press rather than on hover, so a keyboard reaches it. What is held is WHICH caveat was
+  // opened, not a bare boolean: the containment version changes on every release and every contain, so a host released and contained
+  // again, or one whose reason changes from one caveat to the other, comes back collapsed. A boolean survives both, and the sentence
+  // would reappear expanded on a press the operator never made.
+  const [openedCaveat, setOpenedCaveat] = useState<string | null>(null);
 
   // One read at a time: the next is scheduled only after the current one settles, so a slow response cannot land after a newer one,
   // and nothing is applied once the effect is cleaned up. A read that fails while a change is on its way is retried; otherwise the
@@ -97,6 +100,8 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
     if (filtering === "disabled") caveat = CAVEATS.disabled;
     if (filtering === "no-capture") caveat = CAVEATS.noCapture;
   }
+  const caveatKey = caveat && state ? `${String(state.version)}:${caveat.label}` : null;
+  const caveatOpen = caveatKey !== null && openedCaveat === caveatKey;
   return (
     <span className="host-containment">
       {/* A polite live region, so a change the host confirms or fails later is announced. Not role="status": the host page already
@@ -117,7 +122,7 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
             aria-expanded={caveatOpen}
             aria-label={`${caveat.label}. ${caveat.note}`}
             onClick={() => {
-              setCaveatOpen((open) => !open);
+              setOpenedCaveat(caveatOpen ? null : caveatKey);
             }}
           >
             <Badge variant="medium" className="host-containment__badge">

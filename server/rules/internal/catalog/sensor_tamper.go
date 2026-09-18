@@ -46,9 +46,9 @@ import (
 // never comes back at all.
 //
 // A provider an operator deliberately disabled produces no alert and needs no logic here: the opt-out is graded
-// extension-side and reported as `disabled` rather than stopped (issue #1078), and issue #685's recorder
-// never emits a transition for an absent provider. The supported configuration is invisible to this rule by
-// construction, which is a stronger guarantee than a suppression list.
+// extension-side and reported as `disabled` rather than stopped (issue #1078), and issue #685's recorder emits a
+// transition for neither a disabled provider nor an absent one. The supported configuration is invisible to this rule
+// by construction, which is a stronger guarantee than a suppression list.
 type SensorTamper struct{}
 
 func (r *SensorTamper) ID() string { return "sensor_tamper" }

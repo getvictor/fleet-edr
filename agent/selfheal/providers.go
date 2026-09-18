@@ -14,8 +14,9 @@ package selfheal
 import "sort"
 
 // ProviderStopped is the state the network extension reports for a provider that stopped through a fault. It mirrors the
-// wire value defined by the extension's ProviderLiveness (issue #649); a provider the operator deliberately disabled is
-// ABSENT from the map instead, which is what makes remediation safe to run without asking.
+// wire value defined by the extension's ProviderLiveness (issue #649); a provider the operator deliberately disabled
+// carries `disabled` instead, and is ABSENT from the map on an extension predating issue #1078. Neither form is this
+// state, which is what makes remediation safe to run without asking.
 const ProviderStopped = "stopped"
 
 // ProviderRunning is the state reported for a provider that is capturing. It is the ONLY affirmative evidence that a remediation

@@ -92,8 +92,9 @@ struct ProviderLiveness {
         return .stopped
     }
 
-    /// forget drops a provider from the report entirely, so it grades as "never started" rather than "stopped". Used
-    /// for a deliberate stop.
+    /// forget drops a provider from the report entirely, so it grades as "never started" rather than "stopped". Used for a LIFECYCLE
+    /// stop, which is the only stop `stateAfterStop` sends here: an operator switching off the DNS proxy records `disabled` instead,
+    /// because that state has to stay visible (issue #1078).
     @discardableResult
     mutating func forget(_ provider: Provider) -> Bool {
         stopReasons.removeValue(forKey: provider)

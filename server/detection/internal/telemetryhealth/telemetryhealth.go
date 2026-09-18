@@ -170,8 +170,8 @@ func commandDeliveryMessage(expiredCount int) string {
 // Only providers claiming to be CAPTURING are kept. Every other case is silence rather than a claim, and silence is not
 // something this package can contradict:
 //
-//   - a provider the operator disabled is omitted by the agent entirely, which is exactly how a supported opt-out is meant to
-//     read;
+//   - a provider the operator disabled reports `disabled` (issue #1078), or is omitted entirely by an agent predating that, and
+//     neither is a claim to be capturing, which is exactly how a supported opt-out is meant to read;
 //   - a provider the endpoint already reports as stopped needs no second opinion, and adding one would be noise on a host whose
 //     operator can already see the fault;
 //   - a provider reporting a state the agent did not recognise has asserted nothing either way.

@@ -104,8 +104,9 @@ func TestRepeatedIdenticalReportsEmitOnce(t *testing.T) {
 // spec:agent-status-reporting/transition-records-distinguish-a-fault-from-a-supported-configuration/a-deliberately-disabled-provider-is-not-recorded-as-a-fault
 func TestAProviderGoingAbsentDoesNotEmit(t *testing.T) {
 	t.Parallel()
-	// #649 reports a deliberately disabled provider as ABSENT rather than stopped. That is a supported configuration, not a
-	// fault, so it must never produce tamper evidence.
+	// An extension predating issue #1078 reports a deliberately disabled provider as ABSENT rather than stopped (one that does
+	// not reports `disabled`, covered separately). That is a supported configuration, not a fault, so neither shape may
+	// produce tamper evidence.
 	r := &recorder{}
 	tr := newTransitions(r)
 	ctx := context.Background()

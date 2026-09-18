@@ -248,8 +248,8 @@ func (r *Registry) MarkProviders(compType string, providers map[string]string, d
 //
 // Two rules, and both matter to the server that reads the result:
 //
-//   - A provider MISSING from the report is dropped, not retained. The extension reports a deliberate opt-out by omission,
-//     so retaining the last known state would publish "running" for a provider an operator switched off.
+//   - A provider MISSING from the report is dropped, not retained. An extension predating issue #1078 reports a deliberate
+//     opt-out by omission, so retaining the last known state would publish "running" for a provider an operator switched off.
 //   - A provider whose state is unchanged keeps its transition instant. Reports arrive on every handshake, so re-stamping
 //     each time would make every provider look like it had just changed and destroy the age the console shows.
 //

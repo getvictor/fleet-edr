@@ -69,12 +69,12 @@ final class ProviderStatusReporter {
 
     /// recordStopped notes that a provider stopped, and grades it by WHY it stopped and WHICH provider it was.
     ///
-    /// A stop graded as deliberate absence drops the provider from the report entirely, so it reads as "never started"
-    /// rather than as a fault. That covers session lifecycle for either provider (logout, user switch, a superceded
-    /// configuration) and an operator switching off the opt-in DNS proxy, which is a supported configuration rather than
-    /// a degradation. An operator switching off the mandatory content filter is NOT absence: it is reported stopped, so
-    /// a host that has been quietly stripped of network capture is visible. Any other reason is a fault for either
-    /// provider, which is the shape the 2026-07-17 incident took.
+    /// Three outcomes, not two. A SESSION LIFECYCLE stop (logout, user switch, a superceded configuration) drops the provider from
+    /// the report entirely, so it reads as "never started" rather than as a fault. An operator switching off the opt-in DNS proxy
+    /// records `disabled` and persists it, because that is a supported configuration that still has to be visible: a contained host
+    /// whose proxy is off is not restricting which names it looks up (issue #1078). Anything else records `stopped`, the fault,
+    /// which is the shape the 2026-07-17 incident took. An operator switching off the mandatory content filter takes that last
+    /// branch rather than the disabled one, so a host quietly stripped of network capture stays visible as a fault.
     func recordStopped(_ provider: ProviderLiveness.Provider, reason: Int) {
         let after = ProviderLiveness.stateAfterStop(provider: provider, reason: reason)
         lock.lock()
