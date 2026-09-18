@@ -53,6 +53,11 @@ type Status struct {
 	// was. A refresh sends the same version and epoch with different addresses, so this is the only thing that tells one lifeline
 	// from another, and it is what the agent pins its dials to (issue #1066).
 	AppliedAddresses []string `json:"appliedAddresses"`
+	// NamesFiltered reports whether the extension's DNS proxy was running when the status was sent, and so whether the restriction on
+	// WHICH names a contained host resolves was in force (issue #1078). A pointer because absent is not false: an extension that
+	// predates the field reports nothing, and reporting that as "names are not filtered" would tell an operator a host is leakier
+	// than it is.
+	NamesFiltered *bool `json:"namesFiltered"`
 }
 
 // document is the network_containment.update the extension decodes: the command plus the lifeline.
@@ -382,9 +387,15 @@ func (m *Manager) Apply(ctx context.Context, payload []byte) (json.RawMessage, e
 	if err != nil {
 		return nil, err
 	}
-	result, _ := json.Marshal(map[string]any{
+	outcome := map[string]any{
 		"version": cmd.Version, "contained": status.Contained, "applied": true, "lifeline": addrStrings(addrs),
-	})
+	}
+	// Only when the extension reported it, so a console reading this result can tell "names are not filtered" from "this extension
+	// does not say" (issue #1078).
+	if status.NamesFiltered != nil {
+		outcome["names_filtered"] = *status.NamesFiltered
+	}
+	result, _ := json.Marshal(outcome)
 	return result, nil
 }
 

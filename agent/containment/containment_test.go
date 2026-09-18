@@ -186,6 +186,40 @@ func TestTargetFor(t *testing.T) {
 	}
 }
 
+// The command result carries whether the extension's DNS proxy was filtering names, so the console can say that a contained host whose
+// proxy is not running has its DNS restricted by destination alone (issue #1078). Absent when the extension does not report it, which
+// is not the same as reporting that names are unfiltered.
+func TestApply_ResultSaysWhetherNamesAreFiltered(t *testing.T) {
+	t.Parallel()
+	running, notRunning := new(bool), new(bool)
+	*running = true
+	cases := []struct {
+		name     string
+		filtered *bool
+		want     string
+	}{
+		{"the proxy is running", running, `{"version":3,"contained":true,"applied":true,"lifeline":["203.0.113.7"],"names_filtered":true}`},
+		{"the proxy is not running", notRunning,
+			`{"version":3,"contained":true,"applied":true,"lifeline":["203.0.113.7"],"names_filtered":false}`},
+		{"the extension does not report it", nil, `{"version":3,"contained":true,"applied":true,"lifeline":["203.0.113.7"]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m, _, res := newTestManager(t, serverTarget, func(d document) *Status {
+				s := applies(d)
+				s.NamesFiltered = tc.filtered
+				return s
+			})
+			res.set("203.0.113.7")
+
+			result, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true}`))
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.want, string(result))
+		})
+	}
+}
+
 // spec:agent-command-executor/set-network-containment-command/the-extension-confirms-the-containment
 func TestApply_ContainSendsTheLifelineAndWaitsForTheExtension(t *testing.T) {
 	t.Parallel()

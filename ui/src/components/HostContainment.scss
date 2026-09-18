@@ -5,7 +5,13 @@
   gap: 0.5rem;
 }
 
-// Visually hidden, for the live region's Released announcement. Mirrors .host-header__sr-only.
+// The caveat's badge and its hidden explanation travel together, so the badge keeps the row's gap and the sentence adds no layout.
+.host-containment__caveat {
+  display: inline-flex;
+  align-items: center;
+}
+
+// Visually hidden, for the live region's Released announcement and the caveat's explanation. Mirrors .host-header__sr-only.
 .host-containment__sr-only {
   position: absolute;
   width: 1px;

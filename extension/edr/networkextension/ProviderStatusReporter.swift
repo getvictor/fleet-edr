@@ -32,6 +32,15 @@ final class ProviderStatusReporter {
         self.serialize = serialize
     }
 
+    /// isRunning answers whether a provider is capturing right now, for a reader that has to say what is in force rather than react to
+    /// a transition. Containment asks it about the DNS proxy, because a contained host whose proxy is not running has its DNS
+    /// restricted by destination only (issue #1078).
+    func isRunning(_ provider: ProviderLiveness.Provider) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return liveness.states[provider] == .running
+    }
+
     /// recordStarted notes that a provider is now capturing.
     func recordStarted(_ provider: ProviderLiveness.Provider) {
         lock.lock()

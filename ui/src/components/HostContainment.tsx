@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ContainmentVersionConflictError, getHostContainment, setHostContainment } from "../api";
-import { containmentBadge, containmentPhase, containmentSettled } from "../containment";
+import { containmentBadge, containmentNamesFiltered, containmentPhase, containmentSettled } from "../containment";
 import { PermissionAction, useCan } from "../permissions-core";
 import type { ContainmentState } from "../types";
 import { ConfirmActionModal } from "./ApplicationControl/ConfirmActionModal";
@@ -12,6 +12,13 @@ import "./HostContainment.scss";
 // CONTAINMENT_POLL_MS is how often a pending containment or release is re-read. The agent confirms within seconds of receiving the
 // command, and an offline host confirms when it next connects, so a few seconds keeps the badge current without hammering the API.
 const CONTAINMENT_POLL_MS = 3000;
+
+// UNFILTERED_NAMES is what "DNS by destination only" means: the host is contained, so the content filter still allows DNS to its own
+// resolvers and nothing else, but the network extension's DNS proxy is not running, so every name those resolvers answer still
+// resolves (issue #1078).
+const UNFILTERED_NAMES =
+  "This Mac's DNS proxy is not running, so containment limits which resolvers it can reach but not which names it can look up. " +
+  "Re-enable the DNS proxy to restrict names again.";
 
 // HostContainment is the host header's network containment control (#948): a badge for where containment stands, and, for an operator
 // holding host.isolate, a Contain or Release action that asks for a reason. Containment cuts the host off from the network except its
@@ -59,6 +66,9 @@ export function HostContainment({ hostId }: { readonly hostId: string }) {
 
   const contain = !(state?.contained ?? false);
   const badge = containmentBadge(phase);
+  // Only for a host that IS contained and said its names are not filtered. A host that is on its way, or that reported nothing, is
+  // not told on, since the claim would be about a state the host does not hold or about something it never said (issue #1078).
+  const unfilteredNames = phase === "contained" && containmentNamesFiltered(state) === false;
   return (
     <span className="host-containment">
       {/* A polite live region, so a change the host confirms or fails later is announced. Not role="status": the host page already
@@ -68,6 +78,17 @@ export function HostContainment({ hostId }: { readonly hostId: string }) {
           <Badge variant={badge.variant} className="host-containment__badge">
             {badge.label}
           </Badge>
+        )}
+        {/* The badge is the glance and the sentence is the explanation. The sentence is in the DOM rather than only on hover, because
+            this qualifies what Contained means for this host and a tooltip alone reaches neither a keyboard nor a screen reader; it is
+            visually hidden because this control sits in the header's title row, which has no space for a sentence. */}
+        {unfilteredNames && (
+          <span className="host-containment__caveat" title={UNFILTERED_NAMES}>
+            <Badge variant="medium" className="host-containment__badge">
+              DNS by destination only
+            </Badge>
+            <span className="host-containment__sr-only">{UNFILTERED_NAMES}</span>
+          </span>
         )}
         {released && <span className="host-containment__sr-only">Released</span>}
       </span>

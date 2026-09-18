@@ -296,12 +296,28 @@ struct NetworkContainmentStatus: Codable, Equatable, Sendable {
     let epoch: Int64
     let applied: Bool
     let error: String?
+    /// namesFiltered says whether the DNS proxy was running when this status was reported, and so whether the restriction on WHICH
+    /// names resolve was in force (issue #1078).
+    ///
+    /// Containment restricts a contained host's DNS in two layers and only one of them always holds. The content filter allows DNS to
+    /// the host's configured resolvers alone, whatever else is running. The proxy is what refuses every name but the lifeline's, and it
+    /// cannot do that while it is not running: a host contained with the proxy disabled or stopped resolves any name those resolvers
+    /// answer. Nothing else tells an operator that, because a deliberately disabled provider is dropped from health rather than graded
+    /// unhealthy, by design.
+    ///
+    /// Nil from an extension that predates the field, which is not the same as false: absent means unreported, and a reader must not
+    /// show an unreported state as "names are not filtered".
+    ///
     /// appliedAddresses are the server addresses of the lifeline the running filter was confirmed to enforce, and nil when none was.
     ///
     /// Here because a lifeline refresh sends the same version and epoch with different addresses, so without it two different
     /// lifelines report an identical status and the agent cannot tell which one the filter holds (issue #1066). The agent pins its
     /// dials to the addresses named here, so it never dials an address the filter is not yet allowing.
     let appliedAddresses: [String]?
+    // An optional Bool, deliberately: the three states are "filtered", "not filtered" and "not reported", and collapsing the last into
+    // false is exactly the reading that would tell an operator a host is leakier than it is.
+    // swiftlint:disable:next discouraged_optional_boolean
+    let namesFiltered: Bool?
 
     /// eventType is the control event type the agent filters on, as it does for provider status.
     static let eventType = "ne_containment_status"
@@ -464,11 +480,17 @@ struct ContainmentStatusTracker {
         error = reason
     }
 
+    // swiftlint:disable discouraged_optional_boolean
     /// status is what the extension reports for the held state: applied when the running filter was confirmed to enforce exactly that
     /// state, pending (not applied, no error) while it waits, and not applied with the error when the latest attempt failed.
-    func status(held: NetworkContainmentUpdate) -> NetworkContainmentStatus {
+    ///
+    /// namesFiltered is passed in rather than read here because whether the DNS proxy is running belongs to the provider that reports
+    /// liveness, not to what the filter was confirmed to enforce; this type stays the pure record of the latter. It is an optional
+    /// Bool for the reason the field is: "not reported" is a third state and must not read as false.
+    func status(held: NetworkContainmentUpdate, namesFiltered: Bool?) -> NetworkContainmentStatus {
         // Confirming clears the error and failing clears the confirmation, so an applied state never carries one.
         NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: held == applied,
-                                 error: error, appliedAddresses: applied?.serverAddresses)
+                                 error: error, appliedAddresses: applied?.serverAddresses, namesFiltered: namesFiltered)
     }
+    // swiftlint:enable discouraged_optional_boolean
 }

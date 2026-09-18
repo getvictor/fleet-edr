@@ -61,6 +61,11 @@ const pendingContain: ContainmentState = {
   delivery: { command_id: 7, status: "pending", current: true },
 };
 
+const containedUnfiltered: ContainmentState = {
+  host_id: HOST, contained: true, version: 1, epoch: 100, reason: "beaconing",
+  delivery: { command_id: 7, status: "completed", current: true, result: { names_filtered: false } },
+};
+
 describe("HostContainment", () => {
   it("offers Contain to an operator holding host.isolate on a host that is not contained, with no badge and no polling", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -265,5 +270,31 @@ describe("HostContainment", () => {
     // it was opened to release a contained host and now offers to contain a released one.
     expect(await screen.findByRole("dialog", { name: "Contain this host?" })).toBeVisible();
     expect(read).toHaveBeenCalled();
+  });
+
+  // A contained host whose DNS proxy is not running still reaches only its own resolvers, but every name they answer resolves. Nothing
+  // else in the console says so, because a deliberately disabled provider is dropped from host health rather than graded unhealthy
+  // (issue #1078).
+  // spec:web-ui/host-network-containment-in-the-console/a-contained-host-whose-names-are-not-filtered-says-so
+  it("says when a contained host's names are not filtered, and explains it where it can be read", async () => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue(containedUnfiltered);
+    renderControl();
+
+    expect(await screen.findByText("Contained")).toBeVisible();
+    expect(screen.getByText("DNS by destination only")).toBeVisible();
+    // In the DOM rather than only on hover: a tooltip reaches neither a keyboard nor a screen reader.
+    expect(screen.getByText(/DNS proxy is not running/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["the host said its names are filtered", { command_id: 7, status: "completed", current: true, result: { names_filtered: true } }],
+    ["the host said nothing about it", { command_id: 7, status: "completed", current: true }],
+    ["the containment is still on its way", { command_id: 7, status: "pending", current: true, result: { names_filtered: false } }],
+  ])("says nothing about name filtering when %s", async (_name, delivery) => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue({ ...containedUnfiltered, delivery });
+    renderControl();
+
+    await screen.findByRole("button", { name: "Release host" });
+    expect(screen.queryByText("DNS by destination only")).not.toBeInTheDocument();
   });
 });

@@ -18,6 +18,22 @@ export function containmentPhase(state: ContainmentState | null | undefined): Co
   return delivery?.status === "failed" ? "release_failed" : "releasing";
 }
 
+// containmentNamesFiltered reports what the host said about the restriction on WHICH names it resolves while contained (issue #1078).
+//
+// Containment restricts a contained host's DNS in two layers and only one of them always holds: the content filter allows DNS to the
+// host's own resolvers whatever else is running, while the network extension's DNS proxy is what refuses every name but the server's.
+// A host contained with that proxy disabled or stopped resolves any name those resolvers answer, and nothing else in the console says
+// so, because a deliberately disabled provider is dropped from host health rather than graded unhealthy.
+//
+// null when the host did not report it, which is not the same as false: an agent or extension that predates the field says nothing,
+// and rendering that as "names are not filtered" would tell an operator a host is leakier than it is. Read from the delivery only
+// while it carries the state the host actually holds, since an older command's result describes an older state.
+export function containmentNamesFiltered(state: ContainmentState | null | undefined): boolean | null {
+  if (!state?.delivery?.current) return null;
+  const reported = state.delivery.result?.names_filtered;
+  return typeof reported === "boolean" ? reported : null;
+}
+
 // containmentSettled reports whether a phase is final until the next change, so a view can stop polling.
 export function containmentSettled(phase: ContainmentPhase | null): boolean {
   return phase !== "containing" && phase !== "releasing";
