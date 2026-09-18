@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "../api";
 import { PermissionsProvider } from "../permissions";
-import type { ContainmentState } from "../types";
+import type { ContainmentState, HostHealth } from "../types";
 import { HostContainment } from "./HostContainment";
 
 const HOST = "93DFC6F5-763D-5075-B305-8AC145D12F96";
@@ -14,12 +14,17 @@ const contained: ContainmentState = {
   delivery: { command_id: 7, status: "completed", current: true },
 };
 
-function renderControl(permissions: readonly string[] = ["host.read", "host.isolate"]) {
+function renderControl(permissions: readonly string[] = ["host.read", "host.isolate"], health: HostHealth | null = null) {
   return render(
     <PermissionsProvider permissions={permissions}>
-      <HostContainment hostId={HOST} />
+      <HostContainment hostId={HOST} health={health} />
     </PermissionsProvider>,
   );
+}
+
+// healthWith builds a host-health snapshot carrying the agent-reported conditions these tests read.
+function healthWith(components: HostHealth["components"]): HostHealth {
+  return { overall_status: "healthy", reported_at_ns: 1, components, derived_components: null, episodes: [] };
 }
 
 // lastButton is the dialog's confirm button: it carries the same label as the header action that opened the dialog, and comes after it.
@@ -265,5 +270,43 @@ describe("HostContainment", () => {
     // it was opened to release a contained host and now offers to contain a released one.
     expect(await screen.findByRole("dialog", { name: "Contain this host?" })).toBeVisible();
     expect(read).toHaveBeenCalled();
+  });
+
+  // spec:web-ui/host-network-containment-in-the-console/a-contained-host-whose-names-are-not-filtered-says-so
+  //
+  // A contained host whose DNS proxy is off still reaches only its own resolvers, but every name they answer resolves. Read from live
+  // health, so it stays true after the containment completed rather than freezing at the moment the command finished (issue #1078).
+  it("says when a contained host's names are not filtered, and explains it on a keyboard", async () => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+    renderControl(["host.read", "host.isolate"], healthWith([{ type: "dns_proxy", status: "healthy", reason: "provider_disabled", last_transition_ns: 0 }]));
+
+    expect(await screen.findByText("Contained")).toBeVisible();
+    const caveat = screen.getByRole("button", { name: /DNS by destination only/ });
+    expect(caveat).toBeVisible();
+    // The explanation is in the accessible name, so it is read without pressing anything, and pressing reveals it on screen.
+    expect(caveat).toHaveAccessibleName(/not restricting which names/);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    fireEvent.click(caveat);
+    expect(screen.getByRole("note")).toBeVisible();
+  });
+
+  it.each([
+    ["the proxy is capturing", healthWith([{ type: "dns_proxy", status: "healthy", reason: "activated", last_transition_ns: 0 }])],
+    ["health has not been read", null],
+  ])("says nothing about name filtering when %s", async (_name, health) => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+    renderControl(["host.read", "host.isolate"], health);
+
+    await screen.findByRole("button", { name: "Release host" });
+    expect(screen.queryByText("DNS by destination only")).not.toBeInTheDocument();
+  });
+
+  // A containment still on its way says nothing: the caveat qualifies what Contained means, and this host is not contained yet.
+  it("says nothing about name filtering while the containment is on its way", async () => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue(pendingContain);
+    renderControl(["host.read", "host.isolate"], healthWith([{ type: "dns_proxy", status: "healthy", reason: "provider_disabled", last_transition_ns: 0 }]));
+
+    expect(await screen.findByText("Containing")).toBeVisible();
+    expect(screen.queryByText("DNS by destination only")).not.toBeInTheDocument();
   });
 });

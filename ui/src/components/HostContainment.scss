@@ -5,6 +5,22 @@
   gap: 0.5rem;
 }
 
+// The caveat trigger is a button wrapping a badge, so it carries no button chrome of its own: the badge is the affordance and the
+// focus ring is what says it can be pressed.
+.host-containment__caveat {
+  padding: 0;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+// The explanation sits below the title row rather than in it, since the row has no space for a sentence.
+.host-containment__caveat-text {
+  flex-basis: 100%;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted, inherit);
+}
+
 // Visually hidden, for the live region's Released announcement. Mirrors .host-header__sr-only.
 .host-containment__sr-only {
   position: absolute;

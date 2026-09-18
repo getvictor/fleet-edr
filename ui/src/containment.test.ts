@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containmentBadge, containmentPhase, containmentSettled } from "./containment";
+import { containmentBadge, containmentPhase, containmentSettled, nameFilteringOff } from "./containment";
 import type { ContainmentState } from "./types";
 
 const state = (over: Partial<ContainmentState>): ContainmentState => ({
@@ -53,5 +53,36 @@ describe("containmentBadge", () => {
     expect(containmentBadge("release_failed")).toEqual({ label: "Release failed", variant: "high" });
     expect(containmentBadge("released")).toBeNull();
     expect(containmentBadge(null)).toBeNull();
+  });
+});
+
+// Whether the host's live health says its DNS proxy is not restricting names (issue #1078). Read from health rather than from the
+// containment command's result, which freezes at the moment the command completed and cannot see a proxy that stopped later.
+describe("nameFilteringOff", () => {
+  it("reports the operator having switched the proxy off", () => {
+    expect(nameFilteringOff([{ type: "dns_proxy", reason: "provider_disabled" }])).toBe(true);
+  });
+
+  // The case a lifecycle state cannot see: a wedged provider still reports itself running, so only the server's derived signal,
+  // DNS flow stopping while process telemetry continued, catches it.
+  it("reports the server having seen no DNS capture", () => {
+    expect(nameFilteringOff([{ type: "dns_proxy_delivery", reason: "no_flow_telemetry" }])).toBe(true);
+  });
+
+  it.each([
+    ["the proxy is capturing", [{ type: "dns_proxy", reason: "activated" }]],
+    ["the proxy is stopped by a fault, which the health section already reports", [{ type: "dns_proxy", reason: "provider_stopped" }]],
+    ["nothing is said about DNS at all", [{ type: "content_filter", reason: "activated" }]],
+    ["no components at all", []],
+  ])("reports false when %s", (_name, components) => {
+    expect(nameFilteringOff(components)).toBe(false);
+  });
+
+  // null, not false: a page that has not read health yet, or a host with no snapshot, must not be shown as either.
+  it.each([
+    ["health is not read yet", null],
+    ["health is absent", undefined],
+  ])("reports nothing when %s", (_name, components) => {
+    expect(nameFilteringOff(components)).toBeNull();
   });
 });

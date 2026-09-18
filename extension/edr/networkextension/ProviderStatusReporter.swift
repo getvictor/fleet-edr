@@ -51,12 +51,24 @@ final class ProviderStatusReporter {
     /// a host that has been quietly stripped of network capture is visible. Any other reason is a fault for either
     /// provider, which is the shape the 2026-07-17 incident took.
     func recordStopped(_ provider: ProviderLiveness.Provider, reason: Int) {
-        let deliberate = ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason)
+        let after = ProviderLiveness.stateAfterStop(provider: provider, reason: reason)
         lock.lock()
-        let changed = deliberate ? liveness.forget(provider) : liveness.record(provider, .stopped, reason: reason)
+        // A fault carries its reason, so a detection consumer can discriminate for itself; a deliberate disable carries none, because
+        // there is nothing to discriminate and the state says all of it.
+        let changed: Bool
+        switch after {
+        case nil: changed = liveness.forget(provider)
+        case .stopped: changed = liveness.record(provider, .stopped, reason: reason)
+        case let .some(state): changed = liveness.record(provider, state)
+        }
         lock.unlock()
         guard changed else { return }
-        let grading = deliberate ? "deliberately disabled" : "a fault"
+        let grading: String
+        switch after {
+        case nil: grading = "a lifecycle stop"
+        case .disabled: grading = "deliberately disabled"
+        default: grading = "a fault"
+        }
         logger.info("""
         Provider \(provider.rawValue, privacy: .public) stopped (reason \(reason, format: .decimal)); treating it as \
         \(grading, privacy: .public)

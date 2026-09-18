@@ -105,6 +105,28 @@ func TestSnapshot_KeepsTheTransitionInstantWhileAProviderIsUnchanged(t *testing.
 // TestSnapshot_GradesAnUnrecognizedProviderStateAsUnknown covers a newer extension reporting a state this build predates.
 // Unknown is the only safe grade in both directions: it is not a positive running claim the server could contradict into a
 // false alert, and it does not condemn a host either.
+// spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/a-disabled-provider-is-reported-not-omitted
+//
+// A provider an operator switched off is reported as its own component saying so, and does NOT read as a fault: DNS proxying is
+// opt-in, so a host that turned it off is correctly configured. What the report carries is the reason, which is what lets a reader
+// that does care, containment, say a contained host's names are not being restricted (issue #1078).
+func TestSnapshot_ReportsADisabledProviderWithoutCallingItAFault(t *testing.T) {
+	t.Parallel()
+	r := newRegistryWithClock(fixedClock(100))
+	r.Register(ComponentNetworkExtension, "Network extension")
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{
+		ProviderContentFilter: ProviderRunning, ProviderDNSProxy: ProviderDisabled,
+	}, true)
+
+	components := componentByType(r.Snapshot())
+	disabled := components[ProviderDNSProxy]
+	assert.Equal(t, StatusHealthy, disabled.Status, "switched off on purpose is not a fault and must not page anyone")
+	assert.Equal(t, reasonProviderDisabled, disabled.Reason)
+	assert.Contains(t, disabled.Message, "turned off")
+	// And the parent stays healthy, which is the property the opt-in provider's absence used to buy.
+	assert.Equal(t, StatusHealthy, components[ComponentNetworkExtension].Status)
+}
+
 func TestSnapshot_GradesAnUnrecognizedProviderStateAsUnknown(t *testing.T) {
 	t.Parallel()
 	r := newRegistryWithClock(fixedClock(100))

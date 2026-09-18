@@ -42,6 +42,8 @@ const (
 	reasonAwaitingProviders  = "awaiting_provider_status"
 	reasonNoProvidersRunning = "no_providers_running"
 	reasonProviderStopped    = "provider_stopped"
+	// reasonProviderDisabled is a provider switched off on purpose, which is a state rather than a fault (issue #1078).
+	reasonProviderDisabled = "provider_disabled"
 	// reasonProviderStateUnknown is for a provider state this build does not recognise, which a newer extension can
 	// produce. Distinct from the reasons above so an operator can tell "I do not know" from "I checked and it is down".
 	reasonProviderStateUnknown = "provider_state_unknown"
@@ -174,6 +176,10 @@ func (r *Registry) MarkConnected(compType string) {
 const (
 	ProviderRunning = "running"
 	ProviderStopped = "stopped"
+	// ProviderDisabled is a provider an operator switched off on purpose. Reported rather than omitted (issue #1078): it is not a
+	// fault and must not page anyone, but a contained host whose DNS proxy is off resolves any name its resolvers answer, and
+	// absence cannot carry that because it reads the same as an extension too old to report anything.
+	ProviderDisabled = "disabled"
 )
 
 // Provider wire identifiers this build knows by name. The set is NOT closed: the extension owns the vocabulary and an
@@ -423,6 +429,11 @@ func gradeProvider(name, state string) (Status, string, string) {
 		return StatusHealthy, reasonActivated, display + " is capturing"
 	case ProviderStopped:
 		return StatusUnhealthy, reasonProviderStopped, display + " stopped capturing"
+	case ProviderDisabled:
+		// Healthy, because the host is configured the way somebody meant it to be and nothing here needs attention on its own. The
+		// reason is what carries the fact to a reader that does care: containment's restriction on which names a contained host
+		// resolves is this provider's work, so the console qualifies a contained host whose proxy is off (issue #1078).
+		return StatusHealthy, reasonProviderDisabled, display + " is turned off"
 	default:
 		return StatusUnknown, reasonProviderStateUnknown, display + " reported an unrecognized state"
 	}
