@@ -57,6 +57,51 @@ final class DisabledProviderStoreTests: XCTestCase {
                        "a restarted extension still reports the provider its operator turned off")
     }
 
+    /// The wiring, end to end through the reporter: a stop the extension grades as an operator opt-out has to reach BOTH the published
+    /// payload and the file. The state machine and the store are tested apart from each other above, so either could be correct while
+    /// `recordStopped` failed to record it, persist it, or publish it.
+    func testAnOperatorDisablingIsPublishedAndRemembered() {
+        let (subject, path) = store()
+        var published: [ProviderStatusPayload] = []
+        let reporter = ProviderStatusReporter(
+            broadcast: { _ in },
+            serialize: { payload in
+                published.append(payload)
+                return Data()
+            },
+            disabledStore: DisabledProviderStore(storagePath: path)
+        )
+        reporter.recordStarted(.dnsProxy)
+
+        // providerDisabled(5): somebody switched this provider off.
+        reporter.recordStopped(.dnsProxy, reason: 5)
+
+        XCTAssertEqual(published.last?.providers["dns_proxy"], "disabled", "the report says so at once")
+        XCTAssertEqual(subject.load(), ["dns_proxy"], "and a later process will still know")
+    }
+
+    /// A stop that is a FAULT is neither published as disabled nor remembered, which is the line this whole state sits on: remembering
+    /// a fault would tell an operator they had switched off a provider that failed.
+    func testAFaultIsNeitherPublishedAsDisabledNorRemembered() {
+        let (subject, path) = store()
+        var published: [ProviderStatusPayload] = []
+        let reporter = ProviderStatusReporter(
+            broadcast: { _ in },
+            serialize: { payload in
+                published.append(payload)
+                return Data()
+            },
+            disabledStore: DisabledProviderStore(storagePath: path)
+        )
+        reporter.recordStarted(.dnsProxy)
+
+        // providerFailed(2): a fault for either provider.
+        reporter.recordStopped(.dnsProxy, reason: 2)
+
+        XCTAssertEqual(published.last?.providers["dns_proxy"], "stopped")
+        XCTAssertTrue(subject.load().isEmpty)
+    }
+
     /// And a provider that is actually running corrects the memory rather than keeping it, so a proxy re-enabled while the extension
     /// was down does not report disabled once it comes back.
     func testAStartingProviderClearsTheMemory() {
