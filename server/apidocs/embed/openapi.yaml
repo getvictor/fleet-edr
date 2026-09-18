@@ -429,6 +429,14 @@ paths:
                   maxLength: 1024
                   pattern: '\S'
                   description: Why the host is contained or released; blank or whitespace-only reasons are refused.
+                expected_version:
+                  type: integer
+                  format: int64
+                  description: |
+                    The containment version the caller read before asking. Optional. When present, the change is refused with
+                    `409 version_conflict` if the host has moved on since, so a caller acting on a state it read cannot apply over a
+                    change it never saw. The comparison is made under the host's row lock, so it cannot race the change it guards.
+                    Omit it to ask for the state whatever the host currently holds. A host that has never been contained is version 0.
       responses:
         "200":
           description: The state after the request, whether it changed, and the queued command's id
@@ -450,6 +458,18 @@ paths:
           description: Not permitted, or a recent authentication is required
         "404":
           description: "`host_not_found`: the host has no active enrollment"
+        "409":
+          description: |
+            `version_conflict`: the request named `expected_version` and the host has moved on since. Nothing was changed, queued or
+            audited. The body carries the state as it now stands, so a caller can decide again without reading a second time.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: {type: string, enum: [version_conflict]}
+                  state: {$ref: "#/components/schemas/ContainmentState"}
         "413":
           description: "`body_too_large`: the request body is over 16 KiB"
 

@@ -91,8 +91,6 @@ containment() {
   uat_rest GET "/api/hosts/$UAT_HOST_ID/containment"
 }
 
-# request_state <true|false> <reason>: asks for a state and prints "<version> <changed>". `changed` is false when the host was
-# already in the state asked for, which for a containment means someone else contained it first.
 # request_state <true|false> <reason> [expected-version]: asks for a state, optionally only while the host is still at the version
 # given. Without a version it asks for the state whatever the host holds, which is what a first containment wants.
 request_state() {

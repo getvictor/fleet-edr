@@ -242,7 +242,9 @@ describe("HostContainment", () => {
   });
 
   it("reports a host someone else changed, and shows the state that now stands", async () => {
-    const read = vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+    // The follow-up read never resolves, so what the page shows afterwards can only have come from the conflict payload. With a read
+    // that resolves, this test would pass with setState(err.state) deleted, which is the thing it is here to check.
+    const read = vi.spyOn(api, "getHostContainment").mockResolvedValueOnce(contained).mockReturnValue(new Promise(() => {}));
     // Another operator released the host after this page read it contained, so the change this page asks for is refused.
     const released: ContainmentState = { host_id: HOST, contained: false, version: 2, epoch: 200, reason: "cleared" };
     const set = vi
@@ -259,10 +261,9 @@ describe("HostContainment", () => {
     });
     expect(await screen.findByText("Someone else changed this host's containment.")).toBeVisible();
 
-    // The page re-reads, so what it holds afterwards is the state that stands rather than the one the dialog was opened on. The
-    // operator's next decision is then made from what is true now, which is the point of refusing the first one.
-    await waitFor(() => {
-      expect(read.mock.calls.length).toBeGreaterThan(1);
-    });
+    // The page took the state from the refusal, so the dialog now offers the decision that makes sense against what the host holds:
+    // it was opened to release a contained host and now offers to contain a released one.
+    expect(await screen.findByRole("dialog", { name: "Contain this host?" })).toBeVisible();
+    expect(read).toHaveBeenCalled();
   });
 });

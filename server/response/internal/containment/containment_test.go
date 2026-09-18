@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -947,6 +948,7 @@ func TestSet_AChangeNamingAStaleVersionIsRefused(t *testing.T) {
 	assert.False(t, state.Contained, "the release stands; the stale request changed nothing")
 	assert.Equal(t, int64(2), state.Version, "and did not consume a version")
 	assert.Empty(t, f.pendingAudit(t), "a refused change records nothing")
+	assert.Len(t, f.containmentCommands(t, "host-a"), 2, "the contain and the release; the refused change queued nothing")
 }
 
 // The version the caller read is the version they may act on, and a request without one keeps asking for the state whatever the host
@@ -998,4 +1000,65 @@ func TestSet_AReleaseOfAHostWithNoStateChecksTheVersionToo(t *testing.T) {
 	change, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-b", false, "cleared", &zero)
 	require.NoError(t, err)
 	assert.False(t, change.Changed, "a host that was never contained is already released")
+}
+
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-naming-a-version-the-host-has-moved-past-is-refused
+//
+// Two operators who read the same version and then both ask. Exactly one may win, and the loser must be refused rather than applied
+// on top: that is the whole point of naming the version, and it is the case sequential tests cannot show. They would pass with the
+// comparison moved outside the row lock, where the second change reads the version before the first has committed its bump and both
+// look current.
+func TestSet_ConcurrentChangesNamingTheSameVersion(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	contained, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+	at := contained.State.Version
+
+	// The first release holds its transaction open inside the queue callback, so the second is still waiting on the host's row when
+	// it reads the version. Under a comparison outside the lock it would have read the pre-release version and been allowed through.
+	holding, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	slow := func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+		if held.CompareAndSwap(false, true) {
+			close(holding)
+			<-release
+		}
+		return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
+	}
+
+	var wins, conflicts atomic.Int32
+	record := func(err error) {
+		switch {
+		case err == nil:
+			wins.Add(1)
+		case errors.Is(err, api.ErrContainmentVersionConflict):
+			conflicts.Add(1)
+		default:
+			assert.NoError(t, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "first", "user:7", &at, slow)
+		record(err)
+	})
+	<-holding
+	wg.Go(func() {
+		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "second", "user:8", &at, slow)
+		record(err)
+	})
+	// Give the second one time to reach the row lock before the first commits, so it is genuinely concurrent rather than sequential.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), wins.Load(), "exactly one of two changes naming the same version is applied")
+	assert.Equal(t, int32(1), conflicts.Load(), "and the other is told the host moved rather than applied on top")
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.Equal(t, at+1, state.Version, "one change, one version")
+	assert.Len(t, f.containmentCommands(t, "host-a"), 2, "the contain and the one release; the refused change queued nothing")
 }
