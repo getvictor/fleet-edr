@@ -173,6 +173,31 @@ func TestDeliverSoon_CallersArrivingTogetherAreAnsweredByOnePass(t *testing.T) {
 	assert.Equal(t, 2, outbox.passes(), "requests arriving during a pass are answered by one further pass, not one each")
 }
 
+// A burst larger than one pass is delivered in full without the interval. Every change in the burst asks for a pass, but the
+// requests coalesce into one, and a pass takes at most DrainBatch: without a pass asking for the next one, entry DrainBatch+1 would
+// sit in the outbox until the tick, which is a minute in production.
+func TestDeliverSoon_ABurstLargerThanOnePassIsDeliveredWithoutTheInterval(t *testing.T) {
+	t.Parallel()
+	outbox := &memOutbox{}
+	recorder := &countingRecorder{}
+	drain, err := auditoutbox.NewDrain(outbox, recorder, "test", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	// An interval far longer than the test, so nothing here can be delivered by a tick.
+	go drain.SweepLoop(t.Context(), time.Hour)
+
+	const burst = auditoutbox.DrainBatch + 1
+	for range burst {
+		outbox.add(t, identityapi.AuditHostContain)
+	}
+	drain.DeliverSoon(t.Context())
+
+	require.Eventually(t, func() bool { return outbox.pending() == 0 }, 10*time.Second, time.Millisecond,
+		"the entries past the first pass are delivered without waiting for the interval")
+	assert.Equal(t, burst, recorder.count())
+	// Two passes for DrainBatch+1 entries, and the second was asked for by the first.
+	assert.Equal(t, 2, outbox.passes())
+}
+
 // spec:server-admin-surface/operator-actions-commit-their-audit-entry/an-entry-no-request-asked-about-is-still-delivered
 //
 // The interval is not made redundant by callers asking. A signal is in-process, so it is lost when the replica that raised it exits,

@@ -240,6 +240,12 @@ func (d *Drain) DeliverSoon(ctx context.Context) {
 		slog.Default().WarnContext(ctx, "audit entry is committed but not delivered: no audit recorder is wired")
 		return
 	}
+	d.request()
+}
+
+// request asks the sweep for a pass without waiting for one, and drops the request when one is already outstanding: a pass reads the
+// outbox when it runs, so a second request would buy nothing a queued pass does not already cover.
+func (d *Drain) request() {
 	select {
 	case d.wake <- struct{}{}:
 	default:
@@ -297,5 +303,16 @@ func (d *Drain) sweep(ctx context.Context, onInterval bool) {
 	if onInterval && delivered > 0 {
 		d.logger.InfoContext(ctx, "delivered audit outbox entries a request had left behind",
 			"subject", d.subject, "count", delivered)
+	}
+	// A pass takes at most DrainBatch, and the callers whose entries it did not reach have already spent their one request on the
+	// pass that just ran: without this, entry DrainBatch+1 of a burst would wait for the interval. So a full batch asks for the next
+	// pass itself, and the outbox is drained over as many passes as it takes.
+	//
+	// Only after a clean pass. A failing store that still reports a full batch would otherwise be retried in a tight loop, which is
+	// the opposite of what an unavailable store needs; the interval retries it instead.
+	if err == nil && delivered == DrainBatch {
+		d.logger.InfoContext(ctx, "audit outbox holds more than one pass delivers; sweeping again",
+			"subject", d.subject, "count", delivered)
+		d.request()
 	}
 }
