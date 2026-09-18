@@ -64,23 +64,33 @@ type GenerationSink interface {
 }
 
 // generationSink holds the installed GenerationSink. Package-level (like logger) because onEvent is a CGo callback reached via a global
-// receiver map, and one agent owns exactly one registry shared across its Mach-service receivers. Only ever stores the same concrete type.
-var generationSink atomic.Value
+// receiver map, and one agent owns exactly one registry shared across its Mach-service receivers.
+//
+// A Pointer rather than a Value, which is what it was: atomic.Value panics when a second Store gives it a different concrete type, so
+// a second implementation of this interface would have crashed the agent rather than replaced the sink, and it has no way to store
+// nothing, which left the sink impossible to clear once set.
+var generationSink atomic.Pointer[GenerationSink]
 
-// SetGenerationSink installs the sink fed by the darwin receive path. Call once at startup before Connect. A nil sink is ignored.
+// SetGenerationSink installs the sink fed by the darwin receive path. Call once at startup before Connect. A nil sink is ignored, so
+// a stray call cannot take the registry away from the receive path.
 func SetGenerationSink(s GenerationSink) {
 	if s != nil {
-		generationSink.Store(s)
+		generationSink.Store(&s)
 	}
+}
+
+// clearGenerationSink drops the installed sink, which SetGenerationSink deliberately cannot. For tests that assert what the package
+// holds by default: without it the first such test to run installs a sink for every later one, including later runs of itself.
+func clearGenerationSink() {
+	generationSink.Store(nil)
 }
 
 // getGenerationSink returns the installed GenerationSink, or nil when none is set (Windows/headless, or before wiring).
 func getGenerationSink() GenerationSink {
-	v := generationSink.Load()
-	if v == nil {
-		return nil
+	if p := generationSink.Load(); p != nil {
+		return *p
 	}
-	return v.(GenerationSink)
+	return nil
 }
 
 // dropWarnInterval is the minimum gap between aggregated "channel full" warnings for one receiver. The first drop after a quiet
