@@ -31,7 +31,7 @@ The agent SHALL execute a `set_network_containment` command, whose payload carri
 
 ### Requirement: The server is reached through the lifeline
 
-While the network extension reports the host contained, the agent SHALL connect to the endpoint it reaches the server through by the lifeline addresses it sent, trying each in turn with an equal share of the time left to connect, for its uploads and command polls, its token refresh and re-enrollment, and the control channel, because the system resolver answers nothing on a contained host. Connections to other destinations, and every connection while the host is not contained, SHALL be dialed as before. A control channel to a proxied server SHALL keep its own proxy dialing; it resolves the proxy with the system resolver, so while the host is contained that channel stays down and commands arrive by polling. Before its first connection to the server, the agent SHALL adopt the containment the network extension persisted, pinning its addresses, so an agent that must enroll on a contained host reaches the server; a state the extension reports SHALL replace it, and a persisted state that is not a containment, that the network extension would itself have refused, or that describes an endpoint other than the one the agent is configured for SHALL leave the host uncontained rather than be adopted in part.
+While the network extension reports the host contained, the agent SHALL connect to the endpoint it reaches the server through by the lifeline addresses the extension reports its filter enforces, or by the addresses it sent where the extension does not report them, trying each in turn with an equal share of the time left to connect, for its uploads and command polls, its token refresh and re-enrollment, and the control channel, because the system resolver answers nothing on a contained host. Connections to other destinations, and every connection while the host is not contained, SHALL be dialed as before. A control channel to a proxied server SHALL keep its own proxy dialing; it resolves the proxy with the system resolver, so while the host is contained that channel stays down and commands arrive by polling. Before its first connection to the server, the agent SHALL adopt the containment the network extension persisted, pinning its addresses, so an agent that must enroll on a contained host reaches the server; a state the extension reports SHALL replace it, and a persisted state that is not a containment, that the network extension would itself have refused, or that describes an endpoint other than the one the agent is configured for SHALL leave the host uncontained rather than be adopted in part.
 
 #### Scenario: An agent starting on a contained host reaches the server
 
@@ -53,13 +53,32 @@ While the network extension reports the host contained, the agent SHALL connect 
 
 ### Requirement: The lifeline is kept current while contained
 
-While the host is contained, the agent SHALL re-resolve its lifeline every five minutes and send the network extension an update at the current state's version and epoch when the addresses changed, and nothing when they did not. An update that could not be delivered SHALL be sent again at the next refresh or extension status, and SHALL NOT be dialed through until it is delivered. An agent that starts while the host is contained SHALL learn the containment from the extension's status and send the lifeline it resolves once. After its connection to the extension is re-established, the agent SHALL send the lifeline again on the next status, since a send over the dropped connection reports no delivery. Refreshes SHALL run one at a time. The extension's `ne_containment_status` control events SHALL be consumed by the agent and never uploaded as telemetry.
+While the host is contained, the agent SHALL re-resolve its lifeline every five minutes and send the network extension an update at the current state's version and epoch when the addresses changed, and nothing when they did not. An update SHALL NOT be dialed through until the network extension reports that its filter enforces exactly that lifeline, because sending an update only hands it to the extension and says nothing about whether it was accepted or applied: dialing addresses the filter does not allow, while it still allows the ones it holds, would close the lifeline the refresh exists to keep open. An update the extension does not report as applied SHALL be sent again at the next refresh or extension status, so a refusal, a failed apply, and a send that never arrived are each retried rather than remembered as delivered. Where the network extension does not report the lifeline it applied, which is one older than the agent, the agent SHALL dial the addresses it sent, since no confirmation is coming and dialing nothing would leave it unable to reach the server at all. An agent that starts while the host is contained SHALL learn the containment from the extension's status and send the lifeline it resolves once. After its connection to the extension is re-established, the agent SHALL send the lifeline again on the next status, since a send over the dropped connection reports no delivery. Refreshes SHALL run one at a time. The extension's `ne_containment_status` control events SHALL be consumed by the agent and never uploaded as telemetry.
 
 #### Scenario: A moved server address reaches the extension
 
 - **GIVEN** a contained host
 - **WHEN** the server's name resolves to different addresses at the next refresh
 - **THEN** the agent sends the extension the new addresses at the same version and epoch
+
+#### Scenario: Dials follow the lifeline the extension confirms
+
+- **GIVEN** a contained host whose server has moved, so a refresh sends addresses the extension has not confirmed
+- **WHEN** the agent connects to the server before that confirmation arrives
+- **THEN** it dials the lifeline the extension reports its filter enforces, not the one just sent
+- **AND** once a status reports the new lifeline as applied, it dials that
+
+#### Scenario: A lifeline no status confirms is sent again
+
+- **GIVEN** a contained host whose lifeline was sent and which no extension status has confirmed
+- **WHEN** the next refresh runs and resolves the same addresses
+- **THEN** the lifeline is sent again rather than treated as delivered because it was sent once
+
+#### Scenario: A refresh the extension did not apply is sent again
+
+- **GIVEN** a contained host whose extension keeps reporting a lifeline other than the one the agent sent, because it refused the update or its filter apply failed
+- **WHEN** each status arrives
+- **THEN** the agent sends the lifeline again rather than treating it as delivered
 
 #### Scenario: An undelivered lifeline refresh is sent again
 

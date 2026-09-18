@@ -590,7 +590,10 @@ func TestWireTypesRoundTrip(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(rt *rapid.T) {
 			in := Status{Contained: rapid.Bool().Draw(rt, "contained"), Version: rapid.Int64().Draw(rt, "version"),
-				Epoch: rapid.Int64().Draw(rt, "epoch"), Applied: rapid.Bool().Draw(rt, "applied"), Error: rapid.String().Draw(rt, "error")}
+				Epoch: rapid.Int64().Draw(rt, "epoch"), Applied: rapid.Bool().Draw(rt, "applied"), Error: rapid.String().Draw(rt, "error"),
+				// Drawn including the empty and nil cases, because the field the extension omits and the field it sends with one
+				// address are both shapes the agent reads, and a wrong JSON key would round-trip a nil unnoticed.
+				AppliedAddresses: rapid.SliceOfN(rapid.String(), 0, 4).Draw(rt, "applied_addresses")}
 			var out Status
 			roundTrip(rt, in, &out)
 			assert.Equal(rt, in, out)
@@ -948,4 +951,126 @@ func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
 	m.Seed(path)
 
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
+}
+
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/dials-follow-the-lifeline-the-extension-confirms
+//
+// The defect this covers (issue #1066): an XPC send only hands the message off. If the extension refuses the refresh or its filter
+// apply fails, the filter still allows the addresses it holds, so an agent that pinned dials to what it sent would dial addresses the
+// filter drops, closing the lifeline the refresh exists to keep open.
+func TestObserve_DialsFollowTheLifelineTheExtensionConfirms(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	// The server is already at .9 while the extension holds .7, so the first status both confirms .7 and starts a refresh that sends
+	// .9. That ordering is the point: the assertion below is made while a send is outstanding and unconfirmed, which is the only
+	// moment the difference between pinning what was sent and what was confirmed is visible.
+	res.set("203.0.113.9")
+	holds := func(addrs ...string) Status {
+		return Status{Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: addrs}
+	}
+
+	m.Observe(t.Context(), holds("203.0.113.7"))
+	require.Len(t, ext.sent(), 1, "the new lifeline was sent")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"dials stay on the lifeline the filter holds while the one just sent is unconfirmed")
+
+	m.Observe(t.Context(), holds("203.0.113.9"))
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"),
+		"the confirmation moves the pins")
+}
+
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-refresh-the-extension-did-not-apply-is-sent-again
+//
+// Before this, a refusal was permanent: the agent recorded the addresses as sent, and every later refresh resolved the same answer,
+// found it equal to what was sent, and stopped. The host kept a lifeline pointing at a server that had moved.
+func TestObserve_ARefreshTheExtensionDidNotApplyIsSentAgain(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	// The server is at .9 and the extension keeps reporting .7: it refused each refresh, or its filter apply failed each time.
+	res.set("203.0.113.9")
+	holds := func(addrs ...string) Status {
+		return Status{Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: addrs}
+	}
+
+	for range 3 {
+		m.Observe(t.Context(), holds("203.0.113.7"))
+	}
+	assert.Len(t, ext.sent(), 3, "each status that does not confirm the new lifeline sends it again")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"and dials stay on the one the filter still holds")
+}
+
+// An extension that does not report the lifeline it applied is one older than this agent. The agent keeps doing what it did before,
+// because refusing to pin would send dials through the system resolver, which answers nothing while the host is contained.
+func TestObserve_AnExtensionThatDoesNotReportItsLifelineStillPins(t *testing.T) {
+	t.Parallel()
+	m, _, res := newTestManager(t, serverTarget, nil)
+	res.set("203.0.113.7")
+	silent := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+
+	m.Observe(t.Context(), silent)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"what was sent, as before this change: there is no confirmation coming, and pinning nothing would leave the agent unable to "+
+			"dial the server at all")
+
+	// A reconnect forgets what was sent, so the next status sends the lifeline again. Against a silent extension that send is what
+	// the pins follow, which is the behavior an agent had before this change and must keep against an older extension.
+	res.set("203.0.113.9")
+	m.Reconnected()
+	m.Observe(t.Context(), silent)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"),
+		"a refresh against such an extension pins what it sent")
+}
+
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-lifeline-no-status-confirms-is-sent-again
+//
+// A send that no status ever answers must be sent again, which is the case a comparison against what was last sent cannot see: the
+// resolver keeps producing the same answer, so a refresh that skipped on "already sent" would leave the filter holding the old
+// lifeline for as long as the host stays contained. Raised by Copilot on #1091.
+func TestRun_ASendNoStatusConfirmsIsSentAgain(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, nil)
+	res.set("203.0.113.9")
+
+	// The extension holds .7 and keeps saying so, which is also what a handoff that never arrived looks like from here.
+	holds7 := Status{Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: []string{"203.0.113.7"}}
+	m.Observe(t.Context(), holds7)
+	require.Len(t, ext.sent(), 1, "the new lifeline was sent once")
+
+	// The periodic refresh runs again with nothing having confirmed it.
+	m.refresh(t.Context())
+	assert.Len(t, ext.sent(), 2, "an unconfirmed send is sent again rather than remembered as delivered")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+		"and dials stay on the lifeline the filter holds")
+
+	// Once it is confirmed, the refresh stops sending.
+	m.Observe(t.Context(), Status{
+		Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: []string{"203.0.113.9"},
+	})
+	before := len(ext.sent())
+	m.refresh(t.Context())
+	assert.Len(t, ext.sent(), before, "a confirmed lifeline is not sent again")
+}
+
+// The status as the extension actually writes it. Pinned against the literal the extension's own wire-shape test asserts
+// (extension/edr/Tests/EDRExtensionLogicTests/NetworkContainmentTests.swift, testStatusWireShape), because the round-trip property
+// above cannot see a key rename: marshalling and unmarshalling with the same struct agrees with itself whatever the key is called.
+// Only a literal from the other side of the wire catches the two drifting apart.
+func TestDecodeStatus_ReadsTheExtensionsWireShape(t *testing.T) {
+	t.Parallel()
+	const event = `{"event_type":"ne_containment_status","payload":` +
+		`{"applied":true,"appliedAddresses":["203.0.113.7","203.0.113.8"],"contained":true,"epoch":100,"version":4}}`
+
+	got := DecodeStatus([]byte(event))
+	assert.Equal(t, Status{
+		Contained: true, Version: 4, Epoch: 100, Applied: true,
+		AppliedAddresses: []string{"203.0.113.7", "203.0.113.8"},
+	}, got)
+
+	// The extension omits the key entirely when no state is confirmed, and when it is an older build that never sends it. Both read
+	// as no reported lifeline, which is what makes the agent fall back to what it sent.
+	none := DecodeStatus([]byte(`{"event_type":"ne_containment_status","payload":` +
+		`{"applied":false,"contained":true,"epoch":100,"error":"filter not running","version":4}}`))
+	assert.Nil(t, none.AppliedAddresses)
+	assert.Equal(t, "filter not running", none.Error)
 }

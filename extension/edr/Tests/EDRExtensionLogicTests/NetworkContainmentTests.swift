@@ -278,15 +278,23 @@ final class NetworkContainmentTests: XCTestCase {
     // MARK: status
 
     // spec:extension-network-response/the-extension-reports-containment-status/the-status-says-whether-containment-was-applied
+    // spec:extension-network-response/the-extension-reports-containment-status/the-status-names-the-lifeline-the-filter-enforces
     func testStatusWireShape() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let failed = NetworkContainmentStatus(contained: true, version: 3, epoch: 100, applied: false, error: "filter not running")
+        let failed = NetworkContainmentStatus(contained: true, version: 3, epoch: 100, applied: false,
+                                              error: "filter not running", appliedAddresses: nil)
         XCTAssertEqual(String(bytes: try encoder.encode(failed), encoding: .utf8),
                        #"{"applied":false,"contained":true,"epoch":100,"error":"filter not running","version":3}"#)
-        let applied = NetworkContainmentStatus(contained: false, version: 4, epoch: 100, applied: true, error: nil)
+        let applied = NetworkContainmentStatus(contained: false, version: 4, epoch: 100, applied: true, error: nil, appliedAddresses: nil)
         XCTAssertEqual(String(bytes: try encoder.encode(applied), encoding: .utf8),
                        #"{"applied":true,"contained":false,"epoch":100,"version":4}"#, "no error key when it applied")
+        // The lifeline the filter holds, which a refresh changes without changing the version or the epoch (issue #1066). Absent
+        // rather than null when nothing is applied, so a status from before this field reads the same as one reporting none.
+        let refreshed = NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil,
+                                                 appliedAddresses: ["203.0.113.7", "203.0.113.8"])
+        XCTAssertEqual(String(bytes: try encoder.encode(refreshed), encoding: .utf8),
+                       #"{"applied":true,"appliedAddresses":["203.0.113.7","203.0.113.8"],"contained":true,"epoch":100,"version":4}"#)
         XCTAssertEqual(NetworkContainmentStatus.eventType, "ne_containment_status")
     }
 
@@ -295,7 +303,7 @@ final class NetworkContainmentTests: XCTestCase {
         let held = contained(version: 4)
         var tracker = ContainmentStatusTracker()
         XCTAssertEqual(tracker.status(held: held),
-                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil, appliedAddresses: nil),
                        "pending before any apply")
 
         tracker.confirmed(contained(version: 3))
@@ -304,12 +312,14 @@ final class NetworkContainmentTests: XCTestCase {
 
         tracker.confirmed(held)
         XCTAssertEqual(tracker.status(held: held),
-                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil))
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil,
+                                                appliedAddresses: held.serverAddresses),
+                       "a confirmed state names the lifeline the filter holds")
 
         tracker.failed("content filter is not running")
         tracker.pending()
         XCTAssertEqual(tracker.status(held: held),
-                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil),
+                       NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false, error: nil, appliedAddresses: nil),
                        "a filter that started and has yet to apply the held state is pending, not failed")
         tracker.confirmed(held)
         tracker.pending()
@@ -324,7 +334,7 @@ final class NetworkContainmentTests: XCTestCase {
         tracker.failed("content filter is not running")
         XCTAssertEqual(tracker.status(held: held),
                        NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: false,
-                                                error: "content filter is not running"),
+                                                error: "content filter is not running", appliedAddresses: nil),
                        "a replacement filter that failed to apply the same state is not confirmed by its predecessor")
         tracker.pending()
         XCTAssertNil(tracker.status(held: contained(version: 5)).error, "a new update starts without the earlier state's error")
