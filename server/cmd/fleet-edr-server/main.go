@@ -244,7 +244,12 @@ func run() error {
 	// Cancellable independently of ctx, so the join below can stop these loops whether we are shutting down on a signal or
 	// returning on a fatal server error. Review found that: with the process context still live on the error path, the join
 	// waited out its full timeout and then logged a statistics-loss warning that had not happened.
-	rulesLoopCtx, stopRulesLoops := context.WithCancel(ctx)
+	//
+	// Detached from ctx's cancellation for the reason the control gateway below is: ctx comes from signal.NotifyContext, so a
+	// SIGTERM would stop these loops at the signal while the server keeps serving for the whole drain window. A change made in that
+	// window asks its audit sweep for a delivery (issue #1089), and with the sweep already gone the row would wait for another
+	// replica or for the next start. The deferred stop below is what ends them, after the drain.
+	rulesLoopCtx, stopRulesLoops := context.WithCancel(context.WithoutCancel(ctx))
 	rulesDone := make(chan struct{})
 	go func() {
 		defer close(rulesDone)
@@ -297,7 +302,11 @@ func run() error {
 	// Cancelled and joined by a defer registered here, for the reason the backfill goroutine above carries: defers run
 	// last-registered-first and `db.Close()` is registered before this, so a loop riding the process context alone would still be
 	// querying the outbox while the pool closed under it. Bounded, because a shutdown must end.
-	responseLoopCtx, stopResponseLoops := context.WithCancel(ctx)
+	//
+	// Detached from ctx's cancellation, like the rules loops above: a containment change or a command issued during the drain window
+	// asks this sweep for its audit row, and a sweep stopped at the signal would leave that row for another replica or the next
+	// start.
+	responseLoopCtx, stopResponseLoops := context.WithCancel(context.WithoutCancel(ctx))
 	responseDone := make(chan struct{})
 	go func() {
 		defer close(responseDone)

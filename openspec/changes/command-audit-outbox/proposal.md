@@ -7,7 +7,7 @@ Both routes also shared one audit helper that named `command.issue`, so a withdr
 ## What changes
 
 - **Both actions commit their entry with the change.** The command row and the audit entry recording it are written in one transaction, into the `response_audit_outbox` that containment already uses, so the context's audit rows keep a single order. The entry is built inside the transaction because it carries the command id, which is only known once the row is written. A refused action leaves no entry.
-- **The delivery is the one the context already has.** The request delivers its own entry after the commit and the existing sweep delivers what a request could not, so this adds no second drain and no second table.
+- **The delivery is the one the context already has.** The request asks the context's existing sweep for its entry after the commit, and that sweep delivers it, so this adds no second drain and no second table.
 - **A withdrawal is audited as `command.cancel`.** The action becomes the caller's rather than a constant shared by both routes.
 
 ## Out of scope

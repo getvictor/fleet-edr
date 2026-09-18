@@ -964,9 +964,9 @@ func (r *recordingAudit) recorded() []identityapi.AuditEvent {
 
 // spec:server-host-containment/a-containment-change-commits-its-audit-entry/the-sweep-delivers-what-a-request-left-behind
 //
-// The request that makes a change delivers its own audit entry, so the sweep exists for what a crash or an unavailable store left
-// behind. Here the store is down while the request runs and comes back with no further request touching the host, which is the
-// condition the sweep is the only thing that covers.
+// A change asks the sweep for its audit row rather than writing it (issue #1089), so the interval exists for what that request could
+// not get written: here the store is down when the change asks and comes back with no further request touching the host, which no
+// signal covers because none is raised again.
 //
 // Driven through Run, the single entry point cmd/main calls, so dropping the sweep from it fails this test.
 func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *testing.T) {
@@ -1016,6 +1016,52 @@ func TestBootstrap_TheContainmentAuditSweepDeliversWhatARequestLeftBehind(t *tes
 	assert.Equal(t, "host-a", recorded.TargetID)
 	assert.Equal(t, "beaconing to a known C2", recorded.Payload["reason"])
 	assert.NotEmpty(t, recorded.RemoteAddr, "the address the request came from survives the outbox")
+}
+
+// The row a change asks for arrives WITHOUT waiting for the interval, which is only true if the sweep Run starts is the one the
+// service asks. Nothing here shortens the interval, so a row that appears inside the wait appeared because the change asked for it:
+// two drains over one outbox, one asked and one swept, would leave this waiting the full minute and fail. That is not hypothetical,
+// it is what the rules context was wired as, and the cross-context authoring test is what caught it.
+func TestBootstrap_AnIssuedCommandsAuditRowIsDeliveredWithoutWaitingForTheInterval(t *testing.T) {
+	t.Parallel()
+	s := full.Open(t)
+	audit := &recordingAudit{}
+	// No AuditSweepInterval: the production default is a minute, so nothing here can be delivered by a tick.
+	r, err := bootstrap.New(bootstrap.Deps{DB: s, AuthZ: allowAllAuthZ{}, Audit: audit})
+	require.NoError(t, err)
+	require.NoError(t, r.ApplySchema(t.Context()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	mux := http.NewServeMux()
+	r.RegisterAuthedRoutes(mux)
+	actor := identityapi.PrincipalRef{ID: "usr_7", Type: identityapi.PrincipalUser, Label: "ada"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mux.ServeHTTP(w, req.WithContext(identityapi.WithActor(req.Context(), &identityapi.Actor{Principal: actor})))
+	}))
+	t.Cleanup(srv.Close)
+
+	issue, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/commands",
+		strings.NewReader(`{"host_id":"host-a","command_type":"kill_process","payload":{"pid":1234}}`))
+	require.NoError(t, err)
+	issue.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(issue)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	require.Eventually(t, func() bool { return len(audit.recorded()) == 1 }, 20*time.Second, 10*time.Millisecond,
+		"the row the request asked for is delivered without waiting for the sweep's interval")
+	recorded := audit.recorded()[0]
+	assert.Equal(t, identityapi.AuditCommandIssue, recorded.Action)
+	assert.Equal(t, "host-a", recorded.TargetID)
+	assert.Equal(t, "kill_process", recorded.Payload["command_type"])
 }
 
 // spec:server-admin-surface/operator-actions-commit-their-audit-entry/an-issued-command-commits-its-audit-entry

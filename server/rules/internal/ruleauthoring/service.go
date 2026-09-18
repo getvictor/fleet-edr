@@ -9,7 +9,6 @@ package ruleauthoring
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 
 	"github.com/fleetdm/edr/server/auditoutbox"
@@ -24,26 +23,23 @@ type Service struct {
 	drain    *auditoutbox.Drain
 }
 
-// New builds a Service. Every collaborator is required, the recorder included.
+// New builds a Service. Every collaborator is required, the drain included.
 //
-// An earlier revision let the recorder be nil and logged the dropped row, on the theory that a non-production wiring still needs
-// the mutations to work. Review pointed out what that actually buys: the caller mounts these routes whenever an author and a
-// corpus are present, so a wiring with no recorder is a reachable state in which every successful change to what a fleet detects
-// loses its audit row. "Every authoring change is attributable" is a contract this change introduces, and a construction that can
-// silently violate it is not a convenience.
-func New(
-	author rulecontentapi.Author, validate rulecontentapi.Validator, outbox rulecontentapi.AuditOutbox,
-	audit identityapi.AuditRecorder, logger *slog.Logger,
-) (*Service, error) {
-	if author == nil || validate == nil || audit == nil {
-		return nil, errors.New("rule authoring: an author, a validator and an audit recorder are all required")
-	}
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	drain, err := NewAuditDrain(outbox, audit, logger)
-	if err != nil {
-		return nil, err
+// An earlier revision let the audit recorder be nil and logged the dropped row, on the theory that a non-production wiring still
+// needs the mutations to work. Review pointed out what that actually buys: the caller mounts these routes whenever an author and a
+// corpus are present, so a wiring with nothing to record through is a reachable state in which every successful change to what a
+// fleet detects loses its audit row. "Every authoring change is attributable" is a contract the outbox introduced, and a
+// construction that can silently violate it is not a convenience.
+//
+// The drain is passed in rather than built here, and it is the one the rules context sweeps. A service that built its own would ask
+// an instance nothing runs, and since a change asks for delivery rather than performing it (issue #1089), its audit row would then
+// wait for the sweep's next interval instead of being written at once. That is not hypothetical: it is how this was wired, and the
+// cross-context authoring test is what caught it.
+//
+// No logger, because the drain carries the one its failures are reported through and this service reports none of its own.
+func New(author rulecontentapi.Author, validate rulecontentapi.Validator, drain *auditoutbox.Drain) (*Service, error) {
+	if author == nil || validate == nil || drain == nil {
+		return nil, errors.New("rule authoring: an author, a validator and an audit drain are all required")
 	}
 	return &Service{author: author, validate: validate, drain: drain}, nil
 }
@@ -140,12 +136,12 @@ func (s *Service) auditEntry(
 	}
 }
 
-// deliver turns the entry this change just committed into an audit row, now rather than on the next sweep.
+// deliver asks the sweep for the entry this change just committed, rather than leaving it to the next interval.
 //
-// Best effort by design, and that is the whole point of the outbox: the entry is already durable, committed with the change, so a
-// failure here delays the audit row rather than losing it. The sweep delivers what this could not, which is why the error is
-// logged and not returned: the operator's change succeeded and so did its record, and telling them otherwise would be the false
-// report the old ordering was trying to avoid.
+// Nothing is waited on, and nothing is reported, which is the whole point of the outbox: the entry is already durable, committed
+// with the change, so a delivery that fails or is slow delays the audit row rather than losing it, and the sweep retries it. Failing
+// the caller on it would be the false report the ordering was chosen to avoid, and waiting for it would put a change that already
+// succeeded behind the audit store (issue #1089).
 func (s *Service) deliver(ctx context.Context) {
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 }

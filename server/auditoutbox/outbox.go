@@ -52,7 +52,7 @@ type Outbox interface {
 const Kind = "identity.audit_event.v1"
 
 // DrainBatch is how many entries one drain pass takes. Small because the steady state is zero or one: an entry is written by an
-// operator action and delivered by that same request, and the sweep exists for the ones a crash or a database blip left behind.
+// operator action, which asks for a pass at once, and what is left for the interval is what a crash or a database blip stranded.
 const DrainBatch = 100
 
 // auditEntryV1 is the ON-DISK shape of an outbox payload, with explicit tags, and it is deliberately not identityapi.AuditEvent.
@@ -139,6 +139,13 @@ type Drain struct {
 	audit   identityapi.AuditRecorder
 	subject string
 	logger  *slog.Logger
+	// wake carries a request from DeliverSoon to SweepLoop, one deep: a sweep reads the outbox when it runs, so two requests that
+	// arrive together are answered by one pass (issue #1089).
+	//
+	// In-process and safe to lose, so it does not make the server stateful (ADR-0010). What has to survive is the entry, and that is
+	// in the database before anything is signalled. A dropped signal, a replica that exits with one pending, or a signal raised where
+	// no sweep is running costs the row the wait until the next interval; no peer replica needs to see it.
+	wake chan struct{}
 }
 
 // NewDrain builds a drain. Every collaborator is required, for the same reason the services require their recorder: a drain with a
@@ -151,7 +158,7 @@ func NewDrain(outbox Outbox, audit identityapi.AuditRecorder, subject string, lo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Drain{outbox: outbox, audit: audit, subject: subject, logger: logger}, nil
+	return &Drain{outbox: outbox, audit: audit, subject: subject, logger: logger, wake: make(chan struct{}, 1)}, nil
 }
 
 // Drain delivers the pending entries, oldest first, and returns how many it delivered.
@@ -160,15 +167,23 @@ func NewDrain(outbox Outbox, audit identityapi.AuditRecorder, subject string, lo
 // are a sequence of changes to what a fleet detects, and delivering a later one over a failed earlier one would produce a trail
 // whose order disagrees with the changes it records. A stalled entry is retried on the next pass.
 func (d *Drain) Drain(ctx context.Context) (int, error) {
+	_, delivered, err := d.pass(ctx)
+	return delivered, err
+}
+
+// pass is one drain, reporting how many entries it READ as well as how many it delivered. The two differ whenever an entry is
+// skipped or a failure stops the loop, and the sweep needs the read count: a batch that came back full is what says the outbox may
+// hold more, whether or not this replica could deliver all of it.
+func (d *Drain) pass(ctx context.Context) (fetched, delivered int, err error) {
 	// Detached from the caller's trace, deliberately. The recorder falls back to the trace on this context when an event carries
 	// none, and a request that makes one change also drains entries other requests left behind: without this, request B would
 	// stamp its own trace onto request A's audit row. Cancellation still propagates, so a shutting-down caller stops promptly.
 	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
 	pending, err := d.outbox.PendingAuditEntries(ctx, DrainBatch)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	delivered := make([]int64, 0, len(pending))
+	sent := make([]int64, 0, len(pending))
 	var stopErr error
 	for _, entry := range pending {
 		// An entry this replica cannot READ is skipped, not stopped on, and never deleted. Review caught the difference: stopping
@@ -198,49 +213,69 @@ func (d *Drain) Drain(ctx context.Context) (int, error) {
 			stopErr = fmt.Errorf("record audit entry %d: %w", entry.ID, err)
 			break
 		}
-		delivered = append(delivered, entry.ID)
+		sent = append(sent, entry.ID)
 	}
-	if len(delivered) > 0 {
-		if err := d.outbox.DeleteAuditEntries(ctx, delivered); err != nil {
+	if len(sent) > 0 {
+		if err := d.outbox.DeleteAuditEntries(ctx, sent); err != nil {
 			// The rows were recorded and the entries were not removed, so the next pass records them again. At-least-once is
 			// the guarantee, so this is a duplicate rather than a loss, and it is worth a line because a persistent failure here
 			// would show up as a repeating audit row.
 			d.logger.ErrorContext(ctx, "delivered audit outbox entries but could not clear them; they will redeliver",
-				"subject", d.subject, "count", len(delivered), "err", err)
-			return len(delivered), err
+				"subject", d.subject, "count", len(sent), "err", err)
+			return len(pending), len(sent), err
 		}
 	}
-	return len(delivered), stopErr
+	return len(pending), len(sent), stopErr
 }
 
-// DeliverNow turns the entries a change just committed into audit rows, rather than leaving them to the next sweep, and is what every
-// caller runs immediately after its transaction commits.
+// DeliverSoon asks the sweep to deliver what the caller just committed, without waiting for it. Every caller runs it immediately
+// after its transaction commits.
 //
-// A failure is logged and not returned. The entry is already durable and the change it records already succeeded, so failing the
-// caller here would report a problem the operator has not got: the row is late, not lost, and the sweep delivers it.
+// It does NOT deliver on the caller's goroutine, and that is the point (issue #1089). Delivering there put a request behind up to
+// DrainBatch audit-store writes before it could answer: in the steady state that is the one entry the request wrote and costs
+// nothing, but after an audit-store outage the first requests back meet a backlog, and a slow store then delays a response whose
+// change has already committed. For a destructive action that is worse than slow, because an operator who sees a timeout and retries
+// has issued it twice.
+//
+// The request is one deep. A sweep reads the outbox when it runs, so callers arriving together are answered by one pass rather than
+// queueing a pass each, and nothing blocks when the sweep is already busy.
 //
 // A nil Drain is the wiring with no audit recorder, which only non-production setups have. It says so rather than returning silently,
 // because the entry then waits in the outbox and this is the only thing that would report a change with no audit row. It logs through
 // the default logger, having no configured one of its own, which is acceptable for a path production does not take.
-func (d *Drain) DeliverNow(ctx context.Context) {
+func (d *Drain) DeliverSoon(ctx context.Context) {
 	if d == nil {
 		slog.Default().WarnContext(ctx, "audit entry is committed but not delivered: no audit recorder is wired")
 		return
 	}
-	if _, err := d.Drain(ctx); err != nil {
-		d.logger.WarnContext(ctx, "audit entry is committed but not yet delivered; the sweep will retry it",
-			"subject", d.subject, "err", err)
+	d.request()
+}
+
+// request asks the sweep for a pass without waiting for one, and drops the request when one is already outstanding: a pass reads the
+// outbox when it runs, so a second request would buy nothing a queued pass does not already cover.
+func (d *Drain) request() {
+	select {
+	case d.wake <- struct{}{}:
+	default:
 	}
 }
 
-// DefaultSweepInterval is how often the sweep looks for entries the request that wrote them could not deliver.
+// DefaultSweepInterval is how often the sweep looks for entries no caller asked it to deliver.
 //
-// A minute rather than seconds. The steady state is an empty table: an entry is written by an operator action and delivered by
-// that same request, so the sweep only sees what a crash or a database blip left behind. Polling faster would buy latency on an
-// audit row that is already durable, at the cost of a query per replica per interval against a table that is almost always empty.
+// A minute rather than seconds. The steady state is an empty table: an operator action asks for a pass as soon as it commits, and
+// what the interval finds is what a crash or a database blip stranded. Polling faster would buy latency on an audit row that is
+// already durable, at the cost of a query per replica per interval against a table that is almost always empty.
 const DefaultSweepInterval = time.Minute
 
-// SweepLoop delivers entries left behind by a request that could not, until ctx is cancelled.
+// SweepLoop delivers committed entries until ctx is cancelled: the ones a caller has just asked for through DeliverSoon, and every
+// interval whatever is left in the outbox regardless.
+//
+// The interval is not redundant now that callers signal. A signal is in-process, so it is lost by a replica that exits between the
+// commit and the sweep, and it never reaches the replica that has to deliver an entry another one wrote. The interval is what makes
+// delivery depend on the durable entry rather than on the signal arriving.
+//
+// This loop is what delivers a change's audit row, so a context that enqueues entries and never runs it writes none. Both bootstraps
+// start it from their Run, unconditionally on having a recorder rather than on which routes are mounted.
 //
 // Not leader-gated, and it does not need to be. The drain reads oldest-first and deletes only what it delivered, so two replicas
 // running it concurrently either deliver disjoint sets or deliver the same entry twice. The second is the at-least-once the audit
@@ -255,17 +290,46 @@ func (d *Drain) SweepLoop(ctx context.Context, interval time.Duration) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-d.wake:
+			d.sweep(ctx, false)
 		case <-ticker.C:
-			delivered, err := d.Drain(ctx)
-			if err != nil {
-				d.logger.ErrorContext(ctx, "sweeping audit outbox entries", "subject", d.subject, "err", err)
-			}
-			if delivered > 0 {
-				// Worth a line: reaching here means a request committed a change whose audit row it could not write, which is
-				// the condition the outbox exists for and which nothing else would report.
-				d.logger.InfoContext(ctx, "delivered audit outbox entries a request had left behind",
-					"subject", d.subject, "count", delivered)
-			}
+			d.sweep(ctx, true)
 		}
+	}
+}
+
+// sweep runs one pass and reports what it found, where onInterval separates the two reasons a pass runs.
+//
+// Entries an interval pass finds were not asked for by any caller on this replica: the request that wrote them died, or the signal
+// went somewhere else. That is the condition the outbox exists for and nothing else reports it. Entries a requested pass finds are
+// the steady state, one per operator action, and logging those would say only that the server is working.
+func (d *Drain) sweep(ctx context.Context, onInterval bool) {
+	fetched, delivered, err := d.pass(ctx)
+	if err != nil {
+		d.logger.ErrorContext(ctx, "sweeping audit outbox entries", "subject", d.subject, "err", err)
+	}
+	if onInterval && delivered > 0 {
+		// What the interval pass delivered, and no more of a claim than that. A request can arrive while this pass is reading or
+		// recording, and a request and the tick can be ready at the same moment, in which case the select may take either: this
+		// pass cannot tell that nothing asked for these entries, so it does not say so.
+		d.logger.InfoContext(ctx, "delivered audit outbox entries on the periodic sweep",
+			"subject", d.subject, "count", delivered)
+	}
+	// A pass takes at most DrainBatch, and the callers whose entries it did not reach have already spent their one request on the
+	// pass that just ran: without this, entry DrainBatch+1 of a burst would wait for the interval. So a pass that READ a full batch
+	// asks for the next one itself, and the outbox is drained over as many passes as it takes.
+	//
+	// On what it read, not on what it delivered: a pass skips an entry written in an encoding this replica does not know, so one
+	// such entry among a full batch would leave the count short and strand everything after it until the interval.
+	//
+	// Guarded two ways against sweeping in a tight loop over entries this replica cannot clear. A pass that failed is left to the
+	// interval, because a failing store is the wrong thing to retry immediately. A pass that delivered nothing is too: a replica
+	// meeting a full batch it cannot read would otherwise re-read the same entries forever, since a skipped entry is never deleted.
+	// The cost of that guard is that a full batch of unreadable entries hides what is behind it from this replica until the replica
+	// that understands them clears them, which is already true of any batch they fill.
+	if err == nil && fetched == DrainBatch && delivered > 0 {
+		d.logger.InfoContext(ctx, "audit outbox holds more than one pass delivers; sweeping again",
+			"subject", d.subject, "count", delivered)
+		d.request()
 	}
 }
