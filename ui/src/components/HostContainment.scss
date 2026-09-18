@@ -1,7 +1,15 @@
-// Network containment control in the host header's title row: its badge and action sit with the online pill they qualify.
+// Network containment control in the host header's title row: its badge and action sit with the online pill they qualify. It wraps,
+// so the caveat's explanation takes a line of its own instead of widening a row that does not wrap.
 .host-containment {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
+
+  // Bounded, and that is what makes the wrap work at all. A flex container with no width limit sizes to its max content, so the
+  // caveat's sentence would sit on the same line however the wrapping is set and widen the whole title row with it. With a definite
+  // width the sentence, which asks for a full line, has to take one of its own. Measured in the browser: the controls alone are about
+  // 325px, so this leaves them a line and gives the sentence the next.
+  max-width: 28rem;
   gap: 0.5rem;
 }
 
@@ -14,11 +22,16 @@
   border: 0;
 }
 
-// The explanation sits below the title row rather than in it, since the row has no space for a sentence.
+// The explanation takes a full line of its own under the controls, which is what the wrapping container above makes possible: a
+// sentence on the title row would widen the header or overflow it.
 .host-containment__caveat-text {
   flex-basis: 100%;
+  max-width: 32rem;
   font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.4;
   color: var(--color-text-muted, inherit);
+  white-space: normal;
 }
 
 // Visually hidden, for the live region's Released announcement. Mirrors .host-header__sr-only.

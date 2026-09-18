@@ -70,7 +70,10 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
   const badge = containmentBadge(phase);
   // Only for a host that IS contained and whose live health says the proxy is not filtering. A host still on its way is not told on,
   // and neither is one whose health has not been read: null is not false (issue #1078).
-  const unfilteredNames = phase === "contained" && nameFilteringOff(health?.components) === true;
+  // Both lists: the agent reports `dns_proxy` and the SERVER derives `dns_proxy_delivery`, and they arrive in separate arrays.
+  // Reading only the first is reading only half the reasons a proxy is not filtering.
+  const conditions = health ? [...(health.components ?? []), ...(health.derived_components ?? [])] : null;
+  const unfilteredNames = phase === "contained" && nameFilteringOff(conditions) === true;
   return (
     <span className="host-containment">
       {/* A polite live region, so a change the host confirms or fails later is announced. Not role="status": the host page already
@@ -101,11 +104,6 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
         )}
         {released && <span className="host-containment__sr-only">Released</span>}
       </span>
-      {unfilteredNames && caveatOpen && (
-        <span className="host-containment__caveat-text" role="note">
-          {NAMES_NOT_FILTERED}
-        </span>
-      )}
       {state && can(PermissionAction.HostIsolate) && (
         <Button
           type="button"
@@ -117,6 +115,13 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
         >
           {contain ? "Contain host" : "Release host"}
         </Button>
+      )}
+      {/* Last, so the badges and the action keep the first line and the sentence takes the next. Its flex-basis is a full line, and
+          the container is bounded, which is what makes that a second row rather than a wider first one. */}
+      {unfilteredNames && caveatOpen && (
+        <span className="host-containment__caveat-text" role="note">
+          {NAMES_NOT_FILTERED}
+        </span>
       )}
       {createPortal(
         <ConfirmActionModal

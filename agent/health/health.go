@@ -171,8 +171,9 @@ func (r *Registry) MarkConnected(compType string) {
 }
 
 // Provider states as they appear on the wire from the extension. A provider that has never started is ABSENT from the map rather
-// than carrying a state, which is what lets "never started" and "started then stopped" grade differently. A deliberate stop (an
-// operator disabling the opt-in DNS proxy) is reported as absence too, so it does not read as a fault forever.
+// than carrying a state, which is what lets "never started" and "started then stopped" grade differently. An operator disabling
+// the opt-in DNS proxy reports `disabled`, which is a state rather than a fault, and which an extension predating it reports as
+// absence instead (issue #1078).
 const (
 	ProviderRunning = "running"
 	ProviderStopped = "stopped"
@@ -194,8 +195,8 @@ const (
 // registry or a live extension.
 //
 // An empty map means the extension is up and talking but nothing is capturing: that is the #649 failure, and it is unhealthy even
-// though the XPC session is perfectly healthy. A provider reported stopped is a fault the extension chose to surface (a deliberate
-// stop is filtered out extension-side and arrives as absence). Anything else is running.
+// though the XPC session is perfectly healthy. A provider reported stopped is a fault the extension chose to surface; a deliberate
+// stop arrives as `disabled`, which is neither running nor a fault and so counts as neither here. Anything else is running.
 func GradeProviders(displayName string, providers map[string]string) (Status, string, string) {
 	stopped := make([]string, 0, len(providers))
 	running := 0

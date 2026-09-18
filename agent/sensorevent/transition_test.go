@@ -132,6 +132,28 @@ func TestAProviderReappearingAfterAbsenceEmits(t *testing.T) {
 }
 
 // spec:agent-status-reporting/a-transition-record-is-not-lost-to-a-transient-failure/a-failed-record-is-retried
+// A provider reporting `disabled` is the same supported opt-out that absence used to be (issue #1078), so it must not emit, and it
+// must leave the baseline so turning the provider back on is recorded. Without the second half a re-enable is read as no change,
+// because the baseline still holds the running state from before the disable.
+func TestADisabledProviderDoesNotEmitAndItsReturnDoes(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	tr := newTransitions(r)
+	ctx := context.Background()
+
+	tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateRunning}, nil)
+	assert.Empty(t, tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateDisabled}, nil),
+		"switching the opt-in DNS proxy off is a supported configuration, not tamper evidence")
+	assert.Empty(t, r.events)
+
+	assert.Equal(t, []string{"dns_proxy"},
+		tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateRunning}, nil),
+		"turning it back on is a transition, which a held baseline would have swallowed")
+	require.Len(t, r.events, 1)
+	assert.Equal(t, "dns_proxy", r.events[0].payload["provider"])
+	assert.Equal(t, StateRunning, r.events[0].payload["state"])
+}
+
 func TestAFailedEmitIsRetriedOnTheNextReport(t *testing.T) {
 	t.Parallel()
 	// Losing the event to a transient queue error would lose the only durable record of the tamper, so the transition is

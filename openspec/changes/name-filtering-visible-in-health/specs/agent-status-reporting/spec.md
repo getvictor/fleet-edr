@@ -41,7 +41,7 @@ A `disabled` provider SHALL be reported rather than omitted, and SHALL be graded
 
 - **GIVEN** an operator has disabled the opt-in DNS proxy
 - **WHEN** the extension reports its remaining running providers
-- **THEN** the disabled provider is absent from the report rather than reported as stopped
+- **THEN** the disabled provider is reported `disabled` rather than stopped, and stays in the report
 - **AND** the `network_extension` component reports status `healthy`
 
 #### Scenario: Disabling the mandatory content filter stays visible
@@ -56,3 +56,46 @@ A `disabled` provider SHALL be reported rather than omitted, and SHALL be graded
 - **GIVEN** the network extension XPC session has just been established
 - **WHEN** no provider report has arrived yet
 - **THEN** the `network_extension` component reports status `degraded` with reason `awaiting_provider_status`
+
+### Requirement: Remediation never overrides a deliberate operator decision
+
+A capture provider the operator has deliberately disabled SHALL NOT be re-enabled by remediation. DNS proxying is opt-in, so re-enabling it against an operator's decision would make the product fight its own administrator, and an automatic control that cannot be turned off is worse than the outage it prevents.
+
+The agent SHALL distinguish the two cases by the report it already receives: a deliberately disabled provider is reported `disabled`, and only a provider reported stopped is eligible for remediation. Neither a `disabled` provider nor one missing from the map is eligible, so an extension that reports the state and one that predates it are both safe from remediation.
+
+#### Scenario: A deliberately disabled provider is not re-enabled
+
+- **GIVEN** an operator has disabled the opt-in DNS proxy
+- **AND** the network extension therefore reports it `disabled` rather than stopped
+- **WHEN** the agent evaluates the report for remediation
+- **THEN** no remediation is attempted for that provider
+- **AND** the provider stays disabled
+
+### Requirement: Transition records distinguish a fault from a supported configuration
+
+A record that fires on ordinary operation is one operators learn to ignore, which destroys the value of the records that matter. Transition recording SHALL therefore be limited to state the agent has actually observed changing, and SHALL NOT treat a supported configuration as a fault.
+
+The first report received after an agent connects SHALL establish a baseline without recording transitions, because the extension re-publishes provider liveness on every handshake and that report describes state the agent has not observed change.
+
+A provider reported `disabled`, or missing from the report entirely, SHALL NOT produce a transition record. An operator who has deliberately disabled an optional provider is running a supported configuration, and both are how an extension reports one. Neither SHALL leave the provider's last observed state standing as the baseline: turning the provider back on is a transition, and a baseline still holding the state from before the opt-out would read it as no change and record nothing.
+
+The record SHALL carry the platform's own reason for a stop, unreduced, so that a consumer can distinguish an operator-driven stop from one produced by an upgrade or a session ending without depending on a verdict already formed on its behalf.
+
+#### Scenario: Reconnecting does not manufacture transitions
+
+- **GIVEN** an agent has just connected to the extension
+- **WHEN** it receives the extension's first liveness report
+- **THEN** no transition is recorded, whatever that report contains
+
+#### Scenario: A deliberately disabled provider is not recorded as a fault
+
+- **GIVEN** an operator has disabled an optional capture provider
+- **AND** the extension therefore reports it `disabled`, or stops reporting it at all
+- **WHEN** the agent receives that report
+- **THEN** no transition is recorded for that provider
+
+#### Scenario: A stop record carries the platform stop reason
+
+- **GIVEN** a capture provider stops and the extension reports the platform's reason
+- **WHEN** the agent records the transition
+- **THEN** the record carries that reason unreduced

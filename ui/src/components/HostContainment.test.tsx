@@ -22,9 +22,13 @@ function renderControl(permissions: readonly string[] = ["host.read", "host.isol
   );
 }
 
-// healthWith builds a host-health snapshot carrying the agent-reported conditions these tests read.
-function healthWith(components: HostHealth["components"]): HostHealth {
-  return { overall_status: "healthy", reported_at_ns: 1, components, derived_components: null, episodes: [] };
+// healthWith builds a host-health snapshot. The two lists are separate on the wire and both matter here: the agent reports
+// `dns_proxy`, and the SERVER derives `dns_proxy_delivery`.
+function healthWith(
+  components: HostHealth["components"],
+  derived: HostHealth["derived_components"] = null,
+): HostHealth {
+  return { overall_status: "healthy", reported_at_ns: 1, components, derived_components: derived, episodes: [] };
 }
 
 // lastButton is the dialog's confirm button: it carries the same label as the header action that opened the dialog, and comes after it.
@@ -288,6 +292,22 @@ describe("HostContainment", () => {
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
     fireEvent.click(caveat);
     expect(screen.getByRole("note")).toBeVisible();
+  });
+
+  // The server's derived condition, which arrives in its own list. This is the case a lifecycle state cannot see, a proxy that
+  // wedged while still reporting itself running, and reading only the agent's list would miss it entirely.
+  it("says so when the server saw no DNS capture, which arrives as a derived condition", async () => {
+    vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+    renderControl(
+      ["host.read", "host.isolate"],
+      healthWith(
+        [{ type: "dns_proxy", status: "healthy", reason: "activated", last_transition_ns: 0 }],
+        [{ type: "dns_proxy_delivery", status: "degraded", reason: "no_flow_telemetry", last_transition_ns: 0 }],
+      ),
+    );
+
+    expect(await screen.findByText("Contained")).toBeVisible();
+    expect(screen.getByRole("button", { name: /DNS by destination only/ })).toBeVisible();
   });
 
   it.each([
