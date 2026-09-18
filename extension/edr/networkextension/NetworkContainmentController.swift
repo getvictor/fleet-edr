@@ -244,7 +244,7 @@ final class NetworkContainmentController: @unchecked Sendable {
         guard let held = store.current else { return }
         // Asked at publish time rather than remembered: whether names are filtered is the DNS proxy's current state, and the proxy can
         // stop or be disabled long after a containment was applied.
-        let status = tracker.status(held: held, namesFiltered: ProviderStatusReporter.shared.isRunning(.dnsProxy))
+        let status = tracker.status(held: held, namesFiltered: ProviderStatus.shared.isRunning(.dnsProxy))
         guard let data = serializer.serialize(eventType: NetworkContainmentStatus.eventType, payload: status) else { return }
         XPCServer.shared.send(data: data)
     }
