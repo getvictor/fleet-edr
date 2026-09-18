@@ -64,7 +64,7 @@ func newPackService(t *testing.T, packs *fakePacks, audit *recordingAudit) *Pack
 // TestNewPackService_RequiresItsCollaborators keeps a half-built service from existing. The drain is required for the reason the
 // lifecycle is: a rollback that replaced every shipped rule without leaving an audit row is the change here least acceptable to
 // lose, so a deployment that wired it wrong should fail to start rather than discover it later. What the drain itself requires,
-// an outbox and a recorder, is its own constructor's to refuse, and TestDrain_RequiresItsCollaborators covers it.
+// an outbox and a recorder, is for its own constructor to refuse, and TestDrain_RequiresItsCollaborators covers it.
 func TestNewPackService_RequiresItsCollaborators(t *testing.T) {
 	t.Parallel()
 	drain, err := NewAuditDrain(&fakeOutbox{}, &recordingAudit{}, nil)

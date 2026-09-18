@@ -379,7 +379,7 @@ func TestNew_RequiresEveryCollaborator(t *testing.T) {
 	_, noValidator := New(&fakeAuthor{}, nil, drain)
 	require.Error(t, noValidator)
 	// The drain is required for the same reason: a change whose audit entry nothing delivers is a change with no trail, reached
-	// by wiring rather than by failure. What the drain itself requires is its own constructor's to refuse, which
+	// by wiring rather than by failure. What the drain itself requires is for its own constructor to refuse, which
 	// TestDrain_RequiresItsCollaborators covers.
 	_, noDrain := New(&fakeAuthor{}, &fakeValidator{}, nil)
 	require.Error(t, noDrain, "a surface whose audit entries go nowhere must not be constructible")

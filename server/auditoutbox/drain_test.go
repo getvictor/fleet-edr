@@ -35,6 +35,15 @@ func (o *memOutbox) add(t *testing.T, action identityapi.AuditAction) {
 	o.entries = append(o.entries, auditoutbox.Pending{ID: o.nextID, Kind: entry.Kind, Payload: entry.Payload})
 }
 
+// addUnreadable adds an entry in an encoding this replica does not know, as a replica a version ahead writes during a rolling
+// deploy. A pass skips it and never deletes it, so it stays at the head of the queue.
+func (o *memOutbox) addUnreadable(kind string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.nextID++
+	o.entries = append(o.entries, auditoutbox.Pending{ID: o.nextID, Kind: kind, Payload: []byte(`{}`)})
+}
+
 func (o *memOutbox) PendingAuditEntries(_ context.Context, limit int) ([]auditoutbox.Pending, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -198,6 +207,49 @@ func TestDeliverSoon_ABurstLargerThanOnePassIsDeliveredWithoutTheInterval(t *tes
 	assert.Equal(t, 2, outbox.passes())
 }
 
+// A skipped entry does not stop the catch-up. A pass reads a full batch and delivers fewer than it read whenever one of them is in
+// an encoding this replica does not know, which is what a rolling deploy produces. Continuing on the delivered count would leave
+// everything behind that batch waiting for the interval because of one entry nobody could read.
+func TestDeliverSoon_ABurstIsDrainedPastAnEntryThisReplicaCannotRead(t *testing.T) {
+	t.Parallel()
+	outbox := &memOutbox{}
+	recorder := &countingRecorder{}
+	drain, err := auditoutbox.NewDrain(outbox, recorder, "test", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	go drain.SweepLoop(t.Context(), time.Hour)
+
+	outbox.addUnreadable("identity.audit_event.v2")
+	const readable = auditoutbox.DrainBatch
+	for range readable {
+		outbox.add(t, identityapi.AuditHostContain)
+	}
+	drain.DeliverSoon(t.Context())
+
+	require.Eventually(t, func() bool { return recorder.count() == readable }, 10*time.Second, time.Millisecond,
+		"the entries behind the unreadable one are delivered without waiting for the interval")
+	// The unreadable entry is left for the replica that understands it, which is the only thing still in the outbox.
+	assert.Equal(t, 1, outbox.pending())
+}
+
+// The catch-up stops when a pass delivers nothing, which is what keeps a replica that cannot read a full batch from re-reading it
+// forever: a skipped entry is never deleted, so a pass asking for another pass on a batch it made no progress on would spin.
+func TestSweepLoop_DoesNotSweepInALoopOverEntriesItCannotRead(t *testing.T) {
+	t.Parallel()
+	outbox := &memOutbox{}
+	drain, err := auditoutbox.NewDrain(outbox, &countingRecorder{}, "test", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	go drain.SweepLoop(t.Context(), time.Hour)
+
+	for range auditoutbox.DrainBatch {
+		outbox.addUnreadable("identity.audit_event.v2")
+	}
+	drain.DeliverSoon(t.Context())
+
+	// One pass for the one request, and no more: a second would mean the pass asked for itself again.
+	assert.Never(t, func() bool { return outbox.passes() > 1 }, 300*time.Millisecond, 5*time.Millisecond)
+	assert.Equal(t, 1, outbox.passes())
+}
+
 // spec:server-admin-surface/operator-actions-commit-their-audit-entry/an-entry-no-request-asked-about-is-still-delivered
 //
 // The interval is not made redundant by callers asking. A signal is in-process, so it is lost when the replica that raised it exits,
@@ -248,10 +300,13 @@ func TestDeliverSoon_OnAnUnwiredDrainSaysSoRatherThanPanicking(t *testing.T) {
 	assert.NotPanics(t, func() { drain.DeliverSoon(t.Context()) })
 }
 
-// An entry the sweep found on its own is the outbox doing its job: a change committed a row that nothing on this replica delivered,
-// which nothing else reports. One a caller asked for is the steady state, one per operator action, and a line per action would say
-// only that the server is working. The two are one switch apart, so the difference is pinned rather than left to the reader.
-func TestSweepLoop_ReportsOnlyTheEntriesNoCallerAskedAbout(t *testing.T) {
+// The interval pass reports what it delivered; a pass a change asked for does not. Entries reaching the interval mean rows are
+// arriving later than the changes that wrote them, which is worth a line, while a line per operator action would say only that the
+// server is working. The two are one switch apart, so the difference is pinned rather than left to the reader.
+//
+// The line says what the pass delivered and NOT that nothing asked for it: a request can arrive while the pass is running, and a
+// request and the tick can be ready together, in which case either may be taken.
+func TestSweepLoop_ReportsWhatTheIntervalPassDelivered(t *testing.T) {
 	t.Parallel()
 	t.Run("asked for", func(t *testing.T) {
 		t.Parallel()
@@ -260,17 +315,17 @@ func TestSweepLoop_ReportsOnlyTheEntriesNoCallerAskedAbout(t *testing.T) {
 		outbox.add(t, identityapi.AuditHostContain)
 		drain.DeliverSoon(t.Context())
 		require.Eventually(t, func() bool { return outbox.pending() == 0 }, 10*time.Second, time.Millisecond)
-		assert.NotContains(t, logged.String(), "left behind", "a delivery a change asked for is not news")
+		assert.NotContains(t, logged.String(), "periodic sweep", "a delivery a change asked for is not news")
 	})
 
-	t.Run("found on the interval", func(t *testing.T) {
+	t.Run("delivered on the interval", func(t *testing.T) {
 		t.Parallel()
 		logged, outbox, drain := loggingDrain(t)
 		outbox.add(t, identityapi.AuditHostContain)
 		go drain.SweepLoop(t.Context(), time.Millisecond)
 		require.Eventually(t, func() bool { return outbox.pending() == 0 }, 10*time.Second, time.Millisecond)
-		assert.Eventually(t, func() bool { return bytes.Contains(logged.Bytes(), []byte("left behind")) }, 10*time.Second,
-			time.Millisecond, "an entry the request that wrote it never delivered is what the outbox exists to report")
+		assert.Eventually(t, func() bool { return bytes.Contains(logged.Bytes(), []byte("periodic sweep")) }, 10*time.Second,
+			time.Millisecond, "a row arriving later than the change that wrote it is what the outbox exists to report")
 	})
 }
 
