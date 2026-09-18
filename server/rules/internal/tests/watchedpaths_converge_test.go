@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/catchup"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/rules/internal/watchedpaths"
@@ -31,7 +32,7 @@ func (f *fakeCommandHistory) insert(_ context.Context, hostIDs []string, _ strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, h := range hostIDs {
-		f.latest[h] = rulesapi.WatchedPathCommand{Payload: payload, Status: "pending", CreatedAt: time.Now()}
+		f.latest[h] = rulesapi.WatchedPathCommand{Payload: payload, Status: catchup.StatusPending, CreatedAt: time.Now()}
 		f.queued = append(f.queued, h)
 	}
 	return len(hostIDs), nil
@@ -78,7 +79,7 @@ func TestWatchedPathsConverge_QueuesTheSetForHostsThatMissedIt(t *testing.T) {
 	require.Equal(t, http.StatusOK, put.StatusCode)
 	// host-a was enrolled at the change and took the push; late-host enrolled afterwards and has nothing.
 	for _, c := range r.inserter.snapshot() {
-		history.latest[c.HostID] = rulesapi.WatchedPathCommand{Payload: c.Payload, Status: "completed", CreatedAt: time.Now()}
+		history.latest[c.HostID] = rulesapi.WatchedPathCommand{Payload: c.Payload, Status: catchup.StatusCompleted, CreatedAt: time.Now()}
 	}
 
 	queued, err = converger.Converge(t.Context())
@@ -107,9 +108,9 @@ func TestWatchedPathsConverge_ResendsAfterExpiryAndReenrollment(t *testing.T) {
 	history := &fakeCommandHistory{latest: map[string]rulesapi.WatchedPathCommand{}}
 	pushedAt := time.Now()
 	for _, c := range r.inserter.snapshot() {
-		status := "completed"
+		status := catchup.StatusCompleted
 		if c.HostID == "host-a" {
-			status = "expired"
+			status = catchup.StatusExpired
 		}
 		history.latest[c.HostID] = rulesapi.WatchedPathCommand{Payload: c.Payload, Status: status, CreatedAt: pushedAt}
 	}

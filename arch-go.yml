@@ -64,6 +64,8 @@ dependenciesRules:
   - package: "**.rules.internal.**"
     shouldOnlyDependsOn:
       internal:
+        # catchup is the shared catch-up policy (issue #1071): one decision about when a host is owed a state again.
+        - "**.catchup"
         # auditoutbox is shared server platform code (issue #1070 moved it out of this context so response could use it too);
         # detection-config changes and watched-path replacements commit their audit entries through it.
         - "**.auditoutbox"
@@ -92,6 +94,8 @@ dependenciesRules:
   - package: "**.response.internal.**"
     shouldOnlyDependsOn:
       internal:
+        # catchup is the shared catch-up policy (issue #1071): one decision about when a host is owed a state again.
+        - "**.catchup"
         # auditoutbox is the shared transactional audit outbox (issue #1070): a containment change commits its audit entry in the
         # transaction that records the change and queues its command, rather than recording the row afterwards.
         - "**.auditoutbox"
@@ -282,6 +286,9 @@ dependenciesRules:
   - package: "**.rules.api"
     shouldOnlyDependsOn:
       internal:
+        # catchup is the shared catch-up policy (issue #1071): the watched-path command carries its status already mapped
+        # onto that vocabulary, by the context that owns the lifecycle, rather than cast from its spelling here.
+        - "**.catchup"
         - "**.rules.api.**"
         - "**.detection.api"          # alias re-export of detection/api types
         - "**.attrkeys"
@@ -291,6 +298,9 @@ dependenciesRules:
   - package: "**.response.api"
     shouldOnlyDependsOn:
       internal:
+        # catchup is the shared catch-up policy (issue #1071): Status.Catchup maps this context's lifecycle onto it, here
+        # rather than at each consumer, because this is the file a rename happens in.
+        - "**.catchup"
         - "**.response.api.**"
         - "**.attrkeys"
         - "**.httpserver"
@@ -373,6 +383,13 @@ dependenciesRules:
   # recorder a drain delivers to are identity's contract (ADR-0021), so no encoding of an audit row can be written without naming
   # them. It is listed apart from *platform_allow rather than folded into it so that exception stays visible: a second context
   # dependency here would mean the package had stopped being platform code.
+  # catchup is the shared catch-up policy: when a host should be sent a state its latest command did not deliver, and the sweep that
+  # asks (issue #1071). Pure platform code with no context dependency at all, since a context maps its own command onto catchup.Latest
+  # rather than the package naming any context's types.
+  - package: "github.com/fleetdm/edr/server/catchup"
+    shouldOnlyDependsOn:
+      internal: *platform_allow
+
   - package: "github.com/fleetdm/edr/server/auditoutbox"
     shouldOnlyDependsOn:
       internal:
