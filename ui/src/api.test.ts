@@ -91,9 +91,15 @@ describe("setHostContainment version conflicts (issue #1076)", () => {
   // usable version must not be taken: a page holding one would send no version at all on the retry, and the retry would be applied
   // unconditionally over whatever it conflicted with.
   it.each([
-    ["a state with no version", { host_id: "host-a", contained: true }],
-    ["a state whose version is not a number", { host_id: "host-a", version: "2" }],
-    ["a state with no host", { contained: true, version: 2 }],
+    ["a state with no version", { host_id: "host-a", contained: true, epoch: 100 }],
+    ["a state whose version is not a number", { host_id: "host-a", contained: true, version: "2", epoch: 100 }],
+    ["a state with no host", { contained: true, version: 2, epoch: 100 }],
+    // Without `contained` the page would offer Contain for a host that is already contained, which is the wrong action on the
+    // wrong host: as much a defect as a missing version, and the reason the checks are typed over the interface's required fields
+    // rather than kept by hand.
+    ["a state with no contained flag", { host_id: "host-a", version: 2, epoch: 100 }],
+    ["a state whose contained flag is not a boolean", { host_id: "host-a", contained: "yes", version: 2, epoch: 100 }],
+    ["a state with no epoch", { host_id: "host-a", contained: true, version: 2 }],
     ["an empty object", {}],
     ["a state that is not an object", "host-a"],
   ])("refuses to take %s as the state to decide from", async (_name, state) => {

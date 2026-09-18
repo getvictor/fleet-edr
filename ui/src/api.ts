@@ -1019,18 +1019,38 @@ export class ContainmentVersionConflictError extends Error {
   }
 }
 
+// RequiredKeys is the keys of T that T declares as required. Used below to make a runtime check of a type's required fields something
+// the compiler counts, rather than a list that drifts from the interface it is supposed to mirror.
+type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T];
+
+// containmentStateChecks is one check per field ContainmentState requires.
+//
+// Typed as a record over exactly those keys, so a required field added to the interface without a check here fails the build, and a
+// check for a field that stopped being required fails it too. A hand-kept list is what left `contained` and `epoch` unchecked while
+// `host_id` and `version` were checked.
+// Each check names its own field rather than being handed a value by key, so nothing here indexes an object with a dynamic name.
+const containmentStateChecks: { [K in RequiredKeys<ContainmentState>]: (state: Record<string, unknown>) => boolean } = {
+  host_id: (state) => typeof state.host_id === "string",
+  contained: (state) => typeof state.contained === "boolean",
+  version: (state) => typeof state.version === "number",
+  epoch: (state) => typeof state.epoch === "number",
+};
+
 // conflictState reads the state a version conflict reports alongside its code.
 //
-// The shape is checked, not assumed, because what this returns is installed as the page's state and the NEXT change is made against
-// its version: a body whose state has no version would leave that undefined, and the retry would then name no version and be applied
-// unconditionally, which is the overwrite the version exists to prevent. Anything this does not recognise is left for the page to
+// The shape is checked, not assumed, because what this returns is installed as the page's state and then read from there. The NEXT
+// change is made against its version, so a state without one would have the retry name no version and be applied unconditionally,
+// which is the overwrite naming a version exists to prevent; and the action the page offers is decided by `contained`, so a state
+// without one would offer Contain for a host that is already contained. Anything this does not recognise is left for the page to
 // re-read, which it does after a conflict.
 function conflictState(body: unknown): ContainmentState | null {
   if (typeof body !== "object" || body === null || !("state" in body)) return null;
   const state: unknown = body.state;
   if (typeof state !== "object" || state === null) return null;
-  const { host_id: hostId, version } = state as { host_id?: unknown; version?: unknown };
-  if (typeof hostId !== "string" || typeof version !== "number") return null;
+  const fields = state as Record<string, unknown>;
+  for (const isValid of Object.values(containmentStateChecks)) {
+    if (!isValid(fields)) return null;
+  }
   return state as ContainmentState;
 }
 
