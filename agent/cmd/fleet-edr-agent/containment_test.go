@@ -64,10 +64,14 @@ func TestNewContainment(t *testing.T) {
 	defer cancel()
 	go literalMgr.Run(ctx)
 	literalMgr.Observe(ctx, containment.Status{Contained: true, Version: 1, Applied: true})
-	require.Eventually(t, func() bool { return sent.Load() > 0 }, 5*time.Second, time.Millisecond,
-		"the worker resolved and sent the lifeline, which is what pins the dial below")
-	_, _ = literalDial(ctx, "tcp", "[2001:0db8::0001]:8443")
-	assert.Equal(t, []string{"[2001:db8::1]:8443"}, dialed)
+	// The dial itself is what this waits on. A send is recorded from inside the send, before the refresh records what it sent, so
+	// waiting for the send would leave the dial free to run by name in that window. The canonical form is the pin: an unpinned dial
+	// passes the literal through as written.
+	require.Eventually(t, func() bool {
+		dialed = nil
+		_, _ = literalDial(ctx, "tcp", "[2001:0db8::0001]:8443")
+		return len(dialed) == 1 && dialed[0] == "[2001:db8::1]:8443"
+	}, 5*time.Second, 10*time.Millisecond, "the worker pins the lifeline, and the dial follows it")
 }
 
 // staticResolver answers every lookup with the same addresses.

@@ -736,9 +736,12 @@ func TestReconnected_TheNextStatusSendsTheLifelineAgain(t *testing.T) {
 	m.Observe(t.Context(), held)
 	m.Observe(t.Context(), held)
 	awaitSent(t, ext, 1)
+	// Before the reconnect, not after: a send is recorded from inside the send, so waiting for it alone leaves the pass still to
+	// record what it sent, and a reconnect lands in that window and invalidates it.
+	requirePinned(t, m, "203.0.113.9")
 
 	m.Reconnected()
-	requirePinned(t, m, "203.0.113.9", "dials stay pinned")
+	requirePinned(t, m, "203.0.113.9", "dials stay pinned across the reconnect")
 	m.Observe(t.Context(), held)
 	sent := awaitSent(t, ext, 2)
 	assert.Equal(t, []string{"203.0.113.9"}, sent[1].Server.Addresses)
@@ -755,9 +758,14 @@ func TestRefresh_AReconnectDuringTheSendIsSentAgain(t *testing.T) {
 	res.set("203.0.113.9")
 	var m *Manager
 	var sends atomic.Int32
+	// reconnected closes once the first send has been answered with a reconnect. The count alone is not that: it is incremented
+	// before Reconnected runs, so a status waiting on it can reach the manager while it still holds the pre-reconnect state and ask
+	// for nothing.
+	reconnected := make(chan struct{})
 	send := func([]byte) error {
 		if sends.Add(1) == 1 {
 			m.Reconnected()
+			close(reconnected)
 		}
 		return nil
 	}
@@ -777,7 +785,11 @@ func TestRefresh_AReconnectDuringTheSendIsSentAgain(t *testing.T) {
 	// One status at a time, waiting for each send: the worker coalesces requests, so two fired together would be answered by one
 	// pass and the count below would be about the coalescing rather than about the reconnect.
 	m.Observe(ctx, held)
-	require.Eventually(t, func() bool { return sends.Load() == 1 }, 5*time.Second, time.Millisecond)
+	select {
+	case <-reconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first send never happened")
+	}
 	m.Observe(ctx, held)
 	require.Eventually(t, func() bool { return sends.Load() == 2 }, 5*time.Second, time.Millisecond,
 		"the reconnect during the first send means the next status sends it again")
