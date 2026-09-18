@@ -112,6 +112,10 @@ dependenciesRules:
         # control is the shared gRPC wire contract for the agent control channel (a platform package like httpserver/sqlhelpers,
         # generated from internal/control/control.proto). The response gateway implements its server side.
         - "**.control"
+        # netaddr parses the address notation an operator writes wherever configuration names hosts or ranges (issue #1059). A
+        # platform package like httpserver: the trusted-proxy list and the reachable-address set are written by the same operator in
+        # the same notation, and a second parser would eventually disagree with this one about a bare IPv6 literal.
+        - "**.netaddr"
 
   # detection context internals.
   - package: "**.detection.internal.**"

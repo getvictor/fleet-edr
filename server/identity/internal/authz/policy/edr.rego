@@ -85,7 +85,7 @@ reauth_satisfied if input.actor.auth_method == "service_account"
 # pattern is "rule fires when this action+resource pair is destructive
 # enough to warrant proving recent possession of credentials."
 requires_fresh_auth(action, _) if {
-	action in {"host.isolate", "host.kill_process", "host.run_script"}
+	action in {"host.isolate", "host.kill_process", "host.run_script", "containment_config.write"}
 }
 
 requires_fresh_auth("alert.resolve", resource) if {

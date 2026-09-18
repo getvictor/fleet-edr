@@ -21,6 +21,7 @@ import (
 	"github.com/fleetdm/edr/server/response/internal/gateway"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 	"github.com/fleetdm/edr/server/response/internal/operator"
+	"github.com/fleetdm/edr/server/response/internal/reachable"
 	"github.com/fleetdm/edr/server/response/internal/service"
 	responsemigrations "github.com/fleetdm/edr/server/response/migrations"
 )
@@ -66,6 +67,9 @@ type Response struct {
 	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
 	containmentH         *operator.ContainmentHandler
 	containmentConverger *containment.Converger
+	// reachableH is nil until EnableContainment wires it. The addresses a contained host may still reach are containment's
+	// configuration, so they are mounted with it rather than separately: without containment there is nothing for them to widen.
+	reachableH *operator.ReachableHandler
 	// auditOutbox is where every operator action in this context commits its audit entry, containment changes and command issuance
 	// and withdrawal alike, and auditDrain turns the entries into audit rows (issue #1070). The drain is nil without a recorder,
 	// which only non-production wiring omits.
@@ -126,6 +130,8 @@ func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollmen
 	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
 	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
 		r.logger)
+	r.reachableH = operator.NewReachableHandler(reachable.NewService(reachable.NewStore(r.db, r.auditOutbox), r.auditDrain),
+		r.authz, r.logger)
 }
 
 // RunAuditSweep delivers audit entries an operator action committed but whose request could not write out, until ctx is cancelled.
@@ -224,6 +230,8 @@ func (r *Response) RegisterAgentRoutes(mux *http.ServeMux) {
 //	GET  /api/commands/{id}
 //	GET  /api/hosts/{host_id}/containment   (once EnableContainment is called)
 //	POST /api/hosts/{host_id}/containment
+//	GET  /api/v1/containment/reachable-addresses
+//	PUT  /api/v1/containment/reachable-addresses
 //
 // Caller wraps in identity.SessionMiddleware + identity.CSRFMiddleware
 // before mounting.
@@ -231,5 +239,8 @@ func (r *Response) RegisterAuthedRoutes(mux httpserver.Router) {
 	r.operatorH.RegisterRoutes(mux)
 	if r.containmentH != nil {
 		r.containmentH.RegisterRoutes(mux)
+	}
+	if r.reachableH != nil {
+		r.reachableH.RegisterRoutes(mux)
 	}
 }

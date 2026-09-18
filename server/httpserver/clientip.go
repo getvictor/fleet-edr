@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/fleetdm/edr/internal/netaddr"
 )
 
 // ClientIPResolver resolves the trustworthy client IP from an
@@ -55,33 +57,13 @@ func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 		if token == "" {
 			continue
 		}
-		prefix, err := parseTrustedPrefix(token)
+		prefix, err := netaddr.ParsePrefix(token)
 		if err != nil {
 			return nil, fmt.Errorf("trusted proxy %q: %w", raw, err)
 		}
 		r.trusted = append(r.trusted, prefix)
 	}
 	return r, nil
-}
-
-func parseTrustedPrefix(token string) (netip.Prefix, error) {
-	if strings.Contains(token, "/") {
-		p, err := netip.ParsePrefix(token)
-		if err != nil {
-			return netip.Prefix{}, err
-		}
-		return p.Masked(), nil
-	}
-	addr, err := netip.ParseAddr(token)
-	if err != nil {
-		return netip.Prefix{}, err
-	}
-	addr = addr.Unmap()
-	bits := 32
-	if addr.Is6() {
-		bits = 128
-	}
-	return netip.PrefixFrom(addr, bits), nil
 }
 
 // ClientIP resolves the trustworthy client IP for r per the rules in the type doc. Returns "" when r is nil. A nil receiver is treated
