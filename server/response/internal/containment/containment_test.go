@@ -977,7 +977,9 @@ func TestSet_AChangeNamingAStaleVersionIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, state.Contained, "the release stands; the stale request changed nothing")
 	assert.Equal(t, int64(2), state.Version, "and did not consume a version")
-	assert.Empty(t, f.pendingAudit(t), "a refused change records nothing")
+	// Two rows for the two changes that took effect and none for the refused one. Counting the delivered rows rather than asserting
+	// the outbox is empty: the outbox holds what no sweep has taken yet, so an empty one would say only that delivery had run.
+	assert.Len(t, f.auditRows(t, 2), 2, "a refused change records nothing")
 	assert.Len(t, f.containmentCommands(t, "host-a"), 2, "the contain and the release; the refused change queued nothing")
 }
 
