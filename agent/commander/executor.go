@@ -44,6 +44,10 @@ type Ledger interface {
 	Mark(ctx context.Context, id int64, status string, result json.RawMessage) error
 	// Delete removes a command's row, used to roll back a write-ahead claim when the side effect was not started.
 	Delete(ctx context.Context, id int64) error
+	// Lookup returns what the ledger records for a command id, with seen=false when it holds nothing. Asked rather than claimed,
+	// because a caller replaying an outcome must not write a claim it would then have to roll back: another transport meeting that
+	// claim would read it as an interrupted attempt and report the command failed (issue #1080).
+	Lookup(ctx context.Context, id int64) (status string, result json.RawMessage, seen bool, err error)
 }
 
 // invalidPayloadPrefix is the reason prefix every handler emits when json.Unmarshal of cmd.Payload fails. Centralised so the wire shape
@@ -141,10 +145,54 @@ func (e *Executor) Execute(ctx context.Context, cmd Command, report ReportFunc) 
 	e.executeNew(ctx, cmd, report)
 }
 
+// ReplayRecorded re-reports what the ledger already holds for a command, and runs no side effect.
+//
+// It exists for the outcome a report failed to deliver (issue #1080). The execution itself succeeded and the ledger recorded it, but
+// the report did not reach the server, so the command stays acked there with its outcome only on the host. The control channel
+// re-offers such a command and Execute replays it; a host on the poll fallback has nothing that would ask, so its poll asks for its
+// own acked commands and hands each one here.
+//
+// A command the ledger does not know is LEFT ALONE, and that is the point of asking rather than executing. The ledger may have been
+// pruned or replaced, and this path cannot tell that from a command that was never run: replaying would invent an outcome the host
+// never produced, and executing would repeat a side effect the operator asked for once. The server keeps the command acked, which is
+// the honest state, and #1062's rule holds here too: only what the ledger's own retention still covers is replayed.
+func (e *Executor) ReplayRecorded(ctx context.Context, cmd Command, report ReportFunc) {
+	if e.ledger == nil {
+		return
+	}
+	// Dropped while the command is executing in this process: its own attempt will report the outcome, and replaying underneath it
+	// would report a bare claim as an interrupted attempt while the attempt is still live.
+	if !e.inFlight.Begin(cmd.ID) {
+		e.logger.DebugContext(ctx, "not replaying a command that is executing", "cmd_id", cmd.ID)
+		return
+	}
+	defer e.inFlight.End(cmd.ID)
+	status, result, seen, err := e.ledger.Lookup(ctx, cmd.ID)
+	if err != nil {
+		e.logger.ErrorContext(ctx, "command ledger lookup", "cmd_id", cmd.ID, "err", err)
+		return
+	}
+	if !seen {
+		e.logger.WarnContext(ctx, "the server is waiting for an outcome this host has no record of; leaving it alone",
+			"cmd_id", cmd.ID)
+		return
+	}
+	// The outcome only. These commands were asked for BY their acknowledged status, so the server already has that acknowledgement
+	// and rejects another as an invalid transition: acking here would put a guaranteed 400 and an error line in front of every
+	// recovery. The dispatch path acks because a command reaching it may still be pending there.
+	e.replayOutcome(ctx, cmd, report, status, result)
+}
+
 // replaySeen handles a command the ledger already records: re-ack and replay a recorded terminal outcome, or terminalize a bare
 // write-ahead claim left by an interrupted prior attempt. The side effect is never run here.
 func (e *Executor) replaySeen(ctx context.Context, cmd Command, report ReportFunc, status string, result json.RawMessage) {
 	e.reportOrLog(ctx, cmd.ID, report, StatusAcked, nil) // re-ack drives the server out of pending if the earlier ack was lost.
+	e.replayOutcome(ctx, cmd, report, status, result)
+}
+
+// replayOutcome reports what the ledger holds for a command, and acknowledges nothing: whether an acknowledgement is needed depends
+// on what the caller knows about the command's status on the server, and the server rejects one that is not a valid transition.
+func (e *Executor) replayOutcome(ctx context.Context, cmd Command, report ReportFunc, status string, result json.RawMessage) {
 	if status == StatusCompleted || status == StatusFailed {
 		e.reportOrLog(ctx, cmd.ID, report, status, result)
 		return

@@ -19,6 +19,15 @@ import (
 // Mirrored as commanderPollInterval in agent/cmd/fleet-edr-agent.
 const defaultPollInterval = 5 * time.Second
 
+// statusPending is the server-side status the poll asks for new work with. It is not among the statuses the agent REPORTS, which is
+// why it is not beside those: the agent never moves a command to pending.
+const statusPending = "pending"
+
+// defaultRecoverInterval is how often the poll asks for this host's acked commands, to re-report an outcome whose report was lost
+// (issue #1080). A minute rather than the poll's own interval: a lost report is rare, the outcome is already durable in the ledger,
+// and the question is otherwise answered with an empty list once per poll per host.
+const defaultRecoverInterval = time.Minute
+
 // defaultFloorInterval is how long the commander will defer to the control channel before polling anyway.
 //
 // The poll used to be skipped outright while the agent believed its stream was up, which made command delivery depend on that belief
@@ -64,6 +73,12 @@ type Config struct {
 	// pushes commands in real time and polling would race it. The deferral is bounded by FloorInterval: a stream the agent believes in
 	// but the server has forgotten would otherwise silence commands forever. Nil means "always poll" (the control channel is disabled).
 	StreamConnected func() bool
+	// RecoverInterval is how often the poll also asks for this host's acked commands, so an outcome whose report did not reach the
+	// server is re-reported from the ledger (issue #1080). Zero uses defaultRecoverInterval.
+	//
+	// Slower than the poll itself, deliberately: the answer is empty in every ordinary case, and asking on every poll would double
+	// this host's request rate against the server for a recovery path that almost never has work.
+	RecoverInterval time.Duration
 	// FloorInterval bounds how long StreamConnected may suppress the poll. Zero uses defaultFloorInterval. It exists so a wedged stream
 	// degrades to slow polling instead of silence; see defaultFloorInterval for how the wedge happens.
 	FloorInterval time.Duration
@@ -89,6 +104,9 @@ type Commander struct {
 	logger   *slog.Logger
 	// lastPoll is when the commander last actually asked the server for pending work. Only Run's goroutine touches it.
 	lastPoll time.Time
+	// lastRecovery is when it last asked for this host's acked commands, so that question runs on its own slower cadence. Only
+	// Run's goroutine touches it.
+	lastRecovery time.Time
 }
 
 // New creates a Commander. The client should already be wrapped with otelhttp.NewTransport if
@@ -99,6 +117,9 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	}
 	if cfg.FloorInterval == 0 {
 		cfg.FloorInterval = defaultFloorInterval
+	}
+	if cfg.RecoverInterval == 0 {
+		cfg.RecoverInterval = defaultRecoverInterval
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -114,10 +135,13 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	// contract stays exactly "defer for at most FloorInterval" instead of "always poll once at startup, then defer".
 	return &Commander{
 		lastPoll: time.Now(),
-		cfg:      cfg,
-		client:   client,
-		executor: executor,
-		logger:   logger,
+		// Not time.Now(): an agent that restarted after reporting an outcome it could not deliver should ask on its first poll
+		// rather than wait out an interval, and this question runs whether or not there is anything to recover.
+		lastRecovery: time.Time{},
+		cfg:          cfg,
+		client:       client,
+		executor:     executor,
+		logger:       logger,
 	}
 }
 
@@ -159,10 +183,41 @@ func (c *Commander) pollAndDispatch(ctx context.Context) {
 	for _, cmd := range commands {
 		c.dispatch(ctx, cmd)
 	}
+	c.recoverOutcomes(ctx)
+}
+
+// recoverOutcomes re-reports the outcomes of commands the server is still waiting for (issue #1080).
+//
+// A command whose side effect ran but whose report did not reach the server stays acked there, and an acked command is not in the
+// pending answer, so nothing on this path would ever ask about it again: the host holds the outcome and the operator sees the action
+// as delivered but unfinished, for as long as the row lives. The control channel closes the same gap by re-offering the command
+// (issue #1062); this is the poll fallback's half of it.
+//
+// Only the ledger's record is reported, never a fresh execution: the Executor leaves alone any command it has no record of.
+func (c *Commander) recoverOutcomes(ctx context.Context) {
+	if time.Since(c.lastRecovery) < c.cfg.RecoverInterval {
+		return
+	}
+	c.lastRecovery = time.Now()
+	awaiting, err := c.fetchByStatus(ctx, StatusAcked)
+	if err != nil {
+		c.logger.WarnContext(ctx, "commander fetch acked", "err", err)
+		return
+	}
+	for _, cmd := range awaiting {
+		c.executor.ReplayRecorded(ctx, cmd, c.report(cmd.ID))
+	}
 }
 
 func (c *Commander) fetchPending(ctx context.Context) ([]Command, error) {
-	reqURL := fmt.Sprintf("%s/api/commands?host_id=%s&status=pending", c.cfg.ServerURL, url.QueryEscape(c.cfg.HostID))
+	return c.fetchByStatus(ctx, statusPending)
+}
+
+// fetchByStatus lists this host's commands in one status. The server pins the host to the token whatever the query says, so the
+// host_id here is informational.
+func (c *Commander) fetchByStatus(ctx context.Context, status string) ([]Command, error) {
+	reqURL := fmt.Sprintf("%s/api/commands?host_id=%s&status=%s", c.cfg.ServerURL, url.QueryEscape(c.cfg.HostID),
+		url.QueryEscape(status))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
