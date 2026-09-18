@@ -397,6 +397,8 @@ Everything else is dropped: new connections, and connections that were already o
 
 Open the host's page and choose **Contain host**, or **Release host** on a contained host. Both ask for a reason, which is recorded in the audit log as `host.contain` or `host.release`. You need `host.isolate`, which the `super_admin`, `admin` and `senior_analyst` roles hold. An operator also needs a recent sign-in: a session that authenticated longer ago than `EDR_REAUTH_WINDOW` (30 minutes by default) is asked to sign in again. A service account holding `host.isolate` is not subject to that window, so automation contains and releases without an interactive sign-in.
 
+If someone else changes the host while you are deciding, your change is refused rather than applied over theirs, and the page shows you the state that now stands so you can decide again. Automation gets the same protection by sending `expected_version` with the version it read: the request is refused with `409 version_conflict`, carrying the current state, when the host has moved on since. A request without that field asks for the state whatever the host currently holds.
+
 The badge on the host's page and in the host list says where the change stands:
 
 | Badge              | Meaning                                                                                                         |
