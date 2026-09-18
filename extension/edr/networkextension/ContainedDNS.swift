@@ -8,8 +8,9 @@ enum ContainedDNS {
     enum Decision: Equatable {
         /// Forward the query upstream as usual.
         case forward
-        /// Forward this query in place of the datagram: a contained host's allowed lookup rebuilt from its header and question alone,
-        /// so nothing a process appends after the question (records, options or any other bytes) leaves the host with it.
+        /// Forward this query in place of the datagram: a contained host's allowed lookup rebuilt from its header, its question and,
+        /// when the client offered one, an OPT record carrying a UDP payload size and nothing else. Everything else a process appends
+        /// after the question (records, options or any other bytes) stays behind.
         case forwardQuestion(Data)
         /// Answer the client with this response instead of forwarding.
         case answer(Data)
@@ -32,6 +33,27 @@ enum ContainedDNS {
         static let maxLabelLength = 63
         /// RFC 1035 3.1: a name is at most 255 octets on the wire, its length octets and the root terminator included.
         static let maxNameLength = 255
+        static let nscountOffset = 8
+        static let arcountOffset = 10
+        /// RFC 6891 6.1.2: an OPT record is a root name, type OPT (41), the requestor's UDP payload size in the CLASS field, a
+        /// four-octet TTL holding the extended RCODE, the EDNS version and the flags, and then its option data. A minimal one, with no
+        /// options, is these 11 octets.
+        static let optRecordLength = 11
+        static let optTypeHigh: UInt8 = 0x00
+        static let optTypeLow: UInt8 = 0x29
+        /// Offsets of an OPT record's fields, from its root name.
+        static let optNameOffset = 0
+        static let optTypeOffset = 1
+        static let optUDPSizeOffset = 3
+        static let optExtendedRCODEOffset = 5
+        static let optVersionOffset = 6
+        static let optFlagsOffset = 7
+        static let optRDLengthOffset = 9
+        static let lowByteMask: UInt16 = 0xFF
+        /// The UDP payload size a rebuilt query advertises, never more than the client asked for. 1232 is the size widely used as the
+        /// largest that traverses the internet without IP fragmentation; 512 is the floor RFC 6891 6.2.3 puts under an advertised size.
+        static let maxAdvertisedUDPSize: UInt16 = 1232
+        static let minAdvertisedUDPSize: UInt16 = 512
     }
 
     /// decision is the proxy's action for one UDP datagram. A host that is not contained forwards everything. A contained host forwards
@@ -41,7 +63,7 @@ enum ContainedDNS {
         guard let containment, containment.contained else { return .forward }
         guard let question = singleQuestion(in: datagram) else { return .drop }
         if let name = question.name, containment.serverNames.contains(name) {
-            return .forwardQuestion(questionOnly(datagram, questionEnd: question.end))
+            return .forwardQuestion(rebuilt(datagram, questionEnd: question.end))
         }
         return .answer(refused(datagram, questionEnd: question.end))
     }
@@ -88,16 +110,53 @@ enum ContainedDNS {
             || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_")
     }
 
-    /// questionOnly rebuilds a query from its ID, opcode, recursion-desired flag and question, with every other flag clear and no records.
-    /// What remains for a process to choose is the ID and where the query goes; the rest of the datagram does not leave the host.
-    private static func questionOnly(_ query: Data, questionEnd: Int) -> Data {
+    /// rebuilt builds the query that leaves the host: the client's ID, opcode, recursion-desired flag and question, every other flag
+    /// clear, no records, and an OPT record when the client offered a usable one. What remains for a process to choose is the ID, the
+    /// name and where the query goes; the rest of the datagram does not leave the host.
+    ///
+    /// The OPT record is this proxy's own, not the client's: a root name, type OPT, a UDP payload size, and nothing else. Without it an
+    /// allowed answer over 512 octets comes back truncated and the stub retries over TCP, which is closed while contained, so a name
+    /// with many addresses or one behind a CDN stops resolving (issue #1072). Rebuilding it rather than passing the client's through
+    /// keeps the EDNS version, the DNSSEC-OK bit and any option out of what leaves the host; the platform's stub resolver does not
+    /// validate DNSSEC, so clearing that bit costs an answer nothing here.
+    private static func rebuilt(_ query: Data, questionEnd: Int) -> Data {
+        let datagram = [UInt8](query)
         var bytes = [UInt8](query.prefix(questionEnd))
         bytes[Wire.flagsOffset] &= Wire.opcodeAndRD
         bytes[Wire.flagsOffset + 1] = 0
         for index in Wire.ancountOffset..<Wire.headerLength {
             bytes[index] = 0
         }
+        guard let offered = offeredUDPSize(datagram, questionEnd: questionEnd) else { return Data(bytes) }
+        // Never more than the client asked for: the answer comes back to a stub that sized its own buffer, and never less than the
+        // floor, so a client advertising a nonsense size still gets a usable one.
+        let advertised = min(max(offered, Wire.minAdvertisedUDPSize), Wire.maxAdvertisedUDPSize)
+        bytes[Wire.arcountOffset + 1] = 1
+        bytes += [0, Wire.optTypeHigh, Wire.optTypeLow,
+                  UInt8(advertised >> Wire.bitsPerByte), UInt8(advertised & Wire.lowByteMask),
+                  0, 0, 0, 0, // extended RCODE, version, flags
+                  0, 0] // no option data
         return Data(bytes)
+    }
+
+    /// offeredUDPSize is the UDP payload size the client advertised, and nil unless what follows the question is EXACTLY one minimal
+    /// OPT record: the datagram ends there, the header counts one additional record and no others, the name is root, the type is OPT,
+    /// the extended RCODE and version are zero, no flag is set, and there is no option data. Anything else, an option, a version this
+    /// does not know, the DNSSEC-OK bit, a second record, or one byte too many, leaves the query rebuilt without an OPT, which is what
+    /// it did before EDNS was carried at all.
+    private static func offeredUDPSize(_ bytes: [UInt8], questionEnd: Int) -> UInt16? {
+        func count(at offset: Int) -> UInt16 { UInt16(bytes[offset]) << Wire.bitsPerByte | UInt16(bytes[offset + 1]) }
+        guard bytes.count == questionEnd + Wire.optRecordLength,
+              count(at: Wire.ancountOffset) == 0, count(at: Wire.nscountOffset) == 0, count(at: Wire.arcountOffset) == 1,
+              bytes[questionEnd + Wire.optNameOffset] == 0,
+              bytes[questionEnd + Wire.optTypeOffset] == Wire.optTypeHigh,
+              bytes[questionEnd + Wire.optTypeOffset + 1] == Wire.optTypeLow,
+              bytes[questionEnd + Wire.optExtendedRCODEOffset] == 0,
+              bytes[questionEnd + Wire.optVersionOffset] == 0,
+              count(at: questionEnd + Wire.optFlagsOffset) == 0,
+              count(at: questionEnd + Wire.optRDLengthOffset) == 0
+        else { return nil }
+        return count(at: questionEnd + Wire.optUDPSizeOffset)
     }
 
     /// refused builds the REFUSED response to a query: its ID, its opcode and recursion-desired flag, and its question, with no records.
