@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,12 @@ func (f *fakeSink) ObserveEventBytes(data []byte) { f.got = append(f.got, data) 
 // TestGenerationSink_SetAndGet covers the package-level sink seam: it is unset by default, SetGenerationSink installs it, and a nil sink
 // is ignored so a stray nil call cannot clear an installed registry.
 func TestGenerationSink_SetAndGet(t *testing.T) { //nolint:paralleltest // installs the package-global generation sink; serial
+	// The sink is package-level and SetGenerationSink deliberately ignores nil, so nothing this test can call puts it back. Restoring
+	// it directly is what makes the default-state assertion below describe the package rather than whichever test ran first: without
+	// this the test passes once and fails on every repeat, and `-count` is how an order-dependent failure gets found.
+	t.Cleanup(func() { generationSink = atomic.Value{} })
+	generationSink = atomic.Value{}
+
 	assert.Nil(t, getGenerationSink(), "no sink is installed by default")
 
 	s := &fakeSink{}
