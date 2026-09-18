@@ -53,26 +53,28 @@ func newPackService(t *testing.T, packs *fakePacks, audit *recordingAudit) *Pack
 	if packs.outbox == nil {
 		packs.outbox = &fakeOutbox{}
 	}
-	s, err := NewPackService(packs, packs.outbox, audit, slog.New(slog.DiscardHandler))
+	drain, err := NewAuditDrain(packs.outbox, audit, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
+	s, err := NewPackService(packs, drain)
+	require.NoError(t, err)
+	audit.drain, audit.outbox = drain, packs.outbox
 	return s
 }
 
-// TestNewPackService_RequiresItsCollaborators keeps a half-built service from existing. The recorder is required for the reason
-// the lifecycle is: a rollback that replaced every shipped rule without leaving an audit row is the change here least acceptable
-// to lose, so a deployment that wired it wrong should fail to start rather than discover it later.
+// TestNewPackService_RequiresItsCollaborators keeps a half-built service from existing. The drain is required for the reason the
+// lifecycle is: a rollback that replaced every shipped rule without leaving an audit row is the change here least acceptable to
+// lose, so a deployment that wired it wrong should fail to start rather than discover it later. What the drain itself requires,
+// an outbox and a recorder, is its own constructor's to refuse, and TestDrain_RequiresItsCollaborators covers it.
 func TestNewPackService_RequiresItsCollaborators(t *testing.T) {
 	t.Parallel()
-	_, noPacks := NewPackService(nil, &fakeOutbox{}, &recordingAudit{}, nil)
+	drain, err := NewAuditDrain(&fakeOutbox{}, &recordingAudit{}, nil)
+	require.NoError(t, err)
+	_, noPacks := NewPackService(nil, drain)
 	require.Error(t, noPacks)
-	_, noAudit := NewPackService(&fakePacks{}, &fakeOutbox{}, nil, nil)
-	require.Error(t, noAudit)
-	// The outbox is required on the same terms: a rollback that committed its audit entry into nothing is the gap this
-	// mechanism closes, arrived at by wiring instead of by failure.
-	_, noOutbox := NewPackService(&fakePacks{}, nil, &recordingAudit{}, nil)
-	require.Error(t, noOutbox)
-	svc, ok := NewPackService(&fakePacks{}, &fakeOutbox{}, &recordingAudit{}, nil)
-	require.NoError(t, ok, "a nil logger is filled in rather than refused")
+	_, noDrain := NewPackService(&fakePacks{}, nil)
+	require.Error(t, noDrain, "a surface whose audit rows nothing delivers must not be constructible")
+	svc, ok := NewPackService(&fakePacks{}, drain)
+	require.NoError(t, ok)
 	require.NotNil(t, svc)
 }
 
@@ -88,7 +90,7 @@ func TestPackService_StatusPassesThrough(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "a", got.Installed)
 	assert.Equal(t, []string{"x"}, got.Added)
-	assert.Empty(t, audit.events, "reading changes nothing, so it records nothing")
+	assert.Empty(t, audit.rows(t, 0), "reading changes nothing, so it records nothing")
 }
 
 // TestPackService_StatusSurfacesAFailure keeps a broken read from looking like a current deployment, which is the answer an
@@ -115,7 +117,7 @@ func TestPackService_RollbackRequiresAReason(t *testing.T) {
 		require.ErrorIs(t, err, ErrReasonRequired, "reason %q", reason)
 	}
 	assert.Zero(t, packs.rollbacks, "the reason is checked before anything is rolled back")
-	assert.Empty(t, audit.events, "nothing happened, so nothing is recorded")
+	assert.Empty(t, audit.rows(t, 0), "nothing happened, so nothing is recorded")
 }
 
 // TestPackService_RollbackRecordsWhoAndWhy is the claim the audit trail rests on, and it checks the payload rather than the row's
@@ -133,8 +135,7 @@ func TestPackService_RollbackRecordsWhoAndWhy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "restored-digest", rolled.Restored)
 
-	require.Len(t, audit.events, 1)
-	e := audit.events[0]
+	e := audit.rows(t, 1)[0]
 	assert.Equal(t, identityapi.AuditRuleContentPackRollback, e.Action,
 		"its own action, because calling this a document change would understate replacing every shipped rule")
 	assert.Equal(t, "rule_content_pack", e.TargetType)
@@ -158,8 +159,7 @@ func TestPackService_RollbackOmitsWithheldWhenThereIsNone(t *testing.T) {
 
 	_, err := svc.Rollback(t.Context(), testActor(), "reverting the noisy pack")
 	require.NoError(t, err)
-	require.Len(t, audit.events, 1)
-	assert.NotContains(t, audit.events[0].Payload, "withheld")
+	assert.NotContains(t, audit.rows(t, 1)[0].Payload, "withheld")
 }
 
 // TestPackService_RefusedRollbackIsNotRecorded pins that a failure leaves no row. The corpus is exactly as it was, so an audit
@@ -171,7 +171,7 @@ func TestPackService_RefusedRollbackIsNotRecorded(t *testing.T) {
 
 	_, err := svc.Rollback(t.Context(), testActor(), "trying it")
 	require.ErrorIs(t, err, rulecontentapi.ErrNoPreviousPack)
-	assert.Empty(t, audit.events)
+	assert.Empty(t, audit.rows(t, 0))
 }
 
 // TestPackService_RollbackSucceedsEvenIfItsAuditRowFails states which way this fails. The rollback is already committed by the
@@ -196,6 +196,5 @@ func TestPackService_RollbackWithoutAnActorStillRecords(t *testing.T) {
 
 	_, err := svc.Rollback(t.Context(), nil, "automated revert")
 	require.NoError(t, err)
-	require.Len(t, audit.events, 1)
-	assert.Equal(t, "automated revert", audit.events[0].Payload["reason"])
+	assert.Equal(t, "automated revert", audit.rows(t, 1)[0].Payload["reason"])
 }

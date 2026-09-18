@@ -3,7 +3,6 @@ package ruleauthoring
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 
 	"github.com/fleetdm/edr/server/auditoutbox"
@@ -23,21 +22,13 @@ type PackService struct {
 	drain *auditoutbox.Drain
 }
 
-// NewPackService builds a PackService. Every collaborator is required, the recorder included: a rollback that replaced every
-// shipped rule without leaving an audit row is the one change here least acceptable to lose.
-func NewPackService(
-	packs rulecontentapi.PackLifecycle, outbox rulecontentapi.AuditOutbox,
-	audit identityapi.AuditRecorder, logger *slog.Logger,
-) (*PackService, error) {
-	if packs == nil || audit == nil {
-		return nil, errors.New("rule pack service: a pack lifecycle and an audit recorder are both required")
-	}
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	drain, err := NewAuditDrain(outbox, audit, logger)
-	if err != nil {
-		return nil, err
+// NewPackService builds a PackService. Every collaborator is required, the drain included: a rollback that replaced every shipped
+// rule without leaving an audit row is the one change here least acceptable to lose.
+//
+// The drain is passed in, and it is the one the rules context sweeps, for the reason New gives.
+func NewPackService(packs rulecontentapi.PackLifecycle, drain *auditoutbox.Drain) (*PackService, error) {
+	if packs == nil || drain == nil {
+		return nil, errors.New("rule pack service: a pack lifecycle and an audit drain are both required")
 	}
 	return &PackService{packs: packs, drain: drain}, nil
 }
@@ -94,8 +85,8 @@ func (s *PackService) Rollback(
 	return rolled, nil
 }
 
-// deliver turns the entry this rollback just committed into an audit row, now rather than on the next sweep. Best effort: the
-// entry is already durable, so a failure delays the row rather than losing it.
+// deliver asks the sweep for the entry this rollback just committed, rather than leaving it to the next interval. The entry is
+// already durable, so nothing here is on the path of a rollback that succeeded.
 func (s *PackService) deliver(ctx context.Context) {
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 }

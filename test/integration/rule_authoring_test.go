@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,39 +100,52 @@ func TestRuleAuthoring_EndToEnd(t *testing.T) { //nolint:tparallel // ordered wa
 	})
 
 	t.Run("the write is attributed in the audit trail", func(t *testing.T) {
-		req := newGet(t, stack.Server.URL+"/api/audit-events?action=rule_content.document_put&limit=50", auditor)
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
 		// "items", not "events": the envelope key is what the audit surface actually emits, and a struct naming the wrong one
 		// decodes to an empty slice without erroring, which is a test that cannot fail for the reason it claims.
-		var page struct {
-			Items []struct {
-				Action   string `json:"action"`
-				TargetID string `json:"target_id"`
-				Actor    struct {
-					ID    string `json:"id"`
-					Label string `json:"label"`
-				} `json:"actor"`
-				Payload map[string]any `json:"payload"`
-			} `json:"items"`
+		type auditRow struct {
+			Action   string `json:"action"`
+			TargetID string `json:"target_id"`
+			Actor    struct {
+				ID    string `json:"id"`
+				Label string `json:"label"`
+			} `json:"actor"`
+			Payload map[string]any `json:"payload"`
 		}
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
-
-		var found bool
-		for _, e := range page.Items {
-			if e.TargetID != "authored/integration_authored_rule.yml" {
-				continue
+		read := func() []auditRow {
+			req := newGet(t, stack.Server.URL+"/api/audit-events?action=rule_content.document_put&limit=50", auditor)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var page struct {
+				Items []auditRow `json:"items"`
 			}
-			found = true
-			assert.Equal(t, "rule_content.document_put", e.Action)
-			assert.Equal(t, "author@rules.test", e.Actor.Label, "attributed to the operator who made the change")
-			assert.Equal(t, "adding coverage for osascript", e.Payload["reason"],
-				"the row must carry why, which is the field a reviewer is actually asking about")
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
+			return page.Items
 		}
-		assert.True(t, found, "the write must be attributable: items=%+v", page.Items)
+		rowFor := func(items []auditRow) (auditRow, bool) {
+			for _, e := range items {
+				if e.TargetID == "authored/integration_authored_rule.yml" {
+					return e, true
+				}
+			}
+			return auditRow{}, false
+		}
+
+		// The write no longer delivers its own audit row: it commits the entry with the change and asks the context's sweep for it
+		// (issue #1089). The stack runs that sweep at its production interval, minutes away, so a row arriving inside this wait
+		// arrived because the write asked for it.
+		var row auditRow
+		require.Eventually(t, func() bool {
+			var ok bool
+			row, ok = rowFor(read())
+			return ok
+		}, 30*time.Second, 100*time.Millisecond, "the write must be attributable: items=%+v", read())
+
+		assert.Equal(t, "rule_content.document_put", row.Action)
+		assert.Equal(t, "author@rules.test", row.Actor.Label, "attributed to the operator who made the change")
+		assert.Equal(t, "adding coverage for osascript", row.Payload["reason"],
+			"the row must carry why, which is the field a reviewer is actually asking about")
 	})
 
 	t.Run("the authored rule reaches the running catalog", func(t *testing.T) {

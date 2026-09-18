@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,23 +21,62 @@ import (
 )
 
 // fakeAudit captures the audit events the service emits so the test can assert the action, target, actor, and reason.
+//
+// The events arrive on the sweep's goroutine rather than the change's (issue #1089), so they are guarded and read through rows,
+// which waits for them.
 type fakeAudit struct {
+	mu     sync.Mutex
 	events []identityapi.AuditEvent
+	// drain and outbox are the delivery a change asks for, kept so rows can start it and see when it has settled.
+	drain    *auditoutbox.Drain
+	outbox   *auditoutbox.Store
+	sweeping sync.Once
 }
 
 func (f *fakeAudit) Record(_ context.Context, e identityapi.AuditEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.events = append(f.events, e)
 	return nil
 }
 
-func newService(t *testing.T, audit identityapi.AuditRecorder) *detectionconfig.Service {
+func (f *fakeAudit) recorded() []identityapi.AuditEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.events)
+}
+
+// rows returns the audit rows the changes so far produced, once the outbox has settled.
+//
+// A change no longer delivers its own row (issue #1089): it commits the entry and asks the sweep, which records it on its own
+// goroutine. Reading the recorder straight after a change would be reading a race, and asserting it is EMPTY straight after one
+// would be asserting nothing at all.
+//
+// The sweep this starts runs at the production interval, minutes away, so nothing here arrives on a tick: a row arrives because the
+// change asked for it, and a service that stopped asking fails these tests rather than passing minutes later. Settled means the
+// outbox is empty as well as the rows delivered, so a test expecting one row fails on a second rather than racing it.
+func (f *fakeAudit) rows(t *testing.T, want int) []identityapi.AuditEvent {
+	t.Helper()
+	f.sweeping.Do(func() { go f.drain.SweepLoop(t.Context(), 0) })
+	require.Eventually(t, func() bool {
+		pending, err := f.outbox.PendingAuditEntries(t.Context(), 1)
+		return err == nil && len(pending) == 0 && len(f.recorded()) >= want
+	}, 10*time.Second, 5*time.Millisecond, "the audit rows the changes committed are delivered without the change waiting for them")
+	rows := f.recorded()
+	require.Len(t, rows, want)
+	return rows
+}
+
+func newService(t *testing.T, audit *fakeAudit) *detectionconfig.Service {
 	t.Helper()
 	store, db := openStore(t)
 	var drain *auditoutbox.Drain
 	if audit != nil {
+		outbox := auditoutbox.NewStore(db, detectionconfig.AuditOutboxTable)
 		var err error
-		drain, err = auditoutbox.NewDrain(auditoutbox.NewStore(db, detectionconfig.AuditOutboxTable), audit, "detection config", nil)
+		drain, err = auditoutbox.NewDrain(outbox, audit, "detection config", nil)
 		require.NoError(t, err)
+		audit.drain, audit.outbox = drain, outbox
 	}
 	svc := detectionconfig.NewService(store, nil, drain, nil)
 	require.NoError(t, svc.Reload(t.Context()))
@@ -68,8 +109,7 @@ func TestService_CreateExclusion_PersistsResolvesAndAudits(t *testing.T) {
 	require.Len(t, list, 1)
 
 	// Audit row carries the action, target, actor, and the reason in the payload.
-	require.Len(t, audit.events, 1)
-	ev := audit.events[0]
+	ev := audit.rows(t, 1)[0]
 	assert.Equal(t, identityapi.AuditDetectionConfigExclusionCreate, ev.Action)
 	assert.Equal(t, "detection_exclusion", ev.TargetType)
 	assert.Equal(t, "usr_42", ev.Actor.ID)
@@ -176,8 +216,7 @@ func TestService_UpsertRuleSetting_ResolvesAndAudits(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, settings, 1)
 
-	require.Len(t, audit.events, 1)
-	assert.Equal(t, identityapi.AuditDetectionConfigRuleSettingUpdate, audit.events[0].Action)
+	assert.Equal(t, identityapi.AuditDetectionConfigRuleSettingUpdate, audit.rows(t, 1)[0].Action)
 }
 
 // spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-re-enables-a-previously-disabled-rule
@@ -227,7 +266,7 @@ func TestService_DeleteExclusion(t *testing.T) {
 		"deleting a missing exclusion surfaces sql.ErrNoRows")
 
 	// One create + one delete audited (the failed second delete short-circuits before audit).
-	assert.Len(t, audit.events, 2)
+	audit.rows(t, 2)
 }
 
 func TestService_NilAuditDropsRowWithoutPanic(t *testing.T) {

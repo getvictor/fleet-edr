@@ -32,14 +32,10 @@ func TestDetectionConfigAudit_RESTChangesAreDelivered(t *testing.T) {
 	setting.Body.Close()
 	require.Equal(t, http.StatusOK, setting.StatusCode)
 
-	events := r.audit.snapshot()
-	require.Len(t, events, 2)
+	events := r.auditRows(t, 2)
 	assert.Equal(t, identityapi.AuditDetectionConfigExclusionCreate, events[0].Action)
 	assert.Equal(t, "ci runner", events[0].Payload["reason"])
 	assert.Equal(t, identityapi.AuditDetectionConfigRuleSettingUpdate, events[1].Action)
-	pending, err := auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
-	require.NoError(t, err)
-	assert.Empty(t, pending)
 }
 
 // The rules context sweeps the detection-config outbox, so an entry a request committed but could not deliver is delivered

@@ -214,11 +214,13 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 
 	var ruleAuthoringH *operator.RuleAuthoringHandler
 	if deps.RuleAuthor != nil && deps.Corpus != nil && deps.RulePacks != nil {
-		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, deps.AuditOutbox, deps.Audit, logger)
+		// Both services take the drain built above, which is the one Run sweeps. Building one per service would leave each asking
+		// an instance nothing runs, and their rows would then wait for the sweep's interval rather than being written at once.
+		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, auditDrain)
 		if aerr != nil {
 			return nil, fmt.Errorf("build rule authoring service: %w", aerr)
 		}
-		packSvc, perr := ruleauthoring.NewPackService(deps.RulePacks, deps.AuditOutbox, deps.Audit, logger)
+		packSvc, perr := ruleauthoring.NewPackService(deps.RulePacks, auditDrain)
 		if perr != nil {
 			return nil, fmt.Errorf("build rule pack service: %w", perr)
 		}

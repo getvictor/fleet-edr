@@ -195,7 +195,7 @@ func (s *Service) reloadAfterMutation(ctx context.Context) {
 }
 
 // auditEntry encodes one operator-action audit row for the outbox, carrying the request's trace so the row is attributed to the
-// request that made the change rather than to whichever request delivers it.
+// request that made the change rather than to whatever the sweep is running under when it delivers it.
 func auditEntry(
 	ctx context.Context, actor *identityapi.Actor, action identityapi.AuditAction,
 	targetType, targetID, reason string, payload map[string]any,
@@ -217,10 +217,10 @@ func auditEntry(
 	return auditoutbox.Encode(event)
 }
 
-// deliverAudit turns the audit entry a mutation just committed into an audit row now, rather than on the next sweep. The entry is
-// already durable, so a failure here delays the row and is logged rather than failing a change that succeeded; the sweep delivers it.
+// deliverAudit asks the sweep for the entry a mutation just committed, rather than leaving it to the next interval. The entry is
+// already durable, so the row is delayed rather than lost if the sweep cannot write it, and the mutation does not wait on either.
 func (s *Service) deliverAudit(ctx context.Context) {
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 }
 
 // actorIdentifier renders the acting principal id recorded as created_by / actor_email (usr_<id> for a user, svc_<id> for a service

@@ -78,6 +78,8 @@ type fixture struct {
 	notified *notifyRecorder
 	// enrolled is each enrolled host's enrollment time.
 	enrolled map[string]time.Time
+	// sweeping starts the drain's sweep on the first test that reads audit rows, since delivery is no longer part of the change.
+	sweeping sync.Once
 }
 
 var operator = identityapi.PrincipalRef{ID: "user:7", Type: "user", Label: "ir@example.com"}
@@ -213,8 +215,7 @@ func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 	require.Len(t, cmds, 2)
 	assert.Equal(t, api.SetNetworkContainmentPayload{Version: 2, Epoch: release.State.Epoch, Contained: false}, payloadOf(t, cmds[1]))
 
-	events := f.audit.recorded()
-	require.Len(t, events, 2)
+	events := f.auditRows(t, 2)
 	assert.Equal(t, identityapi.AuditHostContain, events[0].Action)
 	assert.Equal(t, identityapi.AuditHostRelease, events[1].Action)
 	for i, e := range events {
@@ -259,7 +260,7 @@ func TestSet_Refusals(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, api.ContainmentState{HostID: tc.hostID}, state)
 			assert.Empty(t, f.containmentCommands(t, tc.hostID))
-			assert.Empty(t, f.audit.recorded())
+			assert.Empty(t, f.auditRows(t, 0))
 		})
 	}
 	t.Run("a reason at the limit is accepted", func(t *testing.T) {
@@ -287,7 +288,7 @@ func TestSet_AskingForTheCurrentStateChangesNothing(t *testing.T) {
 	assert.Zero(t, again.CommandID)
 	assert.Equal(t, first.State, again.State, "the version, epoch and reason stay those of the change that made it")
 	assert.Len(t, f.containmentCommands(t, "host-a"), 1)
-	assert.Len(t, f.audit.recorded(), 1)
+	f.auditRows(t, 1)
 	assert.Empty(t, f.containmentCommands(t, "host-b"))
 }
 
@@ -706,7 +707,7 @@ func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, state.Contained, "the state rolled back with the command")
 	assert.Zero(t, state.Version)
-	assert.Empty(t, f.audit.recorded(), "nothing happened, so nothing is audited")
+	assert.Empty(t, f.auditRows(t, 0), "nothing happened, so nothing is audited")
 	assert.Empty(t, f.notified.recorded(), "the gateway is told nothing")
 	assert.Empty(t, f.containmentCommands(t, "host-a"), "the command written through the transaction rolled back with the state")
 }
@@ -827,6 +828,27 @@ func TestList_EveryHostWithAState(t *testing.T) {
 }
 
 // pendingAudit decodes the audit entries the outbox holds, oldest first.
+// auditRows returns the audit rows the changes so far produced, once the outbox has settled.
+//
+// A change no longer delivers its own row (issue #1089): it commits the entry and asks the sweep, which delivers it on its own
+// goroutine. So reading the recorder straight after a change would be reading a race, and asserting the recorder is EMPTY straight
+// after one would be asserting nothing at all.
+//
+// The sweep this starts runs at the production interval, minutes away, so nothing here arrives on a tick. A row arrives because the
+// change asked for it, and a service that stopped asking fails these tests rather than passing minutes later. Settled means the
+// outbox is empty as well as the rows delivered, so a test expecting one row fails on a second rather than racing it.
+func (f *fixture) auditRows(t *testing.T, want int) []identityapi.AuditEvent {
+	t.Helper()
+	f.sweeping.Do(func() { go f.drain.SweepLoop(t.Context(), 0) })
+	require.Eventually(t, func() bool {
+		pending, err := f.outbox.PendingAuditEntries(t.Context(), 1)
+		return err == nil && len(pending) == 0 && len(f.audit.recorded()) >= want
+	}, 10*time.Second, 5*time.Millisecond, "the audit rows the changes committed are delivered without the change waiting for them")
+	rows := f.audit.recorded()
+	require.Len(t, rows, want)
+	return rows
+}
+
 func (f *fixture) pendingAudit(t *testing.T) []identityapi.AuditEvent {
 	t.Helper()
 	pending, err := f.outbox.PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
@@ -913,11 +935,11 @@ func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	assert.False(t, state.Contained)
 	assert.Empty(t, f.containmentCommands(t, "host-a"), "the command rolled back with the entry")
 	assert.Empty(t, f.pendingAudit(t))
-	assert.Empty(t, f.audit.recorded())
+	assert.Empty(t, f.auditRows(t, 0))
 
 	// A request for the state a host already has changes nothing, so it records nothing either.
 	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "already released")
 	require.NoError(t, err)
 	assert.Empty(t, f.pendingAudit(t))
-	assert.Empty(t, f.audit.recorded())
+	assert.Empty(t, f.auditRows(t, 0))
 }
