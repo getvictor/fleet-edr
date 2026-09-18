@@ -15,9 +15,10 @@ import (
 
 // fakeLedger is an in-memory commander.Ledger for executor unit tests: it gives durable-style dedup (an atomic claim) without SQLite.
 type fakeLedger struct {
-	mu       sync.Mutex
-	m        map[int64]ledgerRow
-	claimErr error // when set, Claim returns this error (models a ledger write failure)
+	mu        sync.Mutex
+	m         map[int64]ledgerRow
+	claimErr  error // when set, Claim returns this error (models a ledger write failure)
+	lookupErr error // when set, Lookup returns this error (models a ledger read failure)
 	// won counts claims actually granted per id, so a concurrency test can assert the side effect was claimed exactly once.
 	won map[int64]int
 }
@@ -65,6 +66,19 @@ func (f *fakeLedger) Mark(_ context.Context, id int64, status string, result jso
 	defer f.mu.Unlock()
 	f.m[id] = ledgerRow{status: status, result: result}
 	return nil
+}
+
+func (f *fakeLedger) Lookup(_ context.Context, id int64) (string, json.RawMessage, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lookupErr != nil {
+		return "", nil, false, f.lookupErr
+	}
+	r, ok := f.m[id]
+	if !ok {
+		return "", nil, false, nil
+	}
+	return r.status, r.result, true, nil
 }
 
 func (f *fakeLedger) Delete(_ context.Context, id int64) error {
