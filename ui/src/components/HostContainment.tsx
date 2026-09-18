@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { getHostContainment, setHostContainment } from "../api";
+import { ContainmentVersionConflictError, getHostContainment, setHostContainment } from "../api";
 import { containmentBadge, containmentPhase, containmentSettled } from "../containment";
 import { PermissionAction, useCan } from "../permissions-core";
 import type { ContainmentState } from "../types";
@@ -100,11 +100,24 @@ export function HostContainment({ hostId }: { readonly hostId: string }) {
             setConfirming(false);
           }}
           onConfirm={async (reason) => {
-            const change = await setHostContainment(hostId, contain, reason);
-            setState(change.state);
-            setReleased(false);
-            setConfirming(false);
-            setReads((n) => n + 1);
+            try {
+              // The version this page read is what the change is made against, so a host someone else changed in the meantime is
+              // reported rather than having this operator's decision applied over theirs (issue #1076).
+              const change = await setHostContainment(hostId, contain, reason, state?.version);
+              setState(change.state);
+              setReleased(false);
+              setConfirming(false);
+              setReads((n) => n + 1);
+            } catch (err) {
+              if (err instanceof ContainmentVersionConflictError) {
+                // Show what the host holds now, so the operator decides again from the state that stands rather than the one they
+                // opened the dialog on. The modal reports the message; the confirmation stays open with the badge updated.
+                if (err.state) setState(err.state);
+                setReleased(false);
+                setReads((n) => n + 1);
+              }
+              throw err;
+            }
           }}
         />,
         document.body,

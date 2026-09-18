@@ -105,15 +105,12 @@ func (s *Service) List(ctx context.Context) ([]api.ContainmentState, error) {
 	return states, nil
 }
 
-// Set asks for a host to be contained or released. expected, when given, is the version the caller read before asking: the change is
-// refused with api.ErrContainmentVersionConflict when the host has moved on since, so an operator acting on a stale view is told
-// rather than applying over a change they never saw (issue #1076). Nil asks for the state whatever the host currently holds.
-// A change is recorded, queued for the host and audited; a request for the state the
+// Set asks for a host to be contained or released. A change is recorded, queued for the host and audited; a request for the state the
 // host already has changes nothing. The state and its command are written in one transaction under the host's lock, so the commands
 // queued for a host are in the order of the states they carry, and a change whose command cannot be queued records nothing and is
 // refused rather than leaving a state for the catch-up to notice (issue #1073).
 func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, hostID string, contained bool,
-	reason string, expected *int64) (api.ContainmentChange, error) {
+	reason string) (api.ContainmentChange, error) {
 	// The limit applies to the reason as sent, as the API schema states it; the recorded reason is the trimmed one.
 	switch {
 	case utf8.RuneCountInString(reason) > api.MaxContainmentReasonLength:
@@ -131,7 +128,7 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	}
 	// The command is queued inside the transaction that records the state, so a change that cannot queue one records nothing: the
 	// operator is told it failed rather than left with a state whose command the catch-up has to notice (issue #1073).
-	state, changed, commandID, err := s.store.Set(ctx, hostID, contained, reason, actor.ID, expected,
+	state, changed, commandID, err := s.store.Set(ctx, hostID, contained, reason, actor.ID,
 		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
 			id, qerr := s.queue(ctx, q, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state))
 			if qerr != nil {

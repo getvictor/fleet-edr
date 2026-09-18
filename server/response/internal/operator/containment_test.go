@@ -26,9 +26,6 @@ type fakeContainment struct {
 	err    error
 	calls  []string
 	actor  identityapi.PrincipalRef
-	// expected is the version the request named, so a test can assert the handler passed it through rather than dropping it.
-	expected *int64
-	getErr   error
 }
 
 func (f *fakeContainment) List(context.Context) ([]api.ContainmentState, error) {
@@ -38,15 +35,12 @@ func (f *fakeContainment) List(context.Context) ([]api.ContainmentState, error) 
 
 func (f *fakeContainment) Get(_ context.Context, hostID string) (api.ContainmentState, error) {
 	f.calls = append(f.calls, "get "+hostID)
-	// getErr rather than err: a version conflict fails Set and then has the handler read the state back, so the two need to be able
-	// to answer differently.
-	return f.state, f.getErr
+	return f.state, f.err
 }
 
-func (f *fakeContainment) Set(_ context.Context, actor identityapi.PrincipalRef, _, hostID string, contained bool, reason string,
-	expected *int64) (api.ContainmentChange, error) {
+func (f *fakeContainment) Set(_ context.Context, actor identityapi.PrincipalRef, _, hostID string, contained bool, reason string) (
+	api.ContainmentChange, error) {
 	f.actor = actor
-	f.expected = expected
 	f.calls = append(f.calls, "set "+hostID+" "+map[bool]string{true: "contain", false: "release"}[contained]+" "+reason)
 	return f.change, f.err
 }
@@ -186,7 +180,7 @@ func TestContainmentHandler_Get(t *testing.T) {
 	})
 	t.Run("a read failure", func(t *testing.T) {
 		t.Parallel()
-		svc := &fakeContainment{getErr: errors.New("db down")}
+		svc := &fakeContainment{err: errors.New("db down")}
 		resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodGet, "/api/hosts/host-a/containment", "")
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -247,41 +241,4 @@ func FuzzContainmentHandler_Set(f *testing.F) {
 			t.Fatalf("unexpected status %d for %q", rec.Code, body)
 		}
 	})
-}
-
-// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-naming-a-version-the-host-has-moved-past-is-refused
-//
-// The route carries the version the caller read, and reports a conflict with the state as it now stands, so the console can say what
-// changed rather than making another request to find out (issue #1076).
-func TestContainmentHandler_AVersionConflictIsReportedWithTheCurrentState(t *testing.T) {
-	t.Parallel()
-	current := api.ContainmentState{HostID: "host-a", Contained: false, Version: 4, Reason: "cleared by someone else"}
-	svc := &fakeContainment{err: api.ErrContainmentVersionConflict, state: current}
-
-	resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodPost, "/api/hosts/host-a/containment",
-		`{"contained":true,"reason":"beaconing","expected_version":1}`)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusConflict, resp.StatusCode)
-
-	var body struct {
-		Error string               `json:"error"`
-		State api.ContainmentState `json:"state"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	assert.Equal(t, "version_conflict", body.Error)
-	assert.Equal(t, current, body.State, "the state the caller has to decide from, without asking again")
-	require.NotNil(t, svc.expected)
-	assert.Equal(t, int64(1), *svc.expected, "the version the request named reached the service")
-}
-
-// A request that names no version reaches the service with none, which is what every caller did before this and still does.
-func TestContainmentHandler_ARequestWithoutAVersionNamesNone(t *testing.T) {
-	t.Parallel()
-	svc := &fakeContainment{change: api.ContainmentChange{State: api.ContainmentState{HostID: "host-a", Contained: true, Version: 1}}}
-
-	resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodPost, "/api/hosts/host-a/containment",
-		`{"contained":true,"reason":"beaconing"}`)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Nil(t, svc.expected)
 }

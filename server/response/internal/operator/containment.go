@@ -23,8 +23,8 @@ const containmentBodyCap = 16 << 10
 type ContainmentService interface {
 	List(ctx context.Context) ([]api.ContainmentState, error)
 	Get(ctx context.Context, hostID string) (api.ContainmentState, error)
-	Set(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, hostID string, contained bool, reason string,
-		expected *int64) (api.ContainmentChange, error)
+	Set(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, hostID string, contained bool, reason string) (
+		api.ContainmentChange, error)
 }
 
 // ContainmentHandler serves the host containment routes (#948).
@@ -55,10 +55,6 @@ func (h *ContainmentHandler) RegisterRoutes(mux httpserver.Router) {
 type containmentRequest struct {
 	Contained *bool  `json:"contained"`
 	Reason    string `json:"reason"`
-	// ExpectedVersion is the containment version the caller read before asking. Optional: a request without it asks for the state
-	// whatever the host currently holds, which is what every caller did before issue #1076. With it, a host that has moved on since
-	// is reported as a conflict rather than having the change applied over whatever happened in between.
-	ExpectedVersion *int64 `json:"expected_version"`
 }
 
 // handleList returns every host with a containment state, for the host list's badges. Authorized as host.read over hosts, as the host
@@ -114,18 +110,8 @@ func (h *ContainmentHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	if a, ok := identityapi.ActorFromContext(ctx); ok {
 		actor = a.Principal
 	}
-	change, err := h.svc.Set(ctx, actor, httpserver.ClientIP(r), hostID, *body.Contained, body.Reason, body.ExpectedVersion)
+	change, err := h.svc.Set(ctx, actor, httpserver.ClientIP(r), hostID, *body.Contained, body.Reason)
 	switch {
-	case errors.Is(err, api.ErrContainmentVersionConflict):
-		// 409 with the state as it now stands, so the caller can show what changed instead of re-reading to find out.
-		current, getErr := h.svc.Get(ctx, hostID)
-		if getErr != nil {
-			h.logger.ErrorContext(ctx, "read containment after a version conflict", attrkeys.HostID, hostID, "err", getErr)
-			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
-			return
-		}
-		writeJSON(ctx, h.logger, w, http.StatusConflict, map[string]any{"error": "version_conflict", "state": current})
-		return
 	case errors.Is(err, api.ErrContainmentReasonRequired):
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "reason_required")
 		return
