@@ -106,7 +106,7 @@ func TestDialThroughProxyTunnelsToTheServer(t *testing.T) {
 
 	proxyURL, err := url.Parse("http://" + proxy.listener.Addr().String())
 	require.NoError(t, err)
-	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
@@ -131,7 +131,7 @@ func TestDialThroughProxySendsCredentialsFromTheProxyURL(t *testing.T) {
 
 	proxyURL, err := url.Parse("http://ir:s3cret@" + proxy.listener.Addr().String())
 	require.NoError(t, err)
-	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
@@ -151,7 +151,7 @@ func TestDialThroughProxyFailsWhenTheProxyRefuses(t *testing.T) {
 
 	proxyURL, err := url.Parse("http://" + proxy.listener.Addr().String())
 	require.NoError(t, err)
-	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
 	require.Error(t, err)
 	assert.Nil(t, conn)
 	assert.Contains(t, err.Error(), "403")
@@ -169,7 +169,7 @@ func TestDialThroughProxyLeavesTheTunnelsFirstBytes(t *testing.T) {
 
 	proxyURL, err := url.Parse("http://" + proxy.listener.Addr().String())
 	require.NoError(t, err)
-	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	conn, err := dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
@@ -188,7 +188,7 @@ func TestDialThroughProxyReportsTheProxyItCouldNotReach(t *testing.T) {
 	proxyURL, err := url.Parse("http://proxy.corp:3128")
 	require.NoError(t, err)
 
-	_, err = dialThroughProxy(t.Context(), failing, proxyURL, "edr.example.com:8443")
+	_, err = dialThroughProxy(t.Context(), failing, proxyURL, "proxy.corp:3128", "edr.example.com:8443")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "proxy.corp:3128")
 	assert.Contains(t, err.Error(), "no route")
@@ -209,7 +209,7 @@ func TestControlDialTakesTheRightPath(t *testing.T) {
 		proxyURL, err := url.Parse("http://" + proxy.listener.Addr().String())
 		require.NoError(t, err)
 
-		conn, err := controlDial(recordingDial(&dialed, &mu), proxyURL)(t.Context(), "edr.example.com:8443")
+		conn, err := controlDial(recordingDial(&dialed, &mu), proxyURL, proxyURL.Host)(t.Context(), "edr.example.com:8443")
 		require.NoError(t, err)
 		defer func() { _ = conn.Close() }()
 
@@ -226,7 +226,7 @@ func TestControlDialTakesTheRightPath(t *testing.T) {
 
 		// The dial itself fails, since nothing serves that name here. What is asserted is WHICH address was dialed: unwrapped,
 		// with no tunnel in the way.
-		_, _ = controlDial(recordingDial(&dialed, &mu), nil)(t.Context(), "edr.example.com:8443")
+		_, _ = controlDial(recordingDial(&dialed, &mu), nil, "")(t.Context(), "edr.example.com:8443")
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -247,29 +247,6 @@ func TestServerProxyTreatsAnUnusableAnswerAsNoProxy(t *testing.T) {
 	assert.Equal(t, "p:3128", found.Host)
 }
 
-func TestProxyAddressDefaultsThePortByScheme(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		given string
-		want  string
-	}{
-		{given: "http://proxy.corp:3128", want: "proxy.corp:3128"},
-		{given: "http://proxy.corp", want: "proxy.corp:80"},
-		{given: "https://proxy.corp", want: "proxy.corp:443"},
-		{given: "https://proxy.corp:8443", want: "proxy.corp:8443"},
-		// #nosec G101 -- a proxy URL carrying user info, which is the case under test, not a credential.
-		{given: "http://ir:s3cret@proxy.corp", want: "proxy.corp:80"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.given, func(t *testing.T) {
-			t.Parallel()
-			u, err := url.Parse(tc.given)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, proxyAddress(u))
-		})
-	}
-}
-
 // The dial's deadline must not outlive the dial. A control stream lives for hours on the connection this returns, so a deadline left
 // on it would tear the stream down the moment the dial's own timeout would have expired, which is a failure that only appears long
 // after the code that caused it.
@@ -285,7 +262,7 @@ func TestDialThroughProxyDoesNotLeaveItsDeadlineOnTheTunnel(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 600*time.Millisecond)
 	defer cancel()
-	conn, err := dialThroughProxy(ctx, recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	conn, err := dialThroughProxy(ctx, recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
@@ -315,7 +292,117 @@ func TestDialThroughProxyFailsWhenTheProxySaysNothing(t *testing.T) {
 	var dialed []string
 	proxyURL, perr := url.Parse("http://" + listener.Addr().String())
 	require.NoError(t, perr)
-	_, err = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	_, err = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read CONNECT response")
+}
+
+// fakeSOCKS answers one SOCKSv5 connect the way a proxy does and records the destination it was asked for.
+type fakeSOCKS struct {
+	listener net.Listener
+	mu       sync.Mutex
+	asked    string
+	methods  []byte
+}
+
+func newFakeSOCKS(t *testing.T) *fakeSOCKS {
+	t.Helper()
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	s := &fakeSOCKS{listener: listener}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, aerr := listener.Accept()
+		if aerr != nil {
+			return
+		}
+		s.handle(conn)
+	}()
+	return s
+}
+
+func (s *fakeSOCKS) handle(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(conn, greeting); err != nil {
+		return
+	}
+	methods := make([]byte, greeting[1])
+	if _, err := io.ReadFull(conn, methods); err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.methods = methods
+	s.mu.Unlock()
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil { // version 5, no authentication
+		return
+	}
+	header := make([]byte, 4) // VER, CMD, RSV, ATYP
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return
+	}
+	nameLen := make([]byte, 1)
+	if _, err := io.ReadFull(conn, nameLen); err != nil {
+		return
+	}
+	name := make([]byte, int(nameLen[0])+2) // the name plus its two port bytes
+	if _, err := io.ReadFull(conn, name); err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.asked = string(name[:len(name)-2]) + ":" + strconv.Itoa(int(name[len(name)-2])<<8|int(name[len(name)-1]))
+	s.mu.Unlock()
+	// Success, bound to 0.0.0.0:0, which is what a proxy answers when the caller does not need the bound address.
+	_, _ = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	// Held open so the caller has a connection to close.
+	buf := make([]byte, 1)
+	_, _ = conn.Read(buf)
+}
+
+func (s *fakeSOCKS) destination() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.asked
+}
+
+// A SOCKS proxy gets a SOCKS handshake, not an HTTP CONNECT. containment.TargetFor already treats socks5 as a proxy the lifeline
+// keeps reachable, so a contained host can be configured this way, and writing CONNECT at it would simply not connect.
+//
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/a-proxied-control-channel-tunnels-through-the-proxy
+func TestControlDialSpeaksSOCKSToASOCKSProxy(t *testing.T) {
+	t.Parallel()
+	socksProxy := newFakeSOCKS(t)
+	var mu sync.Mutex
+	var dialed []string
+
+	proxyURL, err := url.Parse("socks5://" + socksProxy.listener.Addr().String())
+	require.NoError(t, err)
+	conn, err := controlDial(recordingDial(&dialed, &mu), proxyURL, proxyURL.Host)(t.Context(), "edr.example.com:8443")
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	assert.Equal(t, "edr.example.com:8443", socksProxy.destination(),
+		"the server is named inside the SOCKS request, so no resolver on this host is asked for it")
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{socksProxy.listener.Addr().String()}, dialed, "and the proxy itself is reached through the pinned dial")
+}
+
+// An https:// proxy is spoken to over TLS. Writing the request in the clear would hand the operator's proxy credentials to anyone
+// on the path, which is the opposite of what configuring an https proxy asks for, so a proxy that cannot complete a handshake fails
+// the dial rather than falling back.
+func TestDialThroughProxyDoesNotSendCredentialsInTheClearToAnHTTPSProxy(t *testing.T) {
+	t.Parallel()
+	plain := newFakeProxy(t, http.StatusOK, "")
+	var mu sync.Mutex
+	var dialed []string
+
+	// An https URL pointed at a proxy that speaks no TLS: the handshake must fail before anything is written.
+	proxyURL, err := url.Parse("https://ir:s3cret@" + plain.listener.Addr().String())
+	require.NoError(t, err)
+	_, err = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS handshake with proxy")
+	assert.Nil(t, plain.seen(), "no request reached the proxy, so no credentials were written")
 }

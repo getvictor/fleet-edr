@@ -77,6 +77,13 @@ type Target struct {
 	Port int
 }
 
+// Address is the target as a dial address. Anything dialing the lifeline endpoint MUST use this spelling, because the pin is matched
+// by address: a caller that composes its own host and port can disagree about a default port and then dial unpinned, which on a
+// contained host is a dial that cannot succeed.
+func (t Target) Address() string {
+	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+}
+
 // TargetFor derives the lifeline target from the server URL. When the agent's transport sends requests for that URL through a proxy
 // (proxy is http.ProxyFromEnvironment in production), the proxy is what the host must keep reaching.
 func TargetFor(serverURL string, proxy func(*http.Request) (*url.URL, error)) (Target, error) {
@@ -189,6 +196,9 @@ func New(opts Options) *Manager {
 	}
 	return &Manager{opts: opts, waiters: map[chan Status]struct{}{}, wake: make(chan struct{}, 1)}
 }
+
+// Target returns the endpoint the lifeline keeps reachable: the server, or the proxy the agent reaches it through.
+func (m *Manager) Target() Target { return m.opts.Target }
 
 // Seed adopts the containment the network extension persisted, pinning the lifeline addresses it holds.
 //
