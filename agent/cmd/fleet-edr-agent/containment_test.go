@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,11 @@ import (
 
 func TestNewContainment(t *testing.T) {
 	t.Parallel()
-	send := func([]byte) error { return nil }
+	var sent atomic.Int32
+	send := func([]byte) error {
+		sent.Add(1)
+		return nil
+	}
 	cfg := &config.Config{ServerURL: "https://edr.example.com:8443", NetXPCService: "group.com.fleetdm.edr.networkextension"}
 
 	var dialed []string
@@ -53,8 +58,15 @@ func TestNewContainment(t *testing.T) {
 	literal := &config.Config{ServerURL: "https://[2001:0db8::0001]:8443", NetXPCService: cfg.NetXPCService}
 	literalMgr, literalDial := newContainment(literal, send, record, slog.Default(), "")
 	require.NotNil(t, literalMgr)
-	literalMgr.Observe(t.Context(), containment.Status{Contained: true, Version: 1, Applied: true})
-	_, _ = literalDial(t.Context(), "tcp", "[2001:0db8::0001]:8443")
+	// The refresh worker, which cmd/main starts alongside the manager: a status asks it to refresh rather than refreshing on the
+	// caller, so the pin this dial depends on is set by the worker.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go literalMgr.Run(ctx)
+	literalMgr.Observe(ctx, containment.Status{Contained: true, Version: 1, Applied: true})
+	require.Eventually(t, func() bool { return sent.Load() > 0 }, 5*time.Second, time.Millisecond,
+		"the worker resolved and sent the lifeline, which is what pins the dial below")
+	_, _ = literalDial(ctx, "tcp", "[2001:0db8::0001]:8443")
 	assert.Equal(t, []string{"[2001:db8::1]:8443"}, dialed)
 }
 
@@ -128,6 +140,9 @@ func TestReceiverLoop_ContainmentStatusIsConsumedNotUploaded(t *testing.T) {
 	var uploaded [][]byte
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	// The refresh worker, which cmd/main starts beside the receiver loop: a status asks it to refresh rather than refreshing on the
+	// receiver's event goroutine, so without it nothing resolves or sends.
+	go mgr.Run(ctx)
 	go startReceiverLoop(ctx, receiverLoopParams{
 		logger:           slog.Default(),
 		serviceLabel:     "test-ne",
@@ -220,6 +235,9 @@ func TestReceiverLoop_AReconnectSendsTheLifelineAgain(t *testing.T) {
 	connectors := make(chan *eventConnector, 4)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	// The refresh worker, which cmd/main starts beside the receiver loop: a status asks it to refresh rather than refreshing on the
+	// receiver's event goroutine, so without it nothing resolves or sends.
+	go mgr.Run(ctx)
 	go startReceiverLoop(ctx, receiverLoopParams{
 		logger:           slog.Default(),
 		serviceLabel:     "test-ne",

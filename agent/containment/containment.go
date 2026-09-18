@@ -167,6 +167,10 @@ type Manager struct {
 	// the agent unable to dial the server at all.
 	reportsLifeline bool
 	waiters         map[chan Status]struct{}
+	// wake asks the refresh worker to run, and holds at most one request: a refresh reads the state when it runs, so two requests
+	// that arrive together are answered by one pass. Observe signals it rather than refreshing inline, because Observe runs on the
+	// network extension receiver's single event goroutine and a refresh does a DNS lookup and an XPC send (issue #1066).
+	wake chan struct{}
 }
 
 // New returns a Manager. The host starts uncontained until the extension or a command says otherwise.
@@ -183,7 +187,7 @@ func New(opts Options) *Manager {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Manager{opts: opts, waiters: map[chan Status]struct{}{}}
+	return &Manager{opts: opts, waiters: map[chan Status]struct{}{}, wake: make(chan struct{}, 1)}
 }
 
 // Seed adopts the containment the network extension persisted, pinning the lifeline addresses it holds.
@@ -482,7 +486,12 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 			"addresses", addrStrings(confirmed))
 	}
 	if refresh {
-		m.refresh(ctx)
+		// Signalled, not run here. This is the receiver's event goroutine: a slow lookup on it stops every network-extension event
+		// behind this one, and once the receiver's buffer fills the events are dropped.
+		select {
+		case m.wake <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -506,13 +515,21 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.mu.Lock()
-			contained := m.state != nil && m.state.Contained
-			m.mu.Unlock()
-			if contained {
-				m.refresh(ctx)
-			}
+			m.refreshIfContained(ctx)
+		case <-m.wake:
+			m.refreshIfContained(ctx)
 		}
+	}
+}
+
+// refreshIfContained runs a refresh when the host is contained, and nothing otherwise: a release adopted between the request and this
+// pass must not be answered with a containment document.
+func (m *Manager) refreshIfContained(ctx context.Context) {
+	m.mu.Lock()
+	contained := m.state != nil && m.state.Contained
+	m.mu.Unlock()
+	if contained {
+		m.refresh(ctx)
 	}
 }
 
