@@ -532,7 +532,11 @@ func (m *Manager) refresh(ctx context.Context) {
 		return
 	}
 	m.refreshed = true
-	if slices.Equal(addrs, m.sent) {
+	// Skipped only when the filter is believed to hold these addresses AND they were sent over the connection now held. Both halves
+	// earn their place. Without the first, a send that no status ever answers is remembered as delivered and the filter keeps the old
+	// lifeline for as long as the host stays contained, because every later refresh resolves the same answer and stops. Without the
+	// second, a reconnect would not re-send, and a send over the dropped connection reports no delivery so it may never have arrived.
+	if slices.Equal(addrs, m.addresses) && slices.Equal(addrs, m.sent) {
 		m.mu.Unlock()
 		return
 	}
