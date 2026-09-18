@@ -71,7 +71,7 @@ type QueueFunc func(ctx context.Context, q sqlx.ExecerContext, state api.Contain
 //
 // The command is queued while that lock is still held, so the commands queued for one host are in the order of the states they carry
 // (issue #1073), and a change whose command cannot be queued records no state.
-func (s *Store) Set(ctx context.Context, hostID string, contained bool, reason, actor string,
+func (s *Store) Set(ctx context.Context, hostID string, contained bool, reason, actor string, expected *int64,
 	queue QueueFunc) (api.ContainmentState, bool, int64, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -88,11 +88,23 @@ func (s *Store) Set(ctx context.Context, hostID string, contained bool, reason, 
 	err = sqlx.GetContext(ctx, tx, &before, selectState+` WHERE host_id = ? FOR UPDATE`, hostID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// Only a release reaches here: a containment created the row above.
+		// Only a release reaches here: a containment created the row above. A host with no row has never been contained, which is
+		// version 0, so a caller expecting anything else was reading a state this host does not have.
+		if expected != nil && *expected != 0 {
+			return api.ContainmentState{}, false, 0, api.ErrContainmentVersionConflict
+		}
 		return api.ContainmentState{HostID: hostID}, false, 0, nil
 	case err != nil:
 		return api.ContainmentState{}, false, 0, fmt.Errorf("lock containment of %s: %w", hostID, err)
-	case before.Contained == contained:
+	}
+	// Checked under the row's lock and BEFORE the no-op check, so a caller that read the state and then asked is told the host moved
+	// rather than having its request applied to a state it never saw (issue #1076). Before the no-op check because a request that
+	// changes nothing still acted on a view that is gone, and reporting it as a success would leave the caller believing the state it
+	// read is the state that stands.
+	if expected != nil && *expected != before.Version {
+		return api.ContainmentState{}, false, 0, api.ErrContainmentVersionConflict
+	}
+	if before.Contained == contained {
 		return before.state(), false, 0, nil
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE host_containment

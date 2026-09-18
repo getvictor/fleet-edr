@@ -55,6 +55,10 @@ type ContainmentChange struct {
 // ErrContainmentReasonRequired is returned for a containment change without a reason.
 var ErrContainmentReasonRequired = errors.New("containment: reason is required")
 
+// ErrContainmentVersionConflict is returned for a containment change that named the version it expected when the host has moved on
+// since. The caller re-reads the state and decides again rather than applying over a change it never saw (issue #1076).
+var ErrContainmentVersionConflict = errors.New("containment: the host's containment changed since it was read")
+
 // ErrContainmentHostNotFound is returned for a containment change on a host with no active enrollment.
 var ErrContainmentHostNotFound = errors.New("containment: host has no active enrollment")
 
