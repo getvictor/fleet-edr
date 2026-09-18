@@ -1019,11 +1019,19 @@ export class ContainmentVersionConflictError extends Error {
   }
 }
 
-// conflictState reads the state a version conflict reports alongside its code. A body without one leaves the page to re-read.
+// conflictState reads the state a version conflict reports alongside its code.
+//
+// The shape is checked, not assumed, because what this returns is installed as the page's state and the NEXT change is made against
+// its version: a body whose state has no version would leave that undefined, and the retry would then name no version and be applied
+// unconditionally, which is the overwrite the version exists to prevent. Anything this does not recognise is left for the page to
+// re-read, which it does after a conflict.
 function conflictState(body: unknown): ContainmentState | null {
   if (typeof body !== "object" || body === null || !("state" in body)) return null;
-  const state = body.state;
-  return typeof state === "object" && state !== null ? (state as ContainmentState) : null;
+  const state: unknown = body.state;
+  if (typeof state !== "object" || state === null) return null;
+  const { host_id: hostId, version } = state as { host_id?: unknown; version?: unknown };
+  if (typeof hostId !== "string" || typeof version !== "number") return null;
+  return state as ContainmentState;
 }
 
 // containmentErrorMessages turns the containment change's typed refusals into what the operator can do about them. The server counts
