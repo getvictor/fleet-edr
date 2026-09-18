@@ -201,7 +201,7 @@ func (s *Service) InsertAudited(ctx context.Context, hostID, commandType string,
 		return 0, err
 	}
 	s.fastNotify(hostID)
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 	return id, nil
 }
 
@@ -221,7 +221,7 @@ func (s *Service) UpdateStatusAudited(ctx context.Context, req api.UpdateStatusR
 	}); err != nil {
 		return err
 	}
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 	return nil
 }
 

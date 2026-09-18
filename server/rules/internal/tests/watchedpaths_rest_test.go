@@ -119,9 +119,7 @@ func TestWatchedPathsREST_ReplacesTheSetPushesItAndAuditsIt(t *testing.T) {
 	assert.GreaterOrEqual(t, secondPayload.Epoch, firstPayload.Epoch)
 	assert.Positive(t, firstPayload.Epoch)
 
-	events := r.audit.snapshot()
-	require.Len(t, events, 2)
-	e := events[1]
+	e := r.auditRows(t, 2)[1]
 	assert.Equal(t, identityapi.AuditDetectionConfigWatchedPathsUpdate, e.Action)
 	assert.Equal(t, "watched_path_set", e.TargetType)
 	assert.Equal(t, "2", e.TargetID)
@@ -214,7 +212,7 @@ func TestWatchedPathsREST_RefusesAReplacementOfAnOutdatedSet(t *testing.T) {
 	assert.Equal(t, int64(1), stored.Version)
 	assert.Equal(t, []rulesapi.WatchedPath{startupItems}, stored.Paths, "the refused edit stored nothing")
 	assert.Len(t, r.inserter.snapshot(), 1, "and queued nothing")
-	assert.Len(t, r.audit.snapshot(), 1, "and audited nothing")
+	r.auditRows(t, 1) // the first replacement, and nothing for the refused one
 
 	statuses := make(chan int, 2)
 	var wg sync.WaitGroup
@@ -265,7 +263,7 @@ func TestWatchedPathsREST_OrdersConcurrentReplacements(t *testing.T) {
 		assert.Greater(t, epochs[v], epochs[v-1], "version %d must carry a later epoch than version %d", v, v-1)
 	}
 	previous := make(map[any]bool, writers)
-	for _, e := range r.audit.snapshot() {
+	for _, e := range r.auditRows(t, writers) {
 		version, ok := e.Payload["version"].(float64)
 		require.True(t, ok, "the audited version is a JSON number")
 		assert.InDelta(t, version-1, e.Payload["previous_version"], 0, "each change audits the set it replaced")
@@ -348,10 +346,7 @@ func TestWatchedPathsREST_RefusesAnInvalidSetWithoutStoringOrPushing(t *testing.
 
 	assert.Equal(t, int64(0), r.watchedPaths(t).Version)
 	assert.Empty(t, r.inserter.snapshot())
-	assert.Empty(t, r.audit.snapshot())
-	pending, err := auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable).PendingAuditEntries(t.Context(), auditoutbox.DrainBatch)
-	require.NoError(t, err)
-	assert.Empty(t, pending, "and left no audit entry behind")
+	assert.Empty(t, r.auditRows(t, 0), "and left no audit entry behind")
 }
 
 // spec:server-detection-rules-engine/detection-config-changes-commit-their-audit-entry/a-replacement-s-audit-row-reports-its-push
@@ -469,9 +464,7 @@ func TestWatchedPathsREST_ReportsAHostListFailure(t *testing.T) {
 	assert.EqualValues(t, 0, result["fanout_hosts"])
 
 	assert.Equal(t, int64(1), r.watchedPaths(t).Version, "the set is stored even though it reached no host")
-	events := r.audit.snapshot()
-	require.Len(t, events, 1)
-	assert.Equal(t, "host_lister_error", events[0].Payload["fanout_skipped_reason"])
+	assert.Equal(t, "host_lister_error", r.auditRows(t, 1)[0].Payload["fanout_skipped_reason"])
 	assert.Empty(t, r.inserter.snapshot())
 }
 
@@ -508,9 +501,7 @@ func TestWatchedPathsREST_KeepsTheChangeWhenThePushFails(t *testing.T) {
 	assert.Equal(t, 2, result.FanoutFailed)
 
 	assert.Equal(t, int64(1), r.watchedPaths(t).Version)
-	events := r.audit.snapshot()
-	require.Len(t, events, 1)
-	assert.EqualValues(t, 2, events[0].Payload["fanout_failed"])
+	assert.EqualValues(t, 2, r.auditRows(t, 1)[0].Payload["fanout_failed"])
 }
 
 // asJSON is v as an audit payload holds it once the outbox has stored and decoded it: JSON arrays, objects and numbers.

@@ -5,11 +5,14 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 )
@@ -27,6 +30,8 @@ type fakeAuthor struct {
 // a slice rather than delivering straight through is what lets a test assert the two are separable, which is the property the
 // outbox exists to give.
 type fakeOutbox struct {
+	// mu guards the entries: a change writes them and the sweep that delivers them runs on its own goroutine (issue #1089).
+	mu      sync.Mutex
 	entries []rulecontentapi.PendingAuditEntry
 	nextID  int64
 	// readErr and deleteErr drive the drain's failure paths, which decide whether an entry is retried or lost.
@@ -35,21 +40,34 @@ type fakeOutbox struct {
 }
 
 func (o *fakeOutbox) add(e rulecontentapi.AuditOutboxEntry) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.nextID++
 	o.entries = append(o.entries, rulecontentapi.PendingAuditEntry{ID: o.nextID, Kind: e.Kind, Payload: e.Payload})
 }
 
+// pending is how many entries are waiting, for a test asking whether delivery has settled.
+func (o *fakeOutbox) pending() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.entries)
+}
+
 func (o *fakeOutbox) PendingAuditEntries(_ context.Context, limit int) ([]rulecontentapi.PendingAuditEntry, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	if o.readErr != nil {
 		return nil, o.readErr
 	}
 	if len(o.entries) > limit {
-		return o.entries[:limit], nil
+		return slices.Clone(o.entries[:limit]), nil
 	}
-	return o.entries, nil
+	return slices.Clone(o.entries), nil
 }
 
 func (o *fakeOutbox) DeleteAuditEntries(_ context.Context, ids []int64) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	if o.deleteErr != nil {
 		return o.deleteErr
 	}
@@ -118,13 +136,49 @@ func (f *fakeValidator) Validate(_ context.Context, docs []rulecontentapi.Docume
 
 // recordingAudit captures every audit row, which is what most of these tests assert on.
 type recordingAudit struct {
+	// mu guards the events: they are recorded by the sweep's goroutine, not the change's (issue #1089).
+	mu     sync.Mutex
 	events []identityapi.AuditEvent
 	err    error
+	// drain and outbox are the delivery a change asks for, kept so rows can start it and see when it has settled.
+	drain    *auditoutbox.Drain
+	outbox   *fakeOutbox
+	sweeping sync.Once
 }
 
 func (a *recordingAudit) Record(_ context.Context, e identityapi.AuditEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Recorded even when it answers with an error, so a test can assert what the drain ASKED about, which is what says whether it
+	// stopped at a failure or carried on past it.
 	a.events = append(a.events, e)
 	return a.err
+}
+
+func (a *recordingAudit) recorded() []identityapi.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.events)
+}
+
+// rows returns the audit rows the changes so far produced, once the outbox has settled.
+//
+// A change no longer delivers its own row (issue #1089): it commits the entry and asks the sweep, which records it on its own
+// goroutine. Reading the recorder straight after a change would be reading a race, and asserting it is EMPTY straight after one
+// would be asserting nothing at all.
+//
+// The sweep this starts runs at the production interval, minutes away, so nothing here arrives on a tick: a row arrives because the
+// change asked for it, and a service that stopped asking fails these tests rather than passing minutes later. Settled means the
+// outbox is empty as well as the rows delivered, so a test expecting one row fails on a second rather than racing it.
+func (a *recordingAudit) rows(t *testing.T, want int) []identityapi.AuditEvent {
+	t.Helper()
+	a.sweeping.Do(func() { go a.drain.SweepLoop(t.Context(), 0) })
+	require.Eventually(t, func() bool {
+		return a.outbox.pending() == 0 && len(a.recorded()) >= want
+	}, 10*time.Second, 5*time.Millisecond, "the audit rows the changes committed are delivered without the change waiting for them")
+	rows := a.recorded()
+	require.Len(t, rows, want)
+	return rows
 }
 
 func newService(t *testing.T, author *fakeAuthor, v *fakeValidator, audit *recordingAudit) *Service {
@@ -134,8 +188,11 @@ func newService(t *testing.T, author *fakeAuthor, v *fakeValidator, audit *recor
 	if author.outbox == nil {
 		author.outbox = &fakeOutbox{}
 	}
-	s, err := New(author, v, author.outbox, audit, slog.New(slog.DiscardHandler))
+	drain, err := NewAuditDrain(author.outbox, audit, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
+	s, err := New(author, v, drain)
+	require.NoError(t, err)
+	audit.drain, audit.outbox = drain, author.outbox
 	return s
 }
 
@@ -158,8 +215,7 @@ func TestPut_IsAttributedWithTheStatedReason(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(11), version)
 
-	require.Len(t, audit.events, 1)
-	e := audit.events[0]
+	e := audit.rows(t, 1)[0]
 	assert.Equal(t, identityapi.AuditRuleContentDocumentPut, e.Action)
 	assert.Equal(t, "rule_content_document", e.TargetType)
 	assert.Equal(t, "authored/keychain_extra.yml", e.TargetID, "the row must name the document")
@@ -178,10 +234,10 @@ func TestDelete_IsAttributed(t *testing.T) {
 		Delete(t.Context(), testActor(), "rule superseded upstream", "imported/old_rule.yml")
 	require.NoError(t, err)
 
-	require.Len(t, audit.events, 1)
-	assert.Equal(t, identityapi.AuditRuleContentDocumentDelete, audit.events[0].Action,
+	deleted := audit.rows(t, 1)[0]
+	assert.Equal(t, identityapi.AuditRuleContentDocumentDelete, deleted.Action,
 		"a deletion must be distinguishable from a write, or the trail cannot say what happened")
-	assert.Equal(t, "imported/old_rule.yml", audit.events[0].TargetID)
+	assert.Equal(t, "imported/old_rule.yml", deleted.TargetID)
 }
 
 // spec:rule-content/every-authoring-change-is-attributable/a-refused-submission-is-not-recorded-as-a-mutation
@@ -198,7 +254,7 @@ func TestPut_RefusedIsNotAudited(t *testing.T) {
 		Put(t.Context(), testActor(), "attempting a change", rulecontentapi.Document{Path: "authored/bad.yml"})
 
 	require.ErrorIs(t, err, rulecontentapi.ErrRefused)
-	assert.Empty(t, audit.events, "a submission that changed nothing must not be recorded as a mutation")
+	assert.Empty(t, audit.rows(t, 0), "a submission that changed nothing must not be recorded as a mutation")
 }
 
 // TestDelete_NotFoundIsNotAudited is the same property on the other mutation. A delete that removed nothing is not a change.
@@ -211,7 +267,7 @@ func TestDelete_NotFoundIsNotAudited(t *testing.T) {
 		Delete(t.Context(), testActor(), "removing", "authored/never.yml")
 
 	require.ErrorIs(t, err, rulecontentapi.ErrDocumentNotFound)
-	assert.Empty(t, audit.events)
+	assert.Empty(t, audit.rows(t, 0))
 }
 
 // spec:rule-content/every-authoring-change-is-attributable/a-change-without-a-stated-reason-is-refused
@@ -234,7 +290,7 @@ func TestChangesRequireAReason(t *testing.T) {
 			require.ErrorIs(t, delErr, ErrReasonRequired)
 			assert.Empty(t, author.put, "the corpus must not be touched by a change nobody explained")
 			assert.Empty(t, author.deleted)
-			assert.Empty(t, audit.events)
+			assert.Empty(t, audit.rows(t, 0))
 		})
 	}
 }
@@ -256,11 +312,11 @@ func TestPut_WarningsAreRecorded(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"authored/a.yml will not run: unsupported field"}, warnings)
-	require.Len(t, audit.events, 1)
+	warned := audit.rows(t, 1)[0]
 	// A JSON round-trip turns []string into []any, so the elements are compared rather than the slice type.
-	require.Len(t, audit.events[0].Payload["warnings"], 1)
+	require.Len(t, warned.Payload["warnings"], 1)
 	assert.Equal(t, "authored/a.yml will not run: unsupported field",
-		audit.events[0].Payload["warnings"].([]any)[0])
+		warned.Payload["warnings"].([]any)[0])
 }
 
 // TestPut_CommittedChangeSurvivesAnAuditFailure pins the posture on the one ordering that has no good answer. The change is
@@ -290,7 +346,7 @@ func TestCheck_ChangesNothingAndAuditsNothing(t *testing.T) {
 	require.Error(t, err, "the check reports what would happen")
 	assert.Empty(t, author.put, "and touches nothing")
 	assert.Empty(t, author.deleted)
-	assert.Empty(t, audit.events, "nothing happened to the thing being audited")
+	assert.Empty(t, audit.rows(t, 0), "nothing happened to the thing being audited")
 	require.Len(t, v.saw, 1, "the validator is asked about the submitted document")
 }
 
@@ -316,14 +372,15 @@ func TestCheck_ReportsWarnings(t *testing.T) {
 // fleet detects loses its audit row. A contract a construction can silently violate is not a contract.
 func TestNew_RequiresEveryCollaborator(t *testing.T) {
 	t.Parallel()
-	_, noAuthor := New(nil, &fakeValidator{}, &fakeOutbox{}, &recordingAudit{}, nil)
+	drain, err := NewAuditDrain(&fakeOutbox{}, &recordingAudit{}, nil)
+	require.NoError(t, err)
+	_, noAuthor := New(nil, &fakeValidator{}, drain)
 	require.Error(t, noAuthor)
-	_, noValidator := New(&fakeAuthor{}, nil, &fakeOutbox{}, &recordingAudit{}, nil)
+	_, noValidator := New(&fakeAuthor{}, nil, drain)
 	require.Error(t, noValidator)
-	_, noRecorder := New(&fakeAuthor{}, &fakeValidator{}, &fakeOutbox{}, nil, nil)
-	require.Error(t, noRecorder, "a surface that cannot audit must not be constructible")
-	// The outbox is required for the same reason: a change that committed its entry into nothing is a change with no trail,
-	// reached by wiring rather than by failure.
-	_, noOutbox := New(&fakeAuthor{}, &fakeValidator{}, nil, &recordingAudit{}, nil)
-	require.Error(t, noOutbox, "a surface whose audit entries go nowhere must not be constructible")
+	// The drain is required for the same reason: a change whose audit entry nothing delivers is a change with no trail, reached
+	// by wiring rather than by failure. What the drain itself requires is for its own constructor to refuse, which
+	// TestDrain_RequiresItsCollaborators covers.
+	_, noDrain := New(&fakeAuthor{}, &fakeValidator{}, nil)
+	require.Error(t, noDrain, "a surface whose audit entries go nowhere must not be constructible")
 }

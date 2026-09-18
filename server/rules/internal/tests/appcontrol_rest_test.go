@@ -14,14 +14,17 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/auditoutbox"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
+	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -115,6 +118,37 @@ type appControlRig struct {
 	hosts    []string
 	actor    *identityapi.Actor
 	db       *sqlx.DB
+	// running starts the context's background loops on the first test that needs one, since a change no longer delivers its own
+	// audit row.
+	running sync.Once
+}
+
+// auditRows returns the audit rows the changes so far produced, once the outbox has settled.
+//
+// A change that goes through the outbox commits its entry and asks the sweep for it, which delivers it on the context's own
+// goroutine (issue #1089). So reading the recorder straight after a request would be reading a race, and asserting it is EMPTY
+// straight after one would be asserting nothing at all. App-control records its rows directly rather than through an outbox, and
+// those tests read the recorder as they always did.
+//
+// The context's loops are started the way cmd/main starts them, with the sweep at its production interval, minutes away: a row that
+// arrives inside this wait arrived because the change asked for it. Settled means the outbox is empty as well as the rows delivered,
+// so a test expecting two rows fails on a third rather than racing it.
+func (r *appControlRig) auditRows(t *testing.T, want int) []identityapi.AuditEvent {
+	t.Helper()
+	r.running.Do(func() {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() { defer close(done); r.rules.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+	})
+	outbox := auditoutbox.NewStore(r.db, detectionconfig.AuditOutboxTable)
+	require.Eventually(t, func() bool {
+		pending, err := outbox.PendingAuditEntries(t.Context(), 1)
+		return err == nil && len(pending) == 0 && len(r.audit.snapshot()) >= want
+	}, 30*time.Second, 10*time.Millisecond, "the audit rows the changes committed are delivered without the request waiting for them")
+	rows := r.audit.snapshot()
+	require.Len(t, rows, want)
+	return rows
 }
 
 // newAppControlRig wires a rules bootstrap with the demo-cut REST surface live. Hosts are a fixed []string the recordingInserter

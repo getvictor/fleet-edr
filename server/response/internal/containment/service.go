@@ -165,7 +165,7 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	// Both after the commit: a gateway told earlier could look for a command that is not there yet, and the entry is not a row to
 	// deliver until the change it records is durable.
 	s.notify(hostID)
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 	return change, nil
 }
 

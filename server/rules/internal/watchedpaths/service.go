@@ -168,5 +168,5 @@ func (s *Service) completeAudit(
 		s.logger.WarnContext(ctx, "watchedpaths: the push outlasted its audit entry's hold; the row is delivered without host counts",
 			"version", version)
 	}
-	s.drain.DeliverNow(ctx)
+	s.drain.DeliverSoon(ctx)
 }

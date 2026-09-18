@@ -40,9 +40,9 @@ func TestDrain_DeliversInOrderAndClearsWhatItDelivered(t *testing.T) {
 	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 2, delivered)
-	require.Len(t, audit.events, 2)
-	assert.Equal(t, identityapi.AuditRuleContentDocumentPut, audit.events[0].Action, "oldest first")
-	assert.Equal(t, identityapi.AuditRuleContentDocumentDelete, audit.events[1].Action)
+	require.Len(t, audit.recorded(), 2)
+	assert.Equal(t, identityapi.AuditRuleContentDocumentPut, audit.recorded()[0].Action, "oldest first")
+	assert.Equal(t, identityapi.AuditRuleContentDocumentDelete, audit.recorded()[1].Action)
 	assert.Empty(t, outbox.entries, "delivered entries are cleared")
 }
 
@@ -82,7 +82,7 @@ func TestDrain_StopsAtTheFirstFailureRatherThanSkippingIt(t *testing.T) {
 	require.Error(t, err)
 	// One ATTEMPT, not two: the recorder is asked about the first entry and the drain stops. The fake records what it was asked
 	// to record whether or not it reports success, which is what makes this the assertion that shows the second was never tried.
-	assert.Len(t, audit.events, 1, "the drain stops at the first failure rather than skipping past it")
+	assert.Len(t, audit.recorded(), 1, "the drain stops at the first failure rather than skipping past it")
 	assert.Len(t, outbox.entries, 2, "and neither entry is cleared")
 }
 
@@ -161,7 +161,7 @@ func TestDrain_SkipsAnEntryItCannotReadRatherThanStalling(t *testing.T) {
 	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
 	require.Error(t, err, "the undecodable entry is reported")
 	assert.Equal(t, 1, delivered, "and the entry behind it still lands")
-	require.Len(t, audit.events, 1)
+	require.Len(t, audit.recorded(), 1)
 	require.Len(t, outbox.entries, 1, "only the poison entry is left")
 	assert.Equal(t, auditoutbox.Kind, outbox.entries[0].Kind)
 }
@@ -192,7 +192,7 @@ func TestDrain_AReadFailureDeliversNothing(t *testing.T) {
 	delivered, err := newDrain(t, outbox, audit).Drain(context.Background())
 	require.Error(t, err)
 	assert.Zero(t, delivered)
-	assert.Empty(t, audit.events)
+	assert.Empty(t, audit.recorded())
 }
 
 // TestDrain_ADeleteFailureRedeliversRatherThanLosing is the at-least-once guarantee at its sharpest point. The rows were recorded
@@ -212,7 +212,7 @@ func TestDrain_ADeleteFailureRedeliversRatherThanLosing(t *testing.T) {
 	outbox.deleteErr = nil
 	_, err = newDrain(t, outbox, audit).Drain(context.Background())
 	require.NoError(t, err)
-	assert.Len(t, audit.events, 2, "redelivered, which is the at-least-once this trades for never losing a row")
+	assert.Len(t, audit.recorded(), 2, "redelivered, which is the at-least-once this trades for never losing a row")
 	assert.Empty(t, outbox.entries)
 }
 
