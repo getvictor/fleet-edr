@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,6 +88,13 @@ func (f *fakeExtension) sent() []document {
 	return append([]document(nil), f.docs...)
 }
 
+// reset forgets what was sent, so a test that drives several rounds can count each one rather than a running total.
+func (f *fakeExtension) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.docs = nil
+}
+
 // applies answers every document the way a healthy extension does: it holds and applies what it was sent.
 func applies(d document) *Status {
 	return &Status{Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true}
@@ -98,7 +106,42 @@ func newTestManager(t *testing.T, target Target, respond func(document) *Status)
 	ext := &fakeExtension{respond: respond}
 	m := New(Options{Target: target, Send: ext.send, Resolver: res, ApplyTimeout: 500 * time.Millisecond, RefreshInterval: time.Hour})
 	ext.mgr = m
+	// The refresh worker, which production always starts (cmd/main). Observe signals it rather than refreshing on the caller's
+	// goroutine, so a test that asserts a status led to a send has to let the worker run. The hour-long interval means only the
+	// signal fires here, never the ticker.
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	return m, ext, res
+}
+
+// requirePinned waits for the refresh worker to have pinned addrs, which a test cannot read straight after Observe any more.
+func requirePinned(t *testing.T, m *Manager, addr string, msgAndArgs ...any) {
+	t.Helper()
+	want := []netip.Addr{netip.MustParseAddr(addr)}
+	require.Eventually(t, func() bool {
+		return slices.Equal(m.pinned("edr.example.com:8443"), want)
+	}, 5*time.Second, time.Millisecond, msgAndArgs...)
+}
+
+// awaitSent waits for the refresh worker to have sent n documents. Used wherever a test previously read ext.sent() straight after
+// Observe, which worked only while a status refreshed on the caller's goroutine.
+func awaitSent(t *testing.T, ext *fakeExtension, n int) []document {
+	t.Helper()
+	require.Eventually(t, func() bool { return len(ext.sent()) >= n }, 5*time.Second, time.Millisecond,
+		"expected %d sends", n)
+	// Read again after the wait rather than closing over the result: the closure's copy is only assigned on the polls that ran, so
+	// returning it leaves callers indexing a slice the compiler cannot see was filled.
+	sent := ext.sent()
+	require.GreaterOrEqual(t, len(sent), n)
+	return sent
 }
 
 var serverTarget = Target{Host: "edr.example.com", Port: 8443}
@@ -290,7 +333,7 @@ func TestObserve_AContainmentHeldAcrossARestartIsRefreshedOnce(t *testing.T) {
 	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
 
 	m.Observe(t.Context(), held)
-	require.Len(t, ext.sent(), 1)
+	awaitSent(t, ext, 1)
 	assert.Equal(t, document{Version: 3, Epoch: 100, Contained: true,
 		Server: &server{Port: 8443, Addresses: []string{"203.0.113.9"}, Names: []string{"edr.example.com"}}}, ext.sent()[0])
 
@@ -314,15 +357,22 @@ func TestObserve_AFailedRefreshIsSentAgainOnTheNextStatus(t *testing.T) {
 	ext.err = errors.New("no connector")
 
 	m.Observe(t.Context(), held)
-	require.Len(t, ext.sent(), 1)
+	awaitSent(t, ext, 1)
 	assert.Empty(t, m.pinned("edr.example.com:8443"))
 
 	ext.mu.Lock()
 	ext.err = nil
 	ext.mu.Unlock()
-	m.Observe(t.Context(), held)
-	require.Len(t, ext.sent(), 2, "the next status sends the lifeline again")
-	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
+	// Statuses until one sends again, rather than one status and a wait. A send is recorded from inside the send itself, so the
+	// first one lands before the failing pass has finished recording that it failed, and a status arriving in that window finds the
+	// manager still mid-pass and asks for nothing. Repeating is what the property says anyway: a status after a failed refresh sends
+	// it again.
+	require.Eventually(t, func() bool {
+		m.Observe(t.Context(), held)
+		return len(ext.sent()) >= 2
+	}, 5*time.Second, 10*time.Millisecond, "a status after the failure sends the lifeline again")
+	// The pin is set by the refresh pass just after its send lands, so waiting for the send alone would race it.
+	requirePinned(t, m, "203.0.113.9")
 }
 
 // gatedResolver blocks each lookup until release is closed, after reporting that it started. A lookup nobody waits for fails rather
@@ -351,16 +401,26 @@ func TestObserve_AReleaseDuringTheLookupSendsNothing(t *testing.T) {
 	m := New(Options{Target: serverTarget, Send: ext.send, Resolver: res, RefreshInterval: time.Hour})
 	ext.mgr = m
 
+	// The worker, which the status below signals rather than refreshing on this goroutine.
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
-		close(done)
+		defer close(done)
+		m.Run(ctx)
 	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	m.Observe(ctx, Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
 	<-res.started
-	m.Observe(t.Context(), Status{Contained: false, Version: 4, Epoch: 100, Applied: true})
+	m.Observe(ctx, Status{Contained: false, Version: 4, Epoch: 100, Applied: true})
 	close(res.release)
-	<-done
-	assert.Empty(t, ext.sent())
+	// Never rather than Empty: the lookup has returned by now and the worker is free to send, so this has to hold over a window
+	// rather than at one instant, or it would pass simply by asking before the worker got there.
+	assert.Never(t, func() bool { return len(ext.sent()) > 0 }, 300*time.Millisecond, 5*time.Millisecond,
+		"a release adopted during the lookup is not answered with a containment document")
 	assert.Empty(t, m.pinned("edr.example.com:8443"))
 }
 
@@ -375,8 +435,20 @@ func TestObserve_AReleaseDuringTheRefreshSendLeavesDialsUnpinned(t *testing.T) {
 		return nil
 	}
 	m = New(Options{Target: serverTarget, Send: send, Resolver: res, RefreshInterval: time.Hour})
-	m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
-	assert.Empty(t, m.pinned("edr.example.com:8443"))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	m.Observe(ctx, Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+	assert.Never(t, func() bool { return len(m.pinned("edr.example.com:8443")) > 0 }, 300*time.Millisecond, 5*time.Millisecond,
+		"a release adopted while the refresh was being sent leaves dials unpinned")
 }
 
 // A status at the command's version from another epoch is not the command's confirmation: the extension holds some other state whose
@@ -429,12 +501,13 @@ func TestRun_RefreshesTheLifelineWhenTheAddressesMove(t *testing.T) {
 	m := New(Options{Target: serverTarget, Send: ext.send, Resolver: res, RefreshInterval: 10 * time.Millisecond})
 	ext.mgr = m
 	res.set("203.0.113.7")
-	m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
-	require.Len(t, ext.sent(), 1)
-
+	// The worker first: Observe signals it rather than refreshing on this goroutine, so nothing is sent until it is running.
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go m.Run(ctx)
+
+	m.Observe(ctx, Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+	awaitSent(t, ext, 1)
 	time.Sleep(60 * time.Millisecond)
 	assert.Len(t, ext.sent(), 1, "unchanged addresses are not resent")
 
@@ -498,6 +571,8 @@ func TestDialContext_PinsTheLifelineOnlyWhileContained(t *testing.T) {
 
 	// A containment and release this agent learns from the extension's status, as after an agent restart, pin and unpin the same way.
 	m.Observe(t.Context(), Status{Contained: true, Version: 5, Epoch: 1, Applied: true})
+	// The worker pins these, so the dial waits for it rather than racing it.
+	require.Eventually(t, func() bool { return len(m.pinned("edr.example.com:8443")) == 2 }, 5*time.Second, time.Millisecond)
 	_, _ = dial(t.Context(), "tcp", "edr.example.com:8443")
 	assert.Equal(t, []string{"203.0.113.7:8443", "203.0.113.8:8443"}, reset())
 	m.Observe(t.Context(), Status{Contained: false, Version: 6, Epoch: 1, Applied: true})
@@ -660,15 +735,19 @@ func TestReconnected_TheNextStatusSendsTheLifelineAgain(t *testing.T) {
 	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
 	m.Observe(t.Context(), held)
 	m.Observe(t.Context(), held)
-	require.Len(t, ext.sent(), 1)
+	awaitSent(t, ext, 1)
+	// Before the reconnect, not after: a send is recorded from inside the send, so waiting for it alone leaves the pass still to
+	// record what it sent, and a reconnect lands in that window and invalidates it.
+	requirePinned(t, m, "203.0.113.9")
 
 	m.Reconnected()
-	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"), "dials stay pinned")
+	requirePinned(t, m, "203.0.113.9", "dials stay pinned across the reconnect")
 	m.Observe(t.Context(), held)
-	require.Len(t, ext.sent(), 2)
-	assert.Equal(t, []string{"203.0.113.9"}, ext.sent()[1].Server.Addresses)
+	sent := awaitSent(t, ext, 2)
+	assert.Equal(t, []string{"203.0.113.9"}, sent[1].Server.Addresses)
 	m.Observe(t.Context(), held)
-	assert.Len(t, ext.sent(), 2)
+	assert.Never(t, func() bool { return len(ext.sent()) > 2 }, 300*time.Millisecond, 5*time.Millisecond,
+		"delivered over the current connection, it is not sent a third time")
 }
 
 // A send that completes over a connection the extension has since replaced is not recorded as sent, so the status on the new connection
@@ -679,19 +758,44 @@ func TestRefresh_AReconnectDuringTheSendIsSentAgain(t *testing.T) {
 	res.set("203.0.113.9")
 	var m *Manager
 	var sends atomic.Int32
+	// reconnected closes once the first send has been answered with a reconnect. The count alone is not that: it is incremented
+	// before Reconnected runs, so a status waiting on it can reach the manager while it still holds the pre-reconnect state and ask
+	// for nothing.
+	reconnected := make(chan struct{})
 	send := func([]byte) error {
 		if sends.Add(1) == 1 {
 			m.Reconnected()
+			close(reconnected)
 		}
 		return nil
 	}
 	m = New(Options{Target: serverTarget, Send: send, Resolver: res, RefreshInterval: time.Hour})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
 	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
-	m.Observe(t.Context(), held)
-	m.Observe(t.Context(), held)
-	assert.Equal(t, int32(2), sends.Load())
-	m.Observe(t.Context(), held)
-	assert.Equal(t, int32(2), sends.Load(), "delivered over the current connection, it is not sent a third time")
+	// One status at a time, waiting for each send: the worker coalesces requests, so two fired together would be answered by one
+	// pass and the count below would be about the coalescing rather than about the reconnect.
+	m.Observe(ctx, held)
+	select {
+	case <-reconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first send never happened")
+	}
+	m.Observe(ctx, held)
+	require.Eventually(t, func() bool { return sends.Load() == 2 }, 5*time.Second, time.Millisecond,
+		"the reconnect during the first send means the next status sends it again")
+	m.Observe(ctx, held)
+	assert.Never(t, func() bool { return sends.Load() > 2 }, 300*time.Millisecond, 5*time.Millisecond,
+		"delivered over the current connection, it is not sent a third time")
 }
 
 // Refreshes run one at a time, so a slower lookup cannot deliver its addresses after a newer one.
@@ -950,7 +1054,7 @@ func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
 	m.Observe(t.Context(), Status{Contained: true, Version: 9, Epoch: 200, Applied: true})
 	m.Seed(path)
 
-	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
+	requirePinned(t, m, "203.0.113.9", "the state the extension reported, refreshed by the worker, not the one Seed read from disk")
 }
 
 // spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/dials-follow-the-lifeline-the-extension-confirms
@@ -970,7 +1074,7 @@ func TestObserve_DialsFollowTheLifelineTheExtensionConfirms(t *testing.T) {
 	}
 
 	m.Observe(t.Context(), holds("203.0.113.7"))
-	require.Len(t, ext.sent(), 1, "the new lifeline was sent")
+	awaitSent(t, ext, 1)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
 		"dials stay on the lifeline the filter holds while the one just sent is unconfirmed")
 
@@ -994,8 +1098,11 @@ func TestObserve_ARefreshTheExtensionDidNotApplyIsSentAgain(t *testing.T) {
 
 	for range 3 {
 		m.Observe(t.Context(), holds("203.0.113.7"))
+		// One at a time: the worker coalesces requests, so three statuses fired at once would be answered by fewer passes. Waiting
+		// for each send is what makes this about the retry rather than about the coalescing.
+		awaitSent(t, ext, 1)
+		ext.reset()
 	}
-	assert.Len(t, ext.sent(), 3, "each status that does not confirm the new lifeline sends it again")
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
 		"and dials stay on the one the filter still holds")
 }
@@ -1009,7 +1116,7 @@ func TestObserve_AnExtensionThatDoesNotReportItsLifelineStillPins(t *testing.T) 
 	silent := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
 
 	m.Observe(t.Context(), silent)
-	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.7")}, m.pinned("edr.example.com:8443"),
+	requirePinned(t, m, "203.0.113.7",
 		"what was sent, as before this change: there is no confirmation coming, and pinning nothing would leave the agent unable to "+
 			"dial the server at all")
 
@@ -1018,8 +1125,7 @@ func TestObserve_AnExtensionThatDoesNotReportItsLifelineStillPins(t *testing.T) 
 	res.set("203.0.113.9")
 	m.Reconnected()
 	m.Observe(t.Context(), silent)
-	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"),
-		"a refresh against such an extension pins what it sent")
+	requirePinned(t, m, "203.0.113.9", "a refresh against such an extension pins what it sent")
 }
 
 // spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-lifeline-no-status-confirms-is-sent-again
@@ -1035,7 +1141,7 @@ func TestRun_ASendNoStatusConfirmsIsSentAgain(t *testing.T) {
 	// The extension holds .7 and keeps saying so, which is also what a handoff that never arrived looks like from here.
 	holds7 := Status{Contained: true, Version: 3, Epoch: 100, Applied: true, AppliedAddresses: []string{"203.0.113.7"}}
 	m.Observe(t.Context(), holds7)
-	require.Len(t, ext.sent(), 1, "the new lifeline was sent once")
+	awaitSent(t, ext, 1)
 
 	// The periodic refresh runs again with nothing having confirmed it.
 	m.refresh(t.Context())
@@ -1073,4 +1179,107 @@ func TestDecodeStatus_ReadsTheExtensionsWireShape(t *testing.T) {
 		`{"applied":false,"contained":true,"epoch":100,"error":"filter not running","version":4}}`))
 	assert.Nil(t, none.AppliedAddresses)
 	assert.Equal(t, "filter not running", none.Error)
+}
+
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-status-does-not-wait-for-the-lifeline-lookup
+//
+// Observe runs on the network extension receiver's single event goroutine (cmd/main's OnEvent). A refresh does a DNS lookup and an
+// XPC send, so doing it there stops every network-extension event behind this one, and once the receiver's 4,096-entry buffer fills
+// the events are dropped. This asserts Observe returns while the lookup is still blocked, which is the whole of that coupling.
+func TestObserve_DoesNotWaitForTheLifelineLookup(t *testing.T) {
+	t.Parallel()
+	res := &gatedResolver{started: make(chan struct{}), release: make(chan struct{})}
+	ext := &fakeExtension{}
+	m := New(Options{Target: serverTarget, Send: ext.send, Resolver: res, RefreshInterval: time.Hour})
+	ext.mgr = m
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		close(res.release)
+		<-done
+	})
+
+	returned := make(chan struct{})
+	go func() {
+		m.Observe(ctx, Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+		close(returned)
+	}()
+
+	// The worker has the lookup and is stuck in it.
+	select {
+	case <-res.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh worker never started the lookup")
+	}
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Observe is waiting for the lookup, which blocks the receiver's event pump")
+	}
+}
+
+// countingGatedResolver blocks its first lookup until released and counts every lookup it is asked for.
+type countingGatedResolver struct {
+	lookups atomic.Int32
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *countingGatedResolver) LookupNetIP(ctx context.Context, _, _ string) ([]netip.Addr, error) {
+	if r.lookups.Add(1) == 1 {
+		r.once.Do(func() { close(r.started) })
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return []netip.Addr{netip.MustParseAddr("203.0.113.7")}, nil
+}
+
+// The worker holds one refresh request, not one per status. Without that, a burst of statuses arriving while a lookup is in flight
+// would queue a lookup each, and every one of them would resolve and send: the send count alone cannot tell that apart, because the
+// later passes find the addresses already sent and stop. Counting lookups is what distinguishes coalescing from deduplicating.
+func TestObserve_StatusesDuringARefreshAreAnsweredByOnePass(t *testing.T) {
+	t.Parallel()
+	res := &countingGatedResolver{started: make(chan struct{}), release: make(chan struct{})}
+	ext := &fakeExtension{}
+	m := New(Options{Target: serverTarget, Send: ext.send, Resolver: res, RefreshInterval: time.Hour})
+	ext.mgr = m
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	m.Observe(ctx, held)
+	select {
+	case <-res.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the worker never started the first lookup")
+	}
+
+	// Five more statuses while that lookup is stuck. Each asks for a refresh, and the one-deep request holds one.
+	for range 5 {
+		m.Observe(ctx, held)
+	}
+	close(res.release)
+
+	// Two passes: the one in flight, and the one its queued request asks for. Never six.
+	require.Eventually(t, func() bool { return res.lookups.Load() >= 2 }, 5*time.Second, time.Millisecond,
+		"the queued request is answered after the pass in flight")
+	assert.Never(t, func() bool { return res.lookups.Load() > 2 }, 300*time.Millisecond, 5*time.Millisecond,
+		"six statuses during one refresh must not queue six lookups")
 }
