@@ -278,10 +278,12 @@ final class NetworkContainmentTests: XCTestCase {
     // MARK: status
 
     // spec:extension-network-response/the-extension-reports-containment-status/the-status-says-whether-containment-was-applied
+    // spec:extension-network-response/the-extension-reports-containment-status/the-status-names-the-lifeline-the-filter-enforces
     func testStatusWireShape() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let failed = NetworkContainmentStatus(contained: true, version: 3, epoch: 100, applied: false, error: "filter not running", appliedAddresses: nil)
+        let failed = NetworkContainmentStatus(contained: true, version: 3, epoch: 100, applied: false,
+                                              error: "filter not running", appliedAddresses: nil)
         XCTAssertEqual(String(bytes: try encoder.encode(failed), encoding: .utf8),
                        #"{"applied":false,"contained":true,"epoch":100,"error":"filter not running","version":3}"#)
         let applied = NetworkContainmentStatus(contained: false, version: 4, epoch: 100, applied: true, error: nil, appliedAddresses: nil)

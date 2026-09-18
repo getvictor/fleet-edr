@@ -950,7 +950,7 @@ func TestSeed_DoesNotReplaceAStateTheExtensionReported(t *testing.T) {
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.9")}, m.pinned("edr.example.com:8443"))
 }
 
-// spec:agent-command-executor/the-agent-refreshes-a-contained-hosts-lifeline/dials-follow-the-lifeline-the-extension-confirms
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/dials-follow-the-lifeline-the-extension-confirms
 //
 // The defect this covers (issue #1066): an XPC send only hands the message off. If the extension refuses the refresh or its filter
 // apply fails, the filter still allows the addresses it holds, so an agent that pinned dials to what it sent would dial addresses the
@@ -976,7 +976,7 @@ func TestObserve_DialsFollowTheLifelineTheExtensionConfirms(t *testing.T) {
 		"the confirmation moves the pins")
 }
 
-// spec:agent-command-executor/the-agent-refreshes-a-contained-hosts-lifeline/a-refresh-the-extension-did-not-apply-is-sent-again
+// spec:agent-command-executor/the-lifeline-is-kept-current-while-contained/a-refresh-the-extension-did-not-apply-is-sent-again
 //
 // Before this, a refusal was permanent: the agent recorded the addresses as sent, and every later refresh resolved the same answer,
 // found it equal to what was sent, and stopped. The host kept a lifeline pointing at a server that had moved.
