@@ -58,6 +58,79 @@ final class ContainedDNSTests: XCTestCase {
         XCTAssertEqual(ContainedDNS.decision(for: Data(padded), containment: contained), .forwardQuestion(Data(expected)))
     }
 
+    /// ednsQuery builds a query for the allowed name carrying one OPT record with the given size, TTL bytes and option data.
+    private func ednsQuery(size: UInt16, ttl: [UInt8] = [0, 0, 0, 0], options: [UInt8] = [],
+                           additional: UInt16 = 1) -> Data {
+        var bytes: [UInt8] = [0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                              UInt8(additional >> 8), UInt8(additional & 0xFF)]
+        for label in name("edr.example.com") {
+            bytes.append(UInt8(label.count))
+            bytes += label
+        }
+        bytes += [0, 0x00, 0x01, 0x00, 0x01]
+        bytes += [0, 0x00, 0x29, UInt8(size >> 8), UInt8(size & 0xFF)] + ttl
+        bytes += [UInt8(options.count >> 8), UInt8(options.count & 0xFF)] + options
+        return Data(bytes)
+    }
+
+    /// forwarded is the query the decision says to send, for a lookup the lifeline allows.
+    private func forwarded(_ datagram: Data) -> Data? {
+        guard case let .forwardQuestion(sent) = ContainedDNS.decision(for: datagram, containment: contained) else { return nil }
+        return sent
+    }
+
+    /// expected is the header and question of an allowed lookup, optionally followed by a rebuilt OPT record of the given size.
+    private func expectedForward(udpSize: UInt16?) -> Data {
+        var bytes: [UInt8] = [0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, udpSize == nil ? 0 : 1]
+        bytes += [0x03, 0x65, 0x64, 0x72, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63, 0x6F, 0x6D, 0x00]
+        bytes += [0x00, 0x01, 0x00, 0x01]
+        if let udpSize {
+            bytes += [0, 0x00, 0x29, UInt8(udpSize >> 8), UInt8(udpSize & 0xFF), 0, 0, 0, 0, 0, 0]
+        }
+        return Data(bytes)
+    }
+
+    // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/an-allowed-lookup-keeps-a-rebuilt-udp-size
+    //
+    // Without an OPT record the resolver answers within 512 octets, so an allowed name with many addresses comes back truncated and the
+    // stub retries over TCP, which is closed while contained: the name stops resolving (issue #1072). The rebuilt record is this
+    // proxy's own and carries a size and nothing else.
+    func testAnAllowedLookupKeepsAUDPSizeWhenTheClientOfferedOne() {
+        XCTAssertEqual(forwarded(ednsQuery(size: 4096)), expectedForward(udpSize: 1232),
+                       "the size is capped at what traverses the internet unfragmented")
+        XCTAssertEqual(forwarded(ednsQuery(size: 1232)), expectedForward(udpSize: 1232))
+        XCTAssertEqual(forwarded(ednsQuery(size: 800)), expectedForward(udpSize: 800),
+                       "a client asking for less than the cap is not given more than it can take")
+        XCTAssertEqual(forwarded(ednsQuery(size: 12)), expectedForward(udpSize: 512),
+                       "and a nonsense size is floored rather than passed on")
+    }
+
+    // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/an-allowed-lookup-carries-only-its-question
+    //
+    // Everything the client can put in an OPT record beyond the size is left behind, and anything this does not recognise takes the
+    // query back to the header and question alone rather than being forwarded unread.
+    func testAnOPTRecordCarryingAnythingElseIsNotForwarded() {
+        let cases: [(String, Data)] = [
+            ("an option", ednsQuery(size: 1232, options: [0x00, 0x0A, 0x00, 0x02, 0xAB, 0xCD])),
+            ("the DNSSEC-OK bit", ednsQuery(size: 1232, ttl: [0, 0, 0x80, 0])),
+            ("a reserved flag", ednsQuery(size: 1232, ttl: [0, 0, 0x00, 0x01])),
+            ("an EDNS version this does not know", ednsQuery(size: 1232, ttl: [0, 1, 0, 0])),
+            ("an extended RCODE", ednsQuery(size: 1232, ttl: [1, 0, 0, 0])),
+            ("a header counting records it does not carry", ednsQuery(size: 1232, additional: 2))
+        ]
+        for (what, datagram) in cases {
+            XCTAssertEqual(forwarded(datagram), expectedForward(udpSize: nil), "\(what) leaves the query without an OPT record")
+        }
+    }
+
+    // A record that is not an OPT, and a second question's worth of bytes, are both left behind: only the shape this reads is kept.
+    func testARecordThatIsNotAnOPTIsNotForwarded() {
+        var bytes = [UInt8](ednsQuery(size: 1232))
+        bytes[bytes.count - 10] = 0x00
+        bytes[bytes.count - 9] = 0x01 // type A where the OPT type belongs
+        XCTAssertEqual(forwarded(Data(bytes)), expectedForward(udpSize: nil))
+    }
+
     // spec:extension-network-response/a-contained-host-resolves-only-the-edr-server-s-name/any-other-name-is-refused-locally
     func testAnyOtherNameIsAnsweredRefusedWithTheQuestionAndNoRecords() {
         let decision = ContainedDNS.decision(for: query(name("exfil.attacker.example"), edns: true), containment: contained)
