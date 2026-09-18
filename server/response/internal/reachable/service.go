@@ -1,9 +1,9 @@
 package reachable
 
 import (
+	"cmp"
 	"context"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -94,34 +94,44 @@ func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr,
 	})
 }
 
-// diff reports what the replacement changed, as the strings an operator reads: destinations that arrived, destinations that left,
-// and destinations that stayed but were renamed.
+// diff reports what the replacement changed, as the entries themselves: destinations that arrived, destinations that left, and
+// destinations that stayed but were renamed.
+//
+// Structured, NOT rendered. An earlier version joined the fields into strings like "10.0.0.0/8 (corporate)" and paired renames with
+// an arrow, which put an operator-controlled note inside a format a reader has to parse: a note containing the delimiter, a bracket
+// or a newline could make one change read as another in the trail that exists to record who widened containment. Entries carry their
+// own fields instead, so there is no delimiter to forge and a reader can filter on a field rather than pattern-match a sentence.
 //
 // Arrival and departure are judged on destination, port and transport, NOT on the whole entry: a note edited on an entry that
 // already existed is not a destination arriving and leaving, and reporting it as both would bury whichever one actually changed. A
-// rename is still a change worth recording, though, because the note is how the console and this trail name a destination, so it is
-// reported as itself rather than dropped.
-func diff(previous, next []api.ReachableAddress) (added, removed, renamed []string) {
+// rename is still a change worth recording, though, because the note is how the console and this trail name a destination.
+func diff(previous, next []api.ReachableAddress) (added, removed []api.ReachableAddress, renamed []map[string]api.ReachableAddress) {
 	before := keyed(previous)
 	after := keyed(next)
 	for key, entry := range after {
 		was, existed := before[key]
 		switch {
 		case !existed:
-			added = append(added, label(entry))
+			added = append(added, entry)
 		case was.Note != entry.Note:
-			renamed = append(renamed, label(was)+" -> "+label(entry))
+			renamed = append(renamed, map[string]api.ReachableAddress{"from": was, "to": entry})
 		}
 	}
 	for key, entry := range before {
 		if _, ok := after[key]; !ok {
-			removed = append(removed, label(entry))
+			removed = append(removed, entry)
 		}
 	}
-	slices.Sort(added)
-	slices.Sort(removed)
-	slices.Sort(renamed)
+	// Sorted so one replacement always renders the same way, whatever order the map walked in.
+	slices.SortFunc(added, byDestination)
+	slices.SortFunc(removed, byDestination)
+	slices.SortFunc(renamed, func(a, b map[string]api.ReachableAddress) int { return byDestination(a["to"], b["to"]) })
 	return added, removed, renamed
+}
+
+// byDestination orders entries the way an operator reads them, by address then port then transport.
+func byDestination(a, b api.ReachableAddress) int {
+	return cmp.Or(strings.Compare(a.CIDR, b.CIDR), cmp.Compare(a.Port, b.Port), strings.Compare(a.Transport, b.Transport))
 }
 
 // keyed indexes entries by destination alone, so the same destination under two notes is one key.
@@ -133,26 +143,4 @@ func keyed(addresses []api.ReachableAddress) map[api.ReachableAddress]api.Reacha
 		out[key] = a
 	}
 	return out
-}
-
-// label renders one entry the way an operator reads it: the destination, then the port and transport when it has them, then the name
-// the operator gave it. The name is what makes the trail legible, since "the MDM server" is what a reviewer is looking for and an
-// address is what they would otherwise have to recognise.
-func label(a api.ReachableAddress) string {
-	var b strings.Builder
-	b.WriteString(a.CIDR)
-	if a.Port != 0 {
-		b.WriteString(":")
-		b.WriteString(strconv.Itoa(a.Port))
-	}
-	if a.Transport != "" {
-		b.WriteString("/")
-		b.WriteString(a.Transport)
-	}
-	if a.Note != "" {
-		b.WriteString(" (")
-		b.WriteString(a.Note)
-		b.WriteString(")")
-	}
-	return b.String()
 }

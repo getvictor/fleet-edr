@@ -547,7 +547,9 @@ paths:
                     $ref: "#/components/schemas/ReachableAddress"
                 reason:
                   type: string
-                  description: Why the set is changing. Required and audited.
+                  description: |
+                    Why the set is changing. Required, and recorded in the audit trail together with the destinations the
+                    replacement added, removed and renamed, each carried as its own fields rather than as rendered text.
                 expected_version:
                   type: integer
                   format: int64

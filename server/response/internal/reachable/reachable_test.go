@@ -141,10 +141,13 @@ func TestAReplacementIsAuditedWithWhatChanged(t *testing.T) {
 	assert.Equal(t, "swapping the MDM server for the collection share", latest.Payload["reason"])
 	// What changed, not only where it ended up: a reviewer reading the second entry can see the MDM server left without
 	// diffing it against the first.
-	// The operator's own name for each destination rides along: "the MDM server" is what a reviewer is looking for, and an address
-	// is what they would otherwise have to recognise.
-	assert.Equal(t, []any{"198.51.100.5/32 (forensic share)"}, latest.Payload["added"])
-	assert.Equal(t, []any{"192.0.2.7/32:443/tcp (MDM server)"}, latest.Payload["removed"])
+	// Structured, with the operator's own name for each destination: "the MDM server" is what a reviewer looks for, and an address
+	// is what they would otherwise have to recognise. Fields rather than a rendered sentence, so a note cannot forge a delimiter
+	// and make one change read as another.
+	assert.Equal(t, []any{map[string]any{"cidr": "198.51.100.5/32", "note": "forensic share"}}, latest.Payload["added"])
+	assert.Equal(t, []any{map[string]any{
+		"cidr": "192.0.2.7/32", "port": float64(443), "transport": "tcp", "note": "MDM server",
+	}}, latest.Payload["removed"])
 }
 
 // A note edited on an address that was already there is not that address arriving and leaving again.
@@ -164,7 +167,10 @@ func TestEditingANoteIsNotReportedAsAChangeOfDestination(t *testing.T) {
 	assert.NotContains(t, events[1].Payload, "removed", "nor did it leave")
 	// It is still a change, and the trail says which name became which. Recording nothing would leave a rename invisible, and the
 	// note is how this trail identifies a destination at all.
-	assert.Equal(t, []any{"192.0.2.7/32 (MDM) -> 192.0.2.7/32 (MDM server (Jamf))"}, events[1].Payload["renamed"])
+	assert.Equal(t, []any{map[string]any{
+		"from": map[string]any{"cidr": "192.0.2.7/32", "note": "MDM"},
+		"to":   map[string]any{"cidr": "192.0.2.7/32", "note": "MDM server (Jamf)"},
+	}}, events[1].Payload["renamed"])
 	// InDelta with no tolerance: the count arrives as a JSON number, so it is a float64 and testifylint refuses Equal on one.
 	assert.InDelta(t, 1, events[1].Payload["count"], 0, "the set is still one address")
 }
@@ -250,4 +256,35 @@ func TestEachReplacementIsStampedAfterTheOneBefore(t *testing.T) {
 		}
 		previous = &set
 	}
+}
+
+// A note is operator text, and the audit trail is the record of who widened containment, so the two must not be able to impersonate
+// each other. An earlier version rendered entries into sentences like "10.0.0.0/8 (corporate) -> ..."; a note carrying that
+// delimiter, a bracket or a newline could then make one change read as another to anyone scanning the trail.
+//
+// The fix is structural rather than escaping: entries are carried as fields, so there is no format to forge. This pins that, using a
+// note built out of exactly the pieces the old rendering used as syntax.
+//
+// spec:server-host-containment/operators-choose-what-a-contained-host-can-still-reach/widening-the-set-is-audited-with-its-reason
+func TestAnAdversarialNoteCannotForgeAnAuditEntry(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	const forged = ") -> 198.51.100.5/32 (innocent\nremoved: 10.0.0.0/8 (corporate)"
+
+	_, err := f.svc.Replace(t.Context(), operator, "",
+		[]api.ReachableAddress{{CIDR: "192.0.2.7", Note: forged}}, "adding one address", nil)
+	require.NoError(t, err)
+
+	events := f.deliver(t)
+	require.Len(t, events, 1)
+	added, ok := events[0].Payload["added"].([]any)
+	require.True(t, ok, "added is a list of entries, not a rendered string")
+	require.Len(t, added, 1, "one address was added, whatever its note says")
+
+	entry, ok := added[0].(map[string]any)
+	require.True(t, ok, "each entry carries its own fields, so a note cannot be read as another entry's")
+	assert.Equal(t, "192.0.2.7/32", entry["cidr"])
+	// The note is kept verbatim, in its own field, where it is text and not syntax.
+	assert.Equal(t, forged, entry["note"])
+	assert.NotContains(t, events[0].Payload, "removed", "nothing was removed, whatever the note spells")
 }
