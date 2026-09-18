@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/fleetdm/edr/server/catchup"
 )
 
 // Command mirrors a row in the commands table. Field tags preserve
@@ -44,6 +46,29 @@ const (
 	// StatusCancelled it is reachable only from StatusPending.
 	StatusExpired Status = "expired"
 )
+
+// Catchup maps a command's status onto the vocabulary the shared catch-up decision reads (issue #1071).
+//
+// Written out rather than cast, and here rather than at each consumer, because this is the file a rename happens in. The decision
+// leaves a status it does not recognize alone, so a status that stopped mapping would silently stop the catch-up resending to every
+// host holding one, with nothing failing. A case missing here is caught by the test that walks every status this type has.
+func (s Status) Catchup() catchup.Status {
+	switch s {
+	case StatusPending:
+		return catchup.StatusPending
+	case StatusAcked:
+		return catchup.StatusAcked
+	case StatusCompleted:
+		return catchup.StatusCompleted
+	case StatusFailed:
+		return catchup.StatusFailed
+	case StatusExpired:
+		return catchup.StatusExpired
+	case StatusCancelled:
+		return catchup.StatusCancelled
+	}
+	return ""
+}
 
 // UndeliverableWindow is how far back the undeliverable-command count looks.
 //
