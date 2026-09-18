@@ -875,7 +875,9 @@ async function typedMutationEndpoint<T>(
   path: string,
   body: unknown,
   parseResponse: (res: Response) => Promise<T>,
-  makeError: (code: string, message: string, status: number) => Error,
+  // body is the parsed error response, so a caller that reports more than a code (a containment conflict carries the state it lost
+  // to) does not have to read the response a second time.
+  makeError: (code: string, message: string, status: number, body: unknown) => Error,
 ): Promise<T> {
   assertSafeAPIPath(path);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -902,7 +904,7 @@ async function typedMutationEndpoint<T>(
   if (!res.ok) {
     const errBody = (await res.clone().json().catch((): null => null)) as TypedErrorBody | null;
     if (errBody?.error) {
-      throw makeError(errBody.error, errBody.message ?? errBody.error, res.status);
+      throw makeError(errBody.error, errBody.message ?? errBody.error, res.status, errBody);
     }
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
@@ -1005,6 +1007,53 @@ export async function getHostContainment(hostId: string): Promise<ContainmentSta
   return fetchJSON<ContainmentState>(`/hosts/${encodeURIComponent(hostId)}/containment`);
 }
 
+// ContainmentVersionConflictError is a containment change refused because the host moved on since the caller read it (issue #1076).
+// It carries the state as it now stands, so the page can show what changed rather than making another request to find out.
+export class ContainmentVersionConflictError extends Error {
+  readonly state: ContainmentState | null;
+
+  constructor(message: string, state: ContainmentState | null) {
+    super(message);
+    this.name = "ContainmentVersionConflictError";
+    this.state = state;
+  }
+}
+
+// RequiredKeys is the keys of T that T declares as required. Used below to make a runtime check of a type's required fields something
+// the compiler counts, rather than a list that drifts from the interface it is supposed to mirror.
+type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T];
+
+// containmentStateChecks is one check per field ContainmentState requires.
+//
+// Typed as a record over exactly those keys, so a required field added to the interface without a check here fails the build, and a
+// check for a field that stopped being required fails it too. A hand-kept list is what left `contained` and `epoch` unchecked while
+// `host_id` and `version` were checked.
+// Each check names its own field rather than being handed a value by key, so nothing here indexes an object with a dynamic name.
+const containmentStateChecks: { [K in RequiredKeys<ContainmentState>]: (state: Record<string, unknown>) => boolean } = {
+  host_id: (state) => typeof state.host_id === "string",
+  contained: (state) => typeof state.contained === "boolean",
+  version: (state) => typeof state.version === "number",
+  epoch: (state) => typeof state.epoch === "number",
+};
+
+// conflictState reads the state a version conflict reports alongside its code.
+//
+// The shape is checked, not assumed, because what this returns is installed as the page's state and then read from there. The NEXT
+// change is made against its version, so a state without one would have the retry name no version and be applied unconditionally,
+// which is the overwrite naming a version exists to prevent; and the action the page offers is decided by `contained`, so a state
+// without one would offer Contain for a host that is already contained. Anything this does not recognise is left for the page to
+// re-read, which it does after a conflict.
+function conflictState(body: unknown): ContainmentState | null {
+  if (typeof body !== "object" || body === null || !("state" in body)) return null;
+  const state: unknown = body.state;
+  if (typeof state !== "object" || state === null) return null;
+  const fields = state as Record<string, unknown>;
+  for (const isValid of Object.values(containmentStateChecks)) {
+    if (!isValid(fields)) return null;
+  }
+  return state as ContainmentState;
+}
+
 // containmentErrorMessages turns the containment change's typed refusals into what the operator can do about them. The server counts
 // the reason's limit in Unicode characters, which a text input's maxLength does not, so the limit is reported here rather than
 // enforced by the input.
@@ -1013,17 +1062,28 @@ const containmentErrorMessages = new Map<string, string>([
   ["reason_too_long", "The reason is too long: keep it to 1024 characters."],
   ["body_too_large", "The reason is too long: keep it to 1024 characters."],
   ["host_not_found", "This host is no longer enrolled, so its containment cannot be changed."],
+  ["version_conflict", "Someone else changed this host's containment while you were deciding. The state shown has been refreshed."],
 ]);
 
 // setHostContainment contains or releases a host. The server requires host.isolate, a recent authentication, and a reason; wrap it in
 // useReauthRetry. A refusal throws an Error whose message says what to do about it.
-export async function setHostContainment(hostId: string, contained: boolean, reason: string): Promise<ContainmentChange> {
+export async function setHostContainment(
+  hostId: string,
+  contained: boolean,
+  reason: string,
+  expectedVersion?: number,
+): Promise<ContainmentChange> {
   return typedMutationEndpoint(
     "POST",
     `/hosts/${encodeURIComponent(hostId)}/containment`,
-    { contained, reason },
+    // expected_version is sent only when the caller read a state to act on, so a caller that does not care keeps the old behavior of
+    // asking for the state whatever the host holds (issue #1076).
+    expectedVersion === undefined ? { contained, reason } : { contained, reason, expected_version: expectedVersion },
     (res) => res.json() as Promise<ContainmentChange>,
-    (code, message) => new Error(containmentErrorMessages.get(code) ?? message),
+    (code, message, _status, body) =>
+      code === "version_conflict"
+        ? new ContainmentVersionConflictError(containmentErrorMessages.get(code) ?? message, conflictState(body))
+        : new Error(containmentErrorMessages.get(code) ?? message),
   );
 }
 

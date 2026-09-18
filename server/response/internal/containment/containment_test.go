@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,7 +190,7 @@ func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 
-	contain, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "  beaconing to a known C2  ")
+	contain, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "  beaconing to a known C2  ", nil)
 	require.NoError(t, err)
 	assert.True(t, contain.Changed)
 	assert.Equal(t, "host-a", contain.State.HostID)
@@ -203,7 +204,7 @@ func TestSet_ContainsAndReleasesAHost(t *testing.T) {
 	assert.Equal(t, contain.CommandID, cmds[0].ID)
 	assert.Equal(t, api.SetNetworkContainmentPayload{Version: 1, Epoch: contain.State.Epoch, Contained: true}, payloadOf(t, cmds[0]))
 
-	release, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "reimaged")
+	release, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "reimaged", nil)
 	require.NoError(t, err)
 	assert.True(t, release.Changed)
 	assert.False(t, release.State.Contained)
@@ -253,7 +254,7 @@ func TestSet_Refusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t)
-			_, err := f.svc.Set(t.Context(), operator, "", tc.hostID, true, tc.reason)
+			_, err := f.svc.Set(t.Context(), operator, "", tc.hostID, true, tc.reason, nil)
 			require.ErrorIs(t, err, tc.want)
 			state, err := f.store.Get(t.Context(), tc.hostID)
 			require.NoError(t, err)
@@ -265,7 +266,7 @@ func TestSet_Refusals(t *testing.T) {
 	t.Run("a reason at the limit is accepted", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
-		_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, strings.Repeat("é", api.MaxContainmentReasonLength))
+		_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, strings.Repeat("é", api.MaxContainmentReasonLength), nil)
 		require.NoError(t, err)
 	})
 }
@@ -275,13 +276,13 @@ func TestSet_AskingForTheCurrentStateChangesNothing(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 
-	never, err := f.svc.Set(t.Context(), operator, "", "host-b", false, "not contained anyway")
+	never, err := f.svc.Set(t.Context(), operator, "", "host-b", false, "not contained anyway", nil)
 	require.NoError(t, err)
 	assert.Equal(t, api.ContainmentChange{State: api.ContainmentState{HostID: "host-b"}}, never, "releasing a host never contained")
 
-	first, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "first")
+	first, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "first", nil)
 	require.NoError(t, err)
-	again, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "second")
+	again, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "second", nil)
 	require.NoError(t, err)
 	assert.False(t, again.Changed)
 	assert.Zero(t, again.CommandID)
@@ -301,7 +302,7 @@ func TestSet_ConcurrentFirstContainmentsSerialize(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range callers {
 		wg.Go(func() {
-			results[i], errs[i] = f.svc.Set(t.Context(), operator, "", "host-a", true, fmt.Sprintf("caller %d", i))
+			results[i], errs[i] = f.svc.Set(t.Context(), operator, "", "host-a", true, fmt.Sprintf("caller %d", i), nil)
 		})
 	}
 	wg.Wait()
@@ -330,7 +331,7 @@ func TestGet_StateAndDelivery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, api.ContainmentState{HostID: "host-b"}, never, "a command queued by other means is not a delivery of a state")
 
-	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 	require.NoError(t, err)
 	got, err := f.svc.Get(t.Context(), "host-a")
 	require.NoError(t, err)
@@ -372,7 +373,7 @@ func TestConverge(t *testing.T) {
 	contained := func(t *testing.T) (*fixture, api.ContainmentChange) {
 		t.Helper()
 		f := newFixture(t)
-		change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+		change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 		require.NoError(t, err)
 		return f, change
 	}
@@ -453,7 +454,7 @@ func TestConverge(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
 		for _, host := range []string{"host-a", "host-b"} {
-			_, err := f.svc.Set(t.Context(), operator, "", host, true, "suspicious")
+			_, err := f.svc.Set(t.Context(), operator, "", host, true, "suspicious", nil)
 			require.NoError(t, err)
 		}
 		delete(f.enrolled, "host-b")
@@ -478,7 +479,7 @@ func TestSet_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 
-	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
 	require.NoError(t, err)
 	require.True(t, change.Changed)
 
@@ -517,14 +518,14 @@ func TestSet_ConcurrentChangesQueueInVersionOrder(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "contain", "user:7", slow)
+		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "contain", "user:7", nil, slow)
 		assert.NoError(t, err)
 	})
 
 	<-holding
 	wg.Go(func() {
 		// Blocks on the host's row lock until the contain commits.
-		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "release", "user:7", slow)
+		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "release", "user:7", nil, slow)
 		assert.NoError(t, err)
 	})
 	// The release must not get as far as queuing while the contain is held. Under the ordering this replaces it gets there in
@@ -561,7 +562,7 @@ func TestStoreFailuresAreReported(t *testing.T) {
 		f := newFixture(t)
 		require.NoError(t, f.db.Close())
 
-		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "why", "user:7", queueOK)
+		_, _, _, err := f.store.Set(t.Context(), "host-a", true, "why", "user:7", nil, queueOK)
 		require.Error(t, err)
 		_, _, err = f.store.QueueCurrent(t.Context(), contained, queueOK)
 		require.Error(t, err)
@@ -573,9 +574,9 @@ func TestStoreFailuresAreReported(t *testing.T) {
 		_, err := f.db.ExecContext(t.Context(), `DROP TABLE host_containment`)
 		require.NoError(t, err)
 
-		_, _, _, err = f.store.Set(t.Context(), "host-a", true, "why", "user:7", queueOK)
+		_, _, _, err = f.store.Set(t.Context(), "host-a", true, "why", "user:7", nil, queueOK)
 		require.Error(t, err, "the containment cannot be created")
-		_, _, _, err = f.store.Set(t.Context(), "host-a", false, "why", "user:7", queueOK)
+		_, _, _, err = f.store.Set(t.Context(), "host-a", false, "why", "user:7", nil, queueOK)
 		require.Error(t, err, "the state cannot be read")
 		_, _, err = f.store.QueueCurrent(t.Context(), contained, queueOK)
 		require.Error(t, err, "the catch-up cannot read the state it meant to queue")
@@ -587,7 +588,7 @@ func TestStoreFailuresAreReported(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
 		for _, hostID := range []string{"host-a", "host-b"} {
-			_, err := f.svc.Set(t.Context(), operator, "", hostID, true, "beaconing")
+			_, err := f.svc.Set(t.Context(), operator, "", hostID, true, "beaconing", nil)
 			require.NoError(t, err)
 		}
 		// Both commands expire, so the catch-up means to queue both states again.
@@ -618,7 +619,7 @@ func TestStoreFailuresAreReported(t *testing.T) {
 	t.Run("a command that cannot be queued by the catch-up", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
-		change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+		change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
 		require.NoError(t, err)
 
 		_, queued, err := f.store.QueueCurrent(t.Context(), change.State,
@@ -636,7 +637,7 @@ func TestConverge_TheGatewayIsToldOnlyOnceTheCommandIsVisible(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 
-	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing")
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
 	require.NoError(t, err)
 	require.True(t, change.Changed)
 	// The change's command expires, which is one of the states the catch-up queues again.
@@ -659,14 +660,14 @@ func TestConverge_AStateThatChangedSinceTheSweepReadItQueuesNothing(t *testing.T
 	t.Parallel()
 	f := newFixture(t)
 
-	contained, _, _, err := f.store.Set(t.Context(), "host-a", true, "contain", "user:7",
+	contained, _, _, err := f.store.Set(t.Context(), "host-a", true, "contain", "user:7", nil,
 		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
 			return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
 		})
 	require.NoError(t, err)
 
 	// The host moves on, as a concurrent change would between the sweep's read and its queue.
-	_, _, _, err = f.store.Set(t.Context(), "host-a", false, "release", "user:7",
+	_, _, _, err = f.store.Set(t.Context(), "host-a", false, "release", "user:7", nil,
 		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
 			return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
 		})
@@ -700,7 +701,7 @@ func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
 		f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
 
-	_, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+	_, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 	require.Error(t, err)
 	state, err := f.store.Get(t.Context(), "host-a")
 	require.NoError(t, err)
@@ -718,10 +719,10 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	boom := errors.New("boom")
 	_, err := containment.NewService(f.store, func(context.Context, string) (bool, error) { return false, boom }, f.commands.QueueTx,
 		f.notified.notify,
-		f.commands.LatestOfType, f.outbox, nil).Set(t.Context(), operator, "", "host-a", true, "x")
+		f.commands.LatestOfType, f.outbox, nil).Set(t.Context(), operator, "", "host-a", true, "x", nil)
 	require.ErrorIs(t, err, boom)
 
-	_, err = f.svc.Set(t.Context(), operator, "", "host-a", true, "x")
+	_, err = f.svc.Set(t.Context(), operator, "", "host-a", true, "x", nil)
 	require.NoError(t, err)
 	latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
@@ -743,7 +744,7 @@ func TestReadFailuresAreReturned(t *testing.T) {
 func TestLoop_RunsTheCatchUpUntilCancelled(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+	change, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 	require.NoError(t, err)
 	f.setStatus(t, change.CommandID, api.StatusExpired)
 
@@ -793,11 +794,11 @@ func TestList_EveryHostWithAState(t *testing.T) {
 	t.Run("contained and released hosts with their deliveries", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
-		contain, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+		contain, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 		require.NoError(t, err)
-		_, err = f.svc.Set(t.Context(), operator, "", "host-b", true, "suspicious")
+		_, err = f.svc.Set(t.Context(), operator, "", "host-b", true, "suspicious", nil)
 		require.NoError(t, err)
-		release, err := f.svc.Set(t.Context(), operator, "", "host-b", false, "cleared")
+		release, err := f.svc.Set(t.Context(), operator, "", "host-b", false, "cleared", nil)
 		require.NoError(t, err)
 
 		got, err := f.svc.List(t.Context())
@@ -815,7 +816,7 @@ func TestList_EveryHostWithAState(t *testing.T) {
 	t.Run("a command history read failure", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
-		_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious")
+		_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 		require.NoError(t, err)
 		boom := errors.New("boom")
 		latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
@@ -861,7 +862,7 @@ func TestSet_ARecorderFailureDelaysTheAuditRowRatherThanLosingIt(t *testing.T) {
 	traceID := identityapi.TraceIDFromContext(ctx)
 	require.NotEmpty(t, traceID, "the fixture must run under a real span or the assertion below proves nothing")
 
-	change, err := f.svc.Set(ctx, operator, "203.0.113.5", "host-a", true, "beaconing to a known C2")
+	change, err := f.svc.Set(ctx, operator, "203.0.113.5", "host-a", true, "beaconing to a known C2", nil)
 	require.NoError(t, err, "a change is not refused because its audit row could not be written")
 	assert.True(t, change.Changed)
 	assert.Empty(t, f.audit.recorded(), "the store is down, so no row yet")
@@ -904,7 +905,7 @@ func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	svc := containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType,
 		auditoutbox.NewStore(f.db, "absent_audit_outbox"), f.drain)
 
-	_, err := svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "suspicious")
+	_, err := svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "suspicious", nil)
 	require.Error(t, err, "a change whose audit entry cannot be written is refused, not recorded without one")
 
 	state, err := f.store.Get(t.Context(), "host-a")
@@ -916,8 +917,180 @@ func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	assert.Empty(t, f.audit.recorded())
 
 	// A request for the state a host already has changes nothing, so it records nothing either.
-	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "already released")
+	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "already released", nil)
 	require.NoError(t, err)
 	assert.Empty(t, f.pendingAudit(t))
 	assert.Empty(t, f.audit.recorded())
+}
+
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-naming-a-version-the-host-has-moved-past-is-refused
+//
+// The window this closes (issue #1076): the console reads a host's state and offers Contain or Release from it, so two operators on
+// one host, or one operator with a stale page, could release a containment the other had just made and be told it succeeded.
+func TestSet_AChangeNamingAStaleVersionIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	contained, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), contained.State.Version)
+
+	// Another operator releases it, which the first has not seen.
+	_, err = f.svc.Set(t.Context(), operator, "203.0.113.6", "host-a", false, "cleared", nil)
+	require.NoError(t, err)
+
+	// The first operator asks from the state they read, and is refused rather than re-containing over the release.
+	stale := int64(1)
+	refused, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", &stale)
+	require.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	// The refusal carries the state it lost to, which is what the console shows instead of reading the host again. Read under the
+	// same lock that refused the change, so it is the state the request lost to rather than whatever stands by the time a second
+	// read would run.
+	assert.Equal(t, int64(2), refused.State.Version, "the refusal names the version the host has moved to")
+	assert.False(t, refused.State.Contained)
+	assert.Equal(t, "cleared", refused.State.Reason, "including why the other operator changed it")
+	assert.False(t, refused.Changed)
+	assert.Zero(t, refused.CommandID)
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.False(t, state.Contained, "the release stands; the stale request changed nothing")
+	assert.Equal(t, int64(2), state.Version, "and did not consume a version")
+	assert.Empty(t, f.pendingAudit(t), "a refused change records nothing")
+	assert.Len(t, f.containmentCommands(t, "host-a"), 2, "the contain and the release; the refused change queued nothing")
+}
+
+// The version the caller read is the version they may act on, and a request without one keeps asking for the state whatever the host
+// holds, which is what every caller did before this.
+func TestSet_AChangeNamingTheCurrentVersionIsApplied(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	current := int64(0)
+	contained, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", &current)
+	require.NoError(t, err, "a host never contained is at version 0, which a caller may name")
+	assert.True(t, contained.State.Contained)
+
+	at := contained.State.Version
+	released, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "cleared", &at)
+	require.NoError(t, err)
+	assert.False(t, released.State.Contained)
+
+	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "again", nil)
+	require.NoError(t, err, "a request naming no version asks for the state whatever the host holds")
+}
+
+// A request that changes nothing still acted on a view that is gone, so it is refused rather than reported as a success: telling the
+// caller their stale read stands would be the lie this exists to prevent.
+func TestSet_AStaleRequestForTheStateTheHostAlreadyHasIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	_, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", false, "cleared", nil)
+	require.NoError(t, err)
+	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "again", nil)
+	require.NoError(t, err)
+
+	stale := int64(1)
+	refused, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "contained already", &stale)
+	require.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	assert.Equal(t, int64(3), refused.State.Version, "the refusal names where the host actually is")
+}
+
+// A host that has never been contained has no row and version 0, so a caller naming any other version was reading a state this host
+// does not have. Releasing such a host still changes nothing when no version is named.
+func TestSet_AReleaseOfAHostWithNoStateChecksTheVersionToo(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	stale := int64(4)
+	refused, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-b", false, "cleared", &stale)
+	require.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	assert.Equal(t, api.ContainmentState{HostID: "host-b"}, refused.State,
+		"the refusal carries the state the host does have: never contained, version 0")
+
+	zero := int64(0)
+	change, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-b", false, "cleared", &zero)
+	require.NoError(t, err)
+	assert.False(t, change.Changed, "a host that was never contained is already released")
+}
+
+// spec:server-host-containment/an-operator-contains-or-releases-a-host/a-change-naming-a-version-the-host-has-moved-past-is-refused
+//
+// Two operators who read the same version and then both ask. Exactly one may win, and the loser must be refused rather than applied
+// on top: that is the whole point of naming the version, and it is the case sequential tests cannot show. They would pass with the
+// comparison moved outside the row lock, where the second change reads the version before the first has committed its bump and both
+// look current.
+func TestSet_ConcurrentChangesNamingTheSameVersion(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	contained, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+	at := contained.State.Version
+
+	// The first release holds its transaction open inside the queue callback, so the second is still waiting on the host's row when
+	// it reads the version. Under a comparison outside the lock it would have read the pre-release version and been allowed through.
+	holding, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	slow := func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
+		if held.CompareAndSwap(false, true) {
+			close(holding)
+			<-release
+		}
+		return f.commands.QueueTx(ctx, q, state.HostID, api.CommandTypeSetNetworkContainment, commandPayloadFor(state))
+	}
+
+	var wins, conflicts atomic.Int32
+	record := func(err error) {
+		switch {
+		case err == nil:
+			wins.Add(1)
+		case errors.Is(err, api.ErrContainmentVersionConflict):
+			conflicts.Add(1)
+		default:
+			assert.NoError(t, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "first", "user:7", &at, slow)
+		record(err)
+	})
+	<-holding
+	wg.Go(func() {
+		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "second", "user:8", &at, slow)
+		record(err)
+	})
+	// Waited for, not slept through. A sleep that ran short would let the first change commit before the second read the version,
+	// and the test would then pass sequentially: both orderings end in one win and one conflict, so the concurrent case this test
+	// exists for would stop being covered without anything failing.
+	requireWaitingOnTheHostRow(t, f.db)
+	close(release)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), wins.Load(), "exactly one of two changes naming the same version is applied")
+	assert.Equal(t, int32(1), conflicts.Load(), "and the other is told the host moved rather than applied on top")
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.Equal(t, at+1, state.Version, "one change, one version")
+	assert.Len(t, f.containmentCommands(t, "host-a"), 2, "the contain and the one release; the refused change queued nothing")
+}
+
+// requireWaitingOnTheHostRow blocks until a transaction is queued behind a host_containment row lock, which is what makes the caller
+// that holds the lock and the caller waiting for it genuinely concurrent.
+//
+// Scoped to this test's own schema through DATABASE(), because every test opens one and they run in parallel against a shared MySQL:
+// an unscoped count would be answered by another test's lock and report a concurrency this test does not have.
+func requireWaitingOnTheHostRow(t *testing.T, db *sqlx.DB) {
+	t.Helper()
+	const waiting = `SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+		JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+		WHERE l.OBJECT_SCHEMA = DATABASE() AND l.OBJECT_NAME = 'host_containment'`
+	require.Eventually(t, func() bool {
+		var waiters int
+		if err := db.GetContext(t.Context(), &waiters, waiting); err != nil {
+			return false
+		}
+		return waiters > 0
+	}, 10*time.Second, 5*time.Millisecond, "no change ever waited on the host's row, so the test was not concurrent")
 }

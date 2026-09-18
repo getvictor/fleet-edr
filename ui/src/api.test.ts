@@ -20,6 +20,8 @@ import {
   deleteRuleContentDocument,
   rollbackRulePack,
   RuleContentApiError,
+  ContainmentVersionConflictError,
+  setHostContainment,
 } from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
@@ -66,6 +68,53 @@ function stubFetch(body: unknown, status = 200, headers: Record<string, string> 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("setHostContainment version conflicts (issue #1076)", () => {
+  it("carries the state a conflict reports, so the page does not read again to find out", async () => {
+    const released = { host_id: "host-a", contained: false, version: 2, epoch: 200, reason: "cleared" };
+    stubFetch({ error: "version_conflict", state: released }, 409);
+    await expect(setHostContainment("host-a", true, "beaconing", 1)).rejects.toSatisfy(
+      (err: unknown) => err instanceof ContainmentVersionConflictError && err.state?.version === 2,
+    );
+  });
+
+  it("reports the conflict without a state when the body carries none", async () => {
+    // A body that is not the documented shape: the page is told the change was refused and re-reads itself.
+    stubFetch({ error: "version_conflict" }, 409);
+    await expect(setHostContainment("host-a", true, "beaconing", 1)).rejects.toSatisfy(
+      (err: unknown) => err instanceof ContainmentVersionConflictError && err.state === null,
+    );
+  });
+
+  // A state carried here becomes the page's state, and the NEXT change is made against its version. So a body whose state has no
+  // usable version must not be taken: a page holding one would send no version at all on the retry, and the retry would be applied
+  // unconditionally over whatever it conflicted with.
+  it.each([
+    ["a state with no version", { host_id: "host-a", contained: true, epoch: 100 }],
+    ["a state whose version is not a number", { host_id: "host-a", contained: true, version: "2", epoch: 100 }],
+    ["a state with no host", { contained: true, version: 2, epoch: 100 }],
+    // Without `contained` the page would offer Contain for a host that is already contained, which is the wrong action on the
+    // wrong host: as much a defect as a missing version, and the reason the checks are typed over the interface's required fields
+    // rather than kept by hand.
+    ["a state with no contained flag", { host_id: "host-a", version: 2, epoch: 100 }],
+    ["a state whose contained flag is not a boolean", { host_id: "host-a", contained: "yes", version: 2, epoch: 100 }],
+    ["a state with no epoch", { host_id: "host-a", contained: true, version: 2 }],
+    ["an empty object", {}],
+    ["a state that is not an object", "host-a"],
+  ])("refuses to take %s as the state to decide from", async (_name, state) => {
+    stubFetch({ error: "version_conflict", state }, 409);
+    await expect(setHostContainment("host-a", true, "beaconing", 1)).rejects.toSatisfy(
+      (err: unknown) => err instanceof ContainmentVersionConflictError && err.state === null,
+    );
+  });
+
+  it("sends no version when the caller names none, which is what asking for the state whatever the host holds means", async () => {
+    const fetchMock = stubFetch({ state: { host_id: "host-a", contained: true, version: 1, epoch: 100 }, changed: true }, 200);
+    await setHostContainment("host-a", true, "beaconing");
+    const [, init] = fetchMock.mock.calls[0] as [URL, { body: string }];
+    expect(JSON.parse(init.body)).toEqual({ contained: true, reason: "beaconing" });
+  });
 });
 
 describe("getHostHealth", () => {

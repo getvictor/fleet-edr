@@ -111,7 +111,9 @@ describe("HostContainment", () => {
 
     read.mockResolvedValue(pendingContain);
     await waitFor(() => {
-      expect(set).toHaveBeenCalledWith(HOST, true, "beaconing");
+      // Version 0 is the state this page read: a host never contained. Sending it is what makes the change conditional on the view
+      // the operator acted from (issue #1076).
+      expect(set).toHaveBeenCalledWith(HOST, true, "beaconing", 0);
     });
     expect(await screen.findByText("Containing")).toBeVisible();
     expect(screen.getByText("Containing").closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
@@ -147,7 +149,7 @@ describe("HostContainment", () => {
     fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "reimaged" } });
     fireEvent.click(lastButton("Release host"));
     await waitFor(() => {
-      expect(set).toHaveBeenCalledWith(HOST, false, "reimaged");
+      expect(set).toHaveBeenCalledWith(HOST, false, "reimaged", 1);
     });
     expect(await screen.findByText("Releasing")).toBeVisible();
   });
@@ -237,5 +239,31 @@ describe("HostContainment", () => {
     fireEvent.click(lastButton("Contain host"));
     expect(await screen.findByRole("alert")).toHaveTextContent("no longer enrolled");
     expect(screen.getByRole("dialog", { name: "Contain this host?" })).toBeVisible();
+  });
+
+  it("reports a host someone else changed, and shows the state that now stands", async () => {
+    // The follow-up read never resolves, so what the page shows afterwards can only have come from the conflict payload. With a read
+    // that resolves, this test would pass with setState(err.state) deleted, which is the thing it is here to check.
+    const read = vi.spyOn(api, "getHostContainment").mockResolvedValueOnce(contained).mockReturnValue(new Promise(() => {}));
+    // Another operator released the host after this page read it contained, so the change this page asks for is refused.
+    const released: ContainmentState = { host_id: HOST, contained: false, version: 2, epoch: 200, reason: "cleared" };
+    const set = vi
+      .spyOn(api, "setHostContainment")
+      .mockRejectedValue(new api.ContainmentVersionConflictError("Someone else changed this host's containment.", released));
+    renderControl();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Release host" }));
+    fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "done" } });
+    fireEvent.click(lastButton("Release host"));
+
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledWith(HOST, false, "done", 1);
+    });
+    expect(await screen.findByText("Someone else changed this host's containment.")).toBeVisible();
+
+    // The page took the state from the refusal, so the dialog now offers the decision that makes sense against what the host holds:
+    // it was opened to release a contained host and now offers to contain a released one.
+    expect(await screen.findByRole("dialog", { name: "Contain this host?" })).toBeVisible();
+    expect(read).toHaveBeenCalled();
   });
 });
