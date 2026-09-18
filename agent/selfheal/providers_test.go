@@ -24,12 +24,25 @@ func TestRemediable(t *testing.T) {
 			want:      []string{"content_filter"},
 		},
 		{
-			// The #649 wire contract: an operator-disabled provider is ABSENT from the map, never "stopped". That is the
-			// entire mechanism preventing self-heal from re-enabling the opt-in DNS proxy against the operator's wishes,
-			// so it is asserted directly rather than inferred from the stopped case.
+			// The wire contract an operator-disabled provider arrives under, in both shapes. Absence is what #649 sent and
+			// what an older extension still sends; `disabled` is what one sends now (issue #1078). Neither is "stopped",
+			// and that is the entire mechanism preventing self-heal from re-enabling the opt-in DNS proxy against the
+			// operator's wishes, so both are asserted directly rather than inferred from the stopped case.
 			desc:      "a deliberately disabled provider is absent, so nothing is eligible",
 			providers: map[string]string{"content_filter": "running"},
 			want:      []string{},
+		},
+		{
+			desc:      "a provider reported disabled is not eligible either",
+			providers: map[string]string{"content_filter": "running", "dns_proxy": "disabled"},
+			want:      []string{},
+		},
+		{
+			// The pairing that matters: a fault beside an opt-out remediates only the fault. A filter keyed on anything
+			// other than a positive "stopped" match would take both.
+			desc:      "a disabled provider beside a stopped one leaves the disabled one alone",
+			providers: map[string]string{"content_filter": "stopped", "dns_proxy": "disabled"},
+			want:      []string{"content_filter"},
 		},
 		{
 			desc:      "an empty report has nothing to remediate",

@@ -42,6 +42,8 @@ const (
 	reasonAwaitingProviders  = "awaiting_provider_status"
 	reasonNoProvidersRunning = "no_providers_running"
 	reasonProviderStopped    = "provider_stopped"
+	// reasonProviderDisabled is a provider switched off on purpose, which is a state rather than a fault (issue #1078).
+	reasonProviderDisabled = "provider_disabled"
 	// reasonProviderStateUnknown is for a provider state this build does not recognise, which a newer extension can
 	// produce. Distinct from the reasons above so an operator can tell "I do not know" from "I checked and it is down".
 	reasonProviderStateUnknown = "provider_state_unknown"
@@ -169,11 +171,16 @@ func (r *Registry) MarkConnected(compType string) {
 }
 
 // Provider states as they appear on the wire from the extension. A provider that has never started is ABSENT from the map rather
-// than carrying a state, which is what lets "never started" and "started then stopped" grade differently. A deliberate stop (an
-// operator disabling the opt-in DNS proxy) is reported as absence too, so it does not read as a fault forever.
+// than carrying a state, which is what lets "never started" and "started then stopped" grade differently. An operator disabling
+// the opt-in DNS proxy reports `disabled`, which is a state rather than a fault, and which an extension predating it reports as
+// absence instead (issue #1078).
 const (
 	ProviderRunning = "running"
 	ProviderStopped = "stopped"
+	// ProviderDisabled is a provider an operator switched off on purpose. Reported rather than omitted (issue #1078): it is not a
+	// fault and must not page anyone, but a contained host whose DNS proxy is off resolves any name its resolvers answer, and
+	// absence cannot carry that because it reads the same as an extension too old to report anything.
+	ProviderDisabled = "disabled"
 )
 
 // Provider wire identifiers this build knows by name. The set is NOT closed: the extension owns the vocabulary and an
@@ -188,8 +195,8 @@ const (
 // registry or a live extension.
 //
 // An empty map means the extension is up and talking but nothing is capturing: that is the #649 failure, and it is unhealthy even
-// though the XPC session is perfectly healthy. A provider reported stopped is a fault the extension chose to surface (a deliberate
-// stop is filtered out extension-side and arrives as absence). Anything else is running.
+// though the XPC session is perfectly healthy. A provider reported stopped is a fault the extension chose to surface; a deliberate
+// stop arrives as `disabled`, which is neither running nor a fault and so counts as neither here. Anything else is running.
 func GradeProviders(displayName string, providers map[string]string) (Status, string, string) {
 	stopped := make([]string, 0, len(providers))
 	running := 0
@@ -241,8 +248,8 @@ func (r *Registry) MarkProviders(compType string, providers map[string]string, d
 //
 // Two rules, and both matter to the server that reads the result:
 //
-//   - A provider MISSING from the report is dropped, not retained. The extension reports a deliberate opt-out by omission,
-//     so retaining the last known state would publish "running" for a provider an operator switched off.
+//   - A provider MISSING from the report is dropped, not retained. An extension predating issue #1078 reports a deliberate
+//     opt-out by omission, so retaining the last known state would publish "running" for a provider an operator switched off.
 //   - A provider whose state is unchanged keeps its transition instant. Reports arrive on every handshake, so re-stamping
 //     each time would make every provider look like it had just changed and destroy the age the console shows.
 //
@@ -423,6 +430,11 @@ func gradeProvider(name, state string) (Status, string, string) {
 		return StatusHealthy, reasonActivated, display + " is capturing"
 	case ProviderStopped:
 		return StatusUnhealthy, reasonProviderStopped, display + " stopped capturing"
+	case ProviderDisabled:
+		// Healthy, because the host is configured the way somebody meant it to be and nothing here needs attention on its own. The
+		// reason is what carries the fact to a reader that does care: containment's restriction on which names a contained host
+		// resolves is this provider's work, so the console qualifies a contained host whose proxy is off (issue #1078).
+		return StatusHealthy, reasonProviderDisabled, display + " is turned off"
 	default:
 		return StatusUnknown, reasonProviderStateUnknown, display + " reported an unrecognized state"
 	}

@@ -33,6 +33,11 @@ struct ProviderLiveness {
     enum State: String, Codable, Sendable {
         case running
         case stopped
+        /// Turned off on purpose, and reported rather than omitted (issue #1078). A provider an operator switched off is not a fault
+        /// and must never page anyone, but it is also not nothing: containment's restriction on which names a contained host resolves
+        /// is the DNS proxy's work, so a host whose proxy is off resolves any name its resolvers answer and the console has to be able
+        /// to say so. Absence cannot carry that, because it is indistinguishable from an extension too old to report at all.
+        case disabled
     }
 
     private(set) var states: [Provider: State] = [:]
@@ -70,19 +75,26 @@ struct ProviderLiveness {
         StopReason.userInitiated, StopReason.providerDisabled, StopReason.configurationDisabled
     ]
 
-    /// isDeliberateAbsence answers whether a stop should make the provider ABSENT from the report rather than `stopped`.
+    /// stateAfterStop answers what a stop leaves behind: nil to drop the provider from the report entirely, or the state it now holds.
     ///
-    /// Absence and `stopped` are graded differently by the agent (absent is not by itself unhealthy), so this is the
-    /// decision that determines whether a stop pages anyone. Anything not named here (providerFailed, noNetworkAvailable,
-    /// configurationFailed, connectionFailed, ...) is a fault for either provider, which is what the 2026-07-17 incident
-    /// looked like from the outside.
-    static func isDeliberateAbsence(provider: Provider, reason: Int) -> Bool {
-        if lifecycleStopReasons.contains(reason) { return true }
-        return provider == .dnsProxy && operatorDisabledStopReasons.contains(reason)
+    /// Three outcomes, and the difference decides both whether a stop pages anyone and whether anything downstream can see it.
+    /// Anything not named below (providerFailed, noNetworkAvailable, configurationFailed, connectionFailed, ...) is a fault for either
+    /// provider, which is what the 2026-07-17 incident looked like from the outside.
+    ///
+    ///   - A lifecycle stop drops the provider. The session hosting it is going away or being replaced, so its last state describes
+    ///     nothing that still exists, and a login or logout must not read as a fault.
+    ///   - An operator disabling the DNS proxy records `disabled`. DNS proxying is opt-in, so this is a correctly configured host and
+    ///     must not read as unhealthy forever; it used to be dropped for that reason, which also made it invisible (issue #1078).
+    ///   - Everything else records `stopped`, the fault.
+    static func stateAfterStop(provider: Provider, reason: Int) -> State? {
+        if lifecycleStopReasons.contains(reason) { return nil }
+        if provider == .dnsProxy, operatorDisabledStopReasons.contains(reason) { return .disabled }
+        return .stopped
     }
 
-    /// forget drops a provider from the report entirely, so it grades as "never started" rather than "stopped". Used
-    /// for a deliberate stop.
+    /// forget drops a provider from the report entirely, so it grades as "never started" rather than "stopped". Used for a LIFECYCLE
+    /// stop, which is the only stop `stateAfterStop` sends here: an operator switching off the DNS proxy records `disabled` instead,
+    /// because that state has to stay visible (issue #1078).
     @discardableResult
     mutating func forget(_ provider: Provider) -> Bool {
         stopReasons.removeValue(forKey: provider)
@@ -96,7 +108,8 @@ struct ProviderLiveness {
         let changed = states[provider] != state
         states[provider] = state
         switch state {
-        case .running:
+        case .running, .disabled:
+            // Neither carries a stop reason: one is capturing, and the other was switched off on purpose, which is the whole reason.
             stopReasons[provider] = nil
         case .stopped:
             stopReasons[provider] = reason

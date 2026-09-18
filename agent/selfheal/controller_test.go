@@ -175,18 +175,33 @@ func TestProviderThatRecoversWithinGraceIsNotRemediated(t *testing.T) {
 // spec:agent-status-reporting/remediation-never-overrides-a-deliberate-operator-decision/a-deliberately-disabled-provider-is-not-re-enabled
 func TestDeliberatelyDisabledProviderIsNeverRemediated(t *testing.T) {
 	t.Parallel()
-	rem := newFakeRemediator(nil)
-	c, clock := testController(t, rem, nil)
-	ctx := context.Background()
-
-	// An operator disabled the opt-in DNS proxy, so #649 reports it ABSENT rather than stopped. No amount of elapsed time
-	// may turn that into a remediation, or the product would keep switching a control back on against its administrator.
-	report := map[string]string{"content_filter": "running"}
-	for range 5 {
-		assert.Empty(t, c.Observe(ctx, report))
-		clock.advance(time.Minute)
+	// Both wire shapes an operator-disabled provider arrives in. An extension predating issue #1078 omits it; one that does
+	// not reports it `disabled`. No amount of elapsed time may turn either into a remediation, or the product would keep
+	// switching a control back on against its administrator. Driven through Observe rather than through Remediable, because
+	// eligibility is only half of it: the controller is what elapsed time acts on.
+	cases := []struct {
+		desc   string
+		report map[string]string
+	}{
+		{desc: "an older extension omits the provider", report: map[string]string{"content_filter": "running"}},
+		// The literal, not a constant: this package matches "stopped" positively and has no production use for the word, so
+		// naming it here would be a constant nothing else reads.
+		{desc: "a current extension reports it disabled", report: map[string]string{"content_filter": "running", "dns_proxy": "disabled"}},
 	}
-	assert.Zero(t, rem.callCount())
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			rem := newFakeRemediator(nil)
+			c, clock := testController(t, rem, nil)
+			ctx := context.Background()
+
+			for range 5 {
+				assert.Empty(t, c.Observe(ctx, tc.report))
+				clock.advance(time.Minute)
+			}
+			assert.Zero(t, rem.callCount())
+		})
+	}
 }
 
 // spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/repeated-failures-stop-retrying-and-escalate
