@@ -419,6 +419,7 @@ func (m *Manager) confirm(ctx context.Context, waiter chan Status, cmd Command) 
 // that restarts while the host is contained learns it: the first contained status it sees triggers a lifeline refresh, sent at that
 // state's version, which the extension accepts only if the addresses moved.
 func (m *Manager) Observe(ctx context.Context, s Status) {
+	var confirmed []netip.Addr
 	m.mu.Lock()
 	for w := range m.waiters {
 		select {
@@ -443,6 +444,9 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 		switch applied, reported := parseAddrs(s.AppliedAddresses); {
 		case reported:
 			m.reportsLifeline = true
+			if !slices.Equal(applied, m.addresses) {
+				confirmed = applied
+			}
 			m.addresses = applied
 			if slices.Equal(applied, m.sent) {
 				// What this agent sent is what the filter enforces.
@@ -471,6 +475,12 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 	}
 	refresh := s.Contained && s.Applied && !m.refreshed
 	m.mu.Unlock()
+	if len(confirmed) > 0 {
+		// Worth a line: this is the lifeline the host can actually reach the server through, and when a refresh is being refused it
+		// is the only thing that says which addresses the filter is still holding.
+		m.opts.Logger.InfoContext(ctx, "network containment: the extension confirmed the lifeline its filter enforces",
+			"addresses", addrStrings(confirmed))
+	}
 	if refresh {
 		m.refresh(ctx)
 	}
