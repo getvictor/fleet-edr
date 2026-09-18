@@ -29,6 +29,8 @@ type fakeProxy struct {
 	// first bytes the tunnelled server sends.
 	status    int
 	afterBody string
+	// afterDelay holds afterBody back, standing in for a server that speaks some time after the tunnel opens.
+	afterDelay time.Duration
 }
 
 func newFakeProxy(t *testing.T, status int, afterBody string) *fakeProxy {
@@ -61,9 +63,16 @@ func (p *fakeProxy) handle(conn net.Conn) {
 	p.request = req
 	p.mu.Unlock()
 	status := http.StatusText(p.status)
-	if _, err := io.WriteString(conn, "HTTP/1.1 "+strconv.Itoa(p.status)+" "+status+"\r\n\r\n"+p.afterBody); err != nil {
+	if _, err := io.WriteString(conn, "HTTP/1.1 "+strconv.Itoa(p.status)+" "+status+"\r\n\r\n"); err != nil {
 		_ = conn.Close()
 		return
+	}
+	if p.afterBody != "" {
+		time.Sleep(p.afterDelay)
+		if _, err := io.WriteString(conn, p.afterBody); err != nil {
+			_ = conn.Close()
+			return
+		}
 	}
 	// Left open: the caller reads what follows the response, which is what a real tunnel carries.
 }
@@ -185,6 +194,59 @@ func TestDialThroughProxyReportsTheProxyItCouldNotReach(t *testing.T) {
 	assert.Contains(t, err.Error(), "no route")
 }
 
+// The dial option is not evidence on its own: what matters is what the dialer gRPC gets actually does. These drive it, which is the
+// wiring the earlier test only asserts the presence of.
+//
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/a-proxied-control-channel-tunnels-through-the-proxy
+func TestControlDialTakesTheRightPath(t *testing.T) {
+	t.Parallel()
+	proxy := newFakeProxy(t, http.StatusOK, "")
+
+	t.Run("a proxied server is tunnelled", func(t *testing.T) {
+		t.Parallel()
+		var mu sync.Mutex
+		var dialed []string
+		proxyURL, err := url.Parse("http://" + proxy.listener.Addr().String())
+		require.NoError(t, err)
+
+		conn, err := controlDial(recordingDial(&dialed, &mu), proxyURL)(t.Context(), "edr.example.com:8443")
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, []string{proxy.listener.Addr().String()}, dialed, "the proxy is dialed, the server is not")
+		assert.Equal(t, "edr.example.com:8443", proxy.seen().Host, "the server is named inside the tunnel")
+	})
+
+	t.Run("a direct server is dialed straight through", func(t *testing.T) {
+		t.Parallel()
+		var mu sync.Mutex
+		var dialed []string
+
+		// The dial itself fails, since nothing serves that name here. What is asserted is WHICH address was dialed: unwrapped,
+		// with no tunnel in the way.
+		_, _ = controlDial(recordingDial(&dialed, &mu), nil)(t.Context(), "edr.example.com:8443")
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, []string{"edr.example.com:8443"}, dialed)
+	})
+}
+
+// serverProxy is asked for the proxy of a URL. A URL it cannot parse, and a proxy function that errors, both mean "no proxy" rather
+// than a failed dial: the control channel then dials the server directly, which is what it did before a proxy was configured at all.
+func TestServerProxyTreatsAnUnusableAnswerAsNoProxy(t *testing.T) {
+	t.Parallel()
+	failing := func(*http.Request) (*url.URL, error) { return nil, errors.New("PROXY is not a URL") }
+	assert.Nil(t, serverProxy("https://edr.example.com:8443", failing))
+	assert.Nil(t, serverProxy("://not a url", func(*http.Request) (*url.URL, error) { return url.Parse("http://p:3128") }))
+
+	found := serverProxy("https://edr.example.com:8443", func(*http.Request) (*url.URL, error) { return url.Parse("http://p:3128") })
+	require.NotNil(t, found)
+	assert.Equal(t, "p:3128", found.Host)
+}
+
 func TestProxyAddressDefaultsThePortByScheme(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -206,4 +268,54 @@ func TestProxyAddressDefaultsThePortByScheme(t *testing.T) {
 			assert.Equal(t, tc.want, proxyAddress(u))
 		})
 	}
+}
+
+// The dial's deadline must not outlive the dial. A control stream lives for hours on the connection this returns, so a deadline left
+// on it would tear the stream down the moment the dial's own timeout would have expired, which is a failure that only appears long
+// after the code that caused it.
+func TestDialThroughProxyDoesNotLeaveItsDeadlineOnTheTunnel(t *testing.T) {
+	t.Parallel()
+	const firstBytes = "spoken well after the dial deadline"
+	proxy := newFakeProxy(t, http.StatusOK, firstBytes)
+	proxy.afterDelay = 1200 * time.Millisecond
+	var mu sync.Mutex
+	var dialed []string
+
+	proxyURL, err := url.Parse("http://" + proxy.listener.Addr().String())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 600*time.Millisecond)
+	defer cancel()
+	conn, err := dialThroughProxy(ctx, recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	// Well past the dial's deadline, and the read still succeeds because the deadline was cleared with the exchange.
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(8*time.Second)))
+	got := make([]byte, len(firstBytes))
+	_, err = io.ReadFull(conn, got)
+	require.NoError(t, err, "the dial's deadline was left on the connection and killed the tunnel")
+	assert.Equal(t, firstBytes, string(got))
+}
+
+// A proxy that accepts the connection and then says nothing fails the dial, rather than handing back a connection with no tunnel
+// behind it.
+func TestDialThroughProxyFailsWhenTheProxySaysNothing(t *testing.T) {
+	t.Parallel()
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, aerr := listener.Accept()
+		if aerr == nil {
+			_ = conn.Close() // accepted, then hung up without answering
+		}
+	}()
+
+	var mu sync.Mutex
+	var dialed []string
+	proxyURL, perr := url.Parse("http://" + listener.Addr().String())
+	require.NoError(t, perr)
+	_, err = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL, "edr.example.com:8443")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read CONNECT response")
 }

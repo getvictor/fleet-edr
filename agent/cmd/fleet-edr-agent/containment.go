@@ -68,13 +68,20 @@ func controlDialOptions(cfg *config.Config, target string, mgr *containment.Mana
 	if mgr == nil {
 		return target, nil
 	}
-	proxyURL := serverProxy(cfg.ServerURL, proxy)
-	return "passthrough:///" + target, []grpc.DialOption{grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+	return "passthrough:///" + target, []grpc.DialOption{
+		grpc.WithContextDialer(controlDial(dial, serverProxy(cfg.ServerURL, proxy))),
+	}
+}
+
+// controlDial is the dialer gRPC is handed: straight through dial for a direct server, and a tunnel for a proxied one. Named rather
+// than inline so a test can drive the choice it makes, which is the whole of the wiring.
+func controlDial(dial dialFunc, proxyURL *url.URL) func(ctx context.Context, addr string) (net.Conn, error) {
+	return func(ctx context.Context, addr string) (net.Conn, error) {
 		if proxyURL == nil {
 			return dial(ctx, "tcp", addr)
 		}
 		return dialThroughProxy(ctx, dial, proxyURL, addr)
-	})}
+	}
 }
 
 // serverProxy returns the proxy the server URL goes through, or nil for a direct connection.
