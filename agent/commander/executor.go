@@ -177,13 +177,22 @@ func (e *Executor) ReplayRecorded(ctx context.Context, cmd Command, report Repor
 			"cmd_id", cmd.ID)
 		return
 	}
-	e.replaySeen(ctx, cmd, report, status, result)
+	// The outcome only. These commands were asked for BY their acknowledged status, so the server already has that acknowledgement
+	// and rejects another as an invalid transition: acking here would put a guaranteed 400 and an error line in front of every
+	// recovery. The dispatch path acks because a command reaching it may still be pending there.
+	e.replayOutcome(ctx, cmd, report, status, result)
 }
 
 // replaySeen handles a command the ledger already records: re-ack and replay a recorded terminal outcome, or terminalize a bare
 // write-ahead claim left by an interrupted prior attempt. The side effect is never run here.
 func (e *Executor) replaySeen(ctx context.Context, cmd Command, report ReportFunc, status string, result json.RawMessage) {
 	e.reportOrLog(ctx, cmd.ID, report, StatusAcked, nil) // re-ack drives the server out of pending if the earlier ack was lost.
+	e.replayOutcome(ctx, cmd, report, status, result)
+}
+
+// replayOutcome reports what the ledger holds for a command, and acknowledges nothing: whether an acknowledgement is needed depends
+// on what the caller knows about the command's status on the server, and the server rejects one that is not a valid transition.
+func (e *Executor) replayOutcome(ctx context.Context, cmd Command, report ReportFunc, status string, result json.RawMessage) {
 	if status == StatusCompleted || status == StatusFailed {
 		e.reportOrLog(ctx, cmd.ID, report, status, result)
 		return

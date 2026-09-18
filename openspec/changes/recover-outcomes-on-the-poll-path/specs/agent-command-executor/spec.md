@@ -20,13 +20,13 @@ An outcome that did not reach the server SHALL be recoverable on the polled path
 - **THEN** the agent receives it on the polled command path at the configured interval
 - **AND** acknowledges and completes it through the unchanged polled lifecycle
 
-#### Scenario: A lost outcome is recovered on the polled path
+#### Scenario: A lost outcome is recovered by polling
 
 - **GIVEN** a host on the polled path whose command ran and whose outcome report did not reach the server
 - **WHEN** the agent next asks about the commands awaiting an outcome
 - **THEN** it re-reports the outcome its ledger recorded, and does not run the side effect again
 
-#### Scenario: A command the host has no record of is left alone
+#### Scenario: An unrecorded command is left alone
 
 - **GIVEN** a command the server is awaiting an outcome for, and an agent whose ledger has no record of it
 - **WHEN** the agent asks about the commands awaiting an outcome

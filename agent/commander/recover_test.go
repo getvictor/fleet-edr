@@ -32,6 +32,11 @@ type reportedUpdate struct {
 // handler refuses a request it cannot read rather than failing the test from inside it: an assertion here would call FailNow on a
 // goroutine that is not the test's, and the tests below assert on the updates they expect, so a refused one shows up as a missing
 // update rather than being swallowed.
+//
+// It also REFUSES a transition the real server refuses, and records the attempt either way. Every command here is acked, and the
+// server allows only completed or failed from there (server/response/internal/service/service.go), so a fake that accepted anything
+// would let a test pin a sequence the server would answer with a 400 and an error log. It did: the first version of this test
+// asserted the acknowledgement the recovery used to send.
 func (s *recoveryServer) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
@@ -44,6 +49,10 @@ func (s *recoveryServer) handler() http.Handler {
 			s.mu.Lock()
 			s.reported = append(s.reported, reportedUpdate{ID: id, Status: body.Status, Result: string(body.Result)})
 			s.mu.Unlock()
+			if body.Status != StatusCompleted && body.Status != StatusFailed {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -79,7 +88,7 @@ func idFromPath(path string) (int64, error) {
 	return id, err
 }
 
-// spec:agent-command-executor/the-control-connection-is-preferred-and-polling-is-the-degraded-floor/a-lost-outcome-is-recovered-on-the-polled-path
+// spec:agent-command-executor/the-control-connection-is-preferred-and-polling-is-the-degraded-floor/a-lost-outcome-is-recovered-by-polling
 //
 // An outcome the host recorded but could not report is re-reported from the ledger, without the side effect running again. This is
 // the gap issue #1080 reported: an acked command is not in the pending answer, so nothing on the poll path would ever ask about it.
@@ -96,14 +105,13 @@ func TestRecoverOutcomes_ReReportsWhatTheLedgerRecorded(t *testing.T) {
 
 	cmdr.recoverOutcomes(t.Context())
 
-	updates := server.updates()
-	require.Len(t, updates, 2, "the re-ack and the outcome")
-	assert.Equal(t, reportedUpdate{ID: 7, Status: StatusAcked}, updates[0])
-	assert.Equal(t, reportedUpdate{ID: 7, Status: StatusCompleted, Result: `{"killed":true}`}, updates[1])
+	// Exactly one update, and it is the outcome. Not an acknowledgement first: these commands were asked for BY their acknowledged
+	// status, so the server has it already and refuses another, which would put a 400 and an error line in front of every recovery.
+	assert.Equal(t, []reportedUpdate{{ID: 7, Status: StatusCompleted, Result: `{"killed":true}`}}, server.updates())
 	assert.Empty(t, sender.sent, "the side effect is not run again")
 }
 
-// spec:agent-command-executor/the-control-connection-is-preferred-and-polling-is-the-degraded-floor/a-command-the-host-has-no-record-of-is-left-alone
+// spec:agent-command-executor/the-control-connection-is-preferred-and-polling-is-the-degraded-floor/an-unrecorded-command-is-left-alone
 //
 // A command the ledger has no record of is left alone. The ledger may have been pruned or replaced, and this path cannot tell that
 // from a command that never ran: reporting an outcome would invent one, and running the command would repeat a kill the operator
