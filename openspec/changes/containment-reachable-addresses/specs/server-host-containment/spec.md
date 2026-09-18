@@ -40,10 +40,10 @@ A replacement MAY name the version the operator read before editing. When it doe
 
 #### Scenario: Editing the set is its own permission
 
-- **GIVEN** a caller without the permission to edit the reachable-address set
-- **WHEN** the caller asks to read it or to replace it
+- **GIVEN** a caller lacking the permission for the operation it asks for, reading or replacing
+- **WHEN** the caller makes that request
 - **THEN** the request is refused before its body is read
-- **AND** reading and replacing are gated on separate permissions
+- **AND** the two operations are gated on separate permissions, so a caller holding only the read permission can read the set and cannot replace it
 
 #### Scenario: Two operators editing at once are told
 

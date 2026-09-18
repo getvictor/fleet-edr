@@ -231,7 +231,9 @@ func TestReachableHandler_RefusesABodyThatIsNotASet(t *testing.T) {
 	assert.Equal(t, "bad_body", errorCode(t, resp))
 	assert.Empty(t, svc.calls)
 
-	oversized := `{"reason":"why","addresses":[` + strings.Repeat(`{"cidr":"192.0.2.7","note":"`+strings.Repeat("x", 900)+`"},`, 100) +
+	// Over the cap, which is itself above the largest set the validator would accept, so this is a body that is not the shape the
+	// route serves rather than a legitimate maximum one.
+	oversized := `{"reason":"why","addresses":[` + strings.Repeat(`{"cidr":"192.0.2.7","note":"`+strings.Repeat("x", 4000)+`"},`, 100) +
 		`{"cidr":"192.0.2.8"}]}`
 	resp = serveReachable(t, svc, &recordingAuthZ{allow: true}, http.MethodPut, oversized)
 	defer resp.Body.Close()

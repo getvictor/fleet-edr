@@ -70,7 +70,7 @@ func (s *Service) Replace(ctx context.Context, actor identityapi.PrincipalRef, r
 // addresses that gained one is indistinguishable from the same set re-saved unless the entry says which one arrived.
 func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr, reason string,
 	previous, next api.ReachableSet) (auditoutbox.Entry, error) {
-	added, removed := diff(previous.Addresses, next.Addresses)
+	added, removed, renamed := diff(previous.Addresses, next.Addresses)
 	payload := map[string]any{
 		"reason":  reason,
 		"version": next.Version,
@@ -82,6 +82,9 @@ func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr,
 	if len(removed) > 0 {
 		payload["removed"] = removed
 	}
+	if len(renamed) > 0 {
+		payload["renamed"] = renamed
+	}
 	return auditoutbox.Encode(identityapi.AuditEvent{
 		Actor: actor, Action: identityapi.AuditContainmentReachableUpdate, TargetType: "containment_config",
 		TargetID: "reachable_addresses", RemoteAddr: remoteAddr, Payload: payload,
@@ -91,39 +94,50 @@ func auditEntry(ctx context.Context, actor identityapi.PrincipalRef, remoteAddr,
 	})
 }
 
-// diff reports which destinations the replacement added and which it removed, as the strings an operator reads.
+// diff reports what the replacement changed, as the strings an operator reads: destinations that arrived, destinations that left,
+// and destinations that stayed but were renamed.
 //
-// Compared on destination, port and transport rather than on the whole entry: a note edited on an entry that already existed is not
-// a destination arriving or leaving, and reporting it as both would bury the one that actually changed.
-func diff(previous, next []api.ReachableAddress) (added, removed []string) {
+// Arrival and departure are judged on destination, port and transport, NOT on the whole entry: a note edited on an entry that
+// already existed is not a destination arriving and leaving, and reporting it as both would bury whichever one actually changed. A
+// rename is still a change worth recording, though, because the note is how the console and this trail name a destination, so it is
+// reported as itself rather than dropped.
+func diff(previous, next []api.ReachableAddress) (added, removed, renamed []string) {
 	before := keyed(previous)
 	after := keyed(next)
-	for key, rendered := range after {
-		if _, ok := before[key]; !ok {
-			added = append(added, rendered)
+	for key, entry := range after {
+		was, existed := before[key]
+		switch {
+		case !existed:
+			added = append(added, label(entry))
+		case was.Note != entry.Note:
+			renamed = append(renamed, label(was)+" -> "+label(entry))
 		}
 	}
-	for key, rendered := range before {
+	for key, entry := range before {
 		if _, ok := after[key]; !ok {
-			removed = append(removed, rendered)
+			removed = append(removed, label(entry))
 		}
 	}
 	slices.Sort(added)
 	slices.Sort(removed)
-	return added, removed
+	slices.Sort(renamed)
+	return added, removed, renamed
 }
 
-func keyed(addresses []api.ReachableAddress) map[api.ReachableAddress]string {
-	out := make(map[api.ReachableAddress]string, len(addresses))
+// keyed indexes entries by destination alone, so the same destination under two notes is one key.
+func keyed(addresses []api.ReachableAddress) map[api.ReachableAddress]api.ReachableAddress {
+	out := make(map[api.ReachableAddress]api.ReachableAddress, len(addresses))
 	for _, a := range addresses {
 		key := a
 		key.Note = ""
-		out[key] = label(a)
+		out[key] = a
 	}
 	return out
 }
 
-// label renders one entry the way an operator wrote it: the destination, then the port and transport when it has them.
+// label renders one entry the way an operator reads it: the destination, then the port and transport when it has them, then the name
+// the operator gave it. The name is what makes the trail legible, since "the MDM server" is what a reviewer is looking for and an
+// address is what they would otherwise have to recognise.
 func label(a api.ReachableAddress) string {
 	var b strings.Builder
 	b.WriteString(a.CIDR)
@@ -134,6 +148,11 @@ func label(a api.ReachableAddress) string {
 	if a.Transport != "" {
 		b.WriteString("/")
 		b.WriteString(a.Transport)
+	}
+	if a.Note != "" {
+		b.WriteString(" (")
+		b.WriteString(a.Note)
+		b.WriteString(")")
 	}
 	return b.String()
 }

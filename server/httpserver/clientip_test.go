@@ -233,3 +233,31 @@ func TestClientIPResolver_MiddlewareSurvivesNilRequestContext(t *testing.T) {
 	resolver.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})).ServeHTTP(rr, req)
 	// No assertion: the test passes if the middleware doesn't panic.
 }
+
+// An IPv4-mapped trusted prefix now means the IPv4 range it spells (issue #1059, which promoted this parser so the containment
+// reachable-address set and this list read one notation).
+//
+// It used to mean nothing at all: the prefix stayed IPv6 while every candidate peer is unmapped before comparison, so a configuration
+// written that way silently trusted nobody. An operator who writes a mapped prefix is naming IPv4 hosts, and the resolver now reads it
+// that way. Pinned here because the direction matters: such a prefix goes from inert to meaning exactly the range it names, so an
+// over-broad one is over-broad in earnest.
+func TestClientIPResolver_MappedTrustedPrefixMeansTheIPv4RangeItSpells(t *testing.T) {
+	t.Parallel()
+	const hop = "10.0.0.5"
+	const realClient = "198.51.100.7"
+
+	resolver, err := httpserver.NewClientIPResolver([]string{"::ffff:10.0.0.0/104"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+	req.RemoteAddr = hop + ":5555"
+	req.Header.Set("X-Forwarded-For", realClient)
+	assert.Equal(t, realClient, resolver.ClientIP(req),
+		"a mapped /104 is the IPv4 /8 it spells, so the hop inside it is trusted and its forwarded client is used")
+
+	// And a peer outside the range it spells is still not trusted: the conversion widens nothing beyond what the operator wrote.
+	outside := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+	outside.RemoteAddr = "192.0.2.9:5555"
+	outside.Header.Set("X-Forwarded-For", realClient)
+	assert.Equal(t, "192.0.2.9", resolver.ClientIP(outside))
+}

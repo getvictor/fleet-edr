@@ -15,10 +15,14 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 )
 
-// reachableBodyCap caps PUT /api/v1/containment/reachable-addresses: MaxReachableAddresses entries, each an address, a port, a
-// transport and a note of at most MaxReachableNoteLength characters, plus the reason. Generous against that, and small enough that a
-// body which is not this shape is refused before it is decoded.
-const reachableBodyCap = 64 << 10
+// reachableBodyCap caps PUT /api/v1/containment/reachable-addresses. It is derived from the limits the set itself allows, rather
+// than picked, because a cap below them would refuse a request that every other rule accepts.
+//
+// The worst case is a full set written entirely in escapes: 64 entries, each with a 200-rune note of non-BMP characters, which JSON
+// may legally spell as surrogate pairs at 12 bytes per rune (64 x 200 x 12 = 150 KiB), plus a 1024-rune reason spelled the same way,
+// plus the addresses and object syntax. That comes to roughly 169 KiB, so the cap is 256 KiB: above anything the validator would
+// accept, and far below a body worth reading to find out it is not this shape.
+const reachableBodyCap = 256 << 10
 
 // ReachableService is the reachable-address surface the operator routes serve.
 type ReachableService interface {

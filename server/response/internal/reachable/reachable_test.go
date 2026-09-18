@@ -2,6 +2,7 @@ package reachable_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -76,6 +77,11 @@ func TestADeploymentStartsWithNothingExtraReachable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), set.Version, "version 0 is the seeded set, which no host has to be told about")
 	assert.Empty(t, set.Addresses)
+	// An EMPTY list, not a missing one. assert.Empty passes for nil too, and nil is what would reach a reader as `"addresses":null`,
+	// turning "no destination is reachable" into "this field was not reported".
+	encoded, err := json.Marshal(set)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"addresses":[]`)
 	assert.Nil(t, set.UpdatedAt, "nobody has changed it, so there is no change time to report")
 }
 
@@ -135,8 +141,10 @@ func TestAReplacementIsAuditedWithWhatChanged(t *testing.T) {
 	assert.Equal(t, "swapping the MDM server for the collection share", latest.Payload["reason"])
 	// What changed, not only where it ended up: a reviewer reading the second entry can see the MDM server left without
 	// diffing it against the first.
-	assert.Equal(t, []any{"198.51.100.5/32"}, latest.Payload["added"])
-	assert.Equal(t, []any{"192.0.2.7/32:443/tcp"}, latest.Payload["removed"])
+	// The operator's own name for each destination rides along: "the MDM server" is what a reviewer is looking for, and an address
+	// is what they would otherwise have to recognise.
+	assert.Equal(t, []any{"198.51.100.5/32 (forensic share)"}, latest.Payload["added"])
+	assert.Equal(t, []any{"192.0.2.7/32:443/tcp (MDM server)"}, latest.Payload["removed"])
 }
 
 // A note edited on an address that was already there is not that address arriving and leaving again.
@@ -152,8 +160,11 @@ func TestEditingANoteIsNotReportedAsAChangeOfDestination(t *testing.T) {
 
 	events := f.deliver(t)
 	require.Len(t, events, 2)
-	assert.NotContains(t, events[1].Payload, "added")
-	assert.NotContains(t, events[1].Payload, "removed")
+	assert.NotContains(t, events[1].Payload, "added", "the destination did not arrive")
+	assert.NotContains(t, events[1].Payload, "removed", "nor did it leave")
+	// It is still a change, and the trail says which name became which. Recording nothing would leave a rename invisible, and the
+	// note is how this trail identifies a destination at all.
+	assert.Equal(t, []any{"192.0.2.7/32 (MDM) -> 192.0.2.7/32 (MDM server (Jamf))"}, events[1].Payload["renamed"])
 	// InDelta with no tolerance: the count arrives as a JSON number, so it is a float64 and testifylint refuses Equal on one.
 	assert.InDelta(t, 1, events[1].Payload["count"], 0, "the set is still one address")
 }

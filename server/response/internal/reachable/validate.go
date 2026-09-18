@@ -22,7 +22,10 @@ import (
 // destinations and silently got three would find out during an incident.
 func Normalize(addresses []api.ReachableAddress) ([]api.ReachableAddress, error) {
 	if len(addresses) > api.MaxReachableAddresses {
-		return nil, fmt.Errorf("%w: %d given, at most %d", api.ErrReachableTooMany, len(addresses), api.MaxReachableAddresses)
+		// Named like every other refusal: the operator is told which entry is the first one over the line, not only that the set
+		// was too long, so a long list can be trimmed from a known point.
+		return nil, fmt.Errorf("address %d (%q): %w: %d given, at most %d", api.MaxReachableAddresses+1,
+			addresses[api.MaxReachableAddresses].CIDR, api.ErrReachableTooMany, len(addresses), api.MaxReachableAddresses)
 	}
 	out := make([]api.ReachableAddress, 0, len(addresses))
 	seen := make(map[api.ReachableAddress]int, len(addresses))

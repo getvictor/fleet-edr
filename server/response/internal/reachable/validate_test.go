@@ -182,6 +182,8 @@ func TestNormalizeCapsTheSet(t *testing.T) {
 	}
 	_, err := Normalize(atCap)
 	require.ErrorIs(t, err, api.ErrReachableTooMany)
+	// Named like every other refusal, so a long list can be trimmed from a known point rather than bisected.
+	assert.Contains(t, err.Error(), fmt.Sprintf("address %d", api.MaxReachableAddresses+1))
 
 	// One below the cap is stored, so the cap is a boundary and not an off-by-one refusing the last legitimate entry.
 	got, err := Normalize(atCap[:api.MaxReachableAddresses])
