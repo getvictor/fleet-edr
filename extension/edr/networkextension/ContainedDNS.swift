@@ -50,8 +50,9 @@ enum ContainedDNS {
         static let optFlagsOffset = 7
         static let optRDLengthOffset = 9
         static let lowByteMask: UInt16 = 0xFF
-        /// The UDP payload size a rebuilt query advertises, never more than the client asked for. 1232 is the size widely used as the
-        /// largest that traverses the internet without IP fragmentation; 512 is the floor RFC 6891 6.2.3 puts under an advertised size.
+        /// The bounds a rebuilt query's UDP payload size is clamped to. 1232 is the size widely used as the largest that traverses the
+        /// internet without IP fragmentation. 512 is the floor RFC 6891 6.2.3 puts under an advertised size, and is also what a client
+        /// receives when it offers no OPT record at all, so raising an offer to it hands the client nothing it could not already take.
         static let maxAdvertisedUDPSize: UInt16 = 1232
         static let minAdvertisedUDPSize: UInt16 = 512
     }
@@ -128,8 +129,9 @@ enum ContainedDNS {
             bytes[index] = 0
         }
         guard let offered = offeredUDPSize(datagram, questionEnd: questionEnd) else { return Data(bytes) }
-        // Never more than the client asked for: the answer comes back to a stub that sized its own buffer, and never less than the
-        // floor, so a client advertising a nonsense size still gets a usable one.
+        // Clamped, not copied. The upper bound is what the client asked for, and then the cap, because the answer comes back to a stub
+        // that sized its own buffer and a bigger one risks fragmentation. The lower bound raises an offer below 512 rather than
+        // carrying it, since 512 is what a responder treats any smaller offer as and what the client would get with no record at all.
         let advertised = min(max(offered, Wire.minAdvertisedUDPSize), Wire.maxAdvertisedUDPSize)
         bytes[Wire.arcountOffset + 1] = 1
         bytes += [0, Wire.optTypeHigh, Wire.optTypeLow,
