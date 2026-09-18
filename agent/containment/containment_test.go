@@ -135,11 +135,12 @@ func requirePinned(t *testing.T, m *Manager, addr string, msgAndArgs ...any) {
 // Observe, which worked only while a status refreshed on the caller's goroutine.
 func awaitSent(t *testing.T, ext *fakeExtension, n int) []document {
 	t.Helper()
-	var sent []document
-	require.Eventually(t, func() bool {
-		sent = ext.sent()
-		return len(sent) >= n
-	}, 5*time.Second, time.Millisecond, "expected %d sends, saw %d", n, len(sent))
+	require.Eventually(t, func() bool { return len(ext.sent()) >= n }, 5*time.Second, time.Millisecond,
+		"expected %d sends", n)
+	// Read again after the wait rather than closing over the result: the closure's copy is only assigned on the polls that ran, so
+	// returning it leaves callers indexing a slice the compiler cannot see was filled.
+	sent := ext.sent()
+	require.GreaterOrEqual(t, len(sent), n)
 	return sent
 }
 
@@ -362,8 +363,14 @@ func TestObserve_AFailedRefreshIsSentAgainOnTheNextStatus(t *testing.T) {
 	ext.mu.Lock()
 	ext.err = nil
 	ext.mu.Unlock()
-	m.Observe(t.Context(), held)
-	awaitSent(t, ext, 2)
+	// Statuses until one sends again, rather than one status and a wait. A send is recorded from inside the send itself, so the
+	// first one lands before the failing pass has finished recording that it failed, and a status arriving in that window finds the
+	// manager still mid-pass and asks for nothing. Repeating is what the property says anyway: a status after a failed refresh sends
+	// it again.
+	require.Eventually(t, func() bool {
+		m.Observe(t.Context(), held)
+		return len(ext.sent()) >= 2
+	}, 5*time.Second, 10*time.Millisecond, "a status after the failure sends the lifeline again")
 	// The pin is set by the refresh pass just after its send lands, so waiting for the send alone would race it.
 	requirePinned(t, m, "203.0.113.9")
 }
@@ -1202,4 +1209,65 @@ func TestObserve_DoesNotWaitForTheLifelineLookup(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Observe is waiting for the lookup, which blocks the receiver's event pump")
 	}
+}
+
+// countingGatedResolver blocks its first lookup until released and counts every lookup it is asked for.
+type countingGatedResolver struct {
+	lookups atomic.Int32
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *countingGatedResolver) LookupNetIP(ctx context.Context, _, _ string) ([]netip.Addr, error) {
+	if r.lookups.Add(1) == 1 {
+		r.once.Do(func() { close(r.started) })
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return []netip.Addr{netip.MustParseAddr("203.0.113.7")}, nil
+}
+
+// The worker holds one refresh request, not one per status. Without that, a burst of statuses arriving while a lookup is in flight
+// would queue a lookup each, and every one of them would resolve and send: the send count alone cannot tell that apart, because the
+// later passes find the addresses already sent and stop. Counting lookups is what distinguishes coalescing from deduplicating.
+func TestObserve_StatusesDuringARefreshAreAnsweredByOnePass(t *testing.T) {
+	t.Parallel()
+	res := &countingGatedResolver{started: make(chan struct{}), release: make(chan struct{})}
+	ext := &fakeExtension{}
+	m := New(Options{Target: serverTarget, Send: ext.send, Resolver: res, RefreshInterval: time.Hour})
+	ext.mgr = m
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	m.Observe(ctx, held)
+	select {
+	case <-res.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the worker never started the first lookup")
+	}
+
+	// Five more statuses while that lookup is stuck. Each asks for a refresh, and the one-deep request holds one.
+	for range 5 {
+		m.Observe(ctx, held)
+	}
+	close(res.release)
+
+	// Two passes: the one in flight, and the one its queued request asks for. Never six.
+	require.Eventually(t, func() bool { return res.lookups.Load() >= 2 }, 5*time.Second, time.Millisecond,
+		"the queued request is answered after the pass in flight")
+	assert.Never(t, func() bool { return res.lookups.Load() > 2 }, 300*time.Millisecond, 5*time.Millisecond,
+		"six statuses during one refresh must not queue six lookups")
 }

@@ -1013,15 +1013,23 @@ const containmentErrorMessages = new Map<string, string>([
   ["reason_too_long", "The reason is too long: keep it to 1024 characters."],
   ["body_too_large", "The reason is too long: keep it to 1024 characters."],
   ["host_not_found", "This host is no longer enrolled, so its containment cannot be changed."],
+  ["version_conflict", "Someone else changed this host's containment while you were deciding. The state shown has been refreshed."],
 ]);
 
 // setHostContainment contains or releases a host. The server requires host.isolate, a recent authentication, and a reason; wrap it in
 // useReauthRetry. A refusal throws an Error whose message says what to do about it.
-export async function setHostContainment(hostId: string, contained: boolean, reason: string): Promise<ContainmentChange> {
+export async function setHostContainment(
+  hostId: string,
+  contained: boolean,
+  reason: string,
+  expectedVersion?: number,
+): Promise<ContainmentChange> {
   return typedMutationEndpoint(
     "POST",
     `/hosts/${encodeURIComponent(hostId)}/containment`,
-    { contained, reason },
+    // expected_version is sent only when the caller read a state to act on, so a caller that does not care keeps the old behavior of
+    // asking for the state whatever the host holds (issue #1076).
+    expectedVersion === undefined ? { contained, reason } : { contained, reason, expected_version: expectedVersion },
     (res) => res.json() as Promise<ContainmentChange>,
     (code, message) => new Error(containmentErrorMessages.get(code) ?? message),
   );
