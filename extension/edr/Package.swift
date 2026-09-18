@@ -88,7 +88,6 @@ let package = Package(
                 "networkextension/NetworkFilter.swift",
                 "networkextension/NetworkContainmentController.swift",
                 "networkextension/XPCServer.swift",
-                "networkextension/ProviderStatusReporter.swift",
                 "com.fleetdm.edr.notify.plist"
             ],
             sources: [
@@ -96,6 +95,12 @@ let package = Package(
                 "extension/ApplicationControlStore.swift",
                 // AtomicFile.swift is the atomic write every persisted store uses, in both extensions. Pure Foundation.
                 "shared/AtomicFile.swift",
+                // DisabledProviderStore.swift remembers which capture providers an operator switched off, across extension restarts
+                // (issue #1078). Pure Foundation over AtomicFile, so the load and save rules are unit-testable.
+                "networkextension/DisabledProviderStore.swift",
+                // ProviderStatusReporter.swift is the liveness reporter itself. It imports Foundation and os.log only, and takes its
+                // broadcast and serialize as closures, so it compiles here and its seeding rules are testable without an XPC session.
+                "networkextension/ProviderStatusReporter.swift",
                 // PushOrder.swift is the one definition of how a pushed document is ordered (epoch, then version), shared by the
                 // application-control snapshot, the watched-path set and the network containment state.
                 "shared/PushOrder.swift",

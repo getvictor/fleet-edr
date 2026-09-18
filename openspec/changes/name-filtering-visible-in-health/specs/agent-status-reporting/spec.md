@@ -10,7 +10,16 @@ The agent SHALL grade the `network_extension` component from that report. A repo
 
 The extension SHALL distinguish three outcomes of a stop, using the reason the platform gives, and none of them SHALL by itself make the component unhealthy except the fault. A stop that means the hosting session is going away or being replaced SHALL drop the provider from the report, for any provider, because it occurs on ordinary logout and on activation and its last state describes nothing that still exists. A stop that means an operator switched the provider off SHALL be reported as `disabled` for the optional DNS proxy, which is opt-in and therefore correctly configured when off; switching off the mandatory content filter SHALL be reported as stopped, so a host left without network capture stays visible. Every other reason SHALL be reported as stopped.
 
+A provider reported `disabled` SHALL stay reported across extension restarts. A provider that is switched off never starts and therefore never stops, so a fresh extension process observes no transition that would tell it: the extension SHALL therefore remember which providers were switched off and report them from its first message, and SHALL correct that memory when such a provider is next seen capturing. It SHALL NOT read the state from the system's own configuration: measured on a live host, that answers `false` inside the extension in the same process and second as its own log line saying the provider started, so reading it would report every host as switched off. A provider disabled before the extension first recorded one SHALL be reported as absent, as it was, since nothing observed it stopping.
+
 A `disabled` provider SHALL be reported rather than omitted, and SHALL be graded as a state and not a fault: its own component SHALL say it is turned off, carrying a reason that distinguishes it from a provider that is capturing and from one that stopped, and it SHALL NOT make its parent component unhealthy. Omitting it, which an earlier version did, is indistinguishable from an extension too old to report anything, and leaves a reader unable to tell a host that switched the provider off from one that never said. That reader exists: host containment's restriction on which names a contained host resolves is the DNS proxy's work, and a contained host whose proxy is off resolves any name its own resolvers answer.
+
+#### Scenario: A disabled provider survives a restart
+
+- **GIVEN** an operator has switched off the optional DNS proxy
+- **WHEN** the extension restarts, so the provider never starts and never stops
+- **THEN** its first report still names the provider `disabled`
+- **AND** a provider found capturing again is no longer reported that way
 
 #### Scenario: A disabled provider is reported, not omitted
 

@@ -26,16 +26,41 @@ final class ProviderStatusReporter {
     private var liveness = ProviderLiveness()
     private let broadcast: (Data) -> Void
     private let serialize: (ProviderStatusPayload) -> Data?
+    private let disabledStore: DisabledProviderStore
 
-    init(broadcast: @escaping (Data) -> Void, serialize: @escaping (ProviderStatusPayload) -> Data?) {
+    init(broadcast: @escaping (Data) -> Void, serialize: @escaping (ProviderStatusPayload) -> Data?,
+         disabledStore: DisabledProviderStore = DisabledProviderStore()) {
         self.broadcast = broadcast
         self.serialize = serialize
+        self.disabledStore = disabledStore
+        // Seeded before the first publish, because a provider that is switched off never starts and so never stops: nothing in this
+        // process's lifetime would otherwise say it was turned off on purpose (issue #1078). A provider that IS running corrects this
+        // within seconds, when its start callback records it, so a stale entry costs only that.
+        for name in disabledStore.load() {
+            guard let provider = ProviderLiveness.Provider(rawValue: name) else { continue }
+            liveness.record(provider, .disabled)
+        }
+    }
+
+    /// persistDisabledLocked writes which providers are currently switched off, so a later extension process starts knowing. Caller
+    /// holds the lock. A write failure is logged and nothing else: this process's own report is already correct.
+    private func persistDisabledLocked() {
+        var disabled: Set<String> = []
+        for provider in ProviderLiveness.Provider.allCases where liveness.states[provider] == .disabled {
+            disabled.insert(provider.rawValue)
+        }
+        if !disabledStore.save(disabled) {
+            logger.error("could not record which capture providers are switched off; a restart will not remember")
+        }
     }
 
     /// recordStarted notes that a provider is now capturing.
     func recordStarted(_ provider: ProviderLiveness.Provider) {
         lock.lock()
         let changed = liveness.record(provider, .running)
+        // A provider that is capturing is not switched off, whatever an earlier process recorded, so the memory is cleared here
+        // rather than only on an explicit enable: this is the path that corrects a stale entry.
+        persistDisabledLocked()
         lock.unlock()
         guard changed else { return }
         logger.info("Provider \(provider.rawValue, privacy: .public) is running")
@@ -61,6 +86,7 @@ final class ProviderStatusReporter {
         case .stopped: changed = liveness.record(provider, .stopped, reason: reason)
         case let .some(state): changed = liveness.record(provider, state)
         }
+        persistDisabledLocked()
         lock.unlock()
         guard changed else { return }
         let grading: String
