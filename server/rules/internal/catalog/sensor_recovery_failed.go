@@ -38,8 +38,9 @@ import (
 // # What it does not do
 //
 // It does not fire on a provider an operator deliberately disabled, and needs no suppression to avoid it. A deliberate
-// opt-out is graded extension-side as the provider being ABSENT (issue #649), the self-heal only ever remediates providers
-// reported STOPPED, and an event exists here only where a remediation was attempted and exhausted.
+// opt-out is graded extension-side as `disabled` (issue #1078), or as the provider being ABSENT by an extension predating
+// that; the self-heal only ever remediates providers reported STOPPED, and an event exists here only where a remediation
+// was attempted and exhausted.
 type SensorRecoveryFailed struct{}
 
 func (r *SensorRecoveryFailed) ID() string { return "sensor_recovery_failed" }

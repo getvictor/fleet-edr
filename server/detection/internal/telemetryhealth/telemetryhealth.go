@@ -105,6 +105,10 @@ var derivedComponents = []derivedComponent{
 	},
 }
 
+// ReasonProviderDisabled is the reason the agent reports for a provider an operator switched off. Named here because this package
+// has to exclude it from the capture claims it contradicts; the agent owns the spelling.
+const ReasonProviderDisabled = "provider_disabled"
+
 // ReasonNoFlowTelemetry is the machine reason on every derived condition: the host's reported health claims its components are fine,
 // but a flow stream it does use has delivered nothing while process telemetry continued.
 const ReasonNoFlowTelemetry = "no_flow_telemetry"
@@ -166,8 +170,8 @@ func commandDeliveryMessage(expiredCount int) string {
 // Only providers claiming to be CAPTURING are kept. Every other case is silence rather than a claim, and silence is not
 // something this package can contradict:
 //
-//   - a provider the operator disabled is omitted by the agent entirely, which is exactly how a supported opt-out is meant to
-//     read;
+//   - a provider the operator disabled reports `disabled` (issue #1078), or is omitted entirely by an agent predating that, and
+//     neither is a claim to be capturing, which is exactly how a supported opt-out is meant to read;
 //   - a provider the endpoint already reports as stopped needs no second opinion, and adding one would be noise on a host whose
 //     operator can already see the fault;
 //   - a provider reporting a state the agent did not recognise has asserted nothing either way.
@@ -187,7 +191,10 @@ func ParseClaims(components []byte) Claims {
 		return c
 	}
 	for _, comp := range reported {
-		if comp.Status == endpointapi.HealthHealthy && isProvider(comp.Type) {
+		// Healthy is the claim, EXCEPT for a provider an operator switched off. That reports healthy because being off on purpose
+		// is not a fault, but it is not a claim to be capturing, and treating it as one would derive a telemetry-loss finding from
+		// the silence of a provider nobody expects to speak (issue #1078).
+		if comp.Status == endpointapi.HealthHealthy && comp.Reason != ReasonProviderDisabled && isProvider(comp.Type) {
 			c.capturing[comp.Type] = struct{}{}
 		}
 	}

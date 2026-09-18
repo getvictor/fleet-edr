@@ -14,8 +14,9 @@ package selfheal
 import "sort"
 
 // ProviderStopped is the state the network extension reports for a provider that stopped through a fault. It mirrors the
-// wire value defined by the extension's ProviderLiveness (issue #649); a provider the operator deliberately disabled is
-// ABSENT from the map instead, which is what makes remediation safe to run without asking.
+// wire value defined by the extension's ProviderLiveness (issue #649); a provider the operator deliberately disabled
+// carries `disabled` instead, and is ABSENT from the map on an extension predating issue #1078. Neither form is this
+// state, which is what makes remediation safe to run without asking.
 const ProviderStopped = "stopped"
 
 // ProviderRunning is the state reported for a provider that is capturing. It is the ONLY affirmative evidence that a remediation
@@ -34,10 +35,11 @@ var subcommand = map[string]string{
 // Remediable returns the providers in a liveness report that are both stopped and known to be restorable, sorted so the
 // remediation order (and the resulting logs) are deterministic.
 //
-// The absence rule is the whole safety story. #649 reports an operator-disabled provider by omitting it from the map, so
-// filtering on ProviderStopped alone is already sufficient to never re-enable something a human turned off on purpose.
-// There is no second "did the operator mean it?" check to get wrong, because the extension answered that question when it
-// graded the stop reason.
+// Matching "stopped" POSITIVELY is the whole safety story. An operator-disabled provider never carries that state: it is
+// omitted from the map by an extension that predates issue #1078, and reported `disabled` by one that does not. Neither is
+// eligible here, and neither needs to be named, because a positive match on the fault state excludes everything else by
+// construction. There is no second "did the operator mean it?" check to get wrong, because the extension answered that
+// question when it graded the stop reason.
 func Remediable(providers map[string]string) []string {
 	out := make([]string, 0, len(providers))
 	for name, state := range providers {

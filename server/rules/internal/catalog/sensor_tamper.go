@@ -45,10 +45,10 @@ import (
 // minute of held batches for an alert that may never come) or suppressing the case that matters most, a provider that
 // never comes back at all.
 //
-// A provider an operator deliberately disabled produces no alert and needs no logic here: issue #649 grades a
-// deliberate opt-out extension-side and reports the provider ABSENT rather than stopped, and issue #685's recorder
-// never emits a transition for an absent provider. The supported configuration is invisible to this rule by
-// construction, which is a stronger guarantee than a suppression list.
+// A provider an operator deliberately disabled produces no alert and needs no logic here: the opt-out is graded
+// extension-side and reported as `disabled` rather than stopped (issue #1078), and issue #685's recorder emits a
+// transition for neither a disabled provider nor an absent one. The supported configuration is invisible to this rule
+// by construction, which is a stronger guarantee than a suppression list.
 type SensorTamper struct{}
 
 func (r *SensorTamper) ID() string { return "sensor_tamper" }
@@ -59,7 +59,7 @@ func (r *SensorTamper) AlgorithmName() string { return "absence_within_window" }
 
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions. There is no per-host tuning to offer, because
 // there is no benign writer to allowlist. The one supported way to run without a provider is to disable it, which is
-// reported as absence and never reaches the rule at all.
+// reported as a disabled state and never reaches the rule at all.
 func (r *SensorTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
 
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding.
@@ -110,7 +110,7 @@ func (r *SensorTamper) Doc() api.Documentation {
 			"how fast capture resumes: an upgrade's replacement provider runs about a second later, while a stop that " +
 			"needed the automatic repair takes tens of seconds. A provider that resumes within a few seconds is " +
 			"therefore not reported.\n\n" +
-			"A provider an operator has deliberately turned off (the DNS proxy is optional) is reported as absent " +
+			"A provider an operator has deliberately turned off (the DNS proxy is optional) is reported as disabled " +
 			"rather than stopped and never reaches this rule.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{sensorTransitionEventType},
@@ -134,7 +134,7 @@ func (r *SensorTamper) Doc() api.Documentation {
 // wire contract in schema/events.json is what ties the two together.
 const sensorTransitionEventType = "sensor_provider_transition"
 
-// Provider states carried by that event. Absence of a provider is a deliberate opt-out and never produces an event, so
+// Provider states carried by that event. A disabled provider is a deliberate opt-out and never produces an event, so
 // there is no third state to handle here.
 const (
 	sensorStateRunning = "running"

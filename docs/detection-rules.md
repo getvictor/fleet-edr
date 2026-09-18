@@ -481,7 +481,7 @@ The agent restores a stopped provider automatically, in about 35 seconds. That r
 
 An agent upgrade also stops providers, as part of replacing the system extension, and the platform reports the same stop reason for that as for somebody switching capture off. The rule separates them by how fast capture resumes: an upgrade's replacement provider runs about a second later, while a stop that needed the automatic repair takes tens of seconds. A provider that resumes within a few seconds is therefore not reported.
 
-A provider an operator has deliberately turned off (the DNS proxy is optional) is reported as absent rather than stopped and never reaches this rule.
+A provider an operator has deliberately turned off (the DNS proxy is optional) is reported as disabled rather than stopped and never reaches this rule.
 
 ### Known false-positive sources
 

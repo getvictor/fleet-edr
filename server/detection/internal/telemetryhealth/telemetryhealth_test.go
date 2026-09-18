@@ -147,6 +147,16 @@ func TestParseClaims(t *testing.T) {
 			want:  nil,
 		},
 		{
+			// A provider an operator switched off reports HEALTHY, because being off on purpose is not a fault (issue #1078). It
+			// is not a claim to be capturing, though, and treating it as one would derive a telemetry-loss finding from the
+			// silence of a provider nobody expects to speak: a permanent false fault on every host with the opt-in proxy off.
+			name: "a provider switched off does not, though it reports healthy",
+			comps: []endpointapi.ComponentHealth{
+				{Type: "dns_proxy", Status: endpointapi.HealthHealthy, Reason: telemetryhealth.ReasonProviderDisabled},
+			},
+			want: nil,
+		},
+		{
 			name:  "a provider in an unrecognised state does not",
 			comps: []endpointapi.ComponentHealth{provider("dns_proxy", endpointapi.HealthUnknown)},
 			want:  nil,

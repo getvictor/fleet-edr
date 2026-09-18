@@ -47,6 +47,28 @@ function healthDotClass(status: string | undefined): string | null {
 // bare host page so an operator in an alert-context view can drop the ?alert=...&process=...&at=... params.
 export function HostHeader({ hostId, actions }: HostHeaderProps) {
   const [detail, setDetail] = useState<HostDetail | null>(null);
+  // Read here rather than inside the popover, because two things on this row need it: the popover's conditions, and the containment
+  // control, which says what containment means for a host whose DNS proxy is not filtering names (issue #1078). One read, one host.
+  const [health, setHealth] = useState<HostHealth | null>(null);
+
+  useEffect(() => {
+    // Reset on hostId change (and clear on a failed fetch) so the attention dot, the health section and the containment caveat never
+    // show the previous host's agent health.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setHealth(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    let cancelled = false;
+    getHostHealth(hostId)
+      .then((h) => {
+        if (!cancelled) setHealth(h);
+      })
+      .catch(() => {
+        if (!cancelled) setHealth(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hostId]);
 
   useEffect(() => {
     // Reset on hostId change so a stale header never shows over another host (React Router re-renders without unmounting). Disable
@@ -80,8 +102,8 @@ export function HostHeader({ hostId, actions }: HostHeaderProps) {
           {online ? "online" : "offline"}
         </span>
       )}
-      {detail && <HostDetailsPopover detail={detail} />}
-      <HostContainment key={hostId} hostId={hostId} />
+      {detail && <HostDetailsPopover detail={detail} health={health} />}
+      <HostContainment key={hostId} hostId={hostId} health={health} />
     </span>
   );
 
@@ -173,28 +195,8 @@ function HostHealthEpisodes({ episodes }: { readonly episodes: readonly HostHeal
 // its copy control, agent version, source IP, event count, exact last-seen, enrollment date, and the agent-health conditions out of the
 // always-visible header. The trigger carries an attention dot only when agent health needs attention, so a clean host shows no health
 // chrome at all. Closes on outside-click and Escape, mirroring AccountMenu's disclosure pattern.
-function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
+function HostDetailsPopover({ detail, health }: { readonly detail: HostDetail; readonly health: HostHealth | null }) {
   const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
-  const [health, setHealth] = useState<HostHealth | null>(null);
-
-  useEffect(() => {
-    // Reset on host_id change (and clear on a failed fetch) so the attention dot and health section never show the previous host's
-    // agent health, matching the header's own detail reset. Disable set-state-in-effect for the synchronous reset.
-    /* eslint-disable react-hooks/set-state-in-effect */
-    setHealth(null);
-    /* eslint-enable react-hooks/set-state-in-effect */
-    let cancelled = false;
-    getHostHealth(detail.host_id)
-      .then((h) => {
-        if (!cancelled) setHealth(h);
-      })
-      .catch(() => {
-        if (!cancelled) setHealth(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detail.host_id]);
 
   const dotClass = healthDotClass(health?.overall_status);
   // Agent-reported conditions first, then the server's own. One list, because an operator diagnosing a host wants every condition in

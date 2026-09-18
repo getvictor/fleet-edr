@@ -22,11 +22,12 @@ import (
 // validate against a closed set, so this needs no server change to be accepted and stored.
 const EventType = "sensor_provider_transition"
 
-// Provider states as reported by the extension. A provider the operator deliberately disabled is ABSENT from the report
-// rather than carrying a state (issue #649), which is what keeps a supported opt-out from looking like a fault.
+// Provider states as reported by the extension. A provider the operator deliberately disabled reports `disabled` (issue #1078);
+// before that it was absent from the report entirely, and both are supported opt-outs rather than faults.
 const (
-	StateRunning = "running"
-	StateStopped = "stopped"
+	StateRunning  = "running"
+	StateStopped  = "stopped"
+	StateDisabled = "disabled"
 )
 
 // Emitter enqueues one event. Matches the agent's enqueue seam so this package does not depend on the queue implementation.
@@ -69,6 +70,12 @@ func (t *Transitions) Observe(ctx context.Context, providers map[string]string, 
 
 	var emitted []string
 	for provider, state := range providers {
+		if state == StateDisabled {
+			// A supported opt-out, which must not emit. The baseline drops it for the same reason absence does: a provider the
+			// operator turns back on has to read as a transition, and holding "running" here would swallow it (issue #1078).
+			delete(t.last, provider)
+			continue
+		}
 		if state != StateRunning && state != StateStopped {
 			// An unrecognised state from a newer extension. The baseline is deliberately LEFT ALONE rather than advanced to
 			// it: "we do not know what this means" is not evidence the provider changed, and recording it would make the
@@ -89,9 +96,9 @@ func (t *Transitions) Observe(ctx context.Context, providers map[string]string, 
 		t.last[provider] = state
 		emitted = append(emitted, provider)
 	}
-	// A provider that vanished from the report was deliberately disabled (issue #649 reports a supported opt-out as
-	// absence). That is not a fault and must not emit, but the baseline has to drop it so a later re-appearance reads as a
-	// transition rather than as no change.
+	// A provider that vanished from the report stopped for a lifecycle reason, or was disabled by an extension that predates the
+	// `disabled` state. Neither is a fault and neither must emit, but the baseline has to drop it so a later re-appearance reads as
+	// a transition rather than as no change.
 	for provider := range t.last {
 		if _, present := providers[provider]; !present {
 			delete(t.last, provider)

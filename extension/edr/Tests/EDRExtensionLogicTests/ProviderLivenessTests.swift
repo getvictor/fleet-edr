@@ -47,30 +47,43 @@ final class ProviderLivenessTests: XCTestCase {
         // unhealthy on every logout and on every activation that supercedes the running configuration.
         for reason in [10, 11, 12, 13] {
             for provider in ProviderLiveness.Provider.allCases {
-                XCTAssertTrue(
-                    ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason),
-                    "reason \(reason) is session lifecycle for \(provider.rawValue)"
+                XCTAssertNil(
+                    ProviderLiveness.stateAfterStop(provider: provider, reason: reason),
+                    "reason \(reason) is session lifecycle for \(provider.rawValue), so the provider is dropped"
                 )
             }
         }
     }
 
     // spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/disabling-the-mandatory-content-filter-stays-visible
-    func testOperatorDisablingIsAbsenceOnlyForTheOptInDNSProxy() {
+    // spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/a-disabled-provider-is-reported-not-omitted
+    func testOperatorDisablingTheOptInDNSProxyIsReportedAsDisabled() {
         // userInitiated(1), providerDisabled(5), configurationDisabled(9): somebody switched this provider off.
         for reason in [1, 5, 9] {
-            // DNS proxying is opt-in, so a host that turned it off is correctly configured, not degraded.
-            XCTAssertTrue(
-                ProviderLiveness.isDeliberateAbsence(provider: .dnsProxy, reason: reason),
-                "reason \(reason) on the opt-in DNS proxy is a supported configuration"
+            // DNS proxying is opt-in, so a host that turned it off is correctly configured, not degraded. It is REPORTED, not
+            // dropped: dropping it is what left a contained host's unrestricted names invisible (issue #1078).
+            XCTAssertEqual(
+                ProviderLiveness.stateAfterStop(provider: .dnsProxy, reason: reason), .disabled,
+                "reason \(reason) on the opt-in DNS proxy is a supported configuration, and still says so"
             )
             // The content filter is not optional. An operator switching it off leaves the host with no network capture,
             // which is the tamper-adjacent state this component exists to surface, so it stays in the report as stopped.
-            XCTAssertFalse(
-                ProviderLiveness.isDeliberateAbsence(provider: .contentFilter, reason: reason),
-                "reason \(reason) on the mandatory content filter must stay visible"
+            XCTAssertEqual(
+                ProviderLiveness.stateAfterStop(provider: .contentFilter, reason: reason), .stopped,
+                "reason \(reason) on the mandatory content filter must stay visible as a fault"
             )
         }
+    }
+
+    // A disabled provider carries no stop reason: there is nothing to discriminate, and a stale one from an earlier fault would
+    // survive into a state that is not a fault at all.
+    func testDisablingClearsAnyEarlierStopReason() {
+        var liveness = ProviderLiveness()
+        liveness.record(.dnsProxy, .stopped, reason: 2)
+        XCTAssertEqual(liveness.reasonSnapshot["dns_proxy"], 2)
+        liveness.record(.dnsProxy, .disabled)
+        XCTAssertNil(liveness.reasonSnapshot["dns_proxy"])
+        XCTAssertEqual(liveness.snapshot["dns_proxy"], "disabled")
     }
 
     func testFaultsAreNeverAbsenceForEitherProvider() {
@@ -78,8 +91,8 @@ final class ProviderLivenessTests: XCTestCase {
         // connectionFailed(14), and the unspecified none(0).
         for reason in [0, 2, 3, 4, 6, 7, 8, 14] {
             for provider in ProviderLiveness.Provider.allCases {
-                XCTAssertFalse(
-                    ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason),
+                XCTAssertEqual(
+                    ProviderLiveness.stateAfterStop(provider: provider, reason: reason), .stopped,
                     "reason \(reason) is a fault for \(provider.rawValue)"
                 )
             }

@@ -104,8 +104,9 @@ func TestRepeatedIdenticalReportsEmitOnce(t *testing.T) {
 // spec:agent-status-reporting/transition-records-distinguish-a-fault-from-a-supported-configuration/a-deliberately-disabled-provider-is-not-recorded-as-a-fault
 func TestAProviderGoingAbsentDoesNotEmit(t *testing.T) {
 	t.Parallel()
-	// #649 reports a deliberately disabled provider as ABSENT rather than stopped. That is a supported configuration, not a
-	// fault, so it must never produce tamper evidence.
+	// An extension predating issue #1078 reports a deliberately disabled provider as ABSENT rather than stopped (one that does
+	// not reports `disabled`, covered separately). That is a supported configuration, not a fault, so neither shape may
+	// produce tamper evidence.
 	r := &recorder{}
 	tr := newTransitions(r)
 	ctx := context.Background()
@@ -129,6 +130,31 @@ func TestAProviderReappearingAfterAbsenceEmits(t *testing.T) {
 		tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateRunning}, nil))
 	require.Len(t, r.events, 1)
 	assert.Equal(t, "dns_proxy", r.events[0].payload["provider"])
+}
+
+// The `disabled` shape of the scenario the absence test above carries. Unmarked deliberately: that scenario's marker is already 159
+// characters, over the gate's limit for a line this change touches, and one marker per scenario is what spectrace asks for.
+//
+// A provider reporting `disabled` is the same supported opt-out that absence used to be (issue #1078), so it must not emit, and it
+// must leave the baseline so turning the provider back on is recorded. Without the second half a re-enable is read as no change,
+// because the baseline still holds the running state from before the disable.
+func TestADisabledProviderDoesNotEmitAndItsReturnDoes(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	tr := newTransitions(r)
+	ctx := context.Background()
+
+	tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateRunning}, nil)
+	assert.Empty(t, tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateDisabled}, nil),
+		"switching the opt-in DNS proxy off is a supported configuration, not tamper evidence")
+	assert.Empty(t, r.events)
+
+	assert.Equal(t, []string{"dns_proxy"},
+		tr.Observe(ctx, map[string]string{"content_filter": StateRunning, "dns_proxy": StateRunning}, nil),
+		"turning it back on is a transition, which a held baseline would have swallowed")
+	require.Len(t, r.events, 1)
+	assert.Equal(t, "dns_proxy", r.events[0].payload["provider"])
+	assert.Equal(t, StateRunning, r.events[0].payload["state"])
 }
 
 // spec:agent-status-reporting/a-transition-record-is-not-lost-to-a-transient-failure/a-failed-record-is-retried

@@ -266,9 +266,10 @@ func TestSensorTamper_IgnoresEverythingItIsNotAbout(t *testing.T) {
 
 // TestSensorTamper_ADisabledProviderIsInvisible. Turning the optional DNS proxy off is a supported configuration, and an
 // operator who did it must not be alerted about it daily. The rule needs no suppression list for that: the agent reports
-// a deliberate opt-out as the provider being ABSENT rather than stopped and records no transition for it, so the batch
-// reaching the engine carries nothing about that provider at all. This pins the consequence, that a host running one
-// provider deliberately is silent rather than merely low-severity.
+// a deliberate opt-out as `disabled` rather than stopped (issue #1078), or omits the provider entirely on an extension
+// predating that, and records no transition for either, so the batch reaching the engine carries nothing about that
+// provider at all. This pins the consequence, that a host running one provider deliberately is silent rather than merely
+// low-severity.
 //
 // spec:server-detection-rules-engine/edr-sensor-tamper-detection/a-deliberately-disabled-provider-does-not-fire
 func TestSensorTamper_ADisabledProviderIsInvisible(t *testing.T) {

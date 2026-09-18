@@ -64,7 +64,9 @@ describe("HostHeader", () => {
     expect(screen.queryByText("0.5.0")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy host id" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    // Matched loosely: the trigger's accessible name grows to "Details agent needs attention" once health says so, and health
+    // is read by the header itself now, so an exact match would be a race against that read.
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
 
     expect(screen.getByText(detail.host_id)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy host id" })).toBeInTheDocument();
@@ -102,7 +104,7 @@ describe("HostHeader", () => {
 
     // Never-enrolled host: the id takes the title slot; unknown facts (agent, IP, enrolled) render no popover row at all.
     expect(await screen.findByText(detail.host_id)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
     expect(screen.queryByText("Agent")).not.toBeInTheDocument();
     expect(screen.queryByText("IP")).not.toBeInTheDocument();
     expect(screen.queryByText("Enrolled")).not.toBeInTheDocument();
@@ -117,7 +119,7 @@ describe("HostHeader", () => {
     expect(screen.queryByText("online")).not.toBeInTheDocument();
     expect(screen.queryByText("offline")).not.toBeInTheDocument();
     // With no detail there is nothing to disclose, so no Details trigger renders; the raw-id title is itself selectable.
-    expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Details/ })).not.toBeInTheDocument();
   });
 });
 
@@ -198,13 +200,13 @@ describe("HostHeader agent health", () => {
     );
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     // A healthy agent rolls up to one pill, revealed only on demand; the per-component condition is available once the popover is open.
     expect(await screen.findByText("Agent healthy")).toBeInTheDocument();
     expect(screen.getByText("Security extension connected")).toBeInTheDocument();
     // Health is now loaded and healthy, so the always-visible trigger carries no attention marker.
-    expect(screen.getByRole("button", { name: "Details" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("button", { name: /Details/ })).not.toHaveAttribute("title");
   });
 
   it("uses an amber (not red) attention dot when the agent is degraded", async () => {
@@ -229,9 +231,9 @@ describe("HostHeader agent health", () => {
     renderHeader(detail.host_id);
 
     // Unknown means no snapshot yet, nothing actionable: open the popover to prove health resolved, then assert the trigger stays clean.
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
     expect(await screen.findByText("Agent unknown")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Details" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("button", { name: /Details/ })).not.toHaveAttribute("title");
   });
 
   // Server-derived conditions (issue #677). These are the ones the agent cannot report about itself: it believes it is healthy, and
@@ -265,7 +267,7 @@ describe("HostHeader agent health", () => {
     );
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     // Both conditions are present, so an operator sees the agent's claim and the server's contradiction of it side by side.
     expect(await screen.findByText("Network extension connected")).toBeInTheDocument();
@@ -297,7 +299,7 @@ describe("HostHeader agent health", () => {
     );
     const { container } = renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
     expect(await screen.findByText("Connection capture")).toBeInTheDocument();
 
     // The age element is absent entirely rather than rendering an epoch-relative string.
@@ -322,7 +324,7 @@ describe("HostHeader agent health", () => {
     );
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     expect(await screen.findByText("Agent healthy")).toBeInTheDocument();
     expect(screen.queryByText("DNS capture")).not.toBeInTheDocument();
@@ -371,7 +373,7 @@ describe("HostHeader agent health", () => {
     );
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     expect(await screen.findByText("Sensor faults")).toBeVisible();
     // The part at fault is the provider, labelled the way the component rows label it.
@@ -397,7 +399,7 @@ describe("HostHeader agent health", () => {
     vi.spyOn(api, "getHostHealth").mockResolvedValue(healthFixture({ episodes: [] }));
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     expect(await screen.findByText(/Agent healthy/)).toBeVisible();
     expect(screen.queryByText("Sensor faults")).toBeNull();
@@ -468,7 +470,7 @@ describe("HostHeader agent health", () => {
     );
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     expect(await screen.findByText("Sensor faults")).toBeVisible();
     expect(screen.getByText("__proto__")).toBeVisible();
@@ -513,7 +515,7 @@ describe("HostHeader agent health", () => {
     );
     renderHeader(detail.host_id);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Details/ }));
 
     expect(await screen.findByText("Content filter")).toBeInTheDocument();
     expect(screen.getByText("DNS proxy")).toBeInTheDocument();

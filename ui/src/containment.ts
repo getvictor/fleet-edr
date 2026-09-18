@@ -18,6 +18,30 @@ export function containmentPhase(state: ContainmentState | null | undefined): Co
   return delivery?.status === "failed" ? "release_failed" : "releasing";
 }
 
+// NameFiltering is what a host's live health says about the restriction on WHICH names it resolves while contained (issue #1078).
+//
+// Four answers, because the two ways a proxy fails to filter are not equally certain and must not be reported as though they were:
+//
+//   - "disabled": the host itself reports the opt-in DNS proxy switched off. Definite, and immediate.
+//   - "no-capture": the SERVER saw no DNS capture arrive while process telemetry continued. Evidence, not proof. The server grades it
+//     degraded rather than unhealthy for the same reason, since a skewed clock or an ingest backlog also explain silence, and its own
+//     message says the provider MAY be running without capturing.
+//   - "filtering": nothing says otherwise.
+//   - null: health has not been read, which is not the same as "filtering".
+//
+// A provider reported `stopped` is a fault the host surfaces on its own and the health section already reports it, so it is not
+// repeated here.
+export type NameFiltering = "disabled" | "no-capture" | "filtering";
+
+export function nameFiltering(
+  conditions: ReadonlyArray<{ type: string; reason?: string }> | null | undefined,
+): NameFiltering | null {
+  if (!conditions) return null;
+  if (conditions.some((c) => c.type === "dns_proxy" && c.reason === "provider_disabled")) return "disabled";
+  if (conditions.some((c) => c.type === "dns_proxy_delivery")) return "no-capture";
+  return "filtering";
+}
+
 // containmentSettled reports whether a phase is final until the next change, so a view can stop polling.
 export function containmentSettled(phase: ContainmentPhase | null): boolean {
   return phase !== "containing" && phase !== "releasing";
