@@ -34,10 +34,11 @@ var subcommand = map[string]string{
 // Remediable returns the providers in a liveness report that are both stopped and known to be restorable, sorted so the
 // remediation order (and the resulting logs) are deterministic.
 //
-// The absence rule is the whole safety story. #649 reports an operator-disabled provider by omitting it from the map, so
-// filtering on ProviderStopped alone is already sufficient to never re-enable something a human turned off on purpose.
-// There is no second "did the operator mean it?" check to get wrong, because the extension answered that question when it
-// graded the stop reason.
+// Matching "stopped" POSITIVELY is the whole safety story. An operator-disabled provider never carries that state: it is
+// omitted from the map by an extension that predates issue #1078, and reported `disabled` by one that does not. Neither is
+// eligible here, and neither needs to be named, because a positive match on the fault state excludes everything else by
+// construction. There is no second "did the operator mean it?" check to get wrong, because the extension answered that
+// question when it graded the stop reason.
 func Remediable(providers map[string]string) []string {
 	out := make([]string, 0, len(providers))
 	for name, state := range providers {

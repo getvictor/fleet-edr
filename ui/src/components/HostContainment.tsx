@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ContainmentVersionConflictError, getHostContainment, setHostContainment } from "../api";
-import { containmentBadge, containmentPhase, containmentSettled, nameFilteringOff } from "../containment";
+import { containmentBadge, containmentPhase, containmentSettled, nameFiltering } from "../containment";
 import { PermissionAction, useCan } from "../permissions-core";
 import type { ContainmentState, HostHealth } from "../types";
 import { ConfirmActionModal } from "./ApplicationControl/ConfirmActionModal";
@@ -13,12 +13,27 @@ import "./HostContainment.scss";
 // command, and an offline host confirms when it next connects, so a few seconds keeps the badge current without hammering the API.
 const CONTAINMENT_POLL_MS = 3000;
 
-// NAMES_NOT_FILTERED explains what the caveat badge means. Containment restricts a contained host's DNS in two layers: the content
-// filter allows DNS only to the host's own resolvers and always holds, while the network extension's DNS proxy is what refuses every
-// name but the server's. With the proxy off or not capturing, the first layer holds and the second does not (issue #1078).
-const NAMES_NOT_FILTERED =
-  "This Mac reaches only its own DNS resolvers, but its DNS proxy is not restricting which names it can look up. Re-enable the " +
-  "DNS proxy, or check the DNS proxy condition under Details, to restrict names again.";
+// What each caveat means, and each says only as much as its evidence supports (issue #1078). Containment restricts a contained host's
+// DNS in two layers: the content filter allows DNS only to the host's own resolvers and always holds, while the DNS proxy is what
+// refuses every name but the server's.
+//
+// The disabled case is what the host itself reports, so it is stated. The no-capture case is the server inferring from silence, which
+// it grades degraded rather than unhealthy because a skewed clock or an ingest backlog explain silence too, so it is put as the
+// question it is rather than as a finding.
+const CAVEATS = {
+  disabled: {
+    label: "DNS by destination only",
+    note:
+      "This Mac reaches only its own DNS resolvers, but its DNS proxy is switched off, so it is not restricting which names it can " +
+      "look up. Re-enable the DNS proxy to restrict names again.",
+  },
+  noCapture: {
+    label: "DNS filtering unconfirmed",
+    note:
+      "No DNS capture has reached the server from this Mac while it was otherwise reporting, which can mean its DNS proxy is not " +
+      "restricting which names it can look up. Check the DNS capture condition under Details.",
+  },
+} as const;
 
 // HostContainment is the host header's network containment control (#948): a badge for where containment stands, and, for an operator
 // holding host.isolate, a Contain or Release action that asks for a reason. Containment cuts the host off from the network except its
@@ -73,7 +88,15 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
   // Both lists: the agent reports `dns_proxy` and the SERVER derives `dns_proxy_delivery`, and they arrive in separate arrays.
   // Reading only the first is reading only half the reasons a proxy is not filtering.
   const conditions = health ? [...(health.components ?? []), ...(health.derived_components ?? [])] : null;
-  const unfilteredNames = phase === "contained" && nameFilteringOff(conditions) === true;
+  const filtering = nameFiltering(conditions);
+  // Only for a host that IS contained and whose live health says something is wrong with name filtering. A host still on its way is
+  // not told on, and neither is one whose health has not been read: null is not an answer.
+  // Switched rather than indexed: the union has two members and naming each keeps a dynamic key out of the lookup.
+  let caveat: { label: string; note: string } | null = null;
+  if (phase === "contained") {
+    if (filtering === "disabled") caveat = CAVEATS.disabled;
+    if (filtering === "no-capture") caveat = CAVEATS.noCapture;
+  }
   return (
     <span className="host-containment">
       {/* A polite live region, so a change the host confirms or fails later is announced. Not role="status": the host page already
@@ -87,18 +110,18 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
         {/* A button, not a span with a title: the explanation has to be reachable by a keyboard, and a tooltip on a non-focusable
             element is not. Pressing it toggles the sentence, which is also in the accessible name, so a screen reader gets it
             without pressing anything. */}
-        {unfilteredNames && (
+        {caveat && (
           <button
             type="button"
             className="host-containment__caveat"
             aria-expanded={caveatOpen}
-            aria-label={`DNS by destination only. ${NAMES_NOT_FILTERED}`}
+            aria-label={`${caveat.label}. ${caveat.note}`}
             onClick={() => {
               setCaveatOpen((open) => !open);
             }}
           >
             <Badge variant="medium" className="host-containment__badge">
-              DNS by destination only
+              {caveat.label}
             </Badge>
           </button>
         )}
@@ -118,9 +141,9 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
       )}
       {/* Last, so the badges and the action keep the first line and the sentence takes the next. Its flex-basis is a full line, and
           the container is bounded, which is what makes that a second row rather than a wider first one. */}
-      {unfilteredNames && caveatOpen && (
+      {caveat && caveatOpen && (
         <span className="host-containment__caveat-text" role="note">
-          {NAMES_NOT_FILTERED}
+          {caveat.note}
         </span>
       )}
       {createPortal(

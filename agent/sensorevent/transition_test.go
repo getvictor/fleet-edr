@@ -131,7 +131,9 @@ func TestAProviderReappearingAfterAbsenceEmits(t *testing.T) {
 	assert.Equal(t, "dns_proxy", r.events[0].payload["provider"])
 }
 
-// spec:agent-status-reporting/a-transition-record-is-not-lost-to-a-transient-failure/a-failed-record-is-retried
+// The `disabled` shape of the scenario the absence test above carries. Unmarked deliberately: that scenario's marker is already 159
+// characters, over the gate's limit for a line this change touches, and one marker per scenario is what spectrace asks for.
+//
 // A provider reporting `disabled` is the same supported opt-out that absence used to be (issue #1078), so it must not emit, and it
 // must leave the baseline so turning the provider back on is recorded. Without the second half a re-enable is read as no change,
 // because the baseline still holds the running state from before the disable.
@@ -154,6 +156,7 @@ func TestADisabledProviderDoesNotEmitAndItsReturnDoes(t *testing.T) {
 	assert.Equal(t, StateRunning, r.events[0].payload["state"])
 }
 
+// spec:agent-status-reporting/a-transition-record-is-not-lost-to-a-transient-failure/a-failed-record-is-retried
 func TestAFailedEmitIsRetriedOnTheNextReport(t *testing.T) {
 	t.Parallel()
 	// Losing the event to a transient queue error would lose the only durable record of the tamper, so the transition is

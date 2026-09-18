@@ -18,30 +18,28 @@ export function containmentPhase(state: ContainmentState | null | undefined): Co
   return delivery?.status === "failed" ? "release_failed" : "releasing";
 }
 
-// NAME_FILTERING_OFF is what the console has to know from a host's live health: the network extension's DNS proxy is not filtering
-// names, so a contained host reaches only its own resolvers but every name they answer still resolves (issue #1078).
+// NameFiltering is what a host's live health says about the restriction on WHICH names it resolves while contained (issue #1078).
 //
-// Two conditions, because the proxy can fail to filter in two ways and each has its own evidence:
+// Four answers, because the two ways a proxy fails to filter are not equally certain and must not be reported as though they were:
 //
-//   - `dns_proxy` reporting `provider_disabled`, which is an operator switching the opt-in proxy off. Live, immediate, and not a
-//     fault: the host is configured the way somebody meant it to be.
-//   - `dns_proxy_delivery` degraded, which the server derives from DNS flow stopping while process telemetry continued. That is the
-//     case a lifecycle state cannot see, because a wedged provider still reports itself running.
+//   - "disabled": the host itself reports the opt-in DNS proxy switched off. Definite, and immediate.
+//   - "no-capture": the SERVER saw no DNS capture arrive while process telemetry continued. Evidence, not proof. The server grades it
+//     degraded rather than unhealthy for the same reason, since a skewed clock or an ingest backlog also explain silence, and its own
+//     message says the provider MAY be running without capturing.
+//   - "filtering": nothing says otherwise.
+//   - null: health has not been read, which is not the same as "filtering".
 //
-// A provider reported `stopped` is a fault the host surfaces on its own and the health section already says so, so it is not
-// duplicated here.
-const NAME_FILTERING_OFF: ReadonlyArray<{ type: string; reason?: string }> = [
-  { type: "dns_proxy", reason: "provider_disabled" },
-  { type: "dns_proxy_delivery" },
-];
+// A provider reported `stopped` is a fault the host surfaces on its own and the health section already reports it, so it is not
+// repeated here.
+export type NameFiltering = "disabled" | "no-capture" | "filtering";
 
-// nameFilteringOff reports whether a host's health says its DNS proxy is not restricting names. Null when health is not known yet,
-// which is not the same as false: a page that has not read health, or a host too old to report, must not be shown as either.
-export function nameFilteringOff(components: ReadonlyArray<{ type: string; reason?: string }> | null | undefined): boolean | null {
-  if (!components) return null;
-  return NAME_FILTERING_OFF.some((want) =>
-    components.some((c) => c.type === want.type && (want.reason === undefined || c.reason === want.reason)),
-  );
+export function nameFiltering(
+  conditions: ReadonlyArray<{ type: string; reason?: string }> | null | undefined,
+): NameFiltering | null {
+  if (!conditions) return null;
+  if (conditions.some((c) => c.type === "dns_proxy" && c.reason === "provider_disabled")) return "disabled";
+  if (conditions.some((c) => c.type === "dns_proxy_delivery")) return "no-capture";
+  return "filtering";
 }
 
 // containmentSettled reports whether a phase is final until the next change, so a view can stop polling.

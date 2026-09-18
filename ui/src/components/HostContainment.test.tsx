@@ -288,15 +288,16 @@ describe("HostContainment", () => {
     const caveat = screen.getByRole("button", { name: /DNS by destination only/ });
     expect(caveat).toBeVisible();
     // The explanation is in the accessible name, so it is read without pressing anything, and pressing reveals it on screen.
-    expect(caveat).toHaveAccessibleName(/not restricting which names/);
+    expect(caveat).toHaveAccessibleName(/switched off/);
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
     fireEvent.click(caveat);
     expect(screen.getByRole("note")).toBeVisible();
   });
 
   // The server's derived condition, which arrives in its own list. This is the case a lifecycle state cannot see, a proxy that
-  // wedged while still reporting itself running, and reading only the agent's list would miss it entirely.
-  it("says so when the server saw no DNS capture, which arrives as a derived condition", async () => {
+  // wedged while still reporting itself running, and reading only the agent's list would miss it entirely. It says LESS than the
+  // disabled case, because the server infers it from silence that a skewed clock or an ingest backlog could also explain.
+  it("puts the server's inference as a question, and reads the derived list to find it", async () => {
     vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
     renderControl(
       ["host.read", "host.isolate"],
@@ -307,7 +308,9 @@ describe("HostContainment", () => {
     );
 
     expect(await screen.findByText("Contained")).toBeVisible();
-    expect(screen.getByRole("button", { name: /DNS by destination only/ })).toBeVisible();
+    const caveat = screen.getByRole("button", { name: /DNS filtering unconfirmed/ });
+    expect(caveat).toBeVisible();
+    expect(caveat).toHaveAccessibleName(/can mean/);
   });
 
   it.each([
