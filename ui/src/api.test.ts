@@ -20,6 +20,8 @@ import {
   deleteRuleContentDocument,
   rollbackRulePack,
   RuleContentApiError,
+  ContainmentVersionConflictError,
+  setHostContainment,
 } from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
@@ -66,6 +68,31 @@ function stubFetch(body: unknown, status = 200, headers: Record<string, string> 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("setHostContainment version conflicts (issue #1076)", () => {
+  it("carries the state a conflict reports, so the page does not read again to find out", async () => {
+    const released = { host_id: "host-a", contained: false, version: 2, epoch: 200, reason: "cleared" };
+    stubFetch({ error: "version_conflict", state: released }, 409);
+    await expect(setHostContainment("host-a", true, "beaconing", 1)).rejects.toSatisfy(
+      (err: unknown) => err instanceof ContainmentVersionConflictError && err.state?.version === 2,
+    );
+  });
+
+  it("reports the conflict without a state when the body carries none", async () => {
+    // A refusal the server could not attach the current state to: the page is told the change was refused and re-reads itself.
+    stubFetch({ error: "version_conflict" }, 409);
+    await expect(setHostContainment("host-a", true, "beaconing", 1)).rejects.toSatisfy(
+      (err: unknown) => err instanceof ContainmentVersionConflictError && err.state === null,
+    );
+  });
+
+  it("sends no version when the caller names none, which is what asking for the state whatever the host holds means", async () => {
+    const fetchMock = stubFetch({ state: { host_id: "host-a", contained: true, version: 1, epoch: 100 }, changed: true }, 200);
+    await setHostContainment("host-a", true, "beaconing");
+    const [, init] = fetchMock.mock.calls[0] as [URL, { body: string }];
+    expect(JSON.parse(init.body)).toEqual({ contained: true, reason: "beaconing" });
+  });
 });
 
 describe("getHostHealth", () => {

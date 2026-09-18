@@ -285,3 +285,16 @@ func TestContainmentHandler_ARequestWithoutAVersionNamesNone(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Nil(t, svc.expected)
 }
+
+// A conflict whose follow-up read also fails still reports the conflict: the caller has to know the change was refused, and the state
+// it would have carried is the part that is missing, not the refusal itself.
+func TestContainmentHandler_AVersionConflictIsReportedEvenWhenTheStateCannotBeRead(t *testing.T) {
+	t.Parallel()
+	svc := &fakeContainment{err: api.ErrContainmentVersionConflict, getErr: errors.New("db down")}
+
+	resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodPost, "/api/hosts/host-a/containment",
+		`{"contained":true,"reason":"beaconing","expected_version":1}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	assert.Equal(t, "version_conflict", errorCode(t, resp))
+}
