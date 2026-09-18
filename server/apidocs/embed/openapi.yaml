@@ -461,12 +461,13 @@ paths:
         "409":
           description: |
             `version_conflict`: the request named `expected_version` and the host has moved on since. Nothing was changed, queued or
-            audited. The body carries the state as it now stands, so a caller can decide again without reading a second time.
+            audited. The body carries the state the refusal was decided against, so a caller can decide again without reading a
+            second time.
           content:
             application/json:
               schema:
                 type: object
-                required: [error]
+                required: [error, state]
                 properties:
                   error: {type: string, enum: [version_conflict]}
                   state: {$ref: "#/components/schemas/ContainmentState"}

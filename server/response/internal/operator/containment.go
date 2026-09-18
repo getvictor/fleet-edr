@@ -117,14 +117,10 @@ func (h *ContainmentHandler) handleSet(w http.ResponseWriter, r *http.Request) {
 	change, err := h.svc.Set(ctx, actor, httpserver.ClientIP(r), hostID, *body.Contained, body.Reason, body.ExpectedVersion)
 	switch {
 	case errors.Is(err, api.ErrContainmentVersionConflict):
-		// 409 with the state as it now stands, so the caller can show what changed instead of re-reading to find out.
-		current, getErr := h.svc.Get(ctx, hostID)
-		if getErr != nil {
-			h.logger.ErrorContext(ctx, "read containment after a version conflict", attrkeys.HostID, hostID, "err", getErr)
-			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
-			return
-		}
-		writeJSON(ctx, h.logger, w, http.StatusConflict, map[string]any{"error": "version_conflict", "state": current})
+		// 409 with the state the refusal was decided against, so the caller can show what changed instead of re-reading to find
+		// out. It comes back with the error from under the host's lock, so there is no second read to fail or to answer with a
+		// version the caller's request did not lose to.
+		writeJSON(ctx, h.logger, w, http.StatusConflict, map[string]any{"error": "version_conflict", "state": change.State})
 		return
 	case errors.Is(err, api.ErrContainmentReasonRequired):
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "reason_required")

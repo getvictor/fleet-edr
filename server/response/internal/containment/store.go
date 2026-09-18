@@ -91,7 +91,7 @@ func (s *Store) Set(ctx context.Context, hostID string, contained bool, reason, 
 		// Only a release reaches here: a containment created the row above. A host with no row has never been contained, which is
 		// version 0, so a caller expecting anything else was reading a state this host does not have.
 		if expected != nil && *expected != 0 {
-			return api.ContainmentState{}, false, 0, api.ErrContainmentVersionConflict
+			return api.ContainmentState{HostID: hostID}, false, 0, api.ErrContainmentVersionConflict
 		}
 		return api.ContainmentState{HostID: hostID}, false, 0, nil
 	case err != nil:
@@ -102,7 +102,10 @@ func (s *Store) Set(ctx context.Context, hostID string, contained bool, reason, 
 	// changes nothing still acted on a view that is gone, and reporting it as a success would leave the caller believing the state it
 	// read is the state that stands.
 	if expected != nil && *expected != before.Version {
-		return api.ContainmentState{}, false, 0, api.ErrContainmentVersionConflict
+		// Returned WITH the conflict, and it is the state the refusal was decided against rather than one read afterwards: a
+		// third change landing between the two reads would answer the caller with a version that is not the one their request
+		// lost to, and a read that failed would leave the refusal with no state to carry at all.
+		return before.state(), false, 0, api.ErrContainmentVersionConflict
 	}
 	if before.Contained == contained {
 		return before.state(), false, 0, nil

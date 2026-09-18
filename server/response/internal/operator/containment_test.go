@@ -38,8 +38,7 @@ func (f *fakeContainment) List(context.Context) ([]api.ContainmentState, error) 
 
 func (f *fakeContainment) Get(_ context.Context, hostID string) (api.ContainmentState, error) {
 	f.calls = append(f.calls, "get "+hostID)
-	// getErr rather than err: a version conflict fails Set and then has the handler read the state back, so the two need to be able
-	// to answer differently.
+	// getErr rather than err, so a test can make a read fail while a change succeeds, and the other way round.
 	return f.state, f.getErr
 }
 
@@ -256,7 +255,7 @@ func FuzzContainmentHandler_Set(f *testing.F) {
 func TestContainmentHandler_AVersionConflictIsReportedWithTheCurrentState(t *testing.T) {
 	t.Parallel()
 	current := api.ContainmentState{HostID: "host-a", Contained: false, Version: 4, Reason: "cleared by someone else"}
-	svc := &fakeContainment{err: api.ErrContainmentVersionConflict, state: current}
+	svc := &fakeContainment{err: api.ErrContainmentVersionConflict, change: api.ContainmentChange{State: current}}
 
 	resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodPost, "/api/hosts/host-a/containment",
 		`{"contained":true,"reason":"beaconing","expected_version":1}`)
@@ -286,15 +285,28 @@ func TestContainmentHandler_ARequestWithoutAVersionNamesNone(t *testing.T) {
 	assert.Nil(t, svc.expected)
 }
 
-// A conflict whose follow-up read also fails still reports the conflict: the caller has to know the change was refused, and the state
-// it would have carried is the part that is missing, not the refusal itself.
-func TestContainmentHandler_AVersionConflictIsReportedEvenWhenTheStateCannotBeRead(t *testing.T) {
+// The conflict answers from the refusal itself and never reads the host again, which is what lets the schema require the state on
+// every version conflict. A handler that re-read would answer with whatever landed after the refusal, and would have to invent an
+// answer when that read failed: here the read is made to fail and the state arrives whole regardless.
+func TestContainmentHandler_AVersionConflictIsAnsweredWithoutASecondRead(t *testing.T) {
 	t.Parallel()
-	svc := &fakeContainment{err: api.ErrContainmentVersionConflict, getErr: errors.New("db down")}
+	current := api.ContainmentState{HostID: "host-a", Contained: true, Version: 9, Reason: "contained by someone else"}
+	svc := &fakeContainment{
+		err:    api.ErrContainmentVersionConflict,
+		change: api.ContainmentChange{State: current},
+		state:  api.ContainmentState{HostID: "host-a", Version: 11, Reason: "a change that landed after the refusal"},
+		getErr: errors.New("db down"),
+	}
 
 	resp := serveContainment(t, svc, &recordingAuthZ{allow: true}, http.MethodPost, "/api/hosts/host-a/containment",
 		`{"contained":true,"reason":"beaconing","expected_version":1}`)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Equal(t, "version_conflict", errorCode(t, resp))
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+
+	var body struct {
+		State api.ContainmentState `json:"state"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, current, body.State, "the state the refusal was decided against, not one read after it")
+	assert.Equal(t, []string{"set host-a contain beaconing"}, svc.calls, "the conflict asked the service nothing further")
 }

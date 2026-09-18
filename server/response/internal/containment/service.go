@@ -7,6 +7,7 @@ import (
 
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"unicode/utf8"
 
@@ -150,6 +151,11 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 			return id, nil
 		})
 	if err != nil {
+		// A version conflict carries the state the refusal was decided against, which is what the caller needs to decide again;
+		// every other failure carries nothing, because nothing about the host was established.
+		if errors.Is(err, api.ErrContainmentVersionConflict) {
+			return api.ContainmentChange{State: state}, err
+		}
 		return api.ContainmentChange{}, err
 	}
 	change := api.ContainmentChange{State: state, Changed: changed, CommandID: commandID}

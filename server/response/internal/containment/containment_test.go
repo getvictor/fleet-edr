@@ -940,8 +940,16 @@ func TestSet_AChangeNamingAStaleVersionIsRefused(t *testing.T) {
 
 	// The first operator asks from the state they read, and is refused rather than re-containing over the release.
 	stale := int64(1)
-	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", &stale)
+	refused, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "beaconing", &stale)
 	require.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	// The refusal carries the state it lost to, which is what the console shows instead of reading the host again. Read under the
+	// same lock that refused the change, so it is the state the request lost to rather than whatever stands by the time a second
+	// read would run.
+	assert.Equal(t, int64(2), refused.State.Version, "the refusal names the version the host has moved to")
+	assert.False(t, refused.State.Contained)
+	assert.Equal(t, "cleared", refused.State.Reason, "including why the other operator changed it")
+	assert.False(t, refused.Changed)
+	assert.Zero(t, refused.CommandID)
 
 	state, err := f.store.Get(t.Context(), "host-a")
 	require.NoError(t, err)
@@ -983,8 +991,9 @@ func TestSet_AStaleRequestForTheStateTheHostAlreadyHasIsRefused(t *testing.T) {
 	require.NoError(t, err)
 
 	stale := int64(1)
-	_, err = f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "contained already", &stale)
-	assert.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	refused, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "contained already", &stale)
+	require.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	assert.Equal(t, int64(3), refused.State.Version, "the refusal names where the host actually is")
 }
 
 // A host that has never been contained has no row and version 0, so a caller naming any other version was reading a state this host
@@ -993,8 +1002,10 @@ func TestSet_AReleaseOfAHostWithNoStateChecksTheVersionToo(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	stale := int64(4)
-	_, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-b", false, "cleared", &stale)
+	refused, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-b", false, "cleared", &stale)
 	require.ErrorIs(t, err, api.ErrContainmentVersionConflict)
+	assert.Equal(t, api.ContainmentState{HostID: "host-b"}, refused.State,
+		"the refusal carries the state the host does have: never contained, version 0")
 
 	zero := int64(0)
 	change, err := f.svc.Set(t.Context(), operator, "203.0.113.5", "host-b", false, "cleared", &zero)
@@ -1049,8 +1060,10 @@ func TestSet_ConcurrentChangesNamingTheSameVersion(t *testing.T) {
 		_, _, _, err := f.store.Set(t.Context(), "host-a", false, "second", "user:8", &at, slow)
 		record(err)
 	})
-	// Give the second one time to reach the row lock before the first commits, so it is genuinely concurrent rather than sequential.
-	time.Sleep(200 * time.Millisecond)
+	// Waited for, not slept through. A sleep that ran short would let the first change commit before the second read the version,
+	// and the test would then pass sequentially: both orderings end in one win and one conflict, so the concurrent case this test
+	// exists for would stop being covered without anything failing.
+	requireWaitingOnTheHostRow(t, f.db)
 	close(release)
 	wg.Wait()
 
@@ -1061,4 +1074,23 @@ func TestSet_ConcurrentChangesNamingTheSameVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, at+1, state.Version, "one change, one version")
 	assert.Len(t, f.containmentCommands(t, "host-a"), 2, "the contain and the one release; the refused change queued nothing")
+}
+
+// requireWaitingOnTheHostRow blocks until a transaction is queued behind a host_containment row lock, which is what makes the caller
+// that holds the lock and the caller waiting for it genuinely concurrent.
+//
+// Scoped to this test's own schema through DATABASE(), because every test opens one and they run in parallel against a shared MySQL:
+// an unscoped count would be answered by another test's lock and report a concurrency this test does not have.
+func requireWaitingOnTheHostRow(t *testing.T, db *sqlx.DB) {
+	t.Helper()
+	const waiting = `SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+		JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+		WHERE l.OBJECT_SCHEMA = DATABASE() AND l.OBJECT_NAME = 'host_containment'`
+	require.Eventually(t, func() bool {
+		var waiters int
+		if err := db.GetContext(t.Context(), &waiters, waiting); err != nil {
+			return false
+		}
+		return waiters > 0
+	}, 10*time.Second, 5*time.Millisecond, "no change ever waited on the host's row, so the test was not concurrent")
 }
