@@ -78,8 +78,8 @@ func TestValidateExclusionValueRefusesABareSigningID(t *testing.T) {
 	err := api.ValidateExclusionValue(api.ExclusionMatchSigningID, "com.vendor.tool")
 
 	require.ErrorIs(t, err, api.ErrSigningIDNotQualified)
-	assert.ErrorContains(t, err, "<TEAMID>:com.vendor.tool", "the message has to show the form, not just name it")
-	assert.ErrorContains(t, err, "platform:com.vendor.tool")
+	require.ErrorContains(t, err, "<TEAMID>:com.vendor.tool", "the message has to show the form, not just name it")
+	require.ErrorContains(t, err, "platform:com.vendor.tool")
 }
 
 func TestValidateExclusionValue(t *testing.T) {
