@@ -155,8 +155,27 @@ func connectThrough(ctx context.Context, conn net.Conn, proxyURL *url.URL, addr 
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("set proxy connect deadline: %w", err)
 		}
-		defer func() { _ = conn.SetDeadline(time.Time{}) }()
 	}
+	// A deadline covers a proxy that goes quiet, and nothing covers a caller that gives up: a cancelled context does not interrupt a
+	// read that has already begun, so a dial the control channel abandoned would sit here until the socket itself failed, holding a
+	// connection nobody is waiting for. Setting the deadline into the past is what unblocks it.
+	exchanged, watched := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-ctx.Done():
+			_ = conn.SetDeadline(time.Now())
+		case <-exchanged:
+		}
+	}()
+	// The watcher is stopped and WAITED FOR before the deadline is cleared. Clearing it first would leave a cancellation that landed
+	// during the exchange free to stamp a past deadline on a connection about to be returned as good, which would kill the stream
+	// that runs over it for reasons nothing in the log would explain.
+	defer func() {
+		close(exchanged)
+		<-watched
+		_ = conn.SetDeadline(time.Time{})
+	}()
 	req := &http.Request{
 		Method: http.MethodConnect,
 		URL:    &url.URL{Opaque: addr},

@@ -86,7 +86,8 @@ func (p *fakeProxy) seen() *http.Request {
 	return p.request
 }
 
-// recordingDial records every address it was asked to dial, then dials for real.
+// recordingDial records every address it was asked to dial, then dials for real. Used where the dial has to reach a fake proxy on
+// this machine.
 func recordingDial(addrs *[]string, mu *sync.Mutex) dialFunc {
 	base := (&net.Dialer{}).DialContext
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -94,6 +95,18 @@ func recordingDial(addrs *[]string, mu *sync.Mutex) dialFunc {
 		*addrs = append(*addrs, addr)
 		mu.Unlock()
 		return base(ctx, network, addr)
+	}
+}
+
+// refusingDial records the address and refuses, without touching the network. Used where the assertion is about WHICH address was
+// dialed: dialing a name like edr.example.com for real would put a DNS lookup and its timeout inside a unit test, which is slow when
+// it resolves and flaky when it does not.
+func refusingDial(addrs *[]string, mu *sync.Mutex) dialFunc {
+	return func(_ context.Context, _, addr string) (net.Conn, error) {
+		mu.Lock()
+		*addrs = append(*addrs, addr)
+		mu.Unlock()
+		return nil, errors.New("not dialed by this test")
 	}
 }
 
@@ -227,9 +240,9 @@ func TestControlDialTakesTheRightPath(t *testing.T) {
 		var mu sync.Mutex
 		var dialed []string
 
-		// The dial itself fails, since nothing serves that name here. What is asserted is WHICH address was dialed: unwrapped,
-		// with no tunnel in the way.
-		_, _ = controlDial(recordingDial(&dialed, &mu), nil, "")(t.Context(), "edr.example.com:8443")
+		// What is asserted is WHICH address was dialed: unwrapped, with no tunnel in the way. The dial refuses without touching
+		// the network, so the test does not depend on what that name resolves to, or on how long it takes to find out.
+		_, _ = controlDial(refusingDial(&dialed, &mu), nil, "")(t.Context(), "edr.example.com:8443")
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -330,4 +343,50 @@ func TestControlDialOptionsLeavesUnspokenProxiesAlone(t *testing.T) {
 	target, opts := controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, http1)
 	assert.Equal(t, "passthrough:///edr.example.com:8443", target)
 	assert.Len(t, opts, 1)
+}
+
+// A caller that gives up must not leave the dial sitting on a connection nobody is waiting for. A cancelled context does not
+// interrupt a read already in progress, so without something to unblock it this waits for the socket itself to fail, which on a
+// silent proxy is minutes.
+func TestDialThroughProxyStopsWhenTheCallerGivesUp(t *testing.T) {
+	t.Parallel()
+	// A listener that accepts and then says nothing at all, which is what a wedged proxy looks like.
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, aerr := listener.Accept()
+		if aerr == nil {
+			accepted <- conn
+		}
+	}()
+
+	proxyURL, err := url.Parse("http://" + listener.Addr().String())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	var mu sync.Mutex
+	var dialed []string
+
+	done := make(chan error, 1)
+	go func() {
+		_, derr := dialThroughProxy(ctx, recordingDial(&dialed, &mu), proxyURL, proxyURL.Host, "edr.example.com:8443")
+		done <- derr
+	}()
+
+	// Let the CONNECT reach the proxy, then give up on it.
+	select {
+	case conn := <-accepted:
+		t.Cleanup(func() { _ = conn.Close() })
+	case <-time.After(5 * time.Second):
+		t.Fatal("the proxy was never dialed")
+	}
+	cancel()
+
+	select {
+	case derr := <-done:
+		require.Error(t, derr, "a cancelled dial does not return a usable connection")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the dial did not return after its context was cancelled")
+	}
 }

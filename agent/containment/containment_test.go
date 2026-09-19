@@ -1289,17 +1289,18 @@ func TestObserve_StatusesDuringARefreshAreAnsweredByOnePass(t *testing.T) {
 // a dial that cannot succeed (issue #1064).
 func TestTargetAddressIsTheSpellingThePinMatches(t *testing.T) {
 	t.Parallel()
+	// One server URL throughout: what each case varies is the proxy, which is what decides the target.
+	const serverURL = "https://edr.example.com:8443"
 	cases := []struct {
-		desc      string
-		serverURL string
-		proxy     string
-		want      string
+		desc  string
+		proxy string
+		want  string
 	}{
-		{desc: "a direct server keeps its own port", serverURL: "https://edr.example.com:8443", want: "edr.example.com:8443"},
-		{desc: "an http proxy without a port is port 80", serverURL: "https://edr.example.com:8443", proxy: "http://proxy.corp", want: "proxy.corp:80"},
-		{desc: "an https proxy without a port is port 443", serverURL: "https://edr.example.com:8443", proxy: "https://proxy.corp", want: "proxy.corp:443"},
-		{desc: "a socks proxy without a port is port 1080", serverURL: "https://edr.example.com:8443", proxy: "socks5://proxy.corp", want: "proxy.corp:1080"},
-		{desc: "a proxy naming a port keeps it", serverURL: "https://edr.example.com:8443", proxy: "socks5://proxy.corp:1085", want: "proxy.corp:1085"},
+		{desc: "a direct server keeps its own port", want: "edr.example.com:8443"},
+		{desc: "an http proxy without a port is port 80", proxy: "http://proxy.corp", want: "proxy.corp:80"},
+		{desc: "an https proxy without a port is port 443", proxy: "https://proxy.corp", want: "proxy.corp:443"},
+		{desc: "a socks proxy without a port is port 1080", proxy: "socks5://proxy.corp", want: "proxy.corp:1080"},
+		{desc: "a proxy naming a port keeps it", proxy: "socks5://proxy.corp:1085", want: "proxy.corp:1085"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
@@ -1308,7 +1309,7 @@ func TestTargetAddressIsTheSpellingThePinMatches(t *testing.T) {
 			if tc.proxy != "" {
 				proxyFor = func(*http.Request) (*url.URL, error) { return url.Parse(tc.proxy) }
 			}
-			target, err := TargetFor(tc.serverURL, proxyFor)
+			target, err := TargetFor(serverURL, proxyFor)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, target.Address())
 		})
