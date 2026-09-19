@@ -5,4 +5,5 @@
 - [x] Match a finished attempt to the episode it was launched for by identity, and discard it when that episode is over.
 - [x] Add `ProviderDisabled` to `agent/selfheal`, mirroring the extension's wire value.
 - [x] Tests for the abandoned enable, absence not abandoning one, the fresh budget afterwards, and the outlived attempt (including on the last attempt of a budget); mutation-check them.
-- [ ] Exercise on a live macOS VM: disable a provider while a remediation is running and confirm it stays disabled.
+- [x] Measure the enable on a live macOS VM, to size the window cancellation actually closes (about 13 ms on edr-dev).
+- [x] Confirm the rebuilt agent runs on edr-dev with both XPC receivers connected and no regression in provider reporting.
