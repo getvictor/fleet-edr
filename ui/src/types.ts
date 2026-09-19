@@ -340,6 +340,9 @@ export interface ReachableSet {
   addresses: ReachableAddress[];
   updated_at?: string;
   updated_by?: string;
+  // updated_by_label is the display label the server resolves from updated_by at read time, absent when it cannot be resolved
+  // (a deleted user or service account), in which case the console falls back to the raw principal id.
+  updated_by_label?: string;
 }
 
 // ContainmentChange mirrors server/response/api.ContainmentChange: the state after a change request and the command queued for it.

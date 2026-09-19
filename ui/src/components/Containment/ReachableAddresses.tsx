@@ -163,7 +163,6 @@ export function ReachableAddresses() {
         setStored(set);
         setDraft(set.addresses);
         setSavedVersion(set.version);
-        setReasonOpen(false);
       })
       .catch((err: unknown) => {
         if (err instanceof ReachableSetConflictError) {
@@ -173,6 +172,9 @@ export function ReachableAddresses() {
       })
       .finally(() => {
         setSaving(false);
+        // Closed whatever the outcome. A refusal names the entry at fault and the conflict offers to load the latest, and both
+        // of those are on the page BEHIND this dialog: leaving it open puts the answer where the operator cannot act on it.
+        setReasonOpen(false);
       });
   };
 
@@ -231,7 +233,8 @@ export function ReachableAddresses() {
       )}
       <p className="reachable__note">
         {draft.length} of {MAX_ADDRESSES} destinations.
-        {stored.updated_at !== undefined && ` Last saved ${formatRelativeISO(stored.updated_at)} by ${stored.updated_by ?? ""}.`}
+        {stored.updated_at !== undefined &&
+          ` Last saved ${formatRelativeISO(stored.updated_at)} by ${stored.updated_by_label ?? stored.updated_by ?? ""}.`}
       </p>
 
       {canWrite && (

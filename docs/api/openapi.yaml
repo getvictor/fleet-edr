@@ -2221,7 +2221,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReachableAddress"
-        updated_by: {type: string}
+        updated_by: {type: string, description: The principal that last changed the set.}
+        updated_by_label:
+          type: string
+          description: >-
+            Display label resolved from updated_by at read time: a user's email, a service account's name, or "system". Absent
+            when it cannot be resolved, for example a deleted account, in which case updated_by is what there is to show.
         updated_at: {type: string, format: date-time}
     Command:
       type: object

@@ -2,14 +2,15 @@
 
 ### Requirement: Reachable destinations are edited in containment settings
 
-Admin settings SHALL include a Containment section that shows the reachable-address set a contained host may still reach on top of containment's own lifeline, the number of destinations used out of the allowed number, and when and by whom the set was last saved. It SHALL also report how many hosts are contained or being contained, so an operator sees what a change reaches; when that count cannot be read, the section SHALL say so rather than report a count it does not have. An operator with `containment_config.write` SHALL be able to edit a draft of the whole set, and saving it SHALL require a reason and SHALL replace the set through `PUT /api/v1/containment/reachable-addresses`. Because the write is gated on a recent authentication, a save SHALL prompt for reauthentication and retry on success. The server SHALL remain the only validator of a destination: when it refuses the set, the section SHALL show the server's message and keep the draft. A save SHALL name the version the draft started from, and when the server refuses it because the set has changed since, the section SHALL say so, keep the draft, and offer to load the latest set. A contained host's page SHALL say how many destinations it can still reach when the set holds any, alongside rather than instead of any caveat about name filtering, and SHALL say nothing when the set is empty, the host is not contained, or the set cannot be read.
+Admin settings SHALL include a Containment section that shows the reachable-address set a contained host may still reach on top of containment's own lifeline, the number of destinations used out of the allowed number, and when and by whom the set was last saved, naming the person or service account rather than a principal id. It SHALL also report how many hosts are contained or being contained, so an operator sees what a change reaches; when that count cannot be read, the section SHALL say so rather than report a count it does not have. An operator with `containment_config.write` SHALL be able to edit a draft of the whole set, and saving it SHALL require a reason and SHALL replace the set through `PUT /api/v1/containment/reachable-addresses`. Because the write is gated on a recent authentication, a save SHALL prompt for reauthentication and retry on success. The server SHALL remain the only validator of a destination: when it refuses the set, the section SHALL show the server's message and keep the draft. A save SHALL name the version the draft started from, and when the server refuses it because the set has changed since, the section SHALL say so, keep the draft, and offer to load the latest set. A contained host's page SHALL say how many destinations it can still reach when the set holds any, alongside rather than instead of any caveat about name filtering, and SHALL say nothing when the set is empty, the host is not contained, or the set cannot be read.
 
 #### Scenario: The console shows the destinations and who they reach
 
 - **GIVEN** a stored set with two destinations, and hosts that are contained
 - **WHEN** an operator opens Containment settings
 - **THEN** the section lists each destination with the port and transport it allows and the name the operator gave it
-- **AND** it reports the destinations used out of the allowed number, when and by whom the set was last saved, and how many hosts are contained or being contained
+- **AND** it reports the destinations used out of the allowed number, how many hosts are contained or being contained, and when the set was last saved and by whom, named rather than given as a principal id
+- **AND** when that name cannot be resolved, because the account was deleted, it shows the principal id rather than nothing
 
 #### Scenario: A count that cannot be read is not reported as a number
 
@@ -36,6 +37,7 @@ Admin settings SHALL include a Containment section that shows the reachable-addr
 - **GIVEN** a draft holding a destination the server refuses as too broad
 - **WHEN** the operator saves it
 - **THEN** the section shows the server's refusal, naming which rule was broken and which entry broke it
+- **AND** the reason prompt is dismissed, because the refusal and the entry to fix are both on the page behind it
 - **AND** the draft is kept for the operator to fix, and editing it clears the message
 
 #### Scenario: A contained host says what it can still reach

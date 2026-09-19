@@ -49,6 +49,11 @@ type Deps struct {
 	// identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
+	// PrincipalLabel resolves a principal id (usr_<id> / svc_<id> / sys) to its display label, so a read of the reachable-address
+	// set can name who last changed it rather than printing the principal id. Optional: without it the console falls back to the
+	// id. cmd/main wires it over identity's Service.PrincipalLabel; a func keeps this context free of an identity-internal type.
+	PrincipalLabel func(ctx context.Context, principalID string) (string, error)
+
 	// AuditSweepInterval is how often this context's audit outbox sweep delivers entries a request could not, for every operator
 	// action that commits one: containment changes, and command issuance and withdrawal. Optional: zero or negative means
 	// auditoutbox.DefaultSweepInterval. Tests shorten it to watch a sweep deliver.
@@ -64,6 +69,9 @@ type Response struct {
 	db        *sqlx.DB
 	logger    *slog.Logger
 	authz     identityapi.AuthZ
+	// principalLabel names who last changed the reachable-address set. Held from New because the handler that uses it is built
+	// later, in EnableContainment.
+	principalLabel func(ctx context.Context, principalID string) (string, error)
 	// containmentH and containmentConverger are nil until EnableContainment wires host network containment.
 	containmentH         *operator.ContainmentHandler
 	containmentConverger *containment.Converger
@@ -114,6 +122,8 @@ func New(deps Deps) (*Response, error) {
 		logger:    logger,
 		authz:     deps.AuthZ,
 
+		principalLabel: deps.PrincipalLabel,
+
 		auditOutbox:        responseOutbox,
 		auditDrain:         responseAuditDrain,
 		auditSweepInterval: deps.AuditSweepInterval,
@@ -134,6 +144,9 @@ func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollmen
 	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
 		reachableSvc.Get, r.logger)
 	r.reachableH = operator.NewReachableHandler(reachableSvc, r.authz, r.logger)
+	if r.principalLabel != nil {
+		r.reachableH.SetPrincipalLabelResolver(r.principalLabel)
+	}
 }
 
 // RunAuditSweep delivers audit entries an operator action committed but whose request could not write out, until ctx is cancelled.

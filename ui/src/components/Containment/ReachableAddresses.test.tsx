@@ -13,7 +13,8 @@ const makeSet = (over: Partial<ReachableSet> = {}): ReachableSet => ({
     { cidr: "203.0.113.0/24" },
   ],
   updated_at: "2026-09-18T12:00:00Z",
-  updated_by: "alice@example.com",
+  updated_by: "usr_1",
+  updated_by_label: "alice@example.com",
   ...over,
 });
 
@@ -112,6 +113,20 @@ describe("ReachableAddresses", () => {
     expect(screen.getByText("0 hosts are contained or being contained right now.")).toBeVisible();
   });
 
+  it("names who last saved the set", async () => {
+    await renderLoaded();
+
+    expect(screen.getByText(/Last saved .* by alice@example\.com\./)).toBeVisible();
+  });
+
+  // A deleted user or service account: the server resolves no label, and the raw principal id beats saying nothing about who
+  // widened what every contained host can reach.
+  it("falls back to the principal id when the label could not be resolved", async () => {
+    await renderLoaded(makeSet({ updated_by_label: undefined }));
+
+    expect(screen.getByText(/Last saved .* by usr_1\./)).toBeVisible();
+  });
+
   it("counts one contained host in the singular", async () => {
     await renderLoaded(makeSet(), [makeState()]);
 
@@ -192,6 +207,8 @@ describe("ReachableAddresses", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("That range is too broad to keep containment meaningful.");
     expect(alert).toHaveTextContent("10.0.0.0/4");
+    // The reason dialog is gone: the refusal names the entry to fix, and the list to fix it in is behind the dialog.
+    expect(screen.queryByRole("dialog")).toBeNull();
     // The draft is kept exactly as the operator built it, so the entry can be fixed rather than retyped.
     expect(rows()).toHaveLength(3);
 
@@ -211,6 +228,8 @@ describe("ReachableAddresses", () => {
     await saveWithReason("no longer needed");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Someone else changed these destinations after this page loaded them.");
+    // The recovery is on the page, so the dialog must not be covering it.
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(rows()).toHaveLength(1);
 
     // The other operator's set, at the version they saved.
