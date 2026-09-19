@@ -10,6 +10,9 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
+// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/an-excluded-candidate-does-not-cover-its-neighbour
+// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/every-candidate-excluded-suppresses-the-finding
+// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/several-candidates-are-all-named
 func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 	t.Parallel()
 	type fixture struct {
@@ -19,7 +22,10 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 		parentPath  string
 		wantFinding bool
 		wantDescHas string
-		exclusions  *fakeExclusions
+		// wantDescLacks is what the description must NOT name. An excluded plist belongs here: an analyst reading the alert
+		// should see what the exclusion left behind, not the benign path that was already accounted for (issue #1028).
+		wantDescLacks string
+		exclusions    *fakeExclusions
 	}
 
 	cases := []fixture{
@@ -66,6 +72,55 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			path:        "/bin/launchctl",
 			parentPath:  "/bin/bash",
 			wantFinding: false,
+		},
+		{
+			// The bypass issue #1028 closes, in the exact shape the issue describes: dogfood excludes the Logitech plist, and
+			// naming it first suppressed whatever was registered alongside it. Planting under /Library/LaunchAgents needs root;
+			// this needs none, because the first argument only has to NAME the excluded plist.
+			name: "an excluded plist does not cover the one beside it",
+			args: []string{
+				"/bin/launchctl", "load",
+				"/Library/LaunchAgents/com.logi.ghub.plist",
+				"/Users/alice/Library/LaunchAgents/evil.plist",
+			},
+			path:          "/bin/launchctl",
+			parentPath:    "/bin/bash",
+			wantFinding:   true,
+			wantDescHas:   "evil.plist",
+			wantDescLacks: "com.logi.ghub.plist",
+			exclusions: &fakeExclusions{entries: []fakeExcl{
+				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.logi.*.plist"},
+			}},
+		},
+		{
+			// Suppressed only when the operator excluded every one of them.
+			name: "several plists all excluded does NOT fire",
+			args: []string{
+				"/bin/launchctl", "load",
+				"/Library/LaunchAgents/com.logi.ghub.plist",
+				"/Library/LaunchAgents/com.okta.agent.plist",
+			},
+			path:        "/bin/launchctl",
+			parentPath:  "/bin/bash",
+			wantFinding: false,
+			exclusions: &fakeExclusions{entries: []fakeExcl{
+				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.logi.*.plist"},
+				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.okta.agent.plist"},
+			}},
+		},
+		{
+			// With no exclusion at all the description still has to name both, or an analyst reads the alert and never learns
+			// the second plist was registered.
+			name: "several plists with no exclusion names them all",
+			args: []string{
+				"/bin/launchctl", "load",
+				"/Users/alice/Library/LaunchAgents/com.first.plist",
+				"/Users/alice/Library/LaunchAgents/com.second.plist",
+			},
+			path:        "/bin/launchctl",
+			parentPath:  "/bin/bash",
+			wantFinding: true,
+			wantDescHas: "com.second.plist",
 		},
 		{
 			name:        "allowlisted plist does NOT fire",
@@ -141,6 +196,10 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			assert.Equal(t, rule.DisplayName(), findings[0].Title, "alert title is the rule's canonical DisplayName (issue #519)")
 			assert.Equal(t, "high", findings[0].Severity)
 			assert.Contains(t, findings[0].Description, tc.wantDescHas)
+			if tc.wantDescLacks != "" {
+				assert.NotContains(t, findings[0].Description, tc.wantDescLacks,
+					"an excluded plist must not be named: the description is what the exclusion left behind")
+			}
 			assert.Contains(t, findings[0].EventIDs, "exec-target")
 		})
 	}

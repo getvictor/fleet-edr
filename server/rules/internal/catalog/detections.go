@@ -161,6 +161,23 @@ func firstField(se *sigmabind.Event, name string) string {
 //
 // Sigma matches a list-valued field when ANY element does, but a finding has to name WHICH one, and the evaluator does not report
 // that. Re-finding it with the same predicate the detection used keeps the two in step.
+// allMatching returns every value of a multi-valued field satisfying pred, in order, or nil when the field is absent or nothing
+// matches. The plural of firstMatching: a command line can carry several arguments of the same kind, and a rule that reads only
+// the first decides on one of them while the rest go unexamined (issue #1028).
+func allMatching(se *sigmabind.Event, name string, pred func(string) bool) []string {
+	values, ok := se.Field(name)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, v := range values {
+		if pred(v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func firstMatching(se *sigmabind.Event, name string, pred func(string) bool) string {
 	values, ok := se.Field(name)
 	if !ok {
