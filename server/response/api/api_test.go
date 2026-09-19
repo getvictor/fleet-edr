@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -123,4 +124,41 @@ func TestContainmentWireShapes(t *testing.T) {
 			assert.Equal(t, tc.want, string(got))
 		})
 	}
+}
+
+// TestReachableWireTypesRoundTrip is the same round trip for the reachable-address set (issue #1059), which the containment command
+// carries to hosts and the operator routes return.
+//
+// The empty-list case is the one worth the generator rather than a table: a set whose addresses marshal to `null` instead of `[]`
+// would make "the operator removed every destination" read as "the field is missing" to any reader that distinguishes them, and an
+// empty set is the state every deployment starts in.
+func TestReachableWireTypesRoundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		count := rapid.IntRange(0, 6).Draw(rt, "count")
+		in := api.ReachableSet{
+			Version:   rapid.Int64().Draw(rt, "version"),
+			UpdatedBy: rapid.String().Draw(rt, "updated_by"),
+			Addresses: make([]api.ReachableAddress, 0, count),
+		}
+		for i := range count {
+			in.Addresses = append(in.Addresses, api.ReachableAddress{
+				CIDR:      rapid.StringN(1, 64, -1).Draw(rt, fmt.Sprintf("cidr_%d", i)),
+				Port:      rapid.IntRange(0, 65535).Draw(rt, fmt.Sprintf("port_%d", i)),
+				Transport: rapid.SampledFrom([]string{"", api.TransportTCP, api.TransportUDP}).Draw(rt, fmt.Sprintf("transport_%d", i)),
+				Note:      rapid.String().Draw(rt, fmt.Sprintf("note_%d", i)),
+			})
+		}
+		if rapid.Bool().Draw(rt, "has_time") {
+			at := time.UnixMicro(rapid.Int64Range(0, 1<<50).Draw(rt, "updated_at")).UTC()
+			in.UpdatedAt = &at
+		}
+
+		body, err := json.Marshal(in)
+		require.NoError(rt, err)
+		var out api.ReachableSet
+		require.NoError(rt, json.Unmarshal(body, &out))
+		assert.Equal(rt, in, out)
+		assert.NotContains(rt, string(body), `"addresses":null`, "an empty set is an empty list, not a missing field")
+	})
 }
