@@ -456,7 +456,10 @@ func TestSuspiciousExec_ParentSignatureExclusion(t *testing.T) {
 		excl fakeExcl
 	}{
 		{"team_id suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchTeamID, value: teamID}},
-		{"signing_id suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchSigningID, value: signingID}},
+		// QUALIFIED by the team that signed it. A bare identifier is refused by the API and, were one stored, would match
+		// nothing, because the candidate is always composed with its qualifier (issue #1024).
+		{"signing_id suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchSigningID,
+			value: teamID + ":" + signingID}},
 		{"cdhash suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchCDHash, value: cdhash}},
 	}
 	for _, tc := range suppressCases {
@@ -474,6 +477,48 @@ func TestSuspiciousExec_ParentSignatureExclusion(t *testing.T) {
 			assert.Empty(t, findings, "signed parent matched by its signing identity must suppress the finding")
 		})
 	}
+
+	// The bypass issue #1024 closes, and the reason a signing_id value is qualified. `codesign -s - -i com.anthropic.claude-code`
+	// needs no privilege and no Apple account, and under an unqualified match that binary inherited the real tool's exclusion.
+	//
+	// spec:server-detection-rules-engine/signature-based-parent-exclusions/an-ad-hoc-parent-claiming-an-identifier-is-not-suppressed
+	t.Run("ad-hoc parent claiming the identifier is not suppressed", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// Ad-hoc: the identifier the attacker chose, no team, not a platform binary.
+		adHoc := `,"code_signing":{"team_id":"","signing_id":"` + signingID + `","flags":0,"is_platform_binary":false}`
+		events := makeEvents("/tmp/payload-parent", adHoc)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchSigningID, value: teamID + ":" + signingID},
+		}}}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1,
+			"an ad-hoc signature can claim any identifier, so it must not inherit the real vendor's exclusion")
+	})
+
+	// spec:server-detection-rules-engine/signature-based-parent-exclusions/a-platform-binary-is-suppressed-by-a-platform-qualified-value
+	t.Run("a platform binary is suppressed by a platform-qualified value", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// An operating-system binary: no team, platform flag set, which is the one thing a planted binary cannot claim.
+		platform := `,"code_signing":{"team_id":"","signing_id":"com.apple.osascript","flags":0,"is_platform_binary":true}`
+		events := makeEvents("/usr/bin/osascript", platform)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchSigningID, value: "platform:com.apple.osascript"},
+		}}}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "a platform-qualified value must suppress the operating system's own binary")
+	})
 
 	t.Run("unsigned lookalike parent is not suppressed by a team_id exclusion", func(t *testing.T) {
 		t.Parallel()
