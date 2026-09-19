@@ -421,7 +421,7 @@ The host's reason for a failure is in the delivery's `result` from `GET /api/hos
 
 - **You cannot add destinations of your own.** The lifeline is fixed, so a contained host cannot be allowed to reach a remediation or forensics service you name ([#1059](https://github.com/getvictor/fleet-edr/issues/1059)).
 - **Name restriction needs the DNS proxy.** On a Mac whose DNS proxy was disabled or has stopped, a contained Mac can still resolve any name its configured resolvers answer. It cannot reach any other resolver, and everything else stays blocked. The host page says so beside the Contained badge when this Mac is in that state, reading its live health: "DNS by destination only" when the Mac reports its proxy switched off, and "DNS filtering unconfirmed" when no DNS capture has reached the server while the Mac was otherwise reporting.
-- **A proxy named by host name.** When the agent reaches the server through a proxy named by host name rather than address, its control channel cannot reconnect while the host is contained; commands then arrive through the agent's regular polling ([#1064](https://github.com/getvictor/fleet-edr/issues/1064)).
+- **A SOCKS or HTTPS proxy.** When the agent reaches the server through a SOCKS or HTTPS proxy, its control channel cannot reconnect while the host is contained; commands then arrive through the agent's regular polling, which is slower, and the console shows the stream disconnected until the host is released ([#1110](https://github.com/getvictor/fleet-edr/issues/1110)). An HTTP proxy is unaffected: the agent tunnels through it at the address the containment lifeline keeps reachable.
 
 ## Application control
 
