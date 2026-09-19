@@ -11,7 +11,7 @@ import (
 // The identifier alone is not an identity. It is whatever the signer put in the binary, and an ad-hoc signature can put anything
 // there with no privilege and no Apple account:
 //
-//	codesign -s - -i com.vendor.tool ./payload
+//	codesign -s - -i com.vendor.tool ./payload    dash-lint:ignore
 //
 // That binary has no team, runs on Apple Silicon, and under an unqualified match it inherited every exclusion written for the
 // real vendor's tool. So an operator following our own guidance, which until issue #1023 called signing_id "non-spoofable",
