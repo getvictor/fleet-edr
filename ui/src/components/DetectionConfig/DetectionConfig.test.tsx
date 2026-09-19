@@ -272,6 +272,36 @@ describe("DetectionConfig", () => {
     expect(screen.getByRole("button", { name: /add exclusion/i })).toBeDisabled();
   });
 
+  // A signing_id value has a shape the API refuses, and it is the one an operator is most likely to get wrong: the identifier
+  // alone is whatever the signer typed, and an ad-hoc signature can claim any vendor's (issue #1024). The form is explained
+  // where the value is typed, rather than left to a 400 after the fact.
+  it("explains the form for a signing_id value, and says nothing for a type that has none", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry({
+          id: "suspicious_exec",
+          doc: makeRuleDoc({ title: "Suspicious execution" }),
+          supported_exclusion_match_types: ["signing_id", "parent_path_glob"],
+        }),
+      ],
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
+
+    fireEvent.change(screen.getByLabelText("Match type"), { target: { value: "signing_id" } });
+    expect(screen.getByText(/Qualified by who signed it/)).toBeVisible();
+    expect(screen.getByText(/A bare identifier is refused/)).toBeVisible();
+    expect(screen.getByLabelText("Value")).toHaveAttribute("placeholder", "Q6L2SF6YDW:com.anthropic.claude-code");
+
+    // A glob has no shape to explain, so nothing is shown and the generic placeholder returns.
+    fireEvent.change(screen.getByLabelText("Match type"), { target: { value: "parent_path_glob" } });
+    expect(screen.queryByText(/Qualified by who signed it/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Value")).toHaveAttribute("placeholder", "/Applications/MyApp.app/Contents/MacOS/MyApp");
+  });
+
   // The match-type picker offers ONLY the match types the selected rule consults (issue #520), in canonical display order, so an
   // operator cannot create an exclusion the rule would silently ignore.
   // spec:web-ui/detection-configuration-admin-views/exclusion-match-type-picker-offers-only-the-supported-types-for-a-rule
