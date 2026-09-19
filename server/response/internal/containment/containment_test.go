@@ -1248,3 +1248,30 @@ func TestSet_AReleaseCarriesNoAllowances(t *testing.T) {
 	// look stale the moment an operator edited the set, and hand each of them a release it already has.
 	assert.Zero(t, release.ReachableVersion)
 }
+
+// Releasing a contained host is the break-glass direction, so it must not depend on a row it does not use. A reachable-address set
+// that cannot be read must not be what stops an operator letting a host back onto the network.
+func TestSet_AReleaseDoesNotNeedTheReachableSet(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.setReachable(2, api.ReachableAddress{CIDR: "192.0.2.7/32"})
+	_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+
+	// The set becomes unreadable, as it would if its row or the database behind it were unavailable.
+	boom := errors.New("reachable set unavailable")
+	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
+		f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain,
+		func(context.Context) (api.ReachableSet, error) { return api.ReachableSet{}, boom })
+
+	_, err = svc.Set(t.Context(), operator, "", "host-a", false, "let it back on the network", nil)
+	require.NoError(t, err, "a release must not be held up by the set it does not carry")
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.False(t, state.Contained)
+
+	// A CONTAINMENT still fails loudly, because one queued without the set would silently withdraw every allowance.
+	_, err = svc.Set(t.Context(), operator, "", "host-a", true, "contain again", nil)
+	require.ErrorIs(t, err, boom)
+}

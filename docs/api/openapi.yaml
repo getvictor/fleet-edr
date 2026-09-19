@@ -376,7 +376,8 @@ paths:
       description: |
         The host's desired containment and its delivery: the latest
         `set_network_containment` command and whether it carries the current
-        state. A host never contained is returned not contained at version 0
+        state, which for a contained host includes the reachable-address set in
+        force. A host never contained is returned not contained at version 0
         with no delivery. Requires `host.read`.
       security:
         - SessionCookie: []
@@ -2178,7 +2179,11 @@ components:
             result: {type: object, additionalProperties: true}
             current:
               type: boolean
-              description: Whether the command carries the host's current version and epoch.
+              description: |
+                Whether the command carries what the host should hold now: its version and epoch, and for a CONTAINED host the
+                reachable-address set in force. A host contained before the set last changed therefore reads as not current until
+                the catch-up queues it again, which is how a set change reaches a host without releasing it. A released host is
+                judged on its version and epoch alone, since it carries no allowances.
     ReachableAddress:
       type: object
       required: [cidr]

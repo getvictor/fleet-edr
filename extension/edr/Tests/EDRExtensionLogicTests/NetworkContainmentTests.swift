@@ -295,6 +295,13 @@ final class NetworkContainmentTests: XCTestCase {
                                                  appliedAddresses: ["203.0.113.7", "203.0.113.8"])
         XCTAssertEqual(String(bytes: try encoder.encode(refreshed), encoding: .utf8),
                        #"{"applied":true,"appliedAddresses":["203.0.113.7","203.0.113.8"],"contained":true,"epoch":100,"version":4}"#)
+        // The reachable-set version the filter is enforcing (issue #1059). Pinned on the WIRE rather than only through the type,
+        // because the agent that reads this key is written in another language: a rename here and a rename there are two edits, and
+        // nothing but this test would notice one happening without the other.
+        let withSet = NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil,
+                                               appliedAddresses: ["203.0.113.7"], appliedReachableVersion: 6)
+        XCTAssertEqual(String(bytes: try encoder.encode(withSet), encoding: .utf8),
+                       #"{"applied":true,"appliedAddresses":["203.0.113.7"],"appliedReachableVersion":6,"contained":true,"epoch":100,"version":4}"#)
         XCTAssertEqual(NetworkContainmentStatus.eventType, "ne_containment_status")
     }
 

@@ -178,13 +178,21 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	if !enrolled {
 		return api.ContainmentChange{}, api.ErrContainmentHostNotFound
 	}
-	// Read BEFORE the change's transaction opens, so a slow read does not hold the host's row. A set read a moment before the
-	// command is queued can be one version stale, and that is what the catch-up is for: the host reads as not current on the next
-	// sweep and is re-queued. The direction that would matter is a host told it has allowances it does not, and that cannot happen
-	// here, since the command carries the version of the set it was built from.
-	reachable, err := s.reachable(ctx)
-	if err != nil {
-		return api.ContainmentChange{}, err
+	// Only for a containment, and read BEFORE the change's transaction opens so a slow read does not hold the host's row.
+	//
+	// A RELEASE must not depend on this at all: releasing a contained host is the break-glass direction, and a reachable-address
+	// row that is unavailable or unreadable must not be what stops an operator letting a host back onto the network. A release
+	// carries no allowances anyway, so there is nothing here for it to need.
+	//
+	// A set read a moment before the command is queued can be one version stale, and that is what the catch-up is for: the host
+	// reads as not current on the next sweep and is re-queued. The direction that would matter is a host told it has allowances it
+	// does not, and that cannot happen here, since the command carries the version of the set it was built from.
+	var reachable api.ReachableSet
+	if contained {
+		var rerr error
+		if reachable, rerr = s.reachable(ctx); rerr != nil {
+			return api.ContainmentChange{}, rerr
+		}
 	}
 	// The command is queued inside the transaction that records the state, so a change that cannot queue one records nothing: the
 	// operator is told it failed rather than left with a state whose command the catch-up has to notice (issue #1073).
