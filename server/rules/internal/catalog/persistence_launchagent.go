@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
@@ -98,10 +99,26 @@ func (r *PersistenceLaunchAgent) evalEvent(
 	if !launchAgentDetection().Matches(se) {
 		return nil, nil
 	}
-	// Read back the values the detection matched on, so the alert names the job that was registered.
+	// Read back the values the detection matched on, so the alert names the jobs that were registered.
+	//
+	// EVERY plist argument, not the first. launchctl takes several paths in one invocation, and reading only the first meant an
+	// exclusion for a benign plist suppressed whatever was registered alongside it (issue #1028):
+	//
+	//	launchctl load /Library/LaunchAgents/com.logi.ghub.plist ~/Library/LaunchAgents/evil.plist
+	//
+	// Planting under /Library/LaunchAgents needs root; this needed none, because the first argument only had to NAME an excluded
+	// plist and the second was the user's own. It also left the description naming only the first, so an analyst reading the
+	// alert never saw the other one.
 	subcommand := firstField(se, "Subcommand")
-	plistPath := firstMatching(se, "CommandArguments", launchAgentPath.MatchString)
-	if r.excluded(plistPath, evt.HostID) {
+	plistPaths := allMatching(se, "CommandArguments", launchAgentPath.MatchString)
+	// Suppressed only when the operator excluded ALL of them. One unexcluded plist is the whole finding.
+	reportable := make([]string, 0, len(plistPaths))
+	for _, path := range plistPaths {
+		if !r.excluded(path, evt.HostID) {
+			reportable = append(reportable, path)
+		}
+	}
+	if len(reportable) == 0 {
 		return nil, nil
 	}
 	// Look up the process row so the alert can link to the process detail view. A young miss raises the retryable
@@ -115,11 +132,13 @@ func (r *PersistenceLaunchAgent) evalEvent(
 		return nil, nil
 	}
 	return &api.Finding{
-		HostID:      evt.HostID,
-		RuleID:      r.ID(),
-		Severity:    api.SeverityHigh,
-		Title:       r.DisplayName(),
-		Description: fmt.Sprintf("launchctl %s %s", subcommand, plistPath),
+		HostID:   evt.HostID,
+		RuleID:   r.ID(),
+		Severity: api.SeverityHigh,
+		Title:    r.DisplayName(),
+		// Names every plist that was NOT excluded, so an analyst sees what the exclusion left behind rather than only the first
+		// argument on the line.
+		Description: fmt.Sprintf("launchctl %s %s", subcommand, strings.Join(reportable, " ")),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{evt.EventID},
 	}, nil
