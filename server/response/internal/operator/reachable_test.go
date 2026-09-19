@@ -193,15 +193,19 @@ func TestReachableHandler_ReportsEachRefusal(t *testing.T) {
 // opposite of what a caller who misspelled a field wanted. Clearing stays available, spelled explicitly.
 func TestReachableHandler_WillNotClearTheSetByOmission(t *testing.T) {
 	t.Parallel()
-	for _, body := range []string{
-		`{"reason":"why"}`,
-		`{"reason":"why","addresses":null}`,
-		`{"reason":"why","address":[{"cidr":"192.0.2.7"}]}`,
-	} {
-		t.Run(body, func(t *testing.T) {
+	cases := []struct {
+		desc string
+		body string
+	}{
+		{desc: "the field is omitted", body: `{"reason":"why"}`},
+		{desc: "the field is null", body: `{"reason":"why","addresses":null}`},
+		{desc: "the field is misspelled", body: `{"reason":"why","address":[{"cidr":"192.0.2.7"}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
 			svc := &fakeReachable{}
-			resp := serveReachable(t, svc, &recordingAuthZ{allow: true}, http.MethodPut, body)
+			resp := serveReachable(t, svc, &recordingAuthZ{allow: true}, http.MethodPut, tc.body)
 			defer resp.Body.Close()
 
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)

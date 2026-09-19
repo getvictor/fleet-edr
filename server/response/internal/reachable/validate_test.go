@@ -147,31 +147,49 @@ func TestNormalizeAcceptsTheRangesOperatorsActuallyRun(t *testing.T) {
 // spec:server-host-containment/operators-choose-what-a-contained-host-can-still-reach/an-address-that-would-undo-containment-is-refused
 func TestNormalizeRefusesOneDestinationWrittenTwice(t *testing.T) {
 	t.Parallel()
-	// Two spellings of one destination. Refused rather than collapsed: the two notes are two operators' claims about one filter
-	// rule, and keeping either one silently discards the other's.
-	_, err := Normalize([]api.ReachableAddress{
-		{CIDR: "10.0.0.0/8", Note: "corporate"},
-		{CIDR: "10.1.2.3/8", Note: "the other one"},
-	})
-	require.ErrorIs(t, err, api.ErrReachableDuplicate)
-	assert.Contains(t, err.Error(), "address 2")
-	assert.Contains(t, err.Error(), "address 1", "the operator is told which pair collided, not just that one did")
+	// Refused rather than collapsed: two notes on one destination are two operators' claims about one filter rule, and keeping
+	// either silently discards the other's.
+	duplicates := []struct {
+		desc  string
+		given []api.ReachableAddress
+	}{
+		{
+			desc: "two spellings of one range",
+			given: []api.ReachableAddress{
+				{CIDR: "10.0.0.0/8", Note: "corporate"},
+				{CIDR: "10.1.2.3/8", Note: "the other one"},
+			},
+		},
+		{
+			// Across address families: an IPv4 destination and its IPv4-mapped spelling are one destination and one rule.
+			desc: "an address and its mapped spelling",
+			given: []api.ReachableAddress{
+				{CIDR: "192.0.2.7", Note: "MDM"},
+				{CIDR: "::ffff:192.0.2.7/128", Note: "MDM again"},
+			},
+		},
+	}
+	for _, tc := range duplicates {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			_, err := Normalize(tc.given)
+			require.ErrorIs(t, err, api.ErrReachableDuplicate)
+			assert.Contains(t, err.Error(), "address 2")
+			assert.Contains(t, err.Error(), "address 1", "the operator is told which pair collided, not just that one did")
+		})
+	}
 
-	// Including across address families: an IPv4 destination and its IPv4-mapped spelling are one destination, and one filter rule.
-	_, err = Normalize([]api.ReachableAddress{
-		{CIDR: "192.0.2.7", Note: "MDM"},
-		{CIDR: "::ffff:192.0.2.7/128", Note: "MDM again"},
+	t.Run("the port and transport are part of the destination", func(t *testing.T) {
+		t.Parallel()
+		// So the same address on two ports is two entries rather than a duplicate.
+		got, err := Normalize([]api.ReachableAddress{
+			{CIDR: "192.0.2.7", Port: 443, Transport: api.TransportTCP},
+			{CIDR: "192.0.2.7", Port: 445, Transport: api.TransportTCP},
+			{CIDR: "192.0.2.7", Port: 443, Transport: api.TransportUDP},
+		})
+		require.NoError(t, err)
+		assert.Len(t, got, 3)
 	})
-	require.ErrorIs(t, err, api.ErrReachableDuplicate)
-
-	// The port and transport are part of the destination, so the same address on two ports is two entries and not a duplicate.
-	got, err := Normalize([]api.ReachableAddress{
-		{CIDR: "192.0.2.7", Port: 443, Transport: api.TransportTCP},
-		{CIDR: "192.0.2.7", Port: 445, Transport: api.TransportTCP},
-		{CIDR: "192.0.2.7", Port: 443, Transport: api.TransportUDP},
-	})
-	require.NoError(t, err)
-	assert.Len(t, got, 3)
 }
 
 func TestNormalizeCapsTheSet(t *testing.T) {
