@@ -37,7 +37,7 @@ func TestNewRefusesAnythingButAPlainIdentifier(t *testing.T) {
 	}{
 		{desc: "a quoted name", table: Table{Name: "`watched_path_set`", PayloadColumn: "paths", Noun: "n"}},
 		{desc: "a name carrying a statement", table: Table{Name: "t; DROP TABLE users", PayloadColumn: "paths", Noun: "n"}},
-		{desc: "a name carrying a comment", table: Table{Name: "t -- x", PayloadColumn: "paths", Noun: "n"}},
+		{desc: "a name carrying a comment", table: Table{Name: "t -- x", PayloadColumn: "paths", Noun: "n"}}, // dash-lint:ignore
 		{desc: "a schema-qualified name", table: Table{Name: "edr.watched_path_set", PayloadColumn: "paths", Noun: "n"}},
 		{desc: "an uppercase name", table: Table{Name: "Watched_Path_Set", PayloadColumn: "paths", Noun: "n"}},
 		{desc: "a name starting with a digit", table: Table{Name: "1set", PayloadColumn: "paths", Noun: "n"}},
