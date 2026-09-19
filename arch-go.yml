@@ -64,6 +64,11 @@ dependenciesRules:
   - package: "**.rules.internal.**"
     shouldOnlyDependsOn:
       internal:
+        # versionedset is the shared versioned single-row JSON set (issue #1109): one row holding a whole set, replaced under a
+        # row lock with a conditional version check and a strictly increasing database-clock stamp. The watched-path set and the
+        # reachable-address set are the same shape in two contexts, and the ordering guarantees are too subtle to keep in two
+        # copies that can drift.
+        - "**.versionedset"
         # catchup is the shared catch-up policy (issue #1071): one decision about when a host is owed a state again.
         - "**.catchup"
         # auditoutbox is shared server platform code (issue #1070 moved it out of this context so response could use it too);
@@ -94,6 +99,11 @@ dependenciesRules:
   - package: "**.response.internal.**"
     shouldOnlyDependsOn:
       internal:
+        # versionedset is the shared versioned single-row JSON set (issue #1109): one row holding a whole set, replaced under a
+        # row lock with a conditional version check and a strictly increasing database-clock stamp. The watched-path set and the
+        # reachable-address set are the same shape in two contexts, and the ordering guarantees are too subtle to keep in two
+        # copies that can drift.
+        - "**.versionedset"
         # catchup is the shared catch-up policy (issue #1071): one decision about when a host is owed a state again.
         - "**.catchup"
         # auditoutbox is the shared transactional audit outbox (issue #1070): a containment change commits its audit entry in the
