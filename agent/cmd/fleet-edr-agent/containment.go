@@ -284,10 +284,10 @@ func dialThroughSOCKS5(ctx context.Context, dial dialFunc, proxyURL *url.URL, pr
 // this accepts. A stricter configuration here would fail ONLY the control channel while everything else kept working, which
 // presents as the bug this is meant to fix and would be diagnosed as one.
 func handshakeWithProxy(ctx context.Context, conn net.Conn, proxyURL *url.URL, proxyTLS *tls.Config) (net.Conn, error) {
+	// Cloned rather than mutated: the caller's configuration is the agent's own, shared with its HTTP transport, and setting
+	// ServerName on it would point every later handshake at the proxy. No nil fallback, because an https proxy without a TLS
+	// policy is not a state any caller produces: main builds one before the dial and the scheme dispatch above is the only way in.
 	cfg := proxyTLS.Clone()
-	if cfg == nil {
-		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
 	// The name the certificate is checked against is the PROXY's, not the server's. Without this the handshake is verified against
 	// whatever ServerName the agent's own configuration carried, which is the server it is tunnelling to.
 	cfg.ServerName = proxyURL.Hostname()

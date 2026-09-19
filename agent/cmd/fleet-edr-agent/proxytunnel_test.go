@@ -817,3 +817,62 @@ func TestDialThroughHTTPSProxyVerifiesTheProxysOwnName(t *testing.T) {
 	require.Len(t, dialedProxy, 1)
 	assert.Equal(t, listener.Addr().String(), dialedProxy[0], "reached at the pinned address, verified under its own name")
 }
+
+// pinnedDialer exists to satisfy proxy.Dialer, whose Dial carries no context. The SOCKS5 library prefers DialContext and so never
+// calls it, but the method is part of the contract the library type-asserts against, and it must pin the same address: a version
+// that honoured the address it was handed would resolve the proxy's name, which is the thing a contained host cannot do.
+//
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/a-socks5-proxy-is-spoken-to-in-its-own-protocol
+func TestPinnedDialerAlwaysDialsThePinnedAddress(t *testing.T) {
+	t.Parallel()
+	var dialed []string
+	var mu sync.Mutex
+	record := func(_ context.Context, _, addr string) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, addr)
+		mu.Unlock()
+		return nil, errors.New("not connecting, only recording")
+	}
+	dialer := pinnedDialer{dial: record, addr: "10.0.0.9:1080"}
+
+	_, err := dialer.Dial("tcp", "proxy.corp:1080")
+	require.Error(t, err)
+	_, err = dialer.DialContext(t.Context(), "tcp", "proxy.corp:1080")
+	require.Error(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"10.0.0.9:1080", "10.0.0.9:1080"}, dialed,
+		"both methods must dial the pinned address, never the name they were handed")
+}
+
+// The failure an operator actually meets: the proxy is there but refuses the CONNECT, or is not there at all. It must fail the
+// dial naming the proxy and the destination, rather than surfacing as an unexplained transport error.
+//
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/a-socks5-proxy-is-spoken-to-in-its-own-protocol
+func TestDialThroughSOCKS5ProxyReportsARefusal(t *testing.T) {
+	t.Parallel()
+	// A listener that accepts and immediately closes, which is what a proxy refusing the handshake looks like.
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, aerr := listener.Accept()
+		if aerr != nil {
+			return
+		}
+		_ = conn.Close()
+	}()
+
+	proxyURL, err := url.Parse("socks5://" + listener.Addr().String())
+	require.NoError(t, err)
+	var dialed []string
+	var mu sync.Mutex
+
+	_, err = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL,
+		listener.Addr().String(), "edr.example.com:8443", nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SOCKS5 proxy "+listener.Addr().String())
+	assert.Contains(t, err.Error(), "edr.example.com:8443", "the destination belongs in the message too")
+}
