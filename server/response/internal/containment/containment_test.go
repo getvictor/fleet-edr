@@ -1243,7 +1243,8 @@ func TestSet_AReleaseCarriesNoAllowances(t *testing.T) {
 	var release api.SetNetworkContainmentPayload
 	require.NoError(t, json.Unmarshal(commands[1].Payload, &release))
 	assert.False(t, release.Contained)
-	// The version still rides along: the host has to be able to tell this release from one built against an older set, or the
-	// catch-up would re-queue the release forever.
-	assert.Equal(t, int64(3), release.ReachableVersion)
+	assert.Empty(t, release.Reachable, "a released host restricts nothing for an allowance to qualify")
+	// Not even the version. A released host is judged without the set, so carrying it would only make every host ever contained
+	// look stale the moment an operator edited the set, and hand each of them a release it already has.
+	assert.Zero(t, release.ReachableVersion)
 }

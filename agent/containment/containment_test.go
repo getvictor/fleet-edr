@@ -1373,3 +1373,51 @@ func TestApply_AReleaseSendsNoAllowances(t *testing.T) {
 	assert.Zero(t, sent[0].ReachableVersion)
 	assert.Empty(t, sent[0].Reachable)
 }
+
+// A restart must not withdraw what an operator allowed. Seed rebuilds the state from the document the extension persisted, and that
+// document carries the allowances, so dropping them here would have the first refresh after every restart send a document with none:
+// the extension takes that as the same containment with its allowances withdrawn and enforces it (issue #1059).
+func TestSeed_AdoptsTheAllowancesWithTheState(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "containment.json")
+	doc := `{"version":7,"epoch":200,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]},` +
+		`"reachableVersion":5,"reachable":[{"cidr":"192.0.2.7/32","port":443,"transport":"tcp"}]}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7")
+	m.Seed(path)
+
+	// The refresh after a restart is what would have sent the withdrawal, so that is what this drives.
+	res.set("203.0.113.9")
+	m.Observe(t.Context(), Status{Contained: true, Version: 7, Epoch: 200, Applied: true})
+	sent := awaitSent(t, ext, 1)
+	assert.Equal(t, int64(5), sent[0].ReachableVersion, "the seeded state kept the set")
+	assert.Equal(t, []ReachableAddress{{CIDR: "192.0.2.7/32", Port: 443, Transport: "tcp"}}, sent[0].Reachable)
+}
+
+// A command that changes ONLY the reachable set carries the same containment version and epoch, so nothing about the state changed.
+// The agent still has to adopt its allowances, or the next refresh sends the previous ones and rolls the change back.
+func TestApply_ASetOnlyChangeIsAdoptedThoughTheStateDidNot(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7")
+
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":1,
+		"reachable":[{"cidr":"192.0.2.7/32"}]}`))
+	require.NoError(t, err)
+	// The same containment, a different set: version and epoch are untouched.
+	_, err = m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":2,
+		"reachable":[{"cidr":"198.51.100.5/32"}]}`))
+	require.NoError(t, err)
+	awaitSent(t, ext, 2)
+
+	// Now a refresh: it must carry the SECOND set, not the first.
+	res.set("203.0.113.9")
+	m.Reconnected()
+	m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+	sent := awaitSent(t, ext, 3)
+	assert.Equal(t, int64(2), sent[2].ReachableVersion, "the refresh carries the set the host was last told about")
+	assert.Equal(t, []ReachableAddress{{CIDR: "198.51.100.5/32"}}, sent[2].Reachable)
+}

@@ -124,4 +124,26 @@ final class NetworkContainmentReachableTests: XCTestCase {
         )
         XCTAssertTrue(NetworkContainment.lifeline(for: released, resolvers: ["198.51.100.1"]).isEmpty)
     }
+
+    /// A set version only ever increases, so an update naming a LOWER one was built before the change and delayed on its way here.
+    /// Accepting it would roll the host's allowances back to a set an operator has already replaced, and nothing upstream serializes
+    /// a refresh against a command, so the delayed document is a real arrival order rather than a hypothetical one.
+    func testAnOlderReachableSetDoesNotRefresh() {
+        let current = NetworkContainmentUpdate(
+            version: 5, epoch: 100, contained: true, serverPort: 8443, serverAddresses: ["203.0.113.7"],
+            reachableVersion: 3, reachable: [entry("198.51.100.5/32")]
+        )
+        let stale = NetworkContainmentUpdate(
+            version: 5, epoch: 100, contained: true, serverPort: 8443, serverAddresses: ["203.0.113.7"],
+            reachableVersion: 2, reachable: [entry("192.0.2.7/32")]
+        )
+        XCTAssertFalse(stale.refreshesLifeline(current), "an older set is a document that lost a race, not a change")
+
+        // A server address that moved is still a refresh, whatever the set version says, because that half is what it always was.
+        let moved = NetworkContainmentUpdate(
+            version: 5, epoch: 100, contained: true, serverPort: 8443, serverAddresses: ["203.0.113.9"],
+            reachableVersion: 3, reachable: [entry("198.51.100.5/32")]
+        )
+        XCTAssertTrue(moved.refreshesLifeline(current))
+    }
 }

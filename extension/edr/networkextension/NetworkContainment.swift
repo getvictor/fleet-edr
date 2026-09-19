@@ -42,14 +42,18 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
         return order > current.order
     }
 
-    /// refreshesLifeline reports whether this update is the current containment with a different server endpoint. The agent re-resolves
-    /// the server name while the host is contained and sends the same server state with the addresses it now resolves to, so an update
-    /// at the same epoch and version is accepted when only the lifeline moved.
+    /// refreshesLifeline reports whether this update is the current containment with a lifeline that moved. The agent re-resolves the
+    /// server name while the host is contained and sends the same server state with the addresses it now resolves to, so an update at
+    /// the same epoch and version is accepted when only the lifeline moved.
+    ///
+    /// The reachable set counts as part of that lifeline, because it changes without any host's containment state changing. It is
+    /// compared with GREATER THAN rather than inequality: versions only ever increase, so an update naming a lower one is a document
+    /// built before the change and delayed on its way here, and accepting it would roll the host's allowances back.
     func refreshesLifeline(_ current: NetworkContainmentUpdate?) -> Bool {
         guard let current else { return false }
         return order == current.order && contained == current.contained
             && (serverPort != current.serverPort || serverAddresses != current.serverAddresses || serverNames != current.serverNames
-                || reachableVersion != current.reachableVersion)
+                || reachableVersion > current.reachableVersion)
     }
 }
 

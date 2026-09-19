@@ -60,11 +60,26 @@ type ReachableSet func(ctx context.Context) (api.ReachableSet, error)
 // catch-up both build it here, so a host that is caught up gets exactly what the change queued. Marshalling cannot fail: every field
 // is a number, a bool, or strings the store validated before writing them.
 func commandPayload(state api.ContainmentState, reachable api.ReachableSet) []byte {
-	payload, _ := json.Marshal(api.SetNetworkContainmentPayload{
-		Version: state.Version, Epoch: state.Epoch, Contained: state.Contained,
-		ReachableVersion: reachable.Version, Reachable: reachable.Addresses,
-	})
+	out := api.SetNetworkContainmentPayload{Version: state.Version, Epoch: state.Epoch, Contained: state.Contained}
+	// Only a containment carries allowances: a release restricts nothing for them to qualify, and a release that carried them would
+	// also be re-queued by the catch-up on every set change, to every host ever contained.
+	if state.Contained {
+		out.ReachableVersion = reachable.Version
+		out.Reachable = forTheHost(reachable.Addresses)
+	}
+	payload, _ := json.Marshal(out)
 	return payload
+}
+
+// forTheHost is the set as the host needs it, without the operator's note. The note names a destination for a human reading the
+// console or the audit trail, and nothing on the host reads it, so sending it would put an operator's free text on every contained
+// host for no purpose.
+func forTheHost(addresses []api.ReachableAddress) []api.ReachableAddress {
+	out := make([]api.ReachableAddress, 0, len(addresses))
+	for _, a := range addresses {
+		out = append(out, api.ReachableAddress{CIDR: a.CIDR, Port: a.Port, Transport: a.Transport})
+	}
+	return out
 }
 
 // carries reports whether a command's payload delivers state together with the reachable-address set at reachableVersion.
@@ -75,8 +90,12 @@ func commandPayload(state api.ContainmentState, reachable api.ReachableSet) []by
 // would never re-queue it, which is the "picks up a change without being released and contained again" the issue asks for.
 func carries(cmd api.Command, state api.ContainmentState, reachableVersion int64) bool {
 	var queued api.SetNetworkContainmentPayload
-	return json.Unmarshal(cmd.Payload, &queued) == nil && queued.Version == state.Version && queued.Epoch == state.Epoch &&
-		queued.ReachableVersion == reachableVersion
+	if json.Unmarshal(cmd.Payload, &queued) != nil || queued.Version != state.Version || queued.Epoch != state.Epoch {
+		return false
+	}
+	// The set only qualifies a containment. Comparing it for a RELEASED host would make every host ever contained look stale the
+	// moment an operator edited the set, and the catch-up would send each of them a release they already have.
+	return !state.Contained || queued.ReachableVersion == reachableVersion
 }
 
 // Get returns a host's state with its delivery.

@@ -281,7 +281,13 @@ func (m *Manager) Seed(path string) {
 		// The extension has already said what it holds, which is the live answer rather than what a restart left on disk.
 		return
 	}
-	m.state = &Command{Version: doc.Version, Epoch: doc.Epoch, Contained: true}
+	// The allowances come with it. The persisted document carries them, and a state adopted without them would have the first
+	// refresh after every restart send a document with none: the extension takes that as the same containment with its allowances
+	// withdrawn, so an operator's chosen destinations would go dark on each agent restart (issue #1059).
+	m.state = &Command{
+		Version: doc.Version, Epoch: doc.Epoch, Contained: true,
+		ReachableVersion: doc.ReachableVersion, Reachable: doc.Reachable,
+	}
 	m.addresses = addrs
 	// sent stays empty: these addresses were sent by whichever agent run wrote them, over a connection this one does not hold, so the
 	// first status starts a refresh that sends what the target resolves to now.
@@ -486,11 +492,14 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 			// The command this agent just sent. Any other state, such as a containment held across an agent restart, leaves what the
 			// extension holds to be read from the status below.
 			m.sent = m.pendingAddresses
-			// And the allowances that went with it. A status carries the state only, so without this the state adopted here would
-			// have none, and the next lifeline refresh would rebuild the document without them: the extension would take that as
-			// the same containment with its allowances withdrawn, and enforce it (issue #1059).
-			m.state.ReachableVersion, m.state.Reachable = m.pending.ReachableVersion, m.pending.Reachable
 		}
+	}
+	// The allowances of the command this agent sent, whenever that command names the state now held. OUTSIDE the adopt branch
+	// deliberately: a command that changes only the reachable set carries the same version and epoch, so nothing about the state
+	// changed and adopt is false, and a carry-over that only ran there would leave the agent holding the previous allowances and
+	// send them again on the next refresh, rolling the change back (issue #1059).
+	if m.pending != nil && m.state != nil && m.pending.sameState(*m.state) {
+		m.state.ReachableVersion, m.state.Reachable = m.pending.ReachableVersion, m.pending.Reachable
 	}
 	// What the extension says its filter enforces is the authority on what may be dialed, and the only thing that distinguishes one
 	// lifeline from another: a refresh keeps the version and the epoch and changes only the addresses (issue #1066).
