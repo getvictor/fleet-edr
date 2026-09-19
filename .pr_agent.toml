@@ -55,4 +55,7 @@ Files under openspec/ use literal tool-parsed section markers: "## ADDED Require
 "## REMOVED Requirements", "### Requirement: ...", "#### Scenario: ...". These exact strings are part of the OpenSpec file
 format and are exempt from sentence-case heading rules. Markdown prose is intentionally not hard-wrapped; long lines are not
 violations.
+A behavior change is specified by a delta under openspec/changes/<name>/specs/**. The canonical openspec/specs/** tree changes
+only when `openspec archive` runs at release, so never ask a PR to edit openspec/specs/** directly, and never report an
+unchanged canonical spec as a gap when the PR carries a delta that covers the change.
 """
