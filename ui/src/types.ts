@@ -324,6 +324,24 @@ export interface ContainmentState {
   delivery?: ContainmentDelivery;
 }
 
+// ReachableAddress mirrors server/response/api.ReachableAddress: one destination a contained host may still reach (#1059). The
+// note is the operator's own name for it, kept for the console and the audit trail; it is not sent to the host.
+export interface ReachableAddress {
+  cidr: string;
+  port?: number;
+  transport?: "tcp" | "udp";
+  note?: string;
+}
+
+// ReachableSet mirrors server/response/api.ReachableSet: the whole set at one version. Version 0 is the empty set a deployment
+// starts with, which is containment's own lifeline and nothing more.
+export interface ReachableSet {
+  version: number;
+  addresses: ReachableAddress[];
+  updated_at?: string;
+  updated_by?: string;
+}
+
 // ContainmentChange mirrors server/response/api.ContainmentChange: the state after a change request and the command queued for it.
 export interface ContainmentChange {
   state: ContainmentState;

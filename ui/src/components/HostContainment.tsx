@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { ContainmentVersionConflictError, getHostContainment, setHostContainment } from "../api";
+import { ContainmentVersionConflictError, getHostContainment, getReachableAddresses, setHostContainment } from "../api";
 import { containmentBadge, containmentPhase, containmentSettled, nameFiltering } from "../containment";
 import { PermissionAction, useCan } from "../permissions-core";
 import type { ContainmentState, HostHealth } from "../types";
@@ -56,6 +56,26 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
   // again, or one whose reason changes from one caveat to the other, comes back collapsed. A boolean survives both, and the sentence
   // would reappear expanded on a press the operator never made.
   const [openedCaveat, setOpenedCaveat] = useState<string | null>(null);
+  // How many destinations a contained host may still reach on top of its lifeline (issue #1059), or 0 when there are none. The set is
+  // deployment-wide, so it is read once for the page rather than per containment read. Best-effort: a failed read says nothing, which
+  // is the same thing an empty set says, and neither is worth failing a header over.
+  const [reachableCount, setReachableCount] = useState(0);
+
+  const canReadReachable = can(PermissionAction.ContainmentConfigRead);
+  useEffect(() => {
+    if (!canReadReachable) return undefined;
+    let cancelled = false;
+    getReachableAddresses()
+      .then((set) => {
+        if (!cancelled) setReachableCount(set.addresses.length);
+      })
+      .catch(() => {
+        // Silent by design: see reachableCount.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canReadReachable]);
 
   // One read at a time: the next is scheduled only after the current one settles, so a slow response cannot land after a newer one,
   // and nothing is applied once the effect is cleaned up. A read that fails while a change is on its way is retried; otherwise the
@@ -95,13 +115,24 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
   // Only for a host that IS contained and whose live health says something is wrong with name filtering. A host still on its way is
   // not told on, and neither is one whose health has not been read: null is not an answer.
   // Switched rather than indexed: the union has two members and naming each keeps a dynamic key out of the lookup.
-  let caveat: { label: string; note: string } | null = null;
+  //
+  // A list rather than one slot: a contained host can both be failing to restrict names and have destinations it may still reach,
+  // and those are separate facts about how much of the network it still has. Showing one and hiding the other would answer "is this
+  // host cut off" with half the reasons it is not.
+  const caveats: { label: string; note: string }[] = [];
   if (phase === "contained") {
-    if (filtering === "disabled") caveat = CAVEATS.disabled;
-    if (filtering === "no-capture") caveat = CAVEATS.noCapture;
+    if (filtering === "disabled") caveats.push(CAVEATS.disabled);
+    if (filtering === "no-capture") caveats.push(CAVEATS.noCapture);
+    if (reachableCount > 0) {
+      caveats.push({
+        label: reachableCount === 1 ? "1 allowed destination" : `${String(reachableCount)} allowed destinations`,
+        note:
+          `This Mac can still reach ${reachableCount === 1 ? "the destination" : `the ${String(reachableCount)} destinations`} ` +
+          "allowed for every contained host, on top of its connection to the EDR server. Change them under Admin settings, Containment.",
+      });
+    }
   }
-  const caveatKey = caveat && state ? `${String(state.version)}:${caveat.label}` : null;
-  const caveatOpen = caveatKey !== null && openedCaveat === caveatKey;
+  const caveatKey = (label: string) => (state ? `${String(state.version)}:${label}` : label);
   return (
     <span className="host-containment">
       {/* A polite live region, so a change the host confirms or fails later is announced. Not role="status": the host page already
@@ -115,21 +146,25 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
         {/* A button, not a span with a title: the explanation has to be reachable by a keyboard, and a tooltip on a non-focusable
             element is not. Pressing it toggles the sentence, which is also in the accessible name, so a screen reader gets it
             without pressing anything. */}
-        {caveat && (
-          <button
-            type="button"
-            className="host-containment__caveat"
-            aria-expanded={caveatOpen}
-            aria-label={`${caveat.label}. ${caveat.note}`}
-            onClick={() => {
-              setOpenedCaveat(caveatOpen ? null : caveatKey);
-            }}
-          >
-            <Badge variant="medium" className="host-containment__badge">
-              {caveat.label}
-            </Badge>
-          </button>
-        )}
+        {caveats.map((c) => {
+          const key = caveatKey(c.label);
+          return (
+            <button
+              key={key}
+              type="button"
+              className="host-containment__caveat"
+              aria-expanded={openedCaveat === key}
+              aria-label={`${c.label}. ${c.note}`}
+              onClick={() => {
+                setOpenedCaveat(openedCaveat === key ? null : key);
+              }}
+            >
+              <Badge variant="medium" className="host-containment__badge">
+                {c.label}
+              </Badge>
+            </button>
+          );
+        })}
         {released && <span className="host-containment__sr-only">Released</span>}
       </span>
       {state && can(PermissionAction.HostIsolate) && (
@@ -146,11 +181,13 @@ export function HostContainment({ hostId, health }: { readonly hostId: string; r
       )}
       {/* Last, so the badges and the action keep the first line and the sentence takes the next. Its flex-basis is a full line, and
           the container is bounded, which is what makes that a second row rather than a wider first one. */}
-      {caveat && caveatOpen && (
-        <span className="host-containment__caveat-text" role="note">
-          {caveat.note}
-        </span>
-      )}
+      {caveats
+        .filter((c) => openedCaveat === caveatKey(c.label))
+        .map((c) => (
+          <span key={caveatKey(c.label)} className="host-containment__caveat-text" role="note">
+            {c.note}
+          </span>
+        ))}
       {createPortal(
         <ConfirmActionModal
           open={confirming}
