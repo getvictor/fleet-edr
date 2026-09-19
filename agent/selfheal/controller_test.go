@@ -338,27 +338,76 @@ func TestDefaultsAreAppliedForZeroValuedOptions(t *testing.T) {
 	assert.NotNil(t, c.logger)
 }
 
-// blockingRemediator holds Enable open until released, so a test can observe the in-flight window.
-type blockingRemediator struct {
-	mu      sync.Mutex
-	calls   int
-	release chan struct{}
-	entered chan struct{}
+// episodeSnapshot reads the fields a test asserts on while holding the controller's lock, and reports whether an episode was
+// there at all. Reading them through the pointer after unlocking would be a data race with the remediation goroutine, and
+// dereferencing without the ok is a nil panic the moment an episode this test expected has been dropped.
+func episodeSnapshot(c *Controller, provider string) (attempts int, eligibleAt time.Time, escalation string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state[provider]
+	if st == nil {
+		return 0, time.Time{}, "", false
+	}
+	return st.attempts, st.eligibleAt, st.escalation, true
 }
 
-func (b *blockingRemediator) Enable(context.Context, string) error {
+// blockingRemediator holds Enable open until released, so a test can observe the in-flight window. It also honours the context
+// it is given and records whether it was cancelled, which is what "the agent stopped trying" looks like from inside the enable.
+type blockingRemediator struct {
+	mu       sync.Mutex
+	calls    int
+	canceled bool
+	// failFirst is how many leading calls return an error at once instead of blocking, so a test can spend most of a budget
+	// quickly and then hold only the final attempt open.
+	failFirst int
+	release   chan struct{}
+	entered   chan struct{}
+}
+
+func newBlockingRemediator() *blockingRemediator {
+	return &blockingRemediator{release: make(chan struct{}), entered: make(chan struct{}, 8)}
+}
+
+func (b *blockingRemediator) Enable(ctx context.Context, _ string) error {
 	b.mu.Lock()
 	b.calls++
+	n, failFirst := b.calls, b.failFirst
 	b.mu.Unlock()
 	b.entered <- struct{}{}
-	<-b.release
-	return nil
+	if n <= failFirst {
+		return errors.New("save failed")
+	}
+	select {
+	case <-ctx.Done():
+		b.mu.Lock()
+		b.canceled = true
+		b.mu.Unlock()
+		return ctx.Err()
+	case <-b.release:
+		return nil
+	}
 }
 
 func (b *blockingRemediator) count() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.calls
+}
+
+func (b *blockingRemediator) wasCanceled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.canceled
+}
+
+// waitForEntry blocks until Enable has been entered, so a test acts while the attempt is in flight rather than before it.
+func (b *blockingRemediator) waitForEntry(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the remediation to start")
+	}
 }
 
 // spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/repeated-failures-stop-retrying-and-escalate
@@ -575,4 +624,167 @@ func TestNoEscalationWhenTheProviderComesBack(t *testing.T) {
 	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": "running"}))
 
 	assert.Zero(t, rec.count(), "a provider that came back must produce no escalation")
+}
+
+// launchAttempt drives a controller to the point where one enable for content_filter is in flight.
+func launchAttempt(t *testing.T, c *Controller, clock *testClock, rem *blockingRemediator, ctx context.Context) {
+	t.Helper()
+	require.Empty(t, c.Observe(ctx, stoppedFilter), "the first report only opens the grace window")
+	clock.advance(30 * time.Second)
+	require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
+	rem.waitForEntry(t)
+}
+
+// An operator who disables a provider has decided it should be off. The eligibility filter already stops a disabled provider
+// STARTING a remediation; this is the one already running, which would otherwise finish and turn back on what they just turned
+// off (issue #1104).
+//
+// spec:agent-status-reporting/remediation-never-overrides-a-deliberate-operator-decision/an-enable-already-running-is-abandoned
+func TestDisablingAProviderAbandonsTheEnableInFlight(t *testing.T) {
+	t.Parallel()
+	rem := newBlockingRemediator()
+	health := &fakeHealth{}
+	c, clock := testController(t, rem, health)
+	ctx := context.Background()
+	launchAttempt(t, c, clock, rem, ctx)
+
+	// The operator disables it while the enable is running.
+	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": ProviderDisabled}))
+
+	assert.Eventually(t, rem.wasCanceled, 2*time.Second, 5*time.Millisecond,
+		"the enable in flight must be stopped, or it finishes and re-enables what the operator disabled")
+	// Nothing of the abandoned attempt is recorded: no episode, and no escalation for a budget it never spent.
+	assert.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.state["content_filter"] == nil
+	}, 2*time.Second, 5*time.Millisecond, "the episode must be dropped with the attempt")
+	assert.Zero(t, health.count())
+}
+
+// Absence is not a decision. It is also what an extension predating the disabled state reports, what a host reports before
+// anything has started, and what a payload that did not decode leaves behind, so cancelling on it would abandon repairs nobody
+// asked to stop.
+//
+// spec:agent-status-reporting/remediation-never-overrides-a-deliberate-operator-decision/an-enable-already-running-is-abandoned
+func TestAnAbsentProviderDoesNotAbandonTheEnableInFlight(t *testing.T) {
+	t.Parallel()
+	rem := newBlockingRemediator()
+	c, clock := testController(t, rem, nil)
+	ctx := context.Background()
+	launchAttempt(t, c, clock, rem, ctx)
+
+	assert.Empty(t, c.Observe(ctx, map[string]string{}))
+
+	assert.False(t, rem.wasCanceled(), "an empty report is not an operator decision and must not stop a repair")
+	c.mu.Lock()
+	st := c.state["content_filter"]
+	c.mu.Unlock()
+	require.NotNil(t, st, "the episode must survive a report that says nothing about the provider")
+	assert.True(t, st.remediating)
+}
+
+// A provider that is disabled, later turned back on, and later still stops again is a NEW fault. It must meet a fresh grace
+// window and a full budget rather than the leftovers of the episode the operator interrupted.
+//
+// spec:agent-status-reporting/remediation-never-overrides-a-deliberate-operator-decision/a-provider-turned-back-on-starts-fresh
+func TestAProviderDisabledMidEpisodeStartsFreshWhenItStopsAgain(t *testing.T) {
+	t.Parallel()
+	rem := newBlockingRemediator()
+	c, clock := testController(t, rem, nil)
+	ctx := context.Background()
+	launchAttempt(t, c, clock, rem, ctx)
+	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": ProviderDisabled}))
+	require.Eventually(t, rem.wasCanceled, 2*time.Second, 5*time.Millisecond, "the attempt must be abandoned first")
+
+	// Turned back on, then it stops again.
+	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": ProviderRunning}))
+	assert.Empty(t, c.Observe(ctx, stoppedFilter), "a stop after the operator's decision opens a new grace window")
+
+	// Still inside the new grace window: had the old episode's deadline survived, this would already be eligible.
+	clock.advance(29 * time.Second)
+	assert.Empty(t, c.Observe(ctx, stoppedFilter), "the new episode must serve a full grace window")
+	clock.advance(time.Second)
+	assert.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
+
+	attempts, _, _, ok := episodeSnapshot(c, "content_filter")
+	require.True(t, ok, "the new episode must exist")
+	assert.Equal(t, 1, attempts, "the new episode must start at the first attempt, not continue the interrupted one's count")
+}
+
+// An attempt that returns after its episode ended must not write its outcome into whatever episode now holds the name. The
+// provider can come back and stop again while an enable is still running, and spending a budget on the new episode, or
+// escalating it, would report a failure for a repair that episode never tried.
+//
+// spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/an-attempt-that-outlives-its-episode-is-discarded
+func TestAnAttemptThatOutlivesItsEpisodeIsDiscarded(t *testing.T) {
+	t.Parallel()
+	rem := newBlockingRemediator()
+	health := &fakeHealth{}
+	c, clock := testController(t, rem, health)
+	ctx := context.Background()
+	launchAttempt(t, c, clock, rem, ctx)
+
+	// The provider comes back, which ends the episode, and then stops again, which opens a new one.
+	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": ProviderRunning}))
+	assert.Empty(t, c.Observe(ctx, stoppedFilter))
+	_, wantEligible, _, ok := episodeSnapshot(c, "content_filter")
+	require.True(t, ok, "the stop after the provider came back must open a new episode")
+
+	// Only now does the first attempt finish.
+	close(rem.release)
+
+	// The new episode is untouched: its deadline is still the grace window it was given, not a backoff computed for the
+	// attempt that just returned, and no attempt has been spent against it.
+	assert.Never(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		st := c.state["content_filter"]
+		return st == nil || st.attempts != 0 || !st.eligibleAt.Equal(wantEligible)
+	}, 200*time.Millisecond, 20*time.Millisecond,
+		"the returning attempt wrote into the episode that replaced its own")
+	assert.Zero(t, health.count())
+}
+
+// The identity check earns its keep on the LAST attempt of a budget. An attempt that returns after its episode ended, into a
+// name a new episode now holds, would otherwise escalate that new episode: the operator would be told automatic recovery had
+// given up on a stop for which nothing had yet been tried.
+//
+// spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/an-attempt-that-outlives-its-episode-is-discarded
+func TestAFinalAttemptThatOutlivesItsEpisodeDoesNotEscalateTheNextOne(t *testing.T) {
+	t.Parallel()
+	rem := newBlockingRemediator()
+	rem.failFirst = 2 // attempts 1 and 2 fail at once; attempt 3, the last in the budget, is held open.
+	health := &fakeHealth{}
+	c, clock := testController(t, rem, health)
+	ctx := context.Background()
+
+	require.Empty(t, c.Observe(ctx, stoppedFilter))
+	clock.advance(30 * time.Second)
+	require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
+	rem.waitForEntry(t)
+	for attempt := 2; attempt <= 3; attempt++ {
+		require.Eventually(t, func() bool {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			st := c.state["content_filter"]
+			return st != nil && !st.remediating
+		}, 2*time.Second, 5*time.Millisecond, "attempt %d never finished being recorded", attempt-1)
+		clock.advance(time.Duration(attempt) * time.Second)
+		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
+		rem.waitForEntry(t)
+	}
+	require.Zero(t, health.count(), "nothing is escalated while the final attempt is still running")
+
+	// The provider comes back and stops again while that final attempt is still in flight.
+	require.Empty(t, c.Observe(ctx, map[string]string{"content_filter": ProviderRunning}))
+	require.Empty(t, c.Observe(ctx, stoppedFilter))
+
+	close(rem.release)
+
+	assert.Never(t, func() bool { return health.count() > 0 }, 250*time.Millisecond, 20*time.Millisecond,
+		"the finished attempt escalated the episode that replaced its own, reporting give-up on a stop nothing had been tried for")
+	_, _, escalation, ok := episodeSnapshot(c, "content_filter")
+	require.True(t, ok, "the new episode must still be there")
+	assert.Empty(t, escalation, "the new episode must not inherit the old one's verdict")
 }
