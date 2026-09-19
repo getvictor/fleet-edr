@@ -365,6 +365,23 @@ Recommended alerts to add against this dashboard:
 - `rate(edr.audit.action="auth.breakglass.failure") > 5/min for 5m`: brute-force on the recovery surface. Cross-check `EDR_BREAKGLASS_IP_ALLOWLIST`.
 - `rate(edr.audit.decision="error" AND edr.audit.reason matches state_mismatch|exchange_failed) > 0 for 5m`: IdP misconfig or load-balancer affinity issue (see [`okta-setup.md`](okta-setup.md) troubleshooting table).
 
+## Reaching the server through a proxy
+
+Set the proxy in `/etc/fleet-edr.conf` on each Mac, alongside `EDR_SERVER_URL`:
+
+```sh
+HTTPS_PROXY=http://proxy.corp:3128
+NO_PROXY=internal.example.com,10.0.0.0/8
+```
+
+Use `HTTP_PROXY` instead when `EDR_SERVER_URL` is an `http://` URL. The names, the scheme rules and the `NO_PROXY` matching are the conventional ones, so a value that works for other tools on the host works here. Credentials in the address (`http://user:pass@proxy.corp:3128`) are presented to the proxy. A value set in the agent's process environment overrides the file, so one host can be pointed elsewhere without editing it.
+
+The proxy applies to everything the agent sends: enrollment, event uploads, command polling, token refresh, and the control channel. It is deliberately all or nothing. A proxy that covered only some of that would hide the parts it did not cover, and the containment lifeline would pin an address the rest of the agent was not using.
+
+Restart the agent after changing it: `sudo launchctl kickstart -k system/com.fleetdm.edr.agent`.
+
+**A contained host keeps reaching its proxy.** Containment pins the proxy's addresses rather than the server's, because the proxy is what the host actually dials, and the agent tunnels the control channel through it so commands keep arriving in real time while the host is contained. That works for HTTP, HTTPS and SOCKS5 (`socks5`, `socks5h`) proxies. A proxy of any other kind is dialed as before and its control channel stays down while contained, with commands arriving by the slower polling path.
+
 ## Handling offline hosts
 
 A host is "offline" when the server hasn't heard from it in >5 min. The admin UI tags these rows with a red dot.

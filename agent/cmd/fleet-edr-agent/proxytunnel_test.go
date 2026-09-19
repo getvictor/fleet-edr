@@ -13,10 +13,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"slices"
 	"strconv"
 	"sync"
@@ -381,8 +384,9 @@ func TestControlDialOptionsLeavesUnspokenProxiesAlone(t *testing.T) {
 	for _, scheme := range []string{"ftp", "quic", "socks4"} {
 		t.Run(scheme, func(t *testing.T) {
 			t.Parallel()
-			proxied := func(*http.Request) (*url.URL, error) { return url.Parse(scheme + "://ir:s3cret@proxy.corp:3128") }
-			target, opts := controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, proxied, nil)
+			proxied := *cfg
+			proxied.Proxy = config.ProxyConfig{HTTPSProxy: scheme + "://ir:s3cret@proxy.corp:3128"}
+			target, opts := controlDialOptions(&proxied, "edr.example.com:8443", mgr, dial, nil)
 			assert.Equal(t, "edr.example.com:8443", target, "gRPC resolves and dials it, as it did before this change")
 			assert.Empty(t, opts, "no dialer of ours, so nothing writes a request this proxy cannot parse")
 		})
@@ -392,8 +396,9 @@ func TestControlDialOptionsLeavesUnspokenProxiesAlone(t *testing.T) {
 	for _, scheme := range []string{"http", "https", "socks5", "socks5h"} {
 		t.Run(scheme+" is taken over", func(t *testing.T) {
 			t.Parallel()
-			proxied := func(*http.Request) (*url.URL, error) { return url.Parse(scheme + "://proxy.corp:3128") }
-			target, opts := controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, proxied, nil)
+			proxied := *cfg
+			proxied.Proxy = config.ProxyConfig{HTTPSProxy: scheme + "://proxy.corp:3128"}
+			target, opts := controlDialOptions(&proxied, "edr.example.com:8443", mgr, dial, nil)
 			assert.Equal(t, "passthrough:///edr.example.com:8443", target)
 			assert.Len(t, opts, 1)
 		})
@@ -932,4 +937,88 @@ func TestDialThroughSOCKS5StopsWhenTheCallerGivesUp(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the cancelled SOCKS5 dial did not return; it is waiting out a silent proxy")
 	}
+}
+
+// The agent's uploads and polling must go through the proxy its own configuration names. This is the wiring, not the chooser:
+// the transport is a clone of http.DefaultTransport, whose inherited Proxy reads the real process environment, so leaving it
+// alone is what made a conf-file proxy do nothing (issue #1117).
+//
+// Driven through a real request rather than by inspecting the transport, because the returned RoundTripper is otel-wrapped and
+// what matters is where the bytes go.
+func TestTheAgentTransportUsesTheConfiguredProxy(t *testing.T) {
+	t.Parallel()
+	reached := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case reached <- r.RequestURI:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(proxy.Close)
+
+	cfg := &config.Config{
+		ServerURL: "http://edr.example.com:8080",
+		// Named as an http proxy for an http server URL, so the request is a plain proxied GET and the test asserts on the
+		// absolute URI rather than on a CONNECT.
+		Proxy: config.ProxyConfig{HTTPProxy: proxy.URL},
+	}
+	_, client, err := newAgentHTTPClient(cfg, baseServerDial(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://edr.example.com:8080/api/health", nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err, "the request must reach the proxy; edr.example.com does not resolve")
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	select {
+	case uri := <-reached:
+		assert.Contains(t, uri, "edr.example.com:8080", "a proxied request carries the absolute URI of the real destination")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the proxy was never reached, so the transport ignored the configured proxy")
+	}
+}
+
+// The containment lifeline pins whatever the agent actually dials. When a proxy is configured that is the PROXY, so the target
+// has to be derived from the same configuration the transports use; deriving it from the process environment instead would pin
+// an address nothing was using and leave a contained host unable to reach the server at all.
+func TestTheLifelineTargetComesFromTheConfiguredProxy(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "darwin" {
+		t.Skip("containment is darwin-only; the manager is nil elsewhere")
+	}
+	cfg := &config.Config{
+		ServerURL:     "https://edr.example.com:8443",
+		NetXPCService: "group.com.fleetdm.edr.networkextension",
+		Proxy:         config.ProxyConfig{HTTPSProxy: "http://proxy.corp:3128"},
+	}
+
+	mgr, _ := newContainment(cfg, func([]byte) error { return nil },
+		baseServerDial(), slog.New(slog.NewTextHandler(io.Discard, nil)), t.TempDir()+"/state.json")
+
+	require.NotNil(t, mgr, "a darwin agent with a network extension has a containment manager")
+	assert.Equal(t, "proxy.corp:3128", mgr.Target().Address(),
+		"the lifeline must pin the proxy the agent dials, not the server it names inside the tunnel")
+}
+
+// Enrollment is built with the agent's own proxy. Its transport is a clone of http.DefaultTransport, so leaving this unset
+// means the FIRST connection a host ever makes goes by the process environment while everything after it goes by the conf file
+// (issue #1117). A host would then enrol direct and talk through a proxy, or fail to enrol at all.
+func TestEnrollmentIsBuiltWithTheConfiguredProxy(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		ServerURL: "https://edr.example.com:8443",
+		Proxy:     config.ProxyConfig{HTTPSProxy: "http://proxy.corp:3128"},
+	}
+
+	opts := enrollmentOptions(cfg, baseServerDial(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	require.NotNil(t, opts.Proxy, "without this the enrollment transport falls back to the process environment")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, cfg.ServerURL+"/api/enroll", nil)
+	require.NoError(t, err)
+	chosen, err := opts.Proxy(req)
+	require.NoError(t, err)
+	require.NotNil(t, chosen)
+	assert.Equal(t, "http://proxy.corp:3128", chosen.String())
 }

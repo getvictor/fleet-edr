@@ -141,17 +141,7 @@ func run() error {
 	containmentMgr, serverDial := newContainment(cfg, neDispatcher.SendNetworkContainment, baseServerDial(), logger,
 		containment.ExtensionStatePath)
 
-	tokenProvider, err := enrollment.Ensure(ctx, enrollment.Options{
-		ServerURL:         cfg.ServerURL,
-		EnrollSecret:      cfg.EnrollSecret,
-		TokenFile:         cfg.TokenFile,
-		ServerFingerprint: cfg.ServerFingerprint,
-		AllowInsecure:     cfg.AllowInsecure,
-		HostIDOverride:    cfg.HostIDOverride,
-		AgentVersion:      version,
-		DialContext:       serverDial,
-		Logger:            logger,
-	})
+	tokenProvider, err := enrollment.Ensure(ctx, enrollmentOptions(cfg, serverDial, logger))
 	if err != nil {
 		logger.ErrorContext(ctx, "enrollment", "err", err)
 		return err
@@ -361,8 +351,28 @@ func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config)
 // EDR_ALLOW_INSECURE or EDR_SERVER_FINGERPRINT.
 //
 // We clone http.DefaultTransport (rather than &http.Transport{}) so the agent
-// keeps ProxyFromEnvironment, keep-alive, and the stdlib's hardened
-// dial/idle timeouts. Real deployments behind HTTPS_PROXY fail without them.
+// keeps keep-alive and the stdlib's hardened dial/idle timeouts. The clone's
+// Proxy is then replaced: the inherited ProxyFromEnvironment reads the real
+// process environment, which is not where an operator is told to configure the
+// agent (issue #1117).
+// enrollmentOptions is what the enrollment client is built from. Split out of the startup path so the wiring is assertable:
+// every field here is a decision about how the agent reaches the server, and Proxy in particular has to be the agent's own
+// rather than the transport's inherited environment lookup (issue #1117).
+func enrollmentOptions(cfg *config.Config, dial dialFunc, logger *slog.Logger) enrollment.Options {
+	return enrollment.Options{
+		ServerURL:         cfg.ServerURL,
+		EnrollSecret:      cfg.EnrollSecret,
+		TokenFile:         cfg.TokenFile,
+		ServerFingerprint: cfg.ServerFingerprint,
+		AllowInsecure:     cfg.AllowInsecure,
+		HostIDOverride:    cfg.HostIDOverride,
+		AgentVersion:      version,
+		DialContext:       dial,
+		Proxy:             cfg.Proxy.ProxyFunc(),
+		Logger:            logger,
+	}
+}
+
 func newAgentHTTPClient(cfg *config.Config, dial dialFunc, logger *slog.Logger) (http.RoundTripper, *http.Client, error) {
 	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
 	if err != nil {
@@ -372,6 +382,9 @@ func newAgentHTTPClient(cfg *config.Config, dial dialFunc, logger *slog.Logger) 
 	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	baseTransport.TLSClientConfig = tlsCfg
 	baseTransport.DialContext = dial
+	// Replaces the clone's inherited ProxyFromEnvironment, which reads the real process environment and so cannot see a proxy the
+	// operator configured in the agent's conf file (issue #1117).
+	baseTransport.Proxy = cfg.Proxy.ProxyFunc()
 	// Enable HTTP/2 with keep-alive PINGs so the long-lived agent connection (shared by the uploader + commander) detects a half-open
 	// link (laptop sleep, NAT rebind) and re-establishes it instead of hanging until the request timeout. ConfigureTransports negotiates
 	// h2 over the existing TLS config and returns the h2 transport for tuning. Non-fatal on failure: the agent keeps HTTP/1.1 keep-alive.
@@ -497,8 +510,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 	if err != nil {
 		return fmt.Errorf("build proxy TLS config: %w", err)
 	}
-	dialTarget, dialOpts := controlDialOptions(cfg, target, deps.containmentMgr, deps.serverDial,
-		http.ProxyFromEnvironment, proxyTLS)
+	dialTarget, dialOpts := controlDialOptions(cfg, target, deps.containmentMgr, deps.serverDial, proxyTLS)
 	conn, err := grpc.NewClient(dialTarget, append(dialOpts,
 		grpc.WithTransportCredentials(creds),
 		// Keep-alive PINGs detect a half-open link (laptop sleep, NAT rebind) on the long-lived stream, mirroring the HTTP/2 transport.
