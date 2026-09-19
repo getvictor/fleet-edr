@@ -97,6 +97,14 @@ const (
 	ActionDetectionConfigRead  Action = "detection_config.read"
 	ActionDetectionConfigWrite Action = "detection_config.write"
 
+	// The addresses a contained host may still reach (issue #1059). Deployment-wide configuration rather than an action on one host,
+	// which is why it is not host.isolate: an operator who can contain the host in front of them is deciding about that host, while
+	// an operator editing this set decides what EVERY contained host, present and future, can still talk to. Write is held by admin
+	// alone and is reauth-gated like the host commands, because widening the set is the one way to weaken a containment already in
+	// force. Read is held by admin + senior_analyst, so the responder who contains a host can see what stays reachable.
+	ActionContainmentConfigRead  Action = "containment_config.read"
+	ActionContainmentConfigWrite Action = "containment_config.write"
+
 	// Rule content authoring (issue #767). The admin surface creates, replaces and deletes the rule documents the detection engine
 	// loads, which is a governed change to WHAT the deployment detects rather than to how a known rule behaves. Read covers the
 	// corpus listing and the dry-run check; write gates the mutations.
@@ -139,6 +147,7 @@ func RegisteredActions() []Action {
 		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete, ActionAppControlRuleBulkUpsert,
 		ActionAppControlPolicyCreate, ActionAppControlPolicyUpdate, ActionAppControlPolicyDelete,
 		ActionDetectionConfigRead, ActionDetectionConfigWrite,
+		ActionContainmentConfigRead, ActionContainmentConfigWrite,
 		ActionRuleContentRead, ActionRuleContentWrite,
 		ActionTracingManage,
 	}

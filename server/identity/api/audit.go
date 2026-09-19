@@ -55,6 +55,11 @@ const (
 	AuditHostContain AuditAction = "host.contain"
 	AuditHostRelease AuditAction = "host.release"
 
+	// The addresses a contained host may still reach (response context, issue #1059). Records the reason, the set's version, and
+	// what the replacement added and removed, because widening what every contained host can talk to is the change an incident
+	// review asks about, and the set's own row only shows where it ended up.
+	AuditContainmentReachableUpdate AuditAction = "containment.reachable_update"
+
 	// Enrollment lifecycle (endpoint context). Constants follow the <resource>.<verb> convention documented at the top of this file:
 	// rotate_token reads as "rotate the host token of the enrollment." Under the self-validating-token model this is an operator-driven
 	// epoch bump (no agent command is dispatched); the affected agent recovers when its refresh carrying the now-stale epoch 401s and it

@@ -474,6 +474,106 @@ paths:
         "413":
           description: "`body_too_large`: the request body is over 16 KiB"
 
+  /api/v1/containment/reachable-addresses:
+    get:
+      tags: [Hosts]
+      summary: Read the addresses a contained host may still reach
+      description: |
+        Returns the deployment-wide set of destinations a contained host may
+        reach on top of containment's built-in lifeline (loopback, DHCP,
+        resolution of the server name, and the EDR server itself). Version 0 is
+        the empty set no operator has changed.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Reachable-address set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReachableSet"
+        "403":
+          description: Caller lacks containment_config.read
+    put:
+      tags: [Hosts]
+      summary: Replace the addresses a contained host may still reach
+      description: |
+        Replaces the set whole and stores it as the next version. `addresses` is
+        required (an empty list clears the set) and `reason` is required and
+        audited with the destinations the replacement added and removed.
+
+        `expected_version`, when sent, is the version the edit started from. If
+        the set has been changed since, the replacement is refused with 409 and
+        nothing is stored, so a stale edit cannot remove an address someone else
+        added. Omit it to replace whatever is stored.
+
+        Each destination is stored canonically: a bare address becomes its
+        single-address prefix (`/32` or `/128`) and a range is masked, so one
+        destination has one spelling.
+
+        `addresses` must be present. A body that omits it, sends null, or
+        misspells it is refused with 400 rather than read as a request to clear
+        the set, which would cut every contained host back to the bare lifeline.
+        Clearing is spelled `"addresses": []`.
+
+        The whole set is refused, and nothing stored, when any entry is invalid.
+        An entry is refused when its `cidr` is not an IP address or CIDR range;
+        when its range is broader than `/8` for IPv4 or `/32` for IPv6, or
+        reaches every IPv4 address through the IPv4-mapped block, which
+        would leave containment meaningless; when its `port` is outside
+        0..65535; when its `transport` is neither `tcp` nor `udp`; when its
+        `note` is over 200 characters; or when it repeats another entry's
+        destination, port and transport. A set of more than 64 entries is
+        refused whole. The error message names which entry was refused.
+
+        Requires `containment_config.write`, which is a separate permission from
+        `host.isolate` and needs a recent authentication: widening this set
+        weakens every containment in force, present and future.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [addresses, reason]
+              properties:
+                addresses:
+                  type: array
+                  description: The whole new set. An empty list clears it.
+                  items:
+                    $ref: "#/components/schemas/ReachableAddress"
+                reason:
+                  type: string
+                  description: |
+                    Why the set is changing. Required, and recorded in the audit trail together with the destinations the
+                    replacement added, removed and renamed, each carried as its own fields rather than as rendered text.
+                expected_version:
+                  type: integer
+                  format: int64
+                  description: |
+                    The set version the edit started from. Optional. When present, the replacement is refused with 409 if the set
+                    has changed since.
+      responses:
+        "200":
+          description: The set after the replacement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReachableSet"
+        "400":
+          description: |
+            `bad_body`, `reason_required`, `reason_too_long`, `too_many_addresses`, `invalid_address`, `address_too_broad`,
+            `invalid_port`, `invalid_transport`, `note_too_long` or `duplicate_address`. The `message` field names the entry at fault.
+        "403":
+          description: Caller lacks containment_config.write, or a recent authentication is required
+        "409":
+          description: "`version_conflict`: the set changed since the caller read it. Nothing was stored."
+        "413":
+          description: "`body_too_large`: the request body is over 256 KiB"
+
   /api/alerts:
     get:
       tags: [Alerts]
@@ -2079,6 +2179,45 @@ components:
             current:
               type: boolean
               description: Whether the command carries the host's current version and epoch.
+    ReachableAddress:
+      type: object
+      required: [cidr]
+      properties:
+        cidr:
+          type: string
+          description: |
+            The destination, as an IP address or a CIDR range. Stored canonically: a bare address reads back as its
+            single-address prefix, a range reads back masked, and an IPv4-mapped form reads back as the IPv4 address or range it
+            is, so one destination has one spelling.
+          example: 192.0.2.7/32
+        port:
+          type: integer
+          description: |
+            The single destination port allowed. Absent, or 0, means every port: port 0 is reserved and nothing is reachable on it,
+            so it carries the "every port" meaning rather than naming a destination.
+          minimum: 0
+          maximum: 65535
+        transport:
+          type: string
+          enum: [tcp, udp]
+          description: The transport allowed, or absent for both.
+        note:
+          type: string
+          description: What the operator called this destination, shown in the console and carried into the audit trail.
+    ReachableSet:
+      type: object
+      required: [version, addresses]
+      properties:
+        version:
+          type: integer
+          format: int64
+          description: The whole set's version. 0 is the empty set no operator has changed.
+        addresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReachableAddress"
+        updated_by: {type: string}
+        updated_at: {type: string, format: date-time}
     Command:
       type: object
       required: [id, host_id, command_type, status, created_at]
