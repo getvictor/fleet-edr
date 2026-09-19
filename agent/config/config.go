@@ -73,6 +73,8 @@ type Config struct {
 	LogLevel                 string
 	LogFormat                string
 	AllowInsecure            bool
+	// Proxy is the outbound proxy every connection to the server goes through, or the zero value for a direct connection.
+	Proxy ProxyConfig
 }
 
 // Load reads configuration from the environment and validates it. The environment is layered on top of /etc/fleet-edr.conf (override
@@ -114,6 +116,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	if c.ServerURL == "" {
 		errs = append(errs, errors.New("required env var EDR_SERVER_URL is not set"))
 	}
+
+	// Read through the layered getenv like everything else, so the conf file the plist points operators at actually works.
+	c.Proxy = loadProxy(getenv)
 
 	c.EnrollSecret = getenv("EDR_ENROLL_SECRET")
 	optional(&c.TokenFile, "EDR_TOKEN_FILE", getenv)

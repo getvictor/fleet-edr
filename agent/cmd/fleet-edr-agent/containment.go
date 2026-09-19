@@ -43,7 +43,9 @@ func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, 
 	if runtime.GOOS != "darwin" || cfg.NetXPCService == "" {
 		return nil, base
 	}
-	target, err := containment.TargetFor(cfg.ServerURL, http.ProxyFromEnvironment)
+	// The agent's own proxy, not the process environment's: the lifeline must pin whatever the REST of the agent dials, or a
+	// contained host would keep an address nothing is using reachable (issue #1117).
+	target, err := containment.TargetFor(cfg.ServerURL, cfg.Proxy.ProxyFunc())
 	if err != nil {
 		logger.WarnContext(context.Background(), "network containment disabled: no lifeline target", "err", err)
 		return nil, base
@@ -66,11 +68,13 @@ func newContainment(cfg *config.Config, send func([]byte) error, base dialFunc, 
 //
 // Without a containment manager nothing is wrapped and gRPC dials as it always did, proxy support included.
 func controlDialOptions(cfg *config.Config, target string, mgr *containment.Manager, dial dialFunc,
-	proxyFor func(*http.Request) (*url.URL, error), proxyTLS *tls.Config) (string, []grpc.DialOption) {
+	proxyTLS *tls.Config) (string, []grpc.DialOption) {
 	if mgr == nil {
 		return target, nil
 	}
-	proxyURL := serverProxy(cfg.ServerURL, proxyFor)
+	// The agent's own proxy, from its own configuration. Taken from cfg rather than passed in, so there is ONE answer to which
+	// proxy the agent uses and the control channel cannot end up on a different one from its uploads (issue #1117).
+	proxyURL := serverProxy(cfg.ServerURL, cfg.Proxy.ProxyFunc())
 	if proxyURL != nil && !tunnelable(proxyURL) {
 		// A proxy this build does not speak keeps gRPC's own dialing, which is what every proxied server had before this change:
 		// the channel still cannot reconnect while the host is contained, and commands arrive by polling. Taking the dial over

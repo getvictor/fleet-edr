@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -97,7 +98,12 @@ type Options struct {
 	// DialContext, when set, is the dial the enrollment and token-refresh client uses, so a contained host refreshes its token through
 	// the containment lifeline (#948). Nil keeps the stdlib's dial.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
-	Logger      *slog.Logger
+
+	// Proxy chooses the outbound proxy, replacing the transport's inherited http.ProxyFromEnvironment. Optional; nil keeps the
+	// stdlib's environment-only behaviour. Production passes the agent's own, so a proxy set in the conf file applies to
+	// enrollment exactly as it does to everything else (issue #1117).
+	Proxy  func(*http.Request) (*url.URL, error)
+	Logger *slog.Logger
 }
 
 // Ensure loads an existing token file or performs a fresh enroll. Returns a TokenProvider the
@@ -405,8 +411,10 @@ func (p *provider) enroll(ctx context.Context) error {
 }
 
 // httpClient builds an http.Client that honours the fingerprint-pinning + insecure toggles. We clone http.DefaultTransport so we
-// inherit the stdlib's dial/idle/keep-alive timeouts and ProxyFromEnvironment support. A bare &http.Transport{} loses those, which in
-// turn loses HTTPS_PROXY support and can leak connections under load.
+// inherit the stdlib's dial/idle/keep-alive timeouts. A bare &http.Transport{} loses those and can leak connections under load.
+//
+// The clone's Proxy is REPLACED when the caller supplies one, rather than left as the inherited ProxyFromEnvironment: that reads
+// the real process environment, and the agent's proxy may have been configured in its conf file (issue #1117).
 func (p *provider) httpClient() (*http.Client, error) {
 	tlsCfg, err := BuildTLSConfig(p.opts.AllowInsecure, p.opts.ServerFingerprint, p.logger)
 	if err != nil {
@@ -414,6 +422,9 @@ func (p *provider) httpClient() (*http.Client, error) {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = tlsCfg
+	if p.opts.Proxy != nil {
+		tr.Proxy = p.opts.Proxy
+	}
 	if p.opts.DialContext != nil {
 		tr.DialContext = p.opts.DialContext
 	}
