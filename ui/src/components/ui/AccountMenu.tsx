@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import { useCan, PermissionAction } from "../../permissions-core";
+import { settingsEntry } from "../Settings/sections";
 import { roleLabel } from "../../roles";
 import { useDismiss } from "./useDismiss";
 import "./AccountMenu.scss";
@@ -32,7 +33,8 @@ function signInLabel(authMethod?: string): string | null {
 }
 
 // AccountMenu is the top-right avatar dropdown: it carries the entry point to the Admin
-// settings area (gated on sso.manage so only admins see it), Detection tuning (gated on
+// settings area (offered when the operator can open ANY settings section, and landing on the
+// first they can), Detection tuning (gated on
 // detection_config.read, so admins and senior analysts see it), Documentation, and Log
 // out. The "Admin settings" link is the only way into the settings area, matching the
 // design. Closes on outside-click and Escape. Implemented as a disclosure (trigger carries
@@ -41,6 +43,9 @@ function signInLabel(authMethod?: string): string | null {
 export function AccountMenu({ user, authMethod, roles, onLogout }: AccountMenuProps) {
   const can = useCan();
   const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
+  // Where "Admin settings" goes, and whether it is offered at all. Gating it on one section's permission hid the whole area from
+  // an operator who could open a different one.
+  const settingsTo = settingsEntry(can);
 
   const badge = authMethodLabel(authMethod);
   const signIn = signInLabel(authMethod);
@@ -76,9 +81,9 @@ export function AccountMenu({ user, authMethod, roles, onLogout }: AccountMenuPr
             )}
             {signIn !== null && <div className="account-menu__session">Signed in with {signIn}</div>}
           </div>
-          {can(PermissionAction.SSOManage) && (
+          {settingsTo !== null && (
             <Link
-              to="/admin/settings/sso"
+              to={settingsTo}
               className="account-menu__item account-menu__item--highlight"
               onClick={() => { setOpen(false); }}
             >

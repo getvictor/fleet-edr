@@ -49,6 +49,25 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("link", { name: "Admin settings" })).not.toBeInTheDocument();
   });
 
+  // The Admin settings link is the ONLY way into that area, so gating it on one section's permission hid every other section from
+  // whoever could open those instead. A senior analyst holds containment_config.read and no sso.manage.
+  //
+  // spec:web-ui/reachable-destinations-are-edited-in-containment-settings/a-reader-cannot-change-the-destinations
+  it("offers Admin settings to an operator who can open a section other than single sign-on", () => {
+    renderMenu([PermissionAction.ContainmentConfigRead]);
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+
+    expect(screen.getByRole("link", { name: "Admin settings" })).toHaveAttribute("href", "/admin/settings/containment");
+  });
+
+  // An admin holds several, and lands on the first section rather than on whichever was added most recently.
+  it("lands on the first section the operator can open", () => {
+    renderMenu([PermissionAction.ContainmentConfigRead, PermissionAction.SSOManage, PermissionAction.UserRead]);
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+
+    expect(screen.getByRole("link", { name: "Admin settings" })).toHaveAttribute("href", "/admin/settings/sso");
+  });
+
   it("shows Detection tuning when detection_config.read is granted, linking to the page", () => {
     renderMenu([PermissionAction.DetectionConfigRead]);
     fireEvent.click(screen.getByRole("button", { name: "Account menu" }));

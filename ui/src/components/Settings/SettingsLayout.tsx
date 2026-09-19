@@ -1,25 +1,20 @@
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router";
-import { useCan, PermissionAction } from "../../permissions-core";
+import { useCan } from "../../permissions-core";
+import { SETTINGS_SECTIONS } from "./sections";
 import "./SettingsLayout.scss";
 
 // SettingsLayout wraps the admin settings pages with a shared sub-navigation between the
 // sections the operator can access (the design's Admin settings area). It is mounted by the
 // router around each settings page, so the individual page components stay free of nav chrome
 // (and their unit tests can render bare). Sections the operator lacks permission for are
-// omitted; the server chokepoint remains the authority (ADR-0012).
-const SECTIONS = [
-  { to: "/admin/settings/sso", label: "Single sign-on", action: PermissionAction.SSOManage },
-  { to: "/admin/settings/webhooks", label: "Webhooks", action: PermissionAction.WebhookManage },
-  { to: "/admin/settings/containment", label: "Containment", action: PermissionAction.ContainmentConfigRead },
-  { to: "/admin/settings/users", label: "Users", action: PermissionAction.UserRead },
-  { to: "/admin/settings/service-accounts", label: "Service accounts", action: PermissionAction.ServiceAccountRead },
-] as const;
+// omitted; the server chokepoint remains the authority (ADR-0012). The section list is shared with AccountMenu, whose
+// "Admin settings" link is the only way in: see ./sections.
 
 export function SettingsLayout({ children }: { readonly children: ReactNode }) {
   const can = useCan();
   const { pathname } = useLocation();
-  const sections = SECTIONS.filter((s) => can(s.action));
+  const sections = SETTINGS_SECTIONS.filter((s) => can(s.action));
 
   return (
     <div className="settings-layout">

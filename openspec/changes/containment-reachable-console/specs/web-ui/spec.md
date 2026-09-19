@@ -24,6 +24,7 @@ Admin settings SHALL include a Containment section that shows the reachable-addr
 - **GIVEN** an operator with `containment_config.read` and without `containment_config.write`
 - **WHEN** they open Containment settings
 - **THEN** the section lists the destinations with no remove, add, discard or save controls
+- **AND** they can reach it through the console's own navigation, which offers the settings area to an operator who can open any section of it rather than only to one who can manage single sign-on
 
 #### Scenario: An operator saves changed destinations with a reason
 
