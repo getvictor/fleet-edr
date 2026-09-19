@@ -6,4 +6,5 @@
 - [x] Handshake TLS with an `https` proxy before writing the CONNECT, using the agent's own policy cloned with the proxy's name.
 - [x] Tests: the SOCKS5 tunnel and its credentials, TLS before the CONNECT asserted on the bytes, a rejected certificate naming the proxy, and verification against the proxy's own name rather than the address it was pinned to.
 - [x] Mutation-check each guard.
-- [ ] Exercise on a live macOS VM as #1064 was: a contained host behind a SOCKS5 proxy, and behind an HTTPS proxy.
+- [x] Exercise on a live macOS VM as #1064 was: a contained host reconnected its control channel through a real SOCKS5 proxy while contained.
+- [ ] Follow-up VM run before RC: a proxy named by HOST NAME (the run used an IP, so it did not isolate the resolution half), and the HTTPS-proxy path.
