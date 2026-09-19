@@ -338,6 +338,19 @@ func TestDefaultsAreAppliedForZeroValuedOptions(t *testing.T) {
 	assert.NotNil(t, c.logger)
 }
 
+// episodeSnapshot reads the fields a test asserts on while holding the controller's lock, and reports whether an episode was
+// there at all. Reading them through the pointer after unlocking would be a data race with the remediation goroutine, and
+// dereferencing without the ok is a nil panic the moment an episode this test expected has been dropped.
+func episodeSnapshot(c *Controller, provider string) (attempts int, eligibleAt time.Time, escalation string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state[provider]
+	if st == nil {
+		return 0, time.Time{}, "", false
+	}
+	return st.attempts, st.eligibleAt, st.escalation, true
+}
+
 // blockingRemediator holds Enable open until released, so a test can observe the in-flight window. It also honours the context
 // it is given and records whether it was cancelled, which is what "the agent stopped trying" looks like from inside the enable.
 type blockingRemediator struct {
@@ -694,10 +707,8 @@ func TestAProviderDisabledMidEpisodeStartsFreshWhenItStopsAgain(t *testing.T) {
 	clock.advance(time.Second)
 	assert.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
 
-	c.mu.Lock()
-	st := c.state["content_filter"]
-	attempts := st.attempts
-	c.mu.Unlock()
+	attempts, _, _, ok := episodeSnapshot(c, "content_filter")
+	require.True(t, ok, "the new episode must exist")
 	assert.Equal(t, 1, attempts, "the new episode must start at the first attempt, not continue the interrupted one's count")
 }
 
@@ -717,11 +728,8 @@ func TestAnAttemptThatOutlivesItsEpisodeIsDiscarded(t *testing.T) {
 	// The provider comes back, which ends the episode, and then stops again, which opens a new one.
 	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": ProviderRunning}))
 	assert.Empty(t, c.Observe(ctx, stoppedFilter))
-	c.mu.Lock()
-	fresh := c.state["content_filter"]
-	wantEligible := fresh.eligibleAt
-	c.mu.Unlock()
-	require.NotNil(t, fresh)
+	_, wantEligible, _, ok := episodeSnapshot(c, "content_filter")
+	require.True(t, ok, "the stop after the provider came back must open a new episode")
 
 	// Only now does the first attempt finish.
 	close(rem.release)
@@ -776,9 +784,7 @@ func TestAFinalAttemptThatOutlivesItsEpisodeDoesNotEscalateTheNextOne(t *testing
 
 	assert.Never(t, func() bool { return health.count() > 0 }, 250*time.Millisecond, 20*time.Millisecond,
 		"the finished attempt escalated the episode that replaced its own, reporting give-up on a stop nothing had been tried for")
-	c.mu.Lock()
-	st := c.state["content_filter"]
-	c.mu.Unlock()
-	require.NotNil(t, st)
-	assert.Empty(t, st.escalation, "the new episode must not inherit the old one's verdict")
+	_, _, escalation, ok := episodeSnapshot(c, "content_filter")
+	require.True(t, ok, "the new episode must still be there")
+	assert.Empty(t, escalation, "the new episode must not inherit the old one's verdict")
 }
