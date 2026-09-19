@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -184,5 +185,91 @@ func TestRenderNeverEmitsAnUnvettedLink(t *testing.T) {
 			}
 			assert.Containsf(t, rendered, "`", "rule %q citation %q is neither a vetted URL nor an inert span", r.ID, ref)
 		}
+	}
+}
+
+// committedDocsPath is the generated rule guide, relative to this package's directory.
+const committedDocsPath = "../../docs/detection-rules.md"
+
+// firstDifference reports the 1-based line where two documents first differ, with both lines, or ok=false when they match. A
+// testify diff of a 2400-line markdown file is unreadable and buries the one line that changed, which is the only line anyone
+// needs in order to know what they forgot to regenerate.
+func firstDifference(want, got string) (line int, wantLine, gotLine string, ok bool) {
+	w, g := strings.Split(want, "\n"), strings.Split(got, "\n")
+	for i := range max(len(w), len(g)) {
+		var wl, gl string
+		if i < len(w) {
+			wl = w[i]
+		}
+		if i < len(g) {
+			gl = g[i]
+		}
+		if wl != gl {
+			return i + 1, wl, gl, true
+		}
+	}
+	return 0, "", "", false
+}
+
+// TestCommittedDocsHaveNoDrift fails the build when docs/detection-rules.md no longer matches what the catalog would render now
+// (issue #1105).
+//
+// The rule pack has had this guard since #780 (TestPackHasNoDrift); the guide has not, and the asymmetry bit on #1103, where
+// sensor_tamper's description was changed to say a deliberately disabled provider is reported `disabled` while the published
+// guide still told operators it was reported as absent. A reviewer caught it. Nothing else would have.
+//
+// It renders through `render`, the same function `generate` writes with, so this compares the committed bytes against what the
+// generator produces rather than against a second implementation that could drift in its own direction.
+//
+// On its location: this test only counts because CI's server-test task runs `./tools/...`, which it has since #1053 (2026-09-14).
+// Before that a guard here would never have executed, which is exactly how #780 happened.
+//
+// spec:server-detection-rules-engine/the-rule-guide-matches-the-registered-detections/a-guide-that-lags-the-catalog-fails-the-build
+func TestCommittedDocsHaveNoDrift(t *testing.T) {
+	t.Parallel()
+
+	var rendered bytes.Buffer
+	require.NoError(t, render(&rendered, allRegisteredRules()))
+	require.NotEmpty(t, rendered.String(),
+		"an empty render would make this test pass by comparing nothing against a file nobody had regenerated")
+
+	committed, err := os.ReadFile(committedDocsPath)
+	require.NoError(t, err, "the generated guide must exist at %s; run `task docs:rules`", committedDocsPath)
+
+	line, wantLine, gotLine, differs := firstDifference(rendered.String(), string(committed))
+	assert.False(t, differs,
+		"docs/detection-rules.md is stale: it no longer matches what the rule catalog renders, so operators are reading "+
+			"documentation that contradicts the code. Run `task docs:rules` and commit the result.\n"+
+			"  first difference at line %d\n  catalog renders: %s\n  file contains:   %s",
+		line, wantLine, gotLine)
+}
+
+// TestFirstDifference pins the differ the drift guard reports through. Its interesting cases are the ones where the documents
+// are different LENGTHS: a rule added or removed changes the line count, and a differ that walked only the shorter document
+// would report no difference at all, which is the drift guard silently passing.
+func TestFirstDifference(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		desc       string
+		want, got  string
+		wantLine   int
+		wantDiffer bool
+	}{
+		{desc: "identical", want: "a\nb\nc", got: "a\nb\nc", wantDiffer: false},
+		{desc: "one line changed", want: "a\nb\nc", got: "a\nX\nc", wantLine: 2, wantDiffer: true},
+		{desc: "the file is missing trailing lines", want: "a\nb\nc", got: "a\nb", wantLine: 3, wantDiffer: true},
+		{desc: "the file has extra trailing lines", want: "a\nb", got: "a\nb\nc", wantLine: 3, wantDiffer: true},
+		{desc: "the file is empty", want: "a", got: "", wantLine: 1, wantDiffer: true},
+		{desc: "both empty", want: "", got: "", wantDiffer: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			line, _, _, differs := firstDifference(tc.want, tc.got)
+			assert.Equal(t, tc.wantDiffer, differs)
+			if tc.wantDiffer {
+				assert.Equal(t, tc.wantLine, line)
+			}
+		})
 	}
 }

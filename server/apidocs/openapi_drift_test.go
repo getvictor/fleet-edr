@@ -23,9 +23,12 @@ const canonicalSpecPath = "../../docs/api/openapi.yaml"
 // reads quietly understates the API. Issue #781 measured 49 lines of exactly that, including a query parameter the served spec
 // did not mention at all.
 //
-// This test lives under server/ deliberately. CI runs `./server/... ./internal/... ./test/integration/... ./test/scale/...` and
-// does NOT run ./tools/..., which is how the rule-pack drift guard came to be written somewhere it never executed (#780). A drift
-// check that only runs locally is not a check, it is a suggestion.
+// This test lives under server/ deliberately: it was written when CI's server-test task ran `./server/... ./internal/...
+// ./test/integration/... ./test/scale/...` and NOT ./tools/..., which is how the rule-pack drift guard came to be written
+// somewhere it never executed (#780). A drift check that only runs locally is not a check, it is a suggestion.
+//
+// That task has included ./tools/... since #1053 (2026-09-14), so a guard there does now run; check the task before relying on
+// either claim. This test stays here because it is about the spec this package serves, not because tools/ is still out of scope.
 func TestEmbeddedSpecMatchesCanonical(t *testing.T) {
 	t.Parallel()
 
