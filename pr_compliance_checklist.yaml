@@ -4,20 +4,27 @@
 # test layers") so a gap surfaces in review before a human reads the diff.
 
 pr_compliances:
-  - title: "Behavior changes update the spec"
+  - title: "Behavior changes ship a spec delta"
     compliance_label: true
     objective: >-
       Any observable behavior change (bug fix, feature, detection rule, wire or event shape, API,
-      persistence semantics) must update openspec/specs/** in the same PR. Non-trivial deltas also
-      add an openspec/changes/ proposal.
+      persistence semantics) ships an OpenSpec change delta in the same PR: openspec/changes/<name>/
+      with proposal.md, tasks.md and specs/<capability>/spec.md written as ADDED / MODIFIED / REMOVED
+      Requirements. The canonical openspec/specs/** tree is written only by `openspec archive` at
+      release time, so a feature PR leaves it untouched and an unchanged canonical spec is not a gap.
     success_criteria: >-
-      The diff changes observable behavior AND updates openspec/specs/**, or the PR carries the
-      no-behavior-change label / "[no-behavior-change]" title marker and the diff genuinely changes
-      no behavior, or the diff changes no observable behavior.
+      The diff changes observable behavior AND adds or updates a change folder openspec/changes/<name>/
+      that, with the PR applied, holds proposal.md, tasks.md and a specs/<capability>/spec.md delta
+      describing the behavior (a later PR on an in-flight change updates files an earlier PR created),
+      or the PR carries the no-behavior-change label / "[no-behavior-change]" title marker and the diff
+      genuinely changes no behavior, or the diff changes no observable behavior.
     failure_criteria: >-
       The diff changes observable behavior (detection rules under server/rules/internal/catalog/,
-      schema/events.json, server/detection/migrations/, API handlers, event emission) with
-      no openspec/specs/** update and no valid no-behavior-change assertion.
+      schema/events.json, server/detection/migrations/, API handlers, event emission) with no valid
+      no-behavior-change assertion and no change folder that, with the PR applied, holds proposal.md,
+      tasks.md and a spec delta describing it; or the diff edits openspec/specs/** without moving the
+      matching change folders into openspec/changes/archive/, which is the signature of a hand edit
+      rather than `openspec archive`.
 
   - title: "New wire-format fields have a round-trip test"
     compliance_label: true
