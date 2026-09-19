@@ -593,6 +593,8 @@ func openResponse(
 		Heartbeat: detectionCtx.Service().RecordHostSeen,
 		Audit:     identityCtx.AuditRecorder(),
 		AuthZ:     identityCtx.AuthZ(),
+		// So a read of the reachable-address set names who last changed it, rather than the principal id.
+		PrincipalLabel: identityCtx.Service().PrincipalLabel,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open response", "err", err)

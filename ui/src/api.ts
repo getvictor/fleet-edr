@@ -20,6 +20,8 @@ import type {
   Command,
   ContainmentChange,
   ContainmentState,
+  ReachableAddress,
+  ReachableSet,
   ApplicationControlPolicy,
   ApplicationControlRule,
 } from "./types";
@@ -1084,6 +1086,54 @@ export async function setHostContainment(
       code === "version_conflict"
         ? new ContainmentVersionConflictError(containmentErrorMessages.get(code) ?? message, conflictState(body))
         : new Error(containmentErrorMessages.get(code) ?? message),
+  );
+}
+
+// ReachableSetConflictError is a replacement refused because the set changed since the operator loaded it. It carries nothing but
+// the fact: unlike a containment conflict, where the operator has to decide again against the state that stands, the fix here is to
+// reload and re-apply the edit, which the panel does by refetching.
+export class ReachableSetConflictError extends Error {}
+
+// reachableErrorMessages turns the set's typed refusals into what the operator can do about them. The server's message names WHICH
+// entry was refused, so it is appended rather than replaced: the code says what rule was broken and the server says where.
+const reachableErrorMessages = new Map<string, string>([
+  ["reason_required", "Give a reason for the audit log."],
+  ["reason_too_long", "The reason is too long: keep it to 1024 characters."],
+  ["too_many_addresses", "That is more destinations than a set may hold."],
+  ["invalid_address", "That is not an IP address or CIDR range."],
+  ["address_too_broad", "That range is too broad to keep containment meaningful."],
+  ["invalid_port", "A port must be between 1 and 65535, or left empty for every port."],
+  ["invalid_transport", "A transport must be TCP or UDP, or left empty for both."],
+  ["note_too_long", "That name is too long: keep it to 200 characters."],
+  ["duplicate_address", "That destination is already in the set."],
+  ["version_conflict", "Someone else changed these destinations after this page loaded them. Load the latest to see their change, then make yours again."],
+]);
+
+// getReachableAddresses reads the destinations a contained host may still reach. Requires containment_config.read.
+export async function getReachableAddresses(): Promise<ReachableSet> {
+  return fetchJSON<ReachableSet>("/v1/containment/reachable-addresses");
+}
+
+// replaceReachableAddresses stores the whole set, provided it is still at expectedVersion, the version the edit started from.
+// Requires containment_config.write and a recent sign-in; wrap it in useReauthRetry.
+export async function replaceReachableAddresses(
+  addresses: ReachableAddress[],
+  reason: string,
+  expectedVersion: number,
+): Promise<ReachableSet> {
+  return typedMutationEndpoint(
+    "PUT",
+    "/v1/containment/reachable-addresses",
+    { addresses, reason, expected_version: expectedVersion },
+    (res) => res.json() as Promise<ReachableSet>,
+    (code, message) => {
+      const known = reachableErrorMessages.get(code);
+      if (code === "version_conflict") {
+        return new ReachableSetConflictError(known ?? message);
+      }
+      // The server names the entry in its message; the code names the rule. An operator fixing a long list needs both.
+      return new Error(known ? `${known} ${message}` : message);
+    },
   );
 }
 

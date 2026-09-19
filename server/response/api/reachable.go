@@ -44,6 +44,10 @@ type ReachableSet struct {
 	Addresses []ReachableAddress `json:"addresses"`
 	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
 	UpdatedBy string             `json:"updated_by,omitempty"`
+	// UpdatedByLabel is the display label the REST handler resolves from UpdatedBy at read time: a user's email, a service
+	// account's name, or "system". Empty when it could not be resolved, and never stored. Without it the console can only name
+	// the principal id, and "last saved by usr_1" tells a reader nothing about who widened what every contained host can reach.
+	UpdatedByLabel string `json:"updated_by_label,omitempty"`
 }
 
 // MaxReachableAddresses caps the set. The list rides every contained host's command payload and becomes one filter rule per entry on

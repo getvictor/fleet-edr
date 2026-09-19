@@ -415,6 +415,8 @@ A host that is not contained, including one that was released, shows no badge. T
 
 A contained host keeps only its connection to the EDR server, loopback, DHCP, and resolution of the server name. Responders usually need a few more systems to stay reachable, such as an MDM or remediation server, a forensic collection share, or a VPN concentrator, so a deployment-wide set of destinations can be allowed on top of that lifeline. It applies to every contained host, present and future.
 
+Edit it under **Admin settings > Containment**. The page lists the destinations, says how many of the 64 are used and when the set was last saved, and reports how many hosts are contained or being contained, which is how many a change reaches. Add a destination by address or CIDR range, optionally narrowed to one port and one transport, and give it a name so the list and the audit trail read as systems rather than addresses. Removing and adding build up a draft that reaches hosts only when you save it, which asks for a reason.
+
 Read it with `GET /api/v1/containment/reachable-addresses` and replace it with `PUT` on the same path. The set is replaced whole, so send the destinations you want to keep; an empty list removes them all. Each entry names an IP address or CIDR range, and may narrow it to one port, to TCP or UDP, and carry a note naming the destination for whoever reads the audit trail later. A reason is required and is recorded with what the change added, removed and renamed.
 
 ```sh
@@ -439,7 +441,7 @@ The host's reason for a failure is in the delivery's `result` from `GET /api/hos
 
 ### Known limits
 
-- **Reachable addresses are set through the API, not the console.** The set described above is read and edited at `/api/v1/containment/reachable-addresses`; there is no page for it yet ([#1059](https://github.com/getvictor/fleet-edr/issues/1059)).
+- **Which version of the reachable set a host holds is not shown.** The console says how many hosts a change reaches, not which of them have taken it up yet. A change reaches an already-contained host within the five-minute sweep described above.
 - **Name restriction needs the DNS proxy.** On a Mac whose DNS proxy was disabled or has stopped, a contained Mac can still resolve any name its configured resolvers answer. It cannot reach any other resolver, and everything else stays blocked. The host page says so beside the Contained badge when this Mac is in that state, reading its live health: "DNS by destination only" when the Mac reports its proxy switched off, and "DNS filtering unconfirmed" when no DNS capture has reached the server while the Mac was otherwise reporting.
 - **A SOCKS or HTTPS proxy.** When the agent reaches the server through a SOCKS or HTTPS proxy, its control channel cannot reconnect while the host is contained; commands then arrive through the agent's regular polling, which is slower, and the console shows the stream disconnected until the host is released ([#1110](https://github.com/getvictor/fleet-edr/issues/1110)). An HTTP proxy is unaffected: the agent tunnels through it at the address the containment lifeline keeps reachable.
 

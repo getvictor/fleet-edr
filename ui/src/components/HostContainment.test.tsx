@@ -373,4 +373,92 @@ describe("HostContainment", () => {
     expect(await screen.findByText("Containing")).toBeVisible();
     expect(screen.queryByText("DNS by destination only")).not.toBeInTheDocument();
   });
+  describe("allowed destinations", () => {
+    const READS_SET = ["host.read", "host.isolate", "containment_config.read"];
+    const setWith = (n: number) => ({
+      version: 4,
+      addresses: Array.from({ length: n }, (_, i) => ({ cidr: `198.51.100.${String(i + 1)}/32` })),
+    });
+
+    // spec:web-ui/reachable-destinations-are-edited-in-containment-settings/a-contained-host-says-what-it-can-still-reach
+    it("says a contained host can still reach the allowed destinations, and where to change them", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+      vi.spyOn(api, "getReachableAddresses").mockResolvedValue(setWith(3));
+      renderControl(READS_SET);
+
+      const caveat = await screen.findByRole("button", { name: /3 allowed destinations/ });
+      expect(caveat).toBeVisible();
+      expect(caveat).toHaveAccessibleName(/on top of its connection to the EDR server/);
+      expect(caveat).toHaveAccessibleName(/Admin settings, Containment/);
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+
+      fireEvent.click(caveat);
+      expect(screen.getByRole("note")).toBeVisible();
+    });
+
+    it("counts one destination in the singular", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+      vi.spyOn(api, "getReachableAddresses").mockResolvedValue(setWith(1));
+      renderControl(READS_SET);
+
+      expect(await screen.findByRole("button", { name: /1 allowed destination\./ })).toBeVisible();
+    });
+
+    it("says nothing when the set is empty, so a fully cut-off host reads as one", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+      vi.spyOn(api, "getReachableAddresses").mockResolvedValue(setWith(0));
+      renderControl(READS_SET);
+
+      expect(await screen.findByText("Contained")).toBeVisible();
+      expect(screen.queryByRole("button", { name: /allowed destination/ })).not.toBeInTheDocument();
+    });
+
+    it("says nothing when the host is not contained yet", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(pendingContain);
+      vi.spyOn(api, "getReachableAddresses").mockResolvedValue(setWith(2));
+      renderControl(READS_SET);
+
+      expect(await screen.findByText("Containing")).toBeVisible();
+      expect(screen.queryByRole("button", { name: /allowed destination/ })).not.toBeInTheDocument();
+    });
+
+    it("does not read the set for an operator who may not read it", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+      const read = vi.spyOn(api, "getReachableAddresses").mockResolvedValue(setWith(2));
+      renderControl(["host.read", "host.isolate"]);
+
+      expect(await screen.findByText("Contained")).toBeVisible();
+      expect(read).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: /allowed destination/ })).not.toBeInTheDocument();
+    });
+
+    it("stays silent when the set cannot be read", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+      vi.spyOn(api, "getReachableAddresses").mockRejectedValue(new Error("service unavailable"));
+      renderControl(READS_SET);
+
+      expect(await screen.findByText("Contained")).toBeVisible();
+      expect(screen.queryByRole("button", { name: /allowed destination/ })).not.toBeInTheDocument();
+      expect(screen.queryByText(/service unavailable/)).not.toBeInTheDocument();
+    });
+
+    // Both facts are about how much network a contained host still has, so neither hides the other.
+    it("shows the destinations alongside the DNS caveat, each with its own explanation", async () => {
+      vi.spyOn(api, "getHostContainment").mockResolvedValue(contained);
+      vi.spyOn(api, "getReachableAddresses").mockResolvedValue(setWith(2));
+      renderControl(READS_SET, healthWith([{ type: "dns_proxy", status: "healthy", reason: "provider_disabled", last_transition_ns: 0 }]));
+
+      const dns = await screen.findByRole("button", { name: /DNS by destination only/ });
+      const destinations = await screen.findByRole("button", { name: /2 allowed destinations/ });
+
+      fireEvent.click(destinations);
+      expect(screen.getByRole("note")).toHaveTextContent(/on top of its connection to the EDR server/);
+
+      // Opening one closes the other: the explanations share a row, and two at once would push the page around.
+      fireEvent.click(dns);
+      const notes = screen.getAllByRole("note");
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toHaveTextContent(/switched off/);
+    });
+  });
 });

@@ -31,11 +31,16 @@ type ReachableService interface {
 		reason string, expected *int64) (api.ReachableSet, error)
 }
 
+// principalLabelResolver resolves a principal id (usr_<id> / svc_<id> / sys) to its display label. A func rather than the identity
+// service, so this context takes no identity-internal dependency (ADR-0004).
+type principalLabelResolver func(ctx context.Context, principalID string) (string, error)
+
 // ReachableHandler serves the reachable-address routes (issue #1059).
 type ReachableHandler struct {
-	svc    ReachableService
-	authz  identityapi.AuthZ
-	logger *slog.Logger
+	svc            ReachableService
+	authz          identityapi.AuthZ
+	principalLabel principalLabelResolver
+	logger         *slog.Logger
 }
 
 // NewReachableHandler builds the handler. svc and authz are required: a nil chokepoint would bypass the role matrix.
@@ -47,6 +52,31 @@ func NewReachableHandler(svc ReachableService, authz identityapi.AuthZ, logger *
 		logger = slog.Default()
 	}
 	return &ReachableHandler{svc: svc, authz: authz, logger: logger}
+}
+
+// SetPrincipalLabelResolver wires the optional directory lookup that names who last changed the set. Mirrors the detection-config
+// handler: set post-construction, so a test or a non-REST consumer that does not need a label can skip it.
+func (h *ReachableHandler) SetPrincipalLabelResolver(r principalLabelResolver) {
+	h.principalLabel = r
+}
+
+// resolveUpdatedByLabel fills the set's UpdatedByLabel from its UpdatedBy. The set no operator has changed has no UpdatedBy and
+// gets no label; a principal that cannot be resolved (a deleted user or service account) leaves the label empty, and the console
+// falls back to the raw id rather than the read failing over who someone was.
+func (h *ReachableHandler) resolveUpdatedByLabel(ctx context.Context, set *api.ReachableSet) {
+	if h.principalLabel == nil || set.UpdatedBy == "" {
+		return
+	}
+	label, err := h.principalLabel(ctx, set.UpdatedBy)
+	if err != nil {
+		// A deleted principal is the expected case here and is not worth a line per read, so only a genuinely unexpected failure
+		// (DB connectivity, say) is logged.
+		if !errors.Is(err, identityapi.ErrUserNotFound) && !errors.Is(err, identityapi.ErrServiceAccountNotFound) {
+			h.logger.WarnContext(ctx, "reachable: resolve principal label", "principal_id", set.UpdatedBy, "err", err)
+		}
+		return
+	}
+	set.UpdatedByLabel = label
 }
 
 // RegisterRoutes wires the reachable-address routes. The caller wraps them in the session and CSRF middleware.
@@ -81,6 +111,7 @@ func (h *ReachableHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
+	h.resolveUpdatedByLabel(ctx, &set)
 	writeJSON(ctx, h.logger, w, http.StatusOK, set)
 }
 
@@ -126,6 +157,7 @@ func (h *ReachableHandler) handleReplace(w http.ResponseWriter, r *http.Request)
 	h.logger.InfoContext(ctx, "admin containment reachable addresses",
 		attrkeys.AdminAction, "containment_reachable_update",
 		"edr.containment.reachable_version", set.Version, "edr.containment.reachable_count", len(set.Addresses))
+	h.resolveUpdatedByLabel(ctx, &set)
 	writeJSON(ctx, h.logger, w, http.StatusOK, set)
 }
 

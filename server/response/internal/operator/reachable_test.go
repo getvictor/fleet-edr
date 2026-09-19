@@ -43,8 +43,20 @@ func (f *fakeReachable) Replace(_ context.Context, actor identityapi.PrincipalRe
 
 func serveReachable(t *testing.T, svc ReachableService, authz identityapi.AuthZ, method, body string) *http.Response {
 	t.Helper()
+	return serveReachableWithLabel(t, svc, authz, nil, method, body)
+}
+
+// serveReachableWithLabel is serveReachable with the optional directory lookup wired, for the tests that care who last changed the
+// set. A nil resolver is the unwired handler.
+func serveReachableWithLabel(t *testing.T, svc ReachableService, authz identityapi.AuthZ, label principalLabelResolver,
+	method, body string) *http.Response {
+	t.Helper()
 	mux := http.NewServeMux()
-	NewReachableHandler(svc, authz, slog.Default()).RegisterRoutes(mux)
+	h := NewReachableHandler(svc, authz, slog.Default())
+	if label != nil {
+		h.SetPrincipalLabelResolver(label)
+	}
+	h.RegisterRoutes(mux)
 	actor := &identityapi.Actor{Principal: identityapi.PrincipalRef{ID: "user:7", Type: "user"}}
 	withActor := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r.WithContext(identityapi.WithActor(r.Context(), actor)))
@@ -245,4 +257,97 @@ func TestReachableHandler_RefusesABodyThatIsNotASet(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 	assert.Equal(t, "body_too_large", errorCode(t, resp))
 	assert.Empty(t, svc.calls, "a body over the cap is refused without being decoded")
+}
+
+// Who last changed the set is named, not left as a principal id. The set widens what EVERY contained host can reach, so "last
+// saved by usr_1" is not an answer to who did that; the label is resolved at read time and never stored, so a renamed account
+// reads as its current name.
+//
+// spec:web-ui/reachable-destinations-are-edited-in-containment-settings/the-console-shows-the-destinations-and-who-they-reach
+func TestReachableHandler_NamesWhoLastChangedTheSet(t *testing.T) {
+	t.Parallel()
+	notFound := func(context.Context, string) (string, error) { return "", identityapi.ErrUserNotFound }
+	cases := []struct {
+		desc string
+		// updatedBy is the principal the stored set carries.
+		updatedBy string
+		label     principalLabelResolver
+		want      string
+		// wantAsked is every principal id the directory was asked about. Nil means it was not consulted at all, which is a
+		// different thing from being asked about the empty string and must not be asserted as though it were the same.
+		wantAsked []string
+	}{
+		{
+			desc:      "resolved to the operator's email",
+			updatedBy: "usr_1",
+			label:     func(_ context.Context, id string) (string, error) { return "responder@example.com", nil },
+			want:      "responder@example.com",
+			wantAsked: []string{"usr_1"},
+		},
+		{
+			// A deleted user or service account. The console falls back to the raw id rather than the read failing.
+			desc:      "a principal that no longer exists leaves the label empty",
+			updatedBy: "usr_9",
+			label:     notFound,
+			want:      "",
+			wantAsked: []string{"usr_9"},
+		},
+		{
+			// The set no operator has changed. Nothing to resolve, and the directory is not asked.
+			desc:      "the unchanged set asks nothing",
+			updatedBy: "",
+			label:     notFound,
+			want:      "",
+			wantAsked: nil,
+		},
+		{
+			// A consumer that wired no resolver still reads the set.
+			desc:      "no resolver wired",
+			updatedBy: "usr_1",
+			label:     nil,
+			want:      "",
+			wantAsked: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			var asked []string
+			label := tc.label
+			if label != nil {
+				inner := tc.label
+				label = func(ctx context.Context, id string) (string, error) {
+					asked = append(asked, id)
+					return inner(ctx, id)
+				}
+			}
+			svc := &fakeReachable{set: api.ReachableSet{Version: 4, UpdatedBy: tc.updatedBy}}
+			resp := serveReachableWithLabel(t, svc, &recordingAuthZ{allow: true}, label, http.MethodGet, "")
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var got api.ReachableSet
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+			assert.Equal(t, tc.want, got.UpdatedByLabel)
+			assert.Equal(t, tc.wantAsked, asked)
+			// The label is derived per read, never persisted: the service is asked for the set it stores, unchanged.
+			assert.Equal(t, tc.updatedBy, got.UpdatedBy)
+		})
+	}
+}
+
+// A replacement answers with the same named attribution as a read, so the console does not go from a name to a principal id the
+// moment an operator saves.
+//
+// spec:web-ui/reachable-destinations-are-edited-in-containment-settings/an-operator-saves-changed-destinations-with-a-reason
+func TestReachableHandler_NamesWhoSavedOnReplace(t *testing.T) {
+	t.Parallel()
+	svc := &fakeReachable{set: api.ReachableSet{Version: 5, UpdatedBy: "svc_2"}}
+	label := func(context.Context, string) (string, error) { return "backup-automation", nil }
+	resp := serveReachableWithLabel(t, svc, &recordingAuthZ{allow: true}, label, http.MethodPut,
+		`{"addresses":[],"reason":"clearing the set"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got api.ReachableSet
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	assert.Equal(t, "backup-automation", got.UpdatedByLabel)
 }
