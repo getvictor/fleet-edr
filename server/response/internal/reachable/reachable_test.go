@@ -3,8 +3,10 @@ package reachable_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
@@ -287,4 +289,86 @@ func TestAnAdversarialNoteCannotForgeAnAuditEntry(t *testing.T) {
 	// The note is kept verbatim, in its own field, where it is text and not syntax.
 	assert.Equal(t, forged, entry["note"])
 	assert.NotContains(t, events[0].Payload, "removed", "nothing was removed, whatever the note spells")
+}
+
+// A replacement whose audit entry cannot be built must store nothing. The set and the record of who changed it are one commit or
+// neither, and this is the half that proves the "neither": the row is updated BEFORE the audit callback runs, so without the
+// rollback the set would move with nobody accountable for it.
+//
+// Driven through the store rather than the service, because the service always builds an entry successfully; the failure this
+// covers belongs to the transaction, which is shared with the watched-path set (issue #1109).
+func TestASetWhoseAuditCannotBeBuiltIsNotStored(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	_, err := f.svc.Replace(t.Context(), operator, "", []api.ReachableAddress{{CIDR: "192.0.2.7", Note: "MDM"}}, "initial", nil)
+	require.NoError(t, err)
+
+	refuse := errors.New("the audit entry could not be built")
+	_, _, err = f.store.Replace(t.Context(), []api.ReachableAddress{{CIDR: "198.51.100.5"}}, "user:7", nil,
+		func(_, _ api.ReachableSet) (auditoutbox.Entry, error) { return auditoutbox.Entry{}, refuse })
+	require.ErrorIs(t, err, refuse)
+
+	set, err := f.svc.Get(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), set.Version, "the version must not move when the change was rolled back")
+	assert.Equal(t, []api.ReachableAddress{{CIDR: "192.0.2.7/32", Note: "MDM"}}, set.Addresses,
+		"nor may the abandoned replacement's addresses be stored")
+}
+
+// Two operators saving edits of the same version must not both succeed. This is the row lock's own test, and the lock is the
+// subtlest thing the shared store owns (issue #1109): without it both replacements read the same version, both find their
+// expected version intact, and the second silently overwrites the first at a version nobody was told about.
+//
+// The first replacement is held open INSIDE its transaction, in the audit callback, which runs after the row is locked and
+// updated and before the commit. That is what makes the outcome deterministic rather than a race the test usually wins: while it
+// is held, the second replacement is at its own locking read.
+//
+// spec:server-host-containment/operators-choose-what-a-contained-host-can-still-reach/two-operators-editing-at-once-are-told
+func TestTwoOperatorsSavingTheSameVersionCannotBothSucceed(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	_, err := f.svc.Replace(t.Context(), operator, "", []api.ReachableAddress{{CIDR: "192.0.2.7", Note: "MDM"}}, "initial", nil)
+	require.NoError(t, err)
+	from := int64(1)
+
+	held, holding := make(chan struct{}), make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		_, _, rerr := f.store.Replace(t.Context(), []api.ReachableAddress{{CIDR: "198.51.100.5"}}, "user:7", &from,
+			func(_, _ api.ReachableSet) (auditoutbox.Entry, error) {
+				close(holding)
+				<-held // the row is locked and updated; the transaction is open
+				return auditoutbox.Entry{Kind: "response.audit.v1", Payload: []byte(`{}`)}, nil
+			})
+		first <- rerr
+	}()
+
+	select {
+	case <-holding:
+	case <-time.After(10 * time.Second):
+		close(held)
+		t.Fatal("the first replacement never reached its audit callback")
+	}
+
+	second := make(chan error, 1)
+	go func() {
+		_, _, rerr := f.store.Replace(t.Context(), []api.ReachableAddress{{CIDR: "203.0.113.9"}}, "user:9", &from,
+			func(_, _ api.ReachableSet) (auditoutbox.Entry, error) {
+				return auditoutbox.Entry{Kind: "response.audit.v1", Payload: []byte(`{}`)}, nil
+			})
+		second <- rerr
+	}()
+	// Long enough that a second replacement which was NOT blocked would have finished its own read and check by now.
+	time.Sleep(250 * time.Millisecond)
+	close(held)
+
+	require.NoError(t, <-first, "the operator who took the lock first must succeed")
+	require.ErrorIs(t, <-second, api.ErrReachableVersionConflict,
+		"the second saved against a version that had moved, and must be told rather than overwrite it")
+
+	set, err := f.svc.Get(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), set.Version, "exactly one replacement landed")
+	// As written: the store stores what it is given, and it is the service that normalizes a bare address to its prefix.
+	assert.Equal(t, []api.ReachableAddress{{CIDR: "198.51.100.5"}}, set.Addresses, "and it is the first operator's")
 }
