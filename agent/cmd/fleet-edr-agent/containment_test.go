@@ -92,17 +92,17 @@ func TestControlDialOptions(t *testing.T) {
 	direct := func(*http.Request) (*url.URL, error) { return nil, nil }
 	proxied := func(*http.Request) (*url.URL, error) { return url.Parse("http://proxy.corp:3128") }
 
-	target, opts := controlDialOptions(cfg, "edr.example.com:8443", nil, dial, direct)
+	target, opts := controlDialOptions(cfg, "edr.example.com:8443", nil, dial, direct, nil)
 	assert.Equal(t, "edr.example.com:8443", target, "no manager: gRPC dials as before")
 	assert.Empty(t, opts)
 
-	target, opts = controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, direct)
+	target, opts = controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, direct, nil)
 	assert.Equal(t, "passthrough:///edr.example.com:8443", target, "the dial receives the server's name, not addresses gRPC resolved")
 	assert.Len(t, opts, 1)
 
 	// A proxied server is tunnelled here rather than by gRPC (issue #1064). gRPC's own proxy support would resolve the proxy's NAME,
 	// which a contained host cannot do, so the control channel could not reconnect while contained.
-	target, opts = controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, proxied)
+	target, opts = controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, proxied, nil)
 	assert.Equal(t, "passthrough:///edr.example.com:8443", target, "gRPC must not resolve anything, proxy or server")
 	assert.Len(t, opts, 1)
 }

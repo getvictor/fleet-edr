@@ -488,7 +488,17 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 	if err != nil {
 		return err
 	}
-	dialTarget, dialOpts := controlDialOptions(cfg, target, deps.containmentMgr, deps.serverDial, http.ProxyFromEnvironment)
+	// The TLS policy an https proxy is spoken to under is the agent's own, the same one its uploads and polling apply to a proxy,
+	// so a proxy certificate those accept is one the control channel accepts. Built even when the server URL is http, because the
+	// proxy's scheme is independent of the server's.
+	//
+	//nolint:contextcheck // BuildTLSConfig takes no context; its handshake callback intentionally uses context.Background.
+	proxyTLS, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	if err != nil {
+		return fmt.Errorf("build proxy TLS config: %w", err)
+	}
+	dialTarget, dialOpts := controlDialOptions(cfg, target, deps.containmentMgr, deps.serverDial,
+		http.ProxyFromEnvironment, proxyTLS)
 	conn, err := grpc.NewClient(dialTarget, append(dialOpts,
 		grpc.WithTransportCredentials(creds),
 		// Keep-alive PINGs detect a half-open link (laptop sleep, NAT rebind) on the long-lived stream, mirroring the HTTP/2 transport.
