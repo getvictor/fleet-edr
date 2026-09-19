@@ -876,3 +876,60 @@ func TestDialThroughSOCKS5ProxyReportsARefusal(t *testing.T) {
 	assert.Contains(t, err.Error(), "SOCKS5 proxy "+listener.Addr().String())
 	assert.Contains(t, err.Error(), "edr.example.com:8443", "the destination belongs in the message too")
 }
+
+// A SOCKS5 dial whose caller gives up must fail promptly, the same as the CONNECT path, rather than sit on a proxy that accepted
+// the connection and then went quiet.
+//
+// The interruption is x/net's rather than ours: socks.Dialer.connect watches ctx.Done() and stamps a past deadline on the
+// connection to unblock its reads, then stops and waits for that watcher before returning, which is the same mechanism
+// connectThrough implements by hand. This test exists because that is a property of a DEPENDENCY: nothing in this repository
+// would fail if a future x/net stopped honouring cancellation mid-handshake, and the symptom would be a control-channel dial
+// wedged on a silent proxy, on a path that only runs while a host is contained.
+//
+// spec:agent-command-executor/the-server-is-reached-through-the-lifeline/a-socks5-proxy-is-spoken-to-in-its-own-protocol
+func TestDialThroughSOCKS5StopsWhenTheCallerGivesUp(t *testing.T) {
+	t.Parallel()
+	// Accepts, then says nothing at all: a proxy that completed TCP and stalled in the handshake.
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, aerr := listener.Accept()
+		if aerr != nil {
+			return
+		}
+		accepted <- conn
+	}()
+
+	proxyURL, err := url.Parse("socks5://" + listener.Addr().String())
+	require.NoError(t, err)
+	var dialed []string
+	var mu sync.Mutex
+	// No deadline on the context: cancellation alone has to be what unblocks it, which is the half a deadline would hide.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, derr := dialThroughProxy(ctx, recordingDial(&dialed, &mu), proxyURL,
+			listener.Addr().String(), "edr.example.com:8443", nil)
+		done <- derr
+	}()
+
+	// Cancel only once the proxy has the connection and the handshake is genuinely in flight.
+	select {
+	case conn := <-accepted:
+		t.Cleanup(func() { _ = conn.Close() })
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("the proxy never received the connection")
+	}
+	cancel()
+
+	select {
+	case derr := <-done:
+		require.Error(t, derr, "a cancelled dial must fail, not return a tunnel nobody is waiting for")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled SOCKS5 dial did not return; it is waiting out a silent proxy")
+	}
+}
