@@ -19,10 +19,13 @@ import (
 // The pack lives inside the package that reads it (a go:embed pattern cannot contain ".."), so this path points into the catalog
 // rather than at docs/.
 //
-// These tests live here, next to ExportPack, rather than beside the generator in tools/gen-rule-pack, for one reason: CI runs
-// `./server/... ./internal/... ./test/integration/... ./test/scale/...` and does NOT run ./tools/.... A drift check that only
-// runs locally is not a drift check, it is a suggestion, and the whole point of this guard is that a rule added, renamed, or
-// re-documented without regenerating the pack fails the build.
+// These tests live here, next to ExportPack, rather than beside the generator in tools/gen-rule-pack, because when they were
+// written CI's server-test task ran `./server/... ./internal/... ./test/integration/... ./test/scale/...` and NOT ./tools/....
+// A drift check that only runs locally is not a drift check, it is a suggestion, and the whole point of this guard is that a
+// rule added, renamed, or re-documented without regenerating the pack fails the build.
+//
+// That task has included ./tools/... since #1053 (2026-09-14), which is why the guide's own drift guard (issue #1105) could be
+// written next to its generator. Check the task before relying on either placement argument.
 const packDir = "../internal/catalog/pack"
 
 func committedFiles(t *testing.T) map[string][]byte {
