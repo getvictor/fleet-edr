@@ -40,6 +40,29 @@ type Command struct {
 	Version   int64 `json:"version"`
 	Epoch     int64 `json:"epoch"`
 	Contained bool  `json:"contained"`
+	// ReachableVersion and Reachable are the deployment's reachable-address set as the command carried it (issue #1059). Held with
+	// the state because the lifeline refresh re-sends the document: a refresh built without them would reach the extension as the
+	// same containment with its allowances removed, which the extension would accept as a lifeline change and enforce.
+	ReachableVersion int64
+	Reachable        []ReachableAddress
+}
+
+// ReachableAddress is one destination a contained host may still reach, as the extension needs it. The operator's note is
+// deliberately not carried: it names the destination for a human reading the console or the audit trail, and nothing on the host
+// reads it, so it does not belong on the wire to the extension.
+type ReachableAddress struct {
+	CIDR      string `json:"cidr"`
+	Port      int    `json:"port,omitempty"`
+	Transport string `json:"transport,omitempty"`
+}
+
+// sameState reports whether two commands name the same containment state.
+//
+// The reachable set is carried WITH a state rather than being part of it, which is why it is not compared here: the extension's
+// status reports the containment it holds and says nothing about allowances, so a state adopted from a status could never match one
+// that included them, and every such adoption would read as a change.
+func (c Command) sameState(other Command) bool {
+	return c.Version == other.Version && c.Epoch == other.Epoch && c.Contained == other.Contained
 }
 
 // Status is the network extension's report of the containment state it holds and whether its content filter applied it.
@@ -53,6 +76,12 @@ type Status struct {
 	// was. A refresh sends the same version and epoch with different addresses, so this is the only thing that tells one lifeline
 	// from another, and it is what the agent pins its dials to (issue #1066).
 	AppliedAddresses []string `json:"appliedAddresses"`
+	// AppliedReachableVersion is the reachable-address set the extension's filter was confirmed to enforce (issue #1059). A change
+	// to that set reuses the containment version and epoch, so without it a status describing the PREVIOUS set cannot be told from
+	// one describing the new one, and a command that changed only the set would take the older status as its confirmation and
+	// report success while the host still enforced the old allowances. Absent from an extension that predates the set, which reads
+	// as version 0 and matches the empty set every deployment starts with.
+	AppliedReachableVersion int64 `json:"appliedReachableVersion"`
 }
 
 // document is the network_containment.update the extension decodes: the command plus the lifeline.
@@ -61,6 +90,10 @@ type document struct {
 	Epoch     int64   `json:"epoch"`
 	Contained bool    `json:"contained"`
 	Server    *server `json:"server,omitempty"`
+	// ReachableVersion and Reachable are the destinations the operator chose to keep reachable (issue #1059), absent when the host
+	// is not contained, since nothing is being restricted then.
+	ReachableVersion int64              `json:"reachableVersion,omitempty"`
+	Reachable        []ReachableAddress `json:"reachable,omitempty"`
 }
 
 type server struct {
@@ -254,7 +287,13 @@ func (m *Manager) Seed(path string) {
 		// The extension has already said what it holds, which is the live answer rather than what a restart left on disk.
 		return
 	}
-	m.state = &Command{Version: doc.Version, Epoch: doc.Epoch, Contained: true}
+	// The allowances come with it. The persisted document carries them, and a state adopted without them would have the first
+	// refresh after every restart send a document with none: the extension takes that as the same containment with its allowances
+	// withdrawn, so an operator's chosen destinations would go dark on each agent restart (issue #1059).
+	m.state = &Command{
+		Version: doc.Version, Epoch: doc.Epoch, Contained: true,
+		ReachableVersion: doc.ReachableVersion, Reachable: doc.Reachable,
+	}
 	m.addresses = addrs
 	// sent stays empty: these addresses were sent by whichever agent run wrote them, over a connection this one does not hold, so the
 	// first status starts a refresh that sends what the target resolves to now.
@@ -357,6 +396,10 @@ func (m *Manager) Apply(ctx context.Context, payload []byte) (json.RawMessage, e
 		Version   int64 `json:"version"`
 		Epoch     int64 `json:"epoch"`
 		Contained *bool `json:"contained"`
+		// Passed through rather than checked: the server validated these before storing them, and an entry this agent judged for
+		// itself would be an entry the server and the host disagree about (issue #1059).
+		ReachableVersion int64              `json:"reachable_version"`
+		Reachable        []ReachableAddress `json:"reachable"`
 	}
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		return nil, fmt.Errorf("invalid payload: %w", err)
@@ -368,7 +411,10 @@ func (m *Manager) Apply(ctx context.Context, payload []byte) (json.RawMessage, e
 	if fields.Contained == nil {
 		return nil, errors.New("payload missing contained")
 	}
-	cmd := Command{Version: fields.Version, Epoch: fields.Epoch, Contained: *fields.Contained}
+	cmd := Command{
+		Version: fields.Version, Epoch: fields.Epoch, Contained: *fields.Contained,
+		ReachableVersion: fields.ReachableVersion, Reachable: fields.Reachable,
+	}
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
 	doc := document{Version: cmd.Version, Epoch: cmd.Epoch, Contained: cmd.Contained}
@@ -380,6 +426,8 @@ func (m *Manager) Apply(ctx context.Context, payload []byte) (json.RawMessage, e
 		}
 		addrs = resolved
 		doc.Server = m.lifelineServer(addrs)
+		// Only for a contained host: a release restricts nothing, so allowances would describe a state that does not exist.
+		doc.ReachableVersion, doc.Reachable = cmd.ReachableVersion, cmd.Reachable
 	}
 	body, _ := json.Marshal(doc)
 
@@ -417,6 +465,11 @@ func (m *Manager) confirm(ctx context.Context, waiter chan Status, cmd Command) 
 				case s.Contained != cmd.Contained:
 					// The extension refused this state because it holds a different one at the same version.
 					return Status{}, fmt.Errorf("the host holds a different state at version %d", s.Version)
+				case s.Applied && cmd.Contained && s.AppliedReachableVersion != cmd.ReachableVersion:
+					// The right containment, the wrong set: a status that predates this command, since a set change reuses the
+					// version and epoch. Kept waiting rather than accepted, or the command would report success for a set the
+					// host is not enforcing and nothing would queue it again.
+					continue
 				case s.Applied:
 					return s, nil
 				case s.Error != "":
@@ -446,11 +499,18 @@ func (m *Manager) Observe(ctx context.Context, s Status) {
 		m.state = &Command{Version: s.Version, Epoch: s.Epoch, Contained: s.Contained}
 		m.refreshed = false
 		m.addresses, m.sent = nil, nil
-		if m.pending != nil && *m.pending == *m.state {
+		if m.pending != nil && m.pending.sameState(*m.state) {
 			// The command this agent just sent. Any other state, such as a containment held across an agent restart, leaves what the
 			// extension holds to be read from the status below.
 			m.sent = m.pendingAddresses
 		}
+	}
+	// The allowances of the command this agent sent, whenever that command names the state now held. OUTSIDE the adopt branch
+	// deliberately: a command that changes only the reachable set carries the same version and epoch, so nothing about the state
+	// changed and adopt is false, and a carry-over that only ran there would leave the agent holding the previous allowances and
+	// send them again on the next refresh, rolling the change back (issue #1059).
+	if m.pending != nil && m.state != nil && m.pending.sameState(*m.state) {
+		m.state.ReachableVersion, m.state.Reachable = m.pending.ReachableVersion, m.pending.Reachable
 	}
 	// What the extension says its filter enforces is the authority on what may be dialed, and the only thing that distinguishes one
 	// lifeline from another: a refresh keeps the version and the epoch and changes only the addresses (issue #1066).
@@ -569,7 +629,12 @@ func (m *Manager) refresh(ctx context.Context) {
 	}
 	state, generation := *m.state, m.generation
 	m.mu.Unlock()
-	doc := document{Version: state.Version, Epoch: state.Epoch, Contained: true, Server: m.lifelineServer(addrs)}
+	doc := document{
+		Version: state.Version, Epoch: state.Epoch, Contained: true, Server: m.lifelineServer(addrs),
+		// Carried from the state: a refresh is the same containment reaching the extension again, and one built without the
+		// allowances would read there as the same containment with them withdrawn.
+		ReachableVersion: state.ReachableVersion, Reachable: state.Reachable,
+	}
 	body, _ := json.Marshal(doc)
 	if err := m.opts.Send(body); err != nil {
 		// Nothing is recorded as sent, so the next status or refresh tries again rather than finding these addresses already sent.
@@ -580,7 +645,7 @@ func (m *Manager) refresh(ctx context.Context) {
 		return
 	}
 	m.mu.Lock()
-	if m.state != nil && *m.state == state && m.generation == generation {
+	if m.state != nil && m.state.sameState(state) && m.generation == generation {
 		// Recorded as sent, and pinned only against an extension that cannot confirm it. The send handed the document off and says
 		// nothing about whether the extension accepted it or its filter applied it, so against an extension that reports the
 		// lifeline it enforces, dials stay where they are until a status names these addresses (issue #1066). Against one that does

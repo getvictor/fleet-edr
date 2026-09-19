@@ -97,7 +97,12 @@ func (f *fakeExtension) reset() {
 
 // applies answers every document the way a healthy extension does: it holds and applies what it was sent.
 func applies(d document) *Status {
-	return &Status{Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true}
+	// The applied set version is echoed the way the real extension reports what its filter enforces: a set change reuses the
+	// containment version and epoch, so it is the only thing that tells one applied set from another.
+	return &Status{
+		Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true,
+		AppliedReachableVersion: d.ReachableVersion,
+	}
 }
 
 func newTestManager(t *testing.T, target Target, respond func(document) *Status) (*Manager, *fakeExtension, *fakeResolver) {
@@ -1314,4 +1319,134 @@ func TestTargetAddressIsTheSpellingThePinMatches(t *testing.T) {
 			assert.Equal(t, tc.want, target.Address())
 		})
 	}
+}
+
+// A lifeline refresh re-sends the whole document, so it has to carry the allowances the command brought. Built without them, the
+// refresh reaches the extension as the SAME containment with its allowances withdrawn, and the extension takes that as a lifeline
+// that moved and enforces it: the operator's chosen destinations would go dark the first time the server's address changed, with
+// nothing anywhere reporting a change (issue #1059).
+func TestRefresh_CarriesTheAllowancesTheCommandBrought(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7")
+
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":4,
+		"reachable":[{"cidr":"192.0.2.7/32","port":443,"transport":"tcp"}]}`))
+	require.NoError(t, err)
+	sent := awaitSent(t, ext, 1)
+	require.Equal(t, int64(4), sent[0].ReachableVersion)
+	require.Len(t, sent[0].Reachable, 1)
+
+	// The extension reconnects, which is the case that re-sends the lifeline: a send reports no delivery, so one made over the
+	// dropped connection may never have arrived. The server has moved meanwhile, so the refresh carries new addresses.
+	res.set("203.0.113.9")
+	m.Reconnected()
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	m.Observe(t.Context(), held)
+	refreshed := awaitSent(t, ext, 2)
+
+	assert.Equal(t, []string{"203.0.113.9"}, refreshed[1].Server.Addresses, "the refresh moved the server")
+	assert.Equal(t, int64(4), refreshed[1].ReachableVersion, "and kept the set")
+	assert.Equal(t, []ReachableAddress{{CIDR: "192.0.2.7/32", Port: 443, Transport: "tcp"}}, refreshed[1].Reachable)
+}
+
+// The document the extension decodes, pinned as bytes. The operator's note is deliberately absent: it names a destination for a
+// human reading the console, and nothing on the host reads it.
+func TestApply_TheDocumentCarriesTheAllowancesWithoutTheNote(t *testing.T) {
+	t.Parallel()
+	doc := document{
+		Version: 3, Epoch: 100, Contained: true,
+		Server:           &server{Port: 8443, Addresses: []string{"203.0.113.7"}},
+		ReachableVersion: 4,
+		Reachable:        []ReachableAddress{{CIDR: "192.0.2.7/32", Port: 443, Transport: "tcp"}, {CIDR: "10.0.0.0/8"}},
+	}
+	body, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"version":3,"epoch":100,"contained":true,`+
+		`"server":{"port":8443,"addresses":["203.0.113.7"]},"reachableVersion":4,`+
+		`"reachable":[{"cidr":"192.0.2.7/32","port":443,"transport":"tcp"},{"cidr":"10.0.0.0/8"}]}`, string(body))
+}
+
+// A release carries no allowances, because nothing is being restricted for them to qualify.
+func TestApply_AReleaseSendsNoAllowances(t *testing.T) {
+	t.Parallel()
+	m, ext, _ := newTestManager(t, serverTarget, applies)
+	_, err := m.Apply(t.Context(), []byte(`{"version":4,"epoch":100,"contained":false,"reachable_version":4,
+		"reachable":[{"cidr":"192.0.2.7/32"}]}`))
+	require.NoError(t, err)
+	sent := awaitSent(t, ext, 1)
+	assert.Zero(t, sent[0].ReachableVersion)
+	assert.Empty(t, sent[0].Reachable)
+}
+
+// A restart must not withdraw what an operator allowed. Seed rebuilds the state from the document the extension persisted, and that
+// document carries the allowances, so dropping them here would have the first refresh after every restart send a document with none:
+// the extension takes that as the same containment with its allowances withdrawn and enforces it (issue #1059).
+func TestSeed_AdoptsTheAllowancesWithTheState(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "containment.json")
+	doc := `{"version":7,"epoch":200,"contained":true,` +
+		`"server":{"port":8443,"addresses":["203.0.113.7"],"names":["edr.example.com"]},` +
+		`"reachableVersion":5,"reachable":[{"cidr":"192.0.2.7/32","port":443,"transport":"tcp"}]}`
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o600))
+
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7")
+	m.Seed(path)
+
+	// The refresh after a restart is what would have sent the withdrawal, so that is what this drives.
+	res.set("203.0.113.9")
+	m.Observe(t.Context(), Status{Contained: true, Version: 7, Epoch: 200, Applied: true})
+	sent := awaitSent(t, ext, 1)
+	assert.Equal(t, int64(5), sent[0].ReachableVersion, "the seeded state kept the set")
+	assert.Equal(t, []ReachableAddress{{CIDR: "192.0.2.7/32", Port: 443, Transport: "tcp"}}, sent[0].Reachable)
+}
+
+// A command that changes ONLY the reachable set carries the same containment version and epoch, so nothing about the state changed.
+// The agent still has to adopt its allowances, or the next refresh sends the previous ones and rolls the change back.
+func TestApply_ASetOnlyChangeIsAdoptedThoughTheStateDidNot(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7")
+
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":1,
+		"reachable":[{"cidr":"192.0.2.7/32"}]}`))
+	require.NoError(t, err)
+	// The same containment, a different set: version and epoch are untouched.
+	_, err = m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":2,
+		"reachable":[{"cidr":"198.51.100.5/32"}]}`))
+	require.NoError(t, err)
+	awaitSent(t, ext, 2)
+
+	// Now a refresh: it must carry the SECOND set, not the first.
+	res.set("203.0.113.9")
+	m.Reconnected()
+	m.Observe(t.Context(), Status{Contained: true, Version: 3, Epoch: 100, Applied: true})
+	sent := awaitSent(t, ext, 3)
+	assert.Equal(t, int64(2), sent[2].ReachableVersion, "the refresh carries the set the host was last told about")
+	assert.Equal(t, []ReachableAddress{{CIDR: "198.51.100.5/32"}}, sent[2].Reachable)
+}
+
+// A set change reuses the containment version and epoch, so a status describing the PREVIOUS set is indistinguishable from one
+// describing the new one except by the set version the extension reports. Without comparing it, a command that changed only the set
+// would take an older status as its confirmation and report success while the host still enforced the old allowances, and nothing
+// would queue it again: the server would believe it delivered (issue #1059).
+func TestApply_ASetChangeIsNotConfirmedByAStatusForTheOldSet(t *testing.T) {
+	t.Parallel()
+	// An extension that applies the containment but keeps reporting the set it already had.
+	stale := func(d document) *Status {
+		return &Status{Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true, AppliedReachableVersion: 1}
+	}
+	m, _, res := newTestManager(t, serverTarget, stale)
+	res.set("203.0.113.7")
+
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":1,
+		"reachable":[{"cidr":"192.0.2.7/32"}]}`))
+	require.NoError(t, err, "the set it reports is the set that was sent, so this one confirms")
+
+	// The same containment, a new set. The extension keeps reporting set 1, so nothing here confirms set 2.
+	_, err = m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":2,
+		"reachable":[{"cidr":"198.51.100.5/32"}]}`))
+	require.Error(t, err, "a status for the previous set must not confirm this command")
+	assert.Contains(t, err.Error(), "did not confirm")
 }

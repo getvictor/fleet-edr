@@ -56,6 +56,16 @@ func TestContainmentWireTypesRoundTrip(t *testing.T) {
 		rapid.Check(t, func(rt *rapid.T) {
 			in := api.SetNetworkContainmentPayload{
 				Version: rapid.Int64().Draw(rt, "version"), Epoch: rapid.Int64().Draw(rt, "epoch"), Contained: rapid.Bool().Draw(rt, "contained"),
+				ReachableVersion: rapid.Int64Min(0).Draw(rt, "reachable_version"),
+			}
+			// The destinations a contained host may still reach ride this payload (issue #1059), so they are part of the shape a
+			// host decodes and belong in the round trip.
+			for i := range rapid.IntRange(0, 4).Draw(rt, "reachable_count") {
+				in.Reachable = append(in.Reachable, api.ReachableAddress{
+					CIDR:      rapid.StringN(1, 48, -1).Draw(rt, fmt.Sprintf("cidr_%d", i)),
+					Port:      rapid.IntRange(0, 65535).Draw(rt, fmt.Sprintf("port_%d", i)),
+					Transport: rapid.SampledFrom([]string{"", api.TransportTCP, api.TransportUDP}).Draw(rt, fmt.Sprintf("transport_%d", i)),
+				})
 			}
 			var out api.SetNetworkContainmentPayload
 			roundTrip(rt, in, &out)

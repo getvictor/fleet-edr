@@ -81,6 +81,26 @@ type fixture struct {
 	enrolled map[string]time.Time
 	// sweeping starts the drain's sweep on the first test that reads audit rows, since delivery is no longer part of the change.
 	sweeping sync.Once
+	// reachable is the deployment's reachable-address set as the tests choose it, read by both the service and the catch-up the way
+	// one service is read by both in production (issue #1059).
+	reachable struct {
+		mu  sync.Mutex
+		set api.ReachableSet
+	}
+}
+
+// reachableSet is the reader the containment service and catch-up are built with.
+func (f *fixture) reachableSet(context.Context) (api.ReachableSet, error) {
+	f.reachable.mu.Lock()
+	defer f.reachable.mu.Unlock()
+	return f.reachable.set, nil
+}
+
+// setReachable replaces the set, as an operator editing it does.
+func (f *fixture) setReachable(version int64, addresses ...api.ReachableAddress) {
+	f.reachable.mu.Lock()
+	defer f.reachable.mu.Unlock()
+	f.reachable.set = api.ReachableSet{Version: version, Addresses: addresses}
 }
 
 var operator = identityapi.PrincipalRef{ID: "user:7", Type: "user", Label: "ir@example.com"}
@@ -146,9 +166,10 @@ func newFixture(t *testing.T) *fixture {
 	drain, err := auditoutbox.NewDrain(f.outbox, f.audit, "host containment", nil)
 	require.NoError(t, err)
 	f.drain = drain
-	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain)
+	f.svc = containment.NewService(f.store, isEnrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox,
+		f.drain, f.reachableSet)
 	f.converger = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments,
-		f.commands.LatestOfType, nil)
+		f.commands.LatestOfType, f.reachableSet, nil)
 	return f
 }
 
@@ -468,7 +489,7 @@ func TestConverge(t *testing.T) {
 			return []api.HostEnrollment{{HostID: "host-a", EnrolledAt: f.enrolled["host-a"]}}, nil
 		}
 		_, err := containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments, latest,
-			nil).Converge(t.Context())
+			f.reachableSet, nil).Converge(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, [][]string{{"host-a"}}, asked)
 	})
@@ -608,7 +629,8 @@ func TestStoreFailuresAreReported(t *testing.T) {
 			}
 			return f.commands.QueueTx(ctx, q, hostID, commandType, payload)
 		}
-		converger := containment.NewConverger(f.store, failFirst, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
+		converger := containment.NewConverger(f.store, failFirst, f.notified.notify, enrollments, f.commands.LatestOfType,
+			f.reachableSet, nil)
 
 		queued, err := converger.Converge(t.Context())
 		require.NoError(t, err, "one host that cannot be queued does not end the sweep")
@@ -700,7 +722,7 @@ func TestSet_ACommandThatCannotBeQueuedRecordsNothing(t *testing.T) {
 		return 0, errors.New("queue unavailable")
 	}
 	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, failing,
-		f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
+		f.notified.notify, f.commands.LatestOfType, f.outbox, nil, f.reachableSet)
 
 	_, err := svc.Set(t.Context(), operator, "", "host-a", true, "suspicious", nil)
 	require.Error(t, err)
@@ -720,7 +742,7 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	boom := errors.New("boom")
 	_, err := containment.NewService(f.store, func(context.Context, string) (bool, error) { return false, boom }, f.commands.QueueTx,
 		f.notified.notify,
-		f.commands.LatestOfType, f.outbox, nil).Set(t.Context(), operator, "", "host-a", true, "x", nil)
+		f.commands.LatestOfType, f.outbox, nil, f.reachableSet).Set(t.Context(), operator, "", "host-a", true, "x", nil)
 	require.ErrorIs(t, err, boom)
 
 	_, err = f.svc.Set(t.Context(), operator, "", "host-a", true, "x", nil)
@@ -728,16 +750,17 @@ func TestReadFailuresAreReturned(t *testing.T) {
 	latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 	_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
 		f.notified.notify,
-		latestFails, f.outbox, nil).Get(t.Context(), "host-a")
+		latestFails, f.outbox, nil, f.reachableSet).Get(t.Context(), "host-a")
 	require.ErrorIs(t, err, boom)
 	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify,
 		func(context.Context) ([]api.HostEnrollment, error) { return nil, boom },
-		f.commands.LatestOfType, nil).Converge(t.Context())
+		f.commands.LatestOfType, f.reachableSet, nil).Converge(t.Context())
 	require.ErrorIs(t, err, boom)
 	onlyHostA := func(context.Context) ([]api.HostEnrollment, error) {
 		return []api.HostEnrollment{{HostID: "host-a"}}, nil
 	}
-	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, onlyHostA, latestFails, nil).Converge(t.Context())
+	_, err = containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, onlyHostA, latestFails,
+		f.reachableSet, nil).Converge(t.Context())
 	require.ErrorIs(t, err, boom)
 }
 
@@ -767,20 +790,24 @@ func TestConstructorsRequireTheirDependencies(t *testing.T) {
 	enrollments := func(context.Context) ([]api.HostEnrollment, error) { return nil, nil }
 	assert.Panics(t, func() { containment.NewStore(nil) })
 	assert.Panics(t, func() {
-		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
+		containment.NewService(nil, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil, f.reachableSet)
 	})
 	assert.Panics(t, func() {
-		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil)
+		containment.NewService(f.store, nil, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, f.outbox, nil, f.reachableSet)
 	})
 	assert.Panics(t, func() {
-		containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil)
+		containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType, nil, nil,
+			f.reachableSet)
 	}, "a service without an outbox could record a containment with nothing saying who made it")
 	assert.Panics(t, func() {
-		containment.NewConverger(f.store, nil, f.notified.notify, enrollments, f.commands.LatestOfType, nil)
+		containment.NewConverger(f.store, nil, f.notified.notify, enrollments, f.commands.LatestOfType, f.reachableSet, nil)
 	})
 	assert.Panics(t, func() {
-		containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, nil, f.commands.LatestOfType, nil)
+		containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, nil, f.commands.LatestOfType, f.reachableSet, nil)
 	})
+	assert.Panics(t, func() {
+		containment.NewConverger(f.store, f.commands.QueueTx, f.notified.notify, enrollments, f.commands.LatestOfType, nil, nil)
+	}, "a catch-up without the reachable set would queue commands that withdraw every allowance")
 }
 
 // spec:server-host-containment/the-containment-state-is-readable/the-host-list-shows-every-host-with-a-state
@@ -823,7 +850,7 @@ func TestList_EveryHostWithAState(t *testing.T) {
 		latestFails := func(context.Context, string, []string) (map[string]api.Command, error) { return nil, boom }
 		_, err = containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
 			f.notified.notify,
-			latestFails, f.outbox, nil).List(t.Context())
+			latestFails, f.outbox, nil, f.reachableSet).List(t.Context())
 		require.ErrorIs(t, err, boom)
 	})
 }
@@ -925,7 +952,7 @@ func TestSet_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	f := newFixture(t)
 	enrolled := func(context.Context, string) (bool, error) { return true, nil }
 	svc := containment.NewService(f.store, enrolled, f.commands.QueueTx, f.notified.notify, f.commands.LatestOfType,
-		auditoutbox.NewStore(f.db, "absent_audit_outbox"), f.drain)
+		auditoutbox.NewStore(f.db, "absent_audit_outbox"), f.drain, f.reachableSet)
 
 	_, err := svc.Set(t.Context(), operator, "203.0.113.5", "host-a", true, "suspicious", nil)
 	require.Error(t, err, "a change whose audit entry cannot be written is refused, not recorded without one")
@@ -1117,4 +1144,134 @@ func requireWaitingOnTheHostRow(t *testing.T, db *sqlx.DB) {
 		}
 		return waiters > 0
 	}, 10*time.Second, 5*time.Millisecond, "no change ever waited on the host's row, so the test was not concurrent")
+}
+
+// The whole point of carrying the set on the containment command: an operator who widens what contained hosts may reach must not
+// have to release and re-contain every host for the change to take effect (issue #1059).
+//
+// A set change does not touch any host's containment state, so nothing about the host is newer. The command it already has stops
+// being current because it carries an older set version, and the catch-up that exists for expired and missed commands re-queues it.
+// No second converger, no command type of its own.
+//
+// spec:server-host-containment/operators-choose-what-a-contained-host-can-still-reach/a-set-change-reaches-a-host-that-is-already-contained
+func TestConverge_AChangedReachableSetReachesAContainedHost(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.setReachable(1, api.ReachableAddress{CIDR: "192.0.2.7/32", Port: 443, Transport: api.TransportTCP})
+
+	_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+	require.Len(t, f.containmentCommands(t, "host-a"), 1)
+
+	// Settled: the host has the state and the set, so a sweep has nothing to do.
+	queued, err := f.converger.Converge(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, queued, "a host holding the current state and set is not sent it again")
+
+	// The operator adds a destination. The host's containment state is untouched.
+	f.setReachable(2,
+		api.ReachableAddress{CIDR: "192.0.2.7/32", Port: 443, Transport: api.TransportTCP},
+		api.ReachableAddress{CIDR: "198.51.100.5/32"},
+	)
+	queued, err = f.converger.Converge(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, queued, "the set moved, so the host's latest command no longer carries what it should")
+
+	commands := f.containmentCommands(t, "host-a")
+	require.Len(t, commands, 2)
+	var payload api.SetNetworkContainmentPayload
+	require.NoError(t, json.Unmarshal(commands[1].Payload, &payload))
+	assert.Equal(t, int64(2), payload.ReachableVersion)
+	assert.Equal(t, []api.ReachableAddress{
+		{CIDR: "192.0.2.7/32", Port: 443, Transport: api.TransportTCP},
+		{CIDR: "198.51.100.5/32"},
+	}, payload.Reachable, "and it carries the set itself, not only its version")
+
+	// Settled again, so a set that stops changing stops producing commands.
+	queued, err = f.converger.Converge(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, queued)
+}
+
+// A change an operator makes carries the set in force at that moment, so a host contained after an edit does not need a sweep to
+// learn what it may reach.
+//
+// spec:server-host-containment/operators-choose-what-a-contained-host-can-still-reach/a-set-change-reaches-a-host-that-is-already-contained
+func TestSet_TheCommandCarriesTheSetInForce(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.setReachable(9, api.ReachableAddress{CIDR: "10.0.0.0/8", Note: "corporate"})
+
+	_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+
+	commands := f.containmentCommands(t, "host-a")
+	require.Len(t, commands, 1)
+	var payload api.SetNetworkContainmentPayload
+	require.NoError(t, json.Unmarshal(commands[0].Payload, &payload))
+	assert.Equal(t, int64(9), payload.ReachableVersion)
+	require.Len(t, payload.Reachable, 1)
+	assert.Equal(t, "10.0.0.0/8", payload.Reachable[0].CIDR)
+
+	// The host's delivery reads as current, since it holds both the state and the set.
+	state, err := f.svc.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	require.NotNil(t, state.Delivery)
+	assert.True(t, state.Delivery.Current)
+
+	// And stops reading as current the moment the set moves, which is what the console shows an operator.
+	f.setReachable(10, api.ReachableAddress{CIDR: "10.0.0.0/8", Note: "corporate"})
+	state, err = f.svc.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	require.NotNil(t, state.Delivery)
+	assert.False(t, state.Delivery.Current, "the host holds an older set, so its command is on its way rather than settled")
+}
+
+// A released host carries no allowances: they describe a restriction that is not in force, and sending them would have the
+// extension hold rules for a lifeline it is not enforcing.
+func TestSet_AReleaseCarriesNoAllowances(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.setReachable(3, api.ReachableAddress{CIDR: "192.0.2.7/32"})
+	_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+	_, err = f.svc.Set(t.Context(), operator, "", "host-a", false, "cleared", nil)
+	require.NoError(t, err)
+
+	commands := f.containmentCommands(t, "host-a")
+	require.Len(t, commands, 2)
+	var release api.SetNetworkContainmentPayload
+	require.NoError(t, json.Unmarshal(commands[1].Payload, &release))
+	assert.False(t, release.Contained)
+	assert.Empty(t, release.Reachable, "a released host restricts nothing for an allowance to qualify")
+	// Not even the version. A released host is judged without the set, so carrying it would only make every host ever contained
+	// look stale the moment an operator edited the set, and hand each of them a release it already has.
+	assert.Zero(t, release.ReachableVersion)
+}
+
+// Releasing a contained host is the break-glass direction, so it must not depend on a row it does not use. A reachable-address set
+// that cannot be read must not be what stops an operator letting a host back onto the network.
+func TestSet_AReleaseDoesNotNeedTheReachableSet(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.setReachable(2, api.ReachableAddress{CIDR: "192.0.2.7/32"})
+	_, err := f.svc.Set(t.Context(), operator, "", "host-a", true, "beaconing", nil)
+	require.NoError(t, err)
+
+	// The set becomes unreadable, as it would if its row or the database behind it were unavailable.
+	boom := errors.New("reachable set unavailable")
+	svc := containment.NewService(f.store, func(context.Context, string) (bool, error) { return true, nil }, f.commands.QueueTx,
+		f.notified.notify, f.commands.LatestOfType, f.outbox, f.drain,
+		func(context.Context) (api.ReachableSet, error) { return api.ReachableSet{}, boom })
+
+	_, err = svc.Set(t.Context(), operator, "", "host-a", false, "let it back on the network", nil)
+	require.NoError(t, err, "a release must not be held up by the set it does not carry")
+
+	state, err := f.store.Get(t.Context(), "host-a")
+	require.NoError(t, err)
+	assert.False(t, state.Contained)
+
+	// A CONTAINMENT still fails loudly, because one queued without the set would silently withdraw every allowance.
+	_, err = svc.Set(t.Context(), operator, "", "host-a", true, "contain again", nil)
+	require.ErrorIs(t, err, boom)
 }

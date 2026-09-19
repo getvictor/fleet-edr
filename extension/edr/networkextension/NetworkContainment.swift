@@ -16,14 +16,21 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
     let serverPort: UInt16
     let serverAddresses: [String]
     let serverNames: [String]
+    /// reachableVersion identifies the reachable-address set these entries came from, and is what tells one set from another: the
+    /// entries themselves are not compared, so a set edited back to its previous contents is still a change the host is told about.
+    let reachableVersion: Int64
+    let reachable: [NetworkContainment.ReachableEntry]
 
-    init(version: Int64, epoch: Int64, contained: Bool, serverPort: UInt16, serverAddresses: [String], serverNames: [String] = []) {
+    init(version: Int64, epoch: Int64, contained: Bool, serverPort: UInt16, serverAddresses: [String], serverNames: [String] = [],
+         reachableVersion: Int64 = 0, reachable: [NetworkContainment.ReachableEntry] = []) {
         self.version = version
         self.epoch = epoch
         self.contained = contained
         self.serverPort = serverPort
         self.serverAddresses = serverAddresses
         self.serverNames = serverNames
+        self.reachableVersion = reachableVersion
+        self.reachable = reachable
     }
 
     var order: PushOrder { PushOrder(epoch: epoch, version: version) }
@@ -35,13 +42,18 @@ struct NetworkContainmentUpdate: Equatable, Sendable {
         return order > current.order
     }
 
-    /// refreshesLifeline reports whether this update is the current containment with a different server endpoint. The agent re-resolves
-    /// the server name while the host is contained and sends the same server state with the addresses it now resolves to, so an update
-    /// at the same epoch and version is accepted when only the lifeline moved.
+    /// refreshesLifeline reports whether this update is the current containment with a lifeline that moved. The agent re-resolves the
+    /// server name while the host is contained and sends the same server state with the addresses it now resolves to, so an update at
+    /// the same epoch and version is accepted when only the lifeline moved.
+    ///
+    /// The reachable set counts as part of that lifeline, because it changes without any host's containment state changing. It is
+    /// compared with GREATER THAN rather than inequality: versions only ever increase, so an update naming a lower one is a document
+    /// built before the change and delayed on its way here, and accepting it would roll the host's allowances back.
     func refreshesLifeline(_ current: NetworkContainmentUpdate?) -> Bool {
         guard let current else { return false }
         return order == current.order && contained == current.contained
-            && (serverPort != current.serverPort || serverAddresses != current.serverAddresses || serverNames != current.serverNames)
+            && (serverPort != current.serverPort || serverAddresses != current.serverAddresses || serverNames != current.serverNames
+                || reachableVersion > current.reachableVersion)
     }
 }
 
@@ -112,14 +124,26 @@ enum NetworkContainment {
     private static let dhcpv6ServerPort: UInt16 = 547
     private static let dhcpv6ClientPort: UInt16 = 546
     private static let dnsPort: UInt16 = 53
-    private static let ipv4HostPrefix = 32
-    private static let ipv6HostPrefix = 128
+    static let ipv4HostPrefix = 32
+    static let ipv6HostPrefix = 128
 
     private struct Document: Decodable {
         let version: Int64
         let epoch: Int64?
         let contained: Bool
         let server: Server?
+        /// Optional so a document persisted by an extension that predates the reachable-address set still decodes. A host that
+        /// upgrades while contained would otherwise fail to load its own state and come up uncontained (issue #1059).
+        let reachableVersion: Int64?
+        let reachable: [ReachableEntry]?
+    }
+
+    /// ReachableEntry is one operator-chosen destination as the agent sends it. The operator's note is not carried: it names the
+    /// destination for a human reading the console, and nothing here reads it.
+    struct ReachableEntry: Decodable, Equatable, Sendable {
+        let cidr: String
+        let port: Int?
+        let transport: String?
     }
 
     private struct Server: Decodable {
@@ -149,7 +173,8 @@ enum NetworkContainment {
         }
         return NetworkContainmentUpdate(
             version: document.version, epoch: document.epoch ?? 0, contained: true, serverPort: UInt16(server.port),
-            serverAddresses: server.addresses, serverNames: names.map(ContainedDNS.normalized)
+            serverAddresses: server.addresses, serverNames: names.map(ContainedDNS.normalized),
+            reachableVersion: document.reachableVersion ?? 0, reachable: document.reachable ?? []
         )
     }
 
@@ -174,6 +199,7 @@ enum NetworkContainment {
             rules.append(LifelineRule(address: any, prefix: 0, port: server, localPort: client, transport: .udp, direction: .any))
         }
         rules.append(contentsOf: resolverRules(for: resolvers))
+        rules.append(contentsOf: reachableRules(for: update.reachable))
         return rules
     }
 
@@ -236,7 +262,7 @@ enum NetworkContainment {
     private static let maxHostNameBytes = 253
     private static let maxLabelBytes = 63
 
-    private static func isIPv6(_ address: String) -> Bool {
+    static func isIPv6(_ address: String) -> Bool {
         address.contains(":")
     }
 }
@@ -286,25 +312,6 @@ struct ReleasedLifeline {
             accepted(state)
         }
     }
-}
-
-/// NetworkContainmentStatus is what the extension reports about containment: the update it holds and whether the content filter
-/// applied it. The agent reports it on, so the console can tell a host that has been told to contain from one that is contained.
-struct NetworkContainmentStatus: Codable, Equatable, Sendable {
-    let contained: Bool
-    let version: Int64
-    let epoch: Int64
-    let applied: Bool
-    let error: String?
-    /// appliedAddresses are the server addresses of the lifeline the running filter was confirmed to enforce, and nil when none was.
-    ///
-    /// Here because a lifeline refresh sends the same version and epoch with different addresses, so without it two different
-    /// lifelines report an identical status and the agent cannot tell which one the filter holds (issue #1066). The agent pins its
-    /// dials to the addresses named here, so it never dials an address the filter is not yet allowing.
-    let appliedAddresses: [String]?
-
-    /// eventType is the control event type the agent filters on, as it does for provider status.
-    static let eventType = "ne_containment_status"
 }
 
 /// NetworkContainmentStore keeps the last accepted containment state: on disk, so a restarted extension re-applies it before the agent
@@ -469,6 +476,7 @@ struct ContainmentStatusTracker {
     func status(held: NetworkContainmentUpdate) -> NetworkContainmentStatus {
         // Confirming clears the error and failing clears the confirmation, so an applied state never carries one.
         NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: held == applied,
-                                 error: error, appliedAddresses: applied?.serverAddresses)
+                                 error: error, appliedAddresses: applied?.serverAddresses,
+                                 appliedReachableVersion: applied?.reachableVersion)
     }
 }
