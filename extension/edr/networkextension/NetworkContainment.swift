@@ -314,25 +314,6 @@ struct ReleasedLifeline {
     }
 }
 
-/// NetworkContainmentStatus is what the extension reports about containment: the update it holds and whether the content filter
-/// applied it. The agent reports it on, so the console can tell a host that has been told to contain from one that is contained.
-struct NetworkContainmentStatus: Codable, Equatable, Sendable {
-    let contained: Bool
-    let version: Int64
-    let epoch: Int64
-    let applied: Bool
-    let error: String?
-    /// appliedAddresses are the server addresses of the lifeline the running filter was confirmed to enforce, and nil when none was.
-    ///
-    /// Here because a lifeline refresh sends the same version and epoch with different addresses, so without it two different
-    /// lifelines report an identical status and the agent cannot tell which one the filter holds (issue #1066). The agent pins its
-    /// dials to the addresses named here, so it never dials an address the filter is not yet allowing.
-    let appliedAddresses: [String]?
-
-    /// eventType is the control event type the agent filters on, as it does for provider status.
-    static let eventType = "ne_containment_status"
-}
-
 /// NetworkContainmentStore keeps the last accepted containment state: on disk, so a restarted extension re-applies it before the agent
 /// is back, and in memory, so a delayed older update is turned away.
 final class NetworkContainmentStore: Sendable {
@@ -495,6 +476,7 @@ struct ContainmentStatusTracker {
     func status(held: NetworkContainmentUpdate) -> NetworkContainmentStatus {
         // Confirming clears the error and failing clears the confirmation, so an applied state never carries one.
         NetworkContainmentStatus(contained: held.contained, version: held.version, epoch: held.epoch, applied: held == applied,
-                                 error: error, appliedAddresses: applied?.serverAddresses)
+                                 error: error, appliedAddresses: applied?.serverAddresses,
+                                 appliedReachableVersion: applied?.reachableVersion)
     }
 }

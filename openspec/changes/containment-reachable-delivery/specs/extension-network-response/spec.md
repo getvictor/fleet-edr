@@ -28,3 +28,44 @@ The network extension SHALL persist an accepted containment update before applyi
 - **GIVEN** any current state
 - **WHEN** a containment update arrives with no server addresses, an address that is not an IP literal, the unspecified address, or a port outside 1 to 65535
 - **THEN** it is refused and the current state stays in force
+
+### Requirement: The extension reports containment status
+
+The network extension SHALL report its containment status to the agent as an `ne_containment_status` control event describing the state it holds: whether the host is contained, that state's version and epoch, whether the content filter was confirmed to enforce that state, the server addresses of the lifeline that filter was confirmed to enforce, the version of the reachable-address set it was confirmed to enforce, and the error when the latest attempt to apply it failed or found no content filter running. The lifeline addresses SHALL be absent when no state is confirmed. They are what tells one lifeline from another, because a refresh carries the same version and epoch and changes only the addresses, so without them the agent cannot know which lifeline the filter holds. The reachable-set version is reported for the same reason and a sharper one: a change to that set reuses the containment version and epoch, so a status describing the previous set is otherwise indistinguishable from one describing the new one, and an agent waiting for such a change to be applied would accept the older status as its confirmation and report a success the host is not enforcing. A held state waiting behind an apply in flight, being applied to a content filter that has just started, or waiting for the content filter to start after the extension starts, SHALL be reported as not applied with no error. A state is reported applied only when the running filter was confirmed to enforce it: an earlier state that was applied SHALL NOT be reported in its place, and neither a failed attempt nor the running filter stopping SHALL leave an earlier confirmation standing. It SHALL report after every change and whenever an agent completes the hello handshake, including before the content filter has started. A host that has never received a containment update SHALL send no status. Filter settings SHALL be applied one at a time, so a later update never takes effect before an earlier one, and a result from a filter that has since stopped SHALL NOT be reported.
+
+#### Scenario: The status names the lifeline the filter enforces
+
+- **GIVEN** a contained host whose content filter was confirmed to enforce a lifeline
+- **WHEN** the extension reports its status
+- **THEN** the status names that lifeline's server addresses
+- **AND** a status for a state no filter is confirmed to enforce names none
+
+#### Scenario: The status says whether containment was applied
+
+- **GIVEN** the extension has applied, or failed to apply, a containment
+- **WHEN** it reports its status
+- **THEN** the event carries contained, version, epoch, applied and, on failure, the error
+
+#### Scenario: Updates in quick succession apply in order
+
+- **GIVEN** filter settings are being applied for one containment update
+- **WHEN** a newer update is accepted before that apply completes
+- **THEN** the newer settings are applied after it, and only the newer state is reported
+
+#### Scenario: A stopped filter's result is not reported
+
+- **GIVEN** filter settings are being applied to a content filter
+- **WHEN** that filter stops and a replacement starts before the apply completes
+- **THEN** the completed apply is not reported, and the replacement is given the current state
+
+#### Scenario: A failed apply is not reported as applied
+
+- **GIVEN** a running filter was confirmed to enforce the held state
+- **WHEN** a later attempt to apply that state fails, or finds no content filter running
+- **THEN** the status names the state as not applied, with the failure as its error
+
+#### Scenario: A state waiting to be applied is reported as pending
+
+- **GIVEN** the extension holds a containment update whose filter settings have not yet been confirmed
+- **WHEN** it reports its status
+- **THEN** the status names that update's version as not applied, with no error

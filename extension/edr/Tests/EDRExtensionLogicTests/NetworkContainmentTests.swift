@@ -313,8 +313,9 @@ final class NetworkContainmentTests: XCTestCase {
         tracker.confirmed(held)
         XCTAssertEqual(tracker.status(held: held),
                        NetworkContainmentStatus(contained: true, version: 4, epoch: 100, applied: true, error: nil,
-                                                appliedAddresses: held.serverAddresses),
-                       "a confirmed state names the lifeline the filter holds")
+                                                appliedAddresses: held.serverAddresses,
+                                                appliedReachableVersion: held.reachableVersion),
+                       "a confirmed state names the lifeline the filter holds, which includes the set of destinations it allows")
 
         tracker.failed("content filter is not running")
         tracker.pending()

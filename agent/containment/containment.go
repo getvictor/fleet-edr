@@ -76,6 +76,12 @@ type Status struct {
 	// was. A refresh sends the same version and epoch with different addresses, so this is the only thing that tells one lifeline
 	// from another, and it is what the agent pins its dials to (issue #1066).
 	AppliedAddresses []string `json:"appliedAddresses"`
+	// AppliedReachableVersion is the reachable-address set the extension's filter was confirmed to enforce (issue #1059). A change
+	// to that set reuses the containment version and epoch, so without it a status describing the PREVIOUS set cannot be told from
+	// one describing the new one, and a command that changed only the set would take the older status as its confirmation and
+	// report success while the host still enforced the old allowances. Absent from an extension that predates the set, which reads
+	// as version 0 and matches the empty set every deployment starts with.
+	AppliedReachableVersion int64 `json:"appliedReachableVersion"`
 }
 
 // document is the network_containment.update the extension decodes: the command plus the lifeline.
@@ -459,6 +465,11 @@ func (m *Manager) confirm(ctx context.Context, waiter chan Status, cmd Command) 
 				case s.Contained != cmd.Contained:
 					// The extension refused this state because it holds a different one at the same version.
 					return Status{}, fmt.Errorf("the host holds a different state at version %d", s.Version)
+				case s.Applied && cmd.Contained && s.AppliedReachableVersion != cmd.ReachableVersion:
+					// The right containment, the wrong set: a status that predates this command, since a set change reuses the
+					// version and epoch. Kept waiting rather than accepted, or the command would report success for a set the
+					// host is not enforcing and nothing would queue it again.
+					continue
 				case s.Applied:
 					return s, nil
 				case s.Error != "":

@@ -139,6 +139,8 @@ let package = Package(
                 // NetworkContainmentReachable.swift is the operator-chosen destinations a contained host may still reach
                 // (#1059), kept apart from the lifeline the product builds for itself.
                 "networkextension/NetworkContainmentReachable.swift",
+                // NetworkContainmentStatus.swift is what the extension tells the agent about the state its filter holds.
+                "networkextension/NetworkContainmentStatus.swift",
                 // ContainedDNS.swift is the DNS proxy's decision while the host is contained: forward the server's name, refuse the
                 // rest. Pure, with its own strict question reader, separate from DNSParser's lenient telemetry parser.
                 "networkextension/ContainedDNS.swift",

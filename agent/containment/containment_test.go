@@ -97,7 +97,12 @@ func (f *fakeExtension) reset() {
 
 // applies answers every document the way a healthy extension does: it holds and applies what it was sent.
 func applies(d document) *Status {
-	return &Status{Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true}
+	// The applied set version is echoed the way the real extension reports what its filter enforces: a set change reuses the
+	// containment version and epoch, so it is the only thing that tells one applied set from another.
+	return &Status{
+		Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true,
+		AppliedReachableVersion: d.ReachableVersion,
+	}
 }
 
 func newTestManager(t *testing.T, target Target, respond func(document) *Status) (*Manager, *fakeExtension, *fakeResolver) {
@@ -1420,4 +1425,28 @@ func TestApply_ASetOnlyChangeIsAdoptedThoughTheStateDidNot(t *testing.T) {
 	sent := awaitSent(t, ext, 3)
 	assert.Equal(t, int64(2), sent[2].ReachableVersion, "the refresh carries the set the host was last told about")
 	assert.Equal(t, []ReachableAddress{{CIDR: "198.51.100.5/32"}}, sent[2].Reachable)
+}
+
+// A set change reuses the containment version and epoch, so a status describing the PREVIOUS set is indistinguishable from one
+// describing the new one except by the set version the extension reports. Without comparing it, a command that changed only the set
+// would take an older status as its confirmation and report success while the host still enforced the old allowances, and nothing
+// would queue it again: the server would believe it delivered (issue #1059).
+func TestApply_ASetChangeIsNotConfirmedByAStatusForTheOldSet(t *testing.T) {
+	t.Parallel()
+	// An extension that applies the containment but keeps reporting the set it already had.
+	stale := func(d document) *Status {
+		return &Status{Contained: d.Contained, Version: d.Version, Epoch: d.Epoch, Applied: true, AppliedReachableVersion: 1}
+	}
+	m, _, res := newTestManager(t, serverTarget, stale)
+	res.set("203.0.113.7")
+
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":1,
+		"reachable":[{"cidr":"192.0.2.7/32"}]}`))
+	require.NoError(t, err, "the set it reports is the set that was sent, so this one confirms")
+
+	// The same containment, a new set. The extension keeps reporting set 1, so nothing here confirms set 2.
+	_, err = m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":2,
+		"reachable":[{"cidr":"198.51.100.5/32"}]}`))
+	require.Error(t, err, "a status for the previous set must not confirm this command")
+	assert.Contains(t, err.Error(), "did not confirm")
 }
