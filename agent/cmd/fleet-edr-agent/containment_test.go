@@ -100,9 +100,11 @@ func TestControlDialOptions(t *testing.T) {
 	assert.Equal(t, "passthrough:///edr.example.com:8443", target, "the dial receives the server's name, not addresses gRPC resolved")
 	assert.Len(t, opts, 1)
 
+	// A proxied server is tunnelled here rather than by gRPC (issue #1064). gRPC's own proxy support would resolve the proxy's NAME,
+	// which a contained host cannot do, so the control channel could not reconnect while contained.
 	target, opts = controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, proxied)
-	assert.Equal(t, "edr.example.com:8443", target, "a proxied server keeps gRPC's proxy dialing")
-	assert.Empty(t, opts)
+	assert.Equal(t, "passthrough:///edr.example.com:8443", target, "gRPC must not resolve anything, proxy or server")
+	assert.Len(t, opts, 1)
 }
 
 // eventConnector is a receiver.Connector that delivers a fixed list of events once connected and then stays open.
