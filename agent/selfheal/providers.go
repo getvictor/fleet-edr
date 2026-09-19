@@ -24,6 +24,15 @@ const ProviderStopped = "stopped"
 // never be read as recovery.
 const ProviderRunning = "running"
 
+// ProviderDisabled is the state reported for a provider an operator deliberately switched off (issue #1078). It is the only
+// AFFIRMATIVE evidence of that decision: absence carries the same meaning on an extension predating the state, but it also
+// carries three others, so only this value may be acted on.
+//
+// The same three values are spelled in agent/health, which grades them into component status. They are duplicated rather than
+// shared because this package deliberately holds no dependency on the health registry beyond the one-method HealthSink; the
+// vocabulary belongs to the extension, and both packages mirror it.
+const ProviderDisabled = "disabled"
+
 // subcommand maps a provider wire identifier to the host-app subcommand that re-enables it. A provider missing from this
 // table is reported but not remediable, which is the honest default for one this build does not know how to restore: it
 // still shows up as unhealthy, it just is not acted on.

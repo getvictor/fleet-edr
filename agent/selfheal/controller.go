@@ -117,6 +117,9 @@ type providerState struct {
 	// remediating guards against a second remediation being launched for a provider while one is in flight; reports keep
 	// arriving during the several seconds an enable takes.
 	remediating bool
+	// cancel stops the enable in flight, and is nil when none is. Set under the lock at the moment the attempt is planned,
+	// not inside the remediation goroutine, so there is no window in which an attempt is running with nothing able to stop it.
+	cancel context.CancelFunc
 	// escalation is the operator-facing diagnosis recorded when the budget was spent; empty means the budget remains. It is
 	// retained rather than being a bare bool because it has to be RE-ASSERTED on every later report: the receiver loop calls
 	// MarkProviders before Observe, and that overwrites the component's reason with provider_stopped. Without re-asserting,
@@ -167,31 +170,55 @@ func (c *Controller) Observe(ctx context.Context, providers map[string]string) [
 	if c.remediator == nil {
 		return nil
 	}
-	launched, attempts, reassert := c.plan(ctx, providers)
-	// Both of these run OUTSIDE the controller's mutex: escalate takes the health registry's lock, and holding two locks in
-	// an order nothing else guarantees is how deadlocks get built.
+	launched, reassert, abandoned := c.plan(ctx, providers)
+	// All three of these run OUTSIDE the controller's mutex: escalate takes the health registry's lock, and holding two locks
+	// in an order nothing else guarantees is how deadlocks get built.
+	for _, cancel := range abandoned {
+		cancel()
+	}
 	for provider, detail := range reassert {
 		c.escalate(provider, detail)
 	}
-	for _, name := range launched {
-		go c.remediate(ctx, name, attempts[name])
+	names := make([]string, 0, len(launched))
+	for _, l := range launched {
+		names = append(names, l.provider)
+		// nolint:contextcheck // l.ctx IS derived from ctx, in plan, which is where it has to be created: the cancel must be
+		// stored under the controller's lock at the moment the attempt is planned, or a report arriving before this goroutine
+		// is scheduled would find nothing to cancel. The linter cannot see the parentage through the struct field.
+		go c.remediate(l.ctx, l.cancel, l.provider, l.state, l.attempt)
 	}
-	return launched
+	return names
+}
+
+// attempt is one remediation the caller should start: which provider, the episode it belongs to, the context that stops it, and
+// which attempt of the budget it is.
+type attempt struct {
+	provider string
+	state    *providerState
+	ctx      context.Context
+	// cancel releases ctx. remediate owns it and defers it, so the context is released on every path out of the attempt,
+	// including the one where the report that would have cancelled it never arrives.
+	cancel  context.CancelFunc
+	attempt int
 }
 
 // plan is the locked half of Observe: it advances the per-provider state and reports what the caller should do. Split out so
 // the mutex is released before any call that reaches the health registry or spawns a remediation.
 func (c *Controller) plan(ctx context.Context, providers map[string]string) (
-	launched []string, attempts map[string]int, reassert map[string]string,
+	launched []attempt, reassert map[string]string, abandoned []context.CancelFunc,
 ) {
 	stopped := map[string]bool{}
 	for _, p := range Remediable(providers) {
 		stopped[p] = true
 	}
 	running := map[string]bool{}
+	disabled := map[string]bool{}
 	for name, state := range providers {
-		if state == ProviderRunning {
+		switch state {
+		case ProviderRunning:
 			running[name] = true
+		case ProviderDisabled:
+			disabled[name] = true
 		}
 	}
 
@@ -213,8 +240,29 @@ func (c *Controller) plan(ctx context.Context, providers map[string]string) (
 		delete(c.state, name)
 	}
 
+	// An operator who disables a provider has decided it should be off, and the agent must stop trying to turn it on. That is
+	// not covered by the eligibility filter: a `disabled` provider never STARTS a remediation, but one already in flight would
+	// otherwise finish and re-enable what the operator just switched off (issue #1104).
+	//
+	// Only the affirmative `disabled` state does this, never absence. Absence also means "nothing has started yet" and "the
+	// payload did not decode", and cancelling a legitimate repair because a report arrived empty is the opposite failure.
+	//
+	// The episode is dropped along with the attempt in flight, so a provider that is later re-enabled and stops again starts
+	// from a fresh grace window and a full budget rather than meeting the leftovers of the stop before the operator's decision.
+	for name := range disabled {
+		st := c.state[name]
+		if st == nil {
+			continue
+		}
+		if st.cancel != nil {
+			abandoned = append(abandoned, st.cancel)
+		}
+		c.logger.InfoContext(ctx, "capture provider was disabled by an operator; abandoning self-heal for it",
+			"provider", name, "attempts", st.attempts, "remediating", st.remediating)
+		delete(c.state, name)
+	}
+
 	now := c.now()
-	attempts = map[string]int{}
 	reassert = map[string]string{}
 	for name := range stopped {
 		st := c.state[name]
@@ -237,29 +285,45 @@ func (c *Controller) plan(ctx context.Context, providers map[string]string) (
 		}
 		st.remediating = true
 		st.attempts++
-		attempts[name] = st.attempts
-		launched = append(launched, name)
+		// The context is derived and stored here, under the lock, rather than in the remediation goroutine: between planning an
+		// attempt and that goroutine being scheduled, a report could arrive that should stop it, and there would be nothing to
+		// stop. The cancel is released in remediate.
+		// #nosec G118 -- the cancel is not dropped: it is stored on the episode so a disable can fire it, and handed to
+		// remediate, which defers it. gosec only recognises a cancel released in the same function.
+		rctx, cancel := context.WithCancel(ctx)
+		st.cancel = cancel
+		launched = append(launched, attempt{provider: name, state: st, ctx: rctx, cancel: cancel, attempt: st.attempts})
 	}
-	sort.Strings(launched)
-	return launched, attempts, reassert
+	sort.Slice(launched, func(i, j int) bool { return launched[i].provider < launched[j].provider })
+	return launched, reassert, abandoned
 }
 
 // remediate runs one enable attempt and records the outcome. It deliberately does NOT verify the provider came back: the
 // extension's next liveness report is the authority on that, and treating our own exit code as proof would let a
 // successful-but-ineffective enable clear the state.
-func (c *Controller) remediate(ctx context.Context, provider string, attempt int) {
+func (c *Controller) remediate(ctx context.Context, cancel context.CancelFunc, provider string, episode *providerState,
+	attempt int) {
+	// The attempt owns its context for exactly as long as it runs. Deferred rather than called at the end because the early
+	// return below (the episode ended while this was in flight) is a path out too, and a context left uncancelled there would
+	// accumulate one leak per abandoned attempt.
+	defer cancel()
 	c.logger.InfoContext(ctx, "restoring stopped capture provider", "provider", provider, "attempt", attempt, "max", c.maxAttempts)
 	err := c.remediator.Enable(ctx, provider)
 
 	c.mu.Lock()
-	st := c.state[provider]
-	if st == nil {
-		// The provider was reported running (or absent) while this attempt was in flight, so its state was cleared. The
-		// heal is moot either way; do not resurrect the entry.
+	// Compared by IDENTITY, not by presence. The entry under this name may be a LATER episode: the provider can be reported
+	// running (or disabled) while this attempt is in flight, which drops the episode, and then stop again and open a new one.
+	// Writing this attempt's outcome into that new episode would spend a budget it never used, and could escalate a stop no
+	// remediation had been tried for.
+	if st := c.state[provider]; st != episode {
+		// The episode this attempt belonged to is over: the provider came back, or an operator disabled it. Either way the
+		// heal is moot, and nothing of this attempt is recorded.
 		c.mu.Unlock()
 		return
 	}
+	st := episode
 	st.remediating = false
+	st.cancel = nil
 	// The budget bounds ATTEMPTS, not failures. An enable that returns success but does not actually bring the provider
 	// back still burns one: the provider is still stopped in the next report, so a success-only path that skipped this
 	// check would retry forever, rewriting NetworkExtension preferences indefinitely while the host stayed blind. That is

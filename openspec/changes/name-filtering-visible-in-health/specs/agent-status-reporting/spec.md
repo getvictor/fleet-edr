@@ -74,6 +74,12 @@ A capture provider the operator has deliberately disabled SHALL NOT be re-enable
 
 The agent SHALL distinguish the two cases by the report it already receives: a deliberately disabled provider is reported `disabled`, and only a provider reported stopped is eligible for remediation. Neither a `disabled` provider nor one missing from the map is eligible, so an extension that reports the state and one that predates it are both safe from remediation.
 
+Eligibility alone does not settle it, because an operator can disable a provider while a repair for it is already running. On learning that a provider is `disabled`, the agent SHALL stop any enable it currently has in flight for that provider and SHALL record nothing of that attempt. The agent cannot undo an enable that already completed before the decision reached it, so this bounds how long it keeps working against the operator rather than removing the race; what it does guarantee is that the agent stops as soon as it is told, and does not resume.
+
+Only the affirmative `disabled` state SHALL do this. Absence SHALL NOT, because absence is also how a host reports a provider before anything has started, how an extension predating the state reports a disable, and what remains when a report cannot be decoded; abandoning a repair on any of those would be the opposite failure.
+
+A provider whose repair was abandoned this way SHALL keep no state from that episode, so that a provider later turned back on which stops again is treated as a new fault, with a full grace window and a full attempt budget, rather than meeting the remains of the episode the operator interrupted.
+
 #### Scenario: A deliberately disabled provider is not re-enabled
 
 - **GIVEN** an operator has disabled the opt-in DNS proxy
@@ -81,6 +87,21 @@ The agent SHALL distinguish the two cases by the report it already receives: a d
 - **WHEN** the agent evaluates the report for remediation
 - **THEN** no remediation is attempted for that provider
 - **AND** the provider stays disabled
+
+#### Scenario: An enable already running is abandoned
+
+- **GIVEN** the agent has an enable in flight for a stopped provider
+- **WHEN** a report arrives saying that provider is now `disabled`
+- **THEN** the agent stops the enable in flight
+- **AND** records no attempt and no escalation for it
+- **AND** a report that merely omits the provider does neither of those, because absence is not a decision
+
+#### Scenario: A provider turned back on starts fresh
+
+- **GIVEN** a provider whose repair was abandoned because an operator disabled it
+- **WHEN** it is later turned back on and stops again
+- **THEN** the agent serves a full grace window before remediating it
+- **AND** counts the next remediation as the first attempt of a full budget
 
 ### Requirement: Transition records distinguish a fault from a supported configuration
 
