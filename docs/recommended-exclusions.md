@@ -10,7 +10,7 @@ An exclusion is `(rule_id, match_type, value)`, with an optional expiry. The val
 
 - `parent_path_glob`: matches a chain's non-shell parent path. `*` matches any run of characters including `/`, and it is the only wildcard. A pattern with no `*` is an exact match. Matching is case-sensitive.
 - `team_id`: matches an Apple Developer team ID exactly (the `TeamIdentifier` field of the code signature).
-- `signing_id`: matches a code-signing identifier exactly (the `Identifier` field, for example `com.anthropic.claude-code`). It is checked on its own, not together with the team ID.
+- `signing_id`: matches a code-signing identifier QUALIFIED by who signed it, written `<TEAMID>:<identifier>` (for example `Q6L2SF6YDW:com.anthropic.claude-code`) or `platform:<identifier>` for a binary Apple ships. Both parts must match, so an ad-hoc binary claiming a vendor's identifier is not covered. `codesign -dv <binary>` prints both fields. A bare identifier is refused.
 - `cdhash`: matches a binary's code-directory hash exactly (40 lowercase hex characters), pinning one exact build. The agent reports a cdhash only for binaries built with Hardened Runtime, so it cannot match an ad-hoc signed binary such as most Homebrew formulae.
 - `path_glob`: matches an absolute filesystem path with the same glob semantics as `parent_path_glob`.
 
@@ -32,7 +32,7 @@ A matched exclusion suppresses the finding before an alert is created, and nothi
 ## Caveats before you add an exclusion
 
 - **Prefer `team_id` for any Developer-ID signed tool.** On Apple Silicon the kernel refuses to run a binary whose signature does not validate, so a planted binary cannot carry a real vendor's team ID. It also survives version updates. Confirm the exact team before allowlisting it: `codesign -dv <binary>` prints `TeamIdentifier`.
-- **Do not rely on `signing_id` alone.** An ad-hoc signature can claim any identifier (`codesign -s - -i com.anthropic.claude-code ./payload`), and the rule matches the identifier without requiring a team ID. A `signing_id` exclusion therefore offers no more protection than a path glob. Use `team_id` instead.
+- **Use `signing_id` to narrow a team, not to stand in for one.** The value carries the team (`Q6L2SF6YDW:com.anthropic.claude-code`), so an ad-hoc signature claiming that identifier is not covered by it: `codesign -s - -i com.anthropic.claude-code ./payload` produces a binary with no team, which matches nothing. Reach for it when a vendor ships several tools and you want one of them rather than all of them. A bare identifier is refused by the API, because it would be whatever the signer typed.
 - **An exclusion trusts everything the parent can be made to run, not just the activity you saw.** An attacker does not need to plant anything to use an excluded parent; invoking the real binary is enough. Never exclude a script interpreter (`python`, `ruby`, `node`, `perl`, `osascript`): `ruby -e 'system("curl ...")'` launders any shell through it. Tools that run commands from their own configuration carry the same risk: `git` (aliases, hooks and `core.sshCommand`), git hook runners such as lefthook and husky, terminal multiplexers, IDEs, and AI coding assistants. Exclude those only where their noise outweighs that blind spot, and prefer an expiry.
 - **Never start a path glob with `*`, and minimize interior wildcards.** Because `*` matches any run of characters including `/`, a leading-wildcard pattern like `*/claude/versions/*` matches that fragment anywhere on disk, so an attacker who can write to `/tmp` creates `/tmp/claude/versions/payload` and runs it to land inside the exclusion. A trailing `*` has the same problem inside a directory: `/Users/alice/.local/share/mise/installs/lefthook/*` matches any file an attacker drops anywhere under that tree. Anchor to the full absolute path of the binary itself.
 - **A path exclusion is only as trustworthy as the write permissions on the directory it points at.** With System Integrity Protection on, system paths (`/usr/bin`, `/usr/libexec`, `/bin`) cannot be written even by root. Homebrew is not in that class: its installer makes `/opt/homebrew` (Apple Silicon) and its directories under `/usr/local` (Intel) owned by the installing user, so any process running as that user can place a binary at an excluded Homebrew path. The same holds for anything under a user home. Check ownership with `stat -f '%Su' <dir>` before trusting a path. On multi-user hosts a wildcarded user segment (`/Users/*/...`) is worse, because it lets every local user plant a binary at the excluded path.
@@ -44,7 +44,7 @@ A matched exclusion suppresses the finding before an alert is created, and nothi
 - `/usr/libexec/sshd-session` as a parent on a workstation. It silences every command run over SSH, which is exactly what an attacker with a stolen key or password runs. Where routine SSH administration makes it necessary on a server, set an expiry.
 - Any script interpreter as a parent, by path or by signature (see the caveats).
 - A glob that ends in `*` inside a user-writable directory, or that starts with `*`.
-- A `signing_id` exclusion standing in for a `team_id` one.
+- A `signing_id` exclusion whose team half names a team you have not confirmed with `codesign -dv`.
 
 ## Workstations vs servers
 

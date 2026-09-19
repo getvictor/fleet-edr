@@ -285,8 +285,9 @@ func parentPathFor(parent, child *api.Process) string {
 // (issue #520): the path glob (match type parent_path_glob) and the parent's already-persisted code-signing identity (team_id,
 // signing_id, cdhash). The signature dimensions let an operator exclude a benign signed parent (e.g. a Developer-ID developer tool
 // such as Claude Code) by its team ID rather than a path glob an attacker who can write to /tmp can land inside. Each dimension is
-// checked on its own, so a signing_id exclusion also matches an ad-hoc signed binary that claims that identifier: only team_id and
-// cdhash resist a planted binary. Glob semantics live in the resolver (api.GlobMatch).
+// checked on its own, and every one of them now resists a planted binary: a signing_id exclusion is matched against the identifier
+// QUALIFIED by the team that signed it, or by `platform` for an operating-system binary, so an ad-hoc signature claiming a vendor's
+// identifier composes to nothing and matches no exclusion (issue #1024). Glob semantics live in the resolver (api.GlobMatch).
 //
 // A parent with no process ROW is not the blanket non-match it used to be, and that sentence in this doc was what issue #831 had to
 // undo. Pid 1 is nameable, so the path glob applies to it; a parent that cannot be named at all still matches nothing, and a parent
@@ -314,7 +315,11 @@ func parentExcluded(r shellChainRule, parent, child *api.Process, hostID string)
 			if cs.TeamID != "" && r.exclusionResolver().Excluded(r.ID(), api.ExclusionMatchTeamID, cs.TeamID, hostID) {
 				return true
 			}
-			if cs.SigningID != "" && r.exclusionResolver().Excluded(r.ID(), api.ExclusionMatchSigningID, cs.SigningID, hostID) {
+			// QUALIFIED by who signed it, never the bare identifier (issue #1024). An ad-hoc binary can claim any vendor's
+			// identifier, so the bare form let a planted binary inherit that vendor's exclusion. A process with no team and
+			// no platform flag composes to "" and matches no signing_id exclusion at all.
+			if qualified := api.QualifiedSigningID(cs.TeamID, cs.SigningID, cs.IsPlatformBinary); qualified != "" &&
+				r.exclusionResolver().Excluded(r.ID(), api.ExclusionMatchSigningID, qualified, hostID) {
 				return true
 			}
 		}

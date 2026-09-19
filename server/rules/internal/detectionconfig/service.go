@@ -134,6 +134,13 @@ func (s *Service) CreateExclusion(
 	if err := s.validateExclusionSupport(in); err != nil {
 		return api.DetectionExclusion{}, err
 	}
+	// Refused here rather than silently stored: an exclusion whose value can never match is one an operator believes is
+	// suppressing something (issue #1024).
+	if err := api.ValidateExclusionValue(in.MatchType, in.Value); err != nil {
+		// Both wrapped: the REST boundary maps ErrInvalidRequest to 400, and a caller that wants to know which rule was broken
+		// can still reach the specific error rather than parsing the message.
+		return api.DetectionExclusion{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
 	excl, err := s.store.CreateExclusion(ctx, in, func(id int64) (auditoutbox.Entry, error) {
 		return auditEntry(ctx, actor, identityapi.AuditDetectionConfigExclusionCreate, "detection_exclusion",
 			strconv.FormatInt(id, 10), reason, map[string]any{

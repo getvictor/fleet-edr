@@ -31,6 +31,21 @@ import "./DetectionConfig.scss";
 // rule's supported_exclusion_match_types on GET /api/rules.
 const MATCH_TYPES = ["path_glob", "parent_path_glob", "team_id", "signing_id", "cdhash", "sha256", "command_substring", "domain"] as const;
 
+// What a value for each match type has to look like, where that is not obvious from the name. Only signing_id has a shape the
+// API refuses, and it is the one an operator is most likely to get wrong: the identifier alone is whatever the signer typed, and
+// an ad-hoc signature can claim any vendor's, so the value carries the team that signed it (issue #1024).
+const VALUE_HINTS: Partial<Record<(typeof MATCH_TYPES)[number], { placeholder: string; help: string }>> = {
+  signing_id: {
+    placeholder: "Q6L2SF6YDW:com.anthropic.claude-code",
+    help:
+      "Qualified by who signed it: <TEAMID>:<identifier>, or platform:<identifier> for a binary Apple ships. " +
+      "`codesign -dv <binary>` prints TeamIdentifier and Identifier. A bare identifier is refused, because an ad-hoc " +
+      "signature can claim any vendor's.",
+  },
+  team_id: { placeholder: "Q6L2SF6YDW", help: "The TeamIdentifier field from `codesign -dv <binary>`." },
+  cdhash: { placeholder: "40 lowercase hex characters", help: "Pins one exact build; reported only for Hardened Runtime binaries." },
+};
+
 // The per-rule modes an operator can select. Monitor was excluded here by the detection-tuning-author-and-modes change, on the
 // grounds that it had no review surface and was a legacy value on a handful of rows.
 //
@@ -691,6 +706,7 @@ export function DetectionConfig() {
   }, []);
 
   const addDisabled = !formRuleID || !formMatchType || !formValue.trim() || !formReason.trim();
+  const valueHint = VALUE_HINTS[formMatchType as (typeof MATCH_TYPES)[number]];
 
   return (
     <>
@@ -760,8 +776,9 @@ export function DetectionConfig() {
                     onChange={(e) => {
                       setFormValue(e.target.value);
                     }}
-                    placeholder="/Applications/MyApp.app/Contents/MacOS/MyApp"
+                    placeholder={valueHint?.placeholder ?? "/Applications/MyApp.app/Contents/MacOS/MyApp"}
                   />
+                  {valueHint && <p className="detection-config__note">{valueHint.help}</p>}
                 </div>
                 <div className="detection-config__form-field--full">
                   <Input

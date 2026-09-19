@@ -407,3 +407,47 @@ func TestService_ARefusedChangeLeavesNoAuditEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 }
+
+// A bare signing_id value is refused at the API, because an exclusion whose value can never match is one an operator believes is
+// suppressing something (issue #1024). The value is qualified by the team that signed the binary, or by `platform` for one the
+// operating system ships; an ad-hoc signature can claim any identifier, so the bare form was a bypass.
+//
+// spec:server-detection-rules-engine/signature-based-parent-exclusions/a-bare-signing-id-exclusion-is-refused
+func TestService_CreateExclusion_RefusesABareSigningID(t *testing.T) {
+	t.Parallel()
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "ops@fleetdm.com")}
+	support := map[string][]api.ExclusionMatchType{
+		"suspicious_exec": {api.ExclusionMatchSigningID},
+	}
+
+	t.Run("a bare identifier is rejected", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{})
+		svc.SetRuleExclusionSupport(support)
+
+		_, err := svc.CreateExclusion(context.Background(), actor, "vendor tool", detectionconfig.CreateExclusionInput{
+			RuleID: "suspicious_exec", MatchType: api.ExclusionMatchSigningID, Value: "com.anthropic.claude-code",
+		})
+
+		require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+		require.ErrorIs(t, err, api.ErrSigningIDNotQualified)
+		list, lerr := svc.ListExclusions(context.Background())
+		require.NoError(t, lerr)
+		assert.Empty(t, list, "a refused exclusion must not be stored")
+	})
+
+	for _, value := range []string{"Q6L2SF6YDW:com.anthropic.claude-code", "platform:com.apple.osascript"} {
+		t.Run("a qualified value persists: "+value, func(t *testing.T) {
+			t.Parallel()
+			svc := newService(t, &fakeAudit{})
+			svc.SetRuleExclusionSupport(support)
+
+			excl, err := svc.CreateExclusion(context.Background(), actor, "vendor tool", detectionconfig.CreateExclusionInput{
+				RuleID: "suspicious_exec", MatchType: api.ExclusionMatchSigningID, Value: value,
+			})
+
+			require.NoError(t, err)
+			assert.NotZero(t, excl.ID)
+		})
+	}
+}
