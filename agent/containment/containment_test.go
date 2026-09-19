@@ -1315,3 +1315,61 @@ func TestTargetAddressIsTheSpellingThePinMatches(t *testing.T) {
 		})
 	}
 }
+
+// A lifeline refresh re-sends the whole document, so it has to carry the allowances the command brought. Built without them, the
+// refresh reaches the extension as the SAME containment with its allowances withdrawn, and the extension takes that as a lifeline
+// that moved and enforces it: the operator's chosen destinations would go dark the first time the server's address changed, with
+// nothing anywhere reporting a change (issue #1059).
+func TestRefresh_CarriesTheAllowancesTheCommandBrought(t *testing.T) {
+	t.Parallel()
+	m, ext, res := newTestManager(t, serverTarget, applies)
+	res.set("203.0.113.7")
+
+	_, err := m.Apply(t.Context(), []byte(`{"version":3,"epoch":100,"contained":true,"reachable_version":4,
+		"reachable":[{"cidr":"192.0.2.7/32","port":443,"transport":"tcp"}]}`))
+	require.NoError(t, err)
+	sent := awaitSent(t, ext, 1)
+	require.Equal(t, int64(4), sent[0].ReachableVersion)
+	require.Len(t, sent[0].Reachable, 1)
+
+	// The extension reconnects, which is the case that re-sends the lifeline: a send reports no delivery, so one made over the
+	// dropped connection may never have arrived. The server has moved meanwhile, so the refresh carries new addresses.
+	res.set("203.0.113.9")
+	m.Reconnected()
+	held := Status{Contained: true, Version: 3, Epoch: 100, Applied: true}
+	m.Observe(t.Context(), held)
+	refreshed := awaitSent(t, ext, 2)
+
+	assert.Equal(t, []string{"203.0.113.9"}, refreshed[1].Server.Addresses, "the refresh moved the server")
+	assert.Equal(t, int64(4), refreshed[1].ReachableVersion, "and kept the set")
+	assert.Equal(t, []ReachableAddress{{CIDR: "192.0.2.7/32", Port: 443, Transport: "tcp"}}, refreshed[1].Reachable)
+}
+
+// The document the extension decodes, pinned as bytes. The operator's note is deliberately absent: it names a destination for a
+// human reading the console, and nothing on the host reads it.
+func TestApply_TheDocumentCarriesTheAllowancesWithoutTheNote(t *testing.T) {
+	t.Parallel()
+	doc := document{
+		Version: 3, Epoch: 100, Contained: true,
+		Server:           &server{Port: 8443, Addresses: []string{"203.0.113.7"}},
+		ReachableVersion: 4,
+		Reachable:        []ReachableAddress{{CIDR: "192.0.2.7/32", Port: 443, Transport: "tcp"}, {CIDR: "10.0.0.0/8"}},
+	}
+	body, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"version":3,"epoch":100,"contained":true,`+
+		`"server":{"port":8443,"addresses":["203.0.113.7"]},"reachableVersion":4,`+
+		`"reachable":[{"cidr":"192.0.2.7/32","port":443,"transport":"tcp"},{"cidr":"10.0.0.0/8"}]}`, string(body))
+}
+
+// A release carries no allowances, because nothing is being restricted for them to qualify.
+func TestApply_AReleaseSendsNoAllowances(t *testing.T) {
+	t.Parallel()
+	m, ext, _ := newTestManager(t, serverTarget, applies)
+	_, err := m.Apply(t.Context(), []byte(`{"version":4,"epoch":100,"contained":false,"reachable_version":4,
+		"reachable":[{"cidr":"192.0.2.7/32"}]}`))
+	require.NoError(t, err)
+	sent := awaitSent(t, ext, 1)
+	assert.Zero(t, sent[0].ReachableVersion)
+	assert.Empty(t, sent[0].Reachable)
+}

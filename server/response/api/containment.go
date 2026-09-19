@@ -17,6 +17,16 @@ type SetNetworkContainmentPayload struct {
 	Version   int64 `json:"version"`
 	Epoch     int64 `json:"epoch"`
 	Contained bool  `json:"contained"`
+	// ReachableVersion and Reachable are the deployment's reachable-address set as it stood when this command was built
+	// (issue #1059). They ride the containment command rather than a command of their own, which is what lets a set change reach a
+	// host that is already contained: a host whose latest command carries an older ReachableVersion stops counting as current, and
+	// the catch-up that already re-queues a missed containment re-queues this too.
+	//
+	// The version is carried beside the addresses rather than derived from them because it is what the comparison uses: comparing
+	// the lists themselves would make a set edited back to its previous contents look like a change nobody needs to hear about,
+	// and would put the whole list in every comparison.
+	ReachableVersion int64              `json:"reachable_version,omitempty"`
+	Reachable        []ReachableAddress `json:"reachable,omitempty"`
 }
 
 // ContainmentState is a host's desired containment and how its delivery stands.

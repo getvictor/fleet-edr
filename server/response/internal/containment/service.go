@@ -35,31 +35,48 @@ type Service struct {
 	latest   LatestCommands
 	outbox   *auditoutbox.Store
 	drain    *auditoutbox.Drain
+	// reachable reads the destinations a contained host may still reach. Every command carries the set, so a change to it reaches
+	// hosts through the catch-up rather than through a command of its own (issue #1059).
+	reachable ReachableSet
 }
 
 // NewService builds a Service. store, enrolled, queue, notify, latest and outbox are required: the outbox is where a change's audit
 // entry commits with it, so a Service without one could record a containment with nothing saying who made it. drain may be nil outside
 // production, which leaves the entries in the outbox rather than turning them into audit rows.
 func NewService(store *Store, enrolled api.HostEnrolledChecker, queue CommandQueuer, notify Notifier, latest LatestCommands,
-	outbox *auditoutbox.Store, drain *auditoutbox.Drain) *Service {
-	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil || outbox == nil {
-		panic("containment.NewService: store, enrolled, queue, notify, latest and outbox are required")
+	outbox *auditoutbox.Store, drain *auditoutbox.Drain, reachable ReachableSet) *Service {
+	if store == nil || enrolled == nil || queue == nil || notify == nil || latest == nil || outbox == nil || reachable == nil {
+		panic("containment.NewService: store, enrolled, queue, notify, latest, outbox and reachable are required")
 	}
-	return &Service{store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, outbox: outbox, drain: drain}
+	return &Service{store: store, enrolled: enrolled, queue: queue, notify: notify, latest: latest, outbox: outbox, drain: drain,
+		reachable: reachable}
 }
 
-// commandPayload is the set_network_containment payload for a state. The change and the catch-up both build it here, so a host that is
-// caught up gets exactly what the change queued. Marshalling a struct of integers and a bool cannot fail.
-func commandPayload(state api.ContainmentState) []byte {
-	payload, _ := json.Marshal(api.SetNetworkContainmentPayload{Version: state.Version, Epoch: state.Epoch, Contained: state.Contained})
+// ReachableSet reads the deployment's reachable-address set, which every containment command carries (issue #1059). Injected rather
+// than imported so this package keeps deciding only what a containment command means.
+type ReachableSet func(ctx context.Context) (api.ReachableSet, error)
+
+// commandPayload is the set_network_containment payload for a state and the reachable-address set in force. The change and the
+// catch-up both build it here, so a host that is caught up gets exactly what the change queued. Marshalling cannot fail: every field
+// is a number, a bool, or strings the store validated before writing them.
+func commandPayload(state api.ContainmentState, reachable api.ReachableSet) []byte {
+	payload, _ := json.Marshal(api.SetNetworkContainmentPayload{
+		Version: state.Version, Epoch: state.Epoch, Contained: state.Contained,
+		ReachableVersion: reachable.Version, Reachable: reachable.Addresses,
+	})
 	return payload
 }
 
-// carries reports whether a command's payload delivers state. A host's version and epoch identify one state, so they are compared and
-// nothing else.
-func carries(cmd api.Command, state api.ContainmentState) bool {
+// carries reports whether a command's payload delivers state together with the reachable-address set at reachableVersion.
+//
+// A host's version and epoch identify one containment state, and the reachable version identifies one set, so those three are
+// compared and nothing else. Including the reachable version is the whole of the convergence: a host already contained when the set
+// changes has an unchanged containment state, so without it the host's latest command would still look current and the catch-up
+// would never re-queue it, which is the "picks up a change without being released and contained again" the issue asks for.
+func carries(cmd api.Command, state api.ContainmentState, reachableVersion int64) bool {
 	var queued api.SetNetworkContainmentPayload
-	return json.Unmarshal(cmd.Payload, &queued) == nil && queued.Version == state.Version && queued.Epoch == state.Epoch
+	return json.Unmarshal(cmd.Payload, &queued) == nil && queued.Version == state.Version && queued.Epoch == state.Epoch &&
+		queued.ReachableVersion == reachableVersion
 }
 
 // Get returns a host's state with its delivery.
@@ -73,14 +90,22 @@ func (s *Service) Get(ctx context.Context, hostID string) (api.ContainmentState,
 	if err != nil {
 		return api.ContainmentState{}, err
 	}
+	reachable, err := s.reachable(ctx)
+	if err != nil {
+		return api.ContainmentState{}, err
+	}
 	if cmd, ok := latest[hostID]; ok {
-		state.Delivery = deliveryOf(cmd, state)
+		state.Delivery = deliveryOf(cmd, state, reachable.Version)
 	}
 	return state, nil
 }
 
-func deliveryOf(cmd api.Command, state api.ContainmentState) *api.ContainmentDelivery {
-	return &api.ContainmentDelivery{CommandID: cmd.ID, Status: cmd.Status, Result: cmd.Result, Current: carries(cmd, state)}
+// deliveryOf describes a host's latest command. It is current when it carries both the state the host holds and the reachable set in
+// force, so a host contained before the set last changed reads as still on its way rather than as settled.
+func deliveryOf(cmd api.Command, state api.ContainmentState, reachableVersion int64) *api.ContainmentDelivery {
+	return &api.ContainmentDelivery{
+		CommandID: cmd.ID, Status: cmd.Status, Result: cmd.Result, Current: carries(cmd, state, reachableVersion),
+	}
 }
 
 // List returns every host that has a containment state, with its delivery, in host_id order. A host whose containment was released
@@ -98,9 +123,13 @@ func (s *Service) List(ctx context.Context) ([]api.ContainmentState, error) {
 	if err != nil {
 		return nil, err
 	}
+	reachable, err := s.reachable(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i := range states {
 		if cmd, ok := latest[states[i].HostID]; ok {
-			states[i].Delivery = deliveryOf(cmd, states[i])
+			states[i].Delivery = deliveryOf(cmd, states[i], reachable.Version)
 		}
 	}
 	return states, nil
@@ -130,11 +159,19 @@ func (s *Service) Set(ctx context.Context, actor identityapi.PrincipalRef, remot
 	if !enrolled {
 		return api.ContainmentChange{}, api.ErrContainmentHostNotFound
 	}
+	// Read BEFORE the change's transaction opens, so a slow read does not hold the host's row. A set read a moment before the
+	// command is queued can be one version stale, and that is what the catch-up is for: the host reads as not current on the next
+	// sweep and is re-queued. The direction that would matter is a host told it has allowances it does not, and that cannot happen
+	// here, since the command carries the version of the set it was built from.
+	reachable, err := s.reachable(ctx)
+	if err != nil {
+		return api.ContainmentChange{}, err
+	}
 	// The command is queued inside the transaction that records the state, so a change that cannot queue one records nothing: the
 	// operator is told it failed rather than left with a state whose command the catch-up has to notice (issue #1073).
 	state, changed, commandID, err := s.store.Set(ctx, hostID, contained, reason, actor.ID, expected,
 		func(ctx context.Context, q sqlx.ExecerContext, state api.ContainmentState) (int64, error) {
-			id, qerr := s.queue(ctx, q, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state))
+			id, qerr := s.queue(ctx, q, hostID, api.CommandTypeSetNetworkContainment, commandPayload(state, reachable))
 			if qerr != nil {
 				return 0, qerr
 			}

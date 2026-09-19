@@ -125,13 +125,15 @@ func New(deps Deps) (*Response, error) {
 // Until it is called the routes are not mounted and the catch-up does nothing.
 func (r *Response) EnableContainment(enrolled api.HostEnrolledChecker, enrollments api.ActiveEnrollmentLister) {
 	store := containment.NewStore(r.db)
+	// One reachable service behind both the routes that edit the set and the containment path that delivers it, so an operator's
+	// edit and the command a host receives cannot be built from different readers (issue #1059).
+	reachableSvc := reachable.NewService(reachable.NewStore(r.db, r.auditOutbox), r.auditDrain)
 	svc := containment.NewService(store, enrolled, r.svc.QueueTx, r.svc.Notify, r.svc.LatestOfType, r.auditOutbox,
-		r.auditDrain)
+		r.auditDrain, reachableSvc.Get)
 	r.containmentH = operator.NewContainmentHandler(svc, r.authz, r.logger)
 	r.containmentConverger = containment.NewConverger(store, r.svc.QueueTx, r.svc.Notify, enrollments, r.svc.LatestOfType,
-		r.logger)
-	r.reachableH = operator.NewReachableHandler(reachable.NewService(reachable.NewStore(r.db, r.auditOutbox), r.auditDrain),
-		r.authz, r.logger)
+		reachableSvc.Get, r.logger)
+	r.reachableH = operator.NewReachableHandler(reachableSvc, r.authz, r.logger)
 }
 
 // RunAuditSweep delivers audit entries an operator action committed but whose request could not write out, until ctx is cancelled.

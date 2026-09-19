@@ -25,29 +25,30 @@ type Converger struct {
 	notify      Notifier
 	enrollments api.ActiveEnrollmentLister
 	latest      LatestCommands
+	reachable   ReachableSet
 	logger      *slog.Logger
 	now         func() time.Time
 }
 
 // NewConverger builds a Converger. Every dependency but logger is required.
 func NewConverger(store *Store, queue CommandQueuer, notify Notifier, enrollments api.ActiveEnrollmentLister,
-	latest LatestCommands, logger *slog.Logger) *Converger {
-	if store == nil || queue == nil || notify == nil || enrollments == nil || latest == nil {
-		panic("containment.NewConverger: store, queue, notify, enrollments and latest are required")
+	latest LatestCommands, reachable ReachableSet, logger *slog.Logger) *Converger {
+	if store == nil || queue == nil || notify == nil || enrollments == nil || latest == nil || reachable == nil {
+		panic("containment.NewConverger: store, queue, notify, enrollments, latest and reachable are required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Converger{store: store, queue: queue, notify: notify, enrollments: enrollments, latest: latest, logger: logger,
-		now: time.Now}
+	return &Converger{store: store, queue: queue, notify: notify, enrollments: enrollments, latest: latest, reachable: reachable,
+		logger: logger, now: time.Now}
 }
 
 // queueCurrent queues one host's state through the store's locked re-read, logging a failure rather than ending the sweep: the other
 // hosts' states are still worth queuing, and this one is tried again on the next sweep.
-func (c *Converger) queueCurrent(ctx context.Context, state api.ContainmentState) (int64, bool) {
+func (c *Converger) queueCurrent(ctx context.Context, state api.ContainmentState, reachable api.ReachableSet) (int64, bool) {
 	commandID, queued, err := c.store.QueueCurrent(ctx, state,
 		func(ctx context.Context, q sqlx.ExecerContext, current api.ContainmentState) (int64, error) {
-			return c.queue(ctx, q, current.HostID, api.CommandTypeSetNetworkContainment, commandPayload(current))
+			return c.queue(ctx, q, current.HostID, api.CommandTypeSetNetworkContainment, commandPayload(current, reachable))
 		})
 	if err != nil {
 		c.logger.WarnContext(ctx, "containment: catch-up could not queue a host's state", "host_id", state.HostID, "err", err)
@@ -93,15 +94,21 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Once for the whole sweep. Every host is judged against the same set and queued with it, so one sweep cannot leave two hosts
+	// holding different versions for no reason an operator could explain; a set that changes mid-sweep is picked up by the next one.
+	reachable, err := c.reachable(ctx)
+	if err != nil {
+		return 0, err
+	}
 	now, queued := c.now(), 0
 	for _, state := range states {
 		at, ok := enrolledAt[state.HostID]
-		if !ok || !needsState(latest[state.HostID], state, at, now) {
+		if !ok || !needsState(latest[state.HostID], state, reachable.Version, at, now) {
 			continue
 		}
 		// Under the host's lock, against the state the host holds now: this sweep read its states some time ago, and a change that
 		// committed since has queued a command of its own, which this one must not be put behind (issue #1073).
-		_, ok = c.queueCurrent(ctx, state)
+		_, ok = c.queueCurrent(ctx, state, reachable)
 		if !ok {
 			continue
 		}
@@ -115,12 +122,12 @@ func (c *Converger) Converge(ctx context.Context) (int, error) {
 }
 
 // needsState reports whether a host should be sent its state, given its latest set_network_containment command. The decision is
-// catchup's; what belongs here is what this context's command means, which is whether its payload carries the host's current state.
-// The zero Command is a host that has never been sent one, and carries nothing.
-func needsState(cmd api.Command, state api.ContainmentState, enrolledAt, now time.Time) bool {
+// catchup's; what belongs here is what this context's command means, which is whether its payload carries the host's current state
+// AND the reachable-address set in force. The zero Command is a host that has never been sent one, and carries nothing.
+func needsState(cmd api.Command, state api.ContainmentState, reachableVersion int64, enrolledAt, now time.Time) bool {
 	return catchup.Needed(catchup.Latest{
 		Queued:      cmd.ID != 0,
-		Carries:     carries(cmd, state),
+		Carries:     carries(cmd, state, reachableVersion),
 		CreatedAt:   cmd.CreatedAt,
 		Status:      cmd.Status.Catchup(),
 		CompletedAt: cmd.CompletedAt,
