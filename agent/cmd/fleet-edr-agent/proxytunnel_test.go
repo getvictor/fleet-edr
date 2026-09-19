@@ -254,13 +254,41 @@ func TestControlDialTakesTheRightPath(t *testing.T) {
 // than a failed dial: the control channel then dials the server directly, which is what it did before a proxy was configured at all.
 func TestServerProxyTreatsAnUnusableAnswerAsNoProxy(t *testing.T) {
 	t.Parallel()
-	failing := func(*http.Request) (*url.URL, error) { return nil, errors.New("PROXY is not a URL") }
-	assert.Nil(t, serverProxy("https://edr.example.com:8443", failing))
-	assert.Nil(t, serverProxy("://not a url", func(*http.Request) (*url.URL, error) { return url.Parse("http://p:3128") }))
-
-	found := serverProxy("https://edr.example.com:8443", func(*http.Request) (*url.URL, error) { return url.Parse("http://p:3128") })
-	require.NotNil(t, found)
-	assert.Equal(t, "p:3128", found.Host)
+	cases := []struct {
+		desc      string
+		serverURL string
+		proxy     func(*http.Request) (*url.URL, error)
+		want      string // the proxy host expected, or empty for no proxy
+	}{
+		{
+			desc:      "the proxy function errors",
+			serverURL: "https://edr.example.com:8443",
+			proxy:     func(*http.Request) (*url.URL, error) { return nil, errors.New("PROXY is not a URL") },
+		},
+		{
+			desc:      "the server URL does not parse",
+			serverURL: "://not a url",
+			proxy:     func(*http.Request) (*url.URL, error) { return url.Parse("http://p:3128") },
+		},
+		{
+			desc:      "a proxy is configured",
+			serverURL: "https://edr.example.com:8443",
+			proxy:     func(*http.Request) (*url.URL, error) { return url.Parse("http://p:3128") },
+			want:      "p:3128",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			got := serverProxy(tc.serverURL, tc.proxy)
+			if tc.want == "" {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, tc.want, got.Host)
+		})
+	}
 }
 
 // The dial's deadline must not outlive the dial. A control stream lives for hours on the connection this returns, so a deadline left
@@ -282,11 +310,21 @@ func TestDialThroughProxyDoesNotLeaveItsDeadlineOnTheTunnel(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	// Well past the dial's deadline, and the read still succeeds because the deadline was cleared with the exchange.
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(8*time.Second)))
+	// Read with NO deadline of its own. Setting one here would overwrite whatever the dial left behind, so a version that stopped
+	// clearing the deadline would still pass: the test would be measuring its own deadline rather than the connection's. The bound
+	// comes from a timer beside the read instead.
 	got := make([]byte, len(firstBytes))
-	_, err = io.ReadFull(conn, got)
-	require.NoError(t, err, "the dial's deadline was left on the connection and killed the tunnel")
+	read := make(chan error, 1)
+	go func() {
+		_, rerr := io.ReadFull(conn, got)
+		read <- rerr
+	}()
+	select {
+	case rerr := <-read:
+		require.NoError(t, rerr, "the dial's deadline was left on the connection and killed the tunnel")
+	case <-time.After(8 * time.Second):
+		t.Fatal("the tunnel produced nothing within the test's own bound")
+	}
 	assert.Equal(t, firstBytes, string(got))
 }
 
