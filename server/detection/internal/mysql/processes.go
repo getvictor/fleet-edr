@@ -418,8 +418,47 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 	return err
 }
 
-// GetParentPath returns the path of the newest generation of the given PID that had forked by atTimeNs, for a fork-without-exec child
-// to inherit as its own path. atTimeNs is the child's fork timestamp. Empty only when no generation of that PID had forked yet.
+// ParentImage is what a fork-without-exec child inherits from its parent: the binary it is running, and what is known about who
+// signed that binary. A forked child runs its parent's image until it execs, so the identity is as much the child's as the path is,
+// and inheriting one without the other described a process running a named binary with no signature for it, which is what made
+// every signature exclusion miss a forked process (issue #1123).
+//
+// Any field may be empty, when the parent's record carries nothing for it. Inheritance copies what the parent has.
+type ParentImage struct {
+	Path        string          `db:"path"`
+	CodeSigning api.NullRawJSON `db:"code_signing"`
+	SHA256      *string         `db:"sha256"`
+	CDHash      *string         `db:"cdhash"`
+}
+
+// IdentityInForceAt returns the image with its signing identity kept only if that identity was in force at atTimeNs, where
+// execTimeNs is the selected row's own exec time.
+//
+// The path and the identity part company in exactly one case, the documented fallback below: when no image in the parent's chain had
+// been applied at the child's fork instant, the lookup answers with the chain's EARLIEST image, whose exec is in the FUTURE relative
+// to that fork. Its path is the closest surviving evidence of what the parent was running, because the pre-exec image is overwritten
+// in place and unrecoverable. Its signature is not evidence of anything: the child was running some other binary, and the one thing
+// a wrong answer here does is let a signature exclusion suppress activity that never ran under that signature. An exclusion that
+// suppresses too much is the failure an EDR cannot have, so the identity is dropped and the child inherits none, which is what it
+// had before any of this and leaves a signature exclusion correctly declining to match it.
+//
+// A selected row with no exec of its own keeps its identity: that row is itself a fork-only child, so what it carries was inherited
+// at ITS fork, which is necessarily before this child's.
+//
+// Shared by the store query and the batch overlay so the two cannot drift, for the same reason the ordering is not duplicated.
+func (p ParentImage) IdentityInForceAt(execTimeNs *int64, atTimeNs int64) ParentImage {
+	if execTimeNs != nil && *execTimeNs > atTimeNs {
+		p.CodeSigning, p.SHA256, p.CDHash = nil, nil, nil
+	}
+	return p
+}
+
+// GetParentImage returns the image of the newest generation of the given PID that had forked by atTimeNs, for a fork-without-exec
+// child to inherit as its own. atTimeNs is the child's fork timestamp. Zero only when no generation of that PID had forked yet.
+//
+// The path and the identity come from this one lookup deliberately. The ordering below is the product of two issues' worth of
+// measurement, and a second copy of it selecting the identity would drift from this one selecting the path, which would attribute a
+// child to one image's path and another image's signature.
 //
 // The fork bound carries the one physical constraint there is: a generation that started AFTER the child forked cannot be the child's
 // parent. Without it the query answered with whichever generation holds the PID at query time, so a fork materialized after its
@@ -489,10 +528,16 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 // same rows: it blanked the inherited path on 29,880 rows while fixing 3,413 fewer than the fork bound alone, so it is a 4:1 net loss
 // and is not to be reinstated here. GetProcessByPID resolves an arbitrary instant that arrives from an unrelated event (a network
 // flow), has no such guarantee, and therefore does need both bounds.
-func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTimeNs int64) (string, error) {
-	var path string
-	err := s.db.GetContext(ctx, &path, `
-		SELECT path FROM processes
+func (s *Store) GetParentImage(ctx context.Context, hostID string, pid int, atTimeNs int64) (ParentImage, error) {
+	// exec_time_ns comes back with the image so the identity can be scoped to what was in force at atTimeNs, which the ordering
+	// alone does not guarantee: its documented last resort selects an image whose exec is still in the future. Scoped in Go rather
+	// than in the SELECT to keep that rule readable and in one place, shared with the overlay.
+	var row struct {
+		ParentImage
+		ExecTimeNs *int64 `db:"exec_time_ns"`
+	}
+	err := s.db.GetContext(ctx, &row, `
+		SELECT path, code_signing, sha256, cdhash, exec_time_ns FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
@@ -505,9 +550,12 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTim
 		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return ParentImage{}, nil
 	}
-	return path, err
+	if err != nil {
+		return ParentImage{}, err
+	}
+	return row.IdentityInForceAt(row.ExecTimeNs, atTimeNs), nil
 }
 
 // processTreeWindowPredicate is the lifetime-overlap predicate shared by GetProcessTree and CountProcessTree: a process overlaps the
@@ -680,19 +728,19 @@ func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int,
 // forked a child at T1 and re-executed at T2, a rule asking what the parent's image was at T1 was told the T2 image, a binary that
 // had not run yet.
 //
-// The ordering is GetParentPath's, verbatim, which is the second correction review forced and the more important one. My first
+// The ordering is GetParentImage's, verbatim, which is the second correction review forced and the more important one. My first
 // version filtered on the image start in the WHERE, which excluded a process between its fork and its FIRST exec: that exec updates
 // the fork row in place, so such a row's image start lies in the future, and the callers this change exists to fix ask at a CHILD's
 // fork time, which can fall in exactly that window. A parent that forked a child before executing anything itself came back as
 // having no record at all.
 //
 // My second version preferred rather than filtered, which fixed that and was still a fourth hand-written ordering for one question.
-// GetParentPath already answers "what was this pid running at this instant" and its ordering handles a case neither of my versions
+// GetParentImage already answers "what was this pid running at this instant" and its ordering handles a case neither of my versions
 // did: when NEITHER candidate's image had been applied yet, the chain's EARLIEST image is the closest surviving evidence of what
 // the parent was running, so that one sorts first. Issues #723 and #724 paid for that reasoning; reusing it is cheaper and more
 // correct than repeating it.
 //
-// The open question that reuse inherited is answered: see GetParentPath's ordering comment. The earliest-image key is scoped to the
+// The open question that reuse inherited is answered: see GetParentImage's ordering comment. The earliest-image key is scoped to the
 // rows it was written for, so a row that never exec'd no longer outranks one whose exec landed at the same image start, and this
 // SQL and the batch overlay now break that tie the same way (#861).
 //
