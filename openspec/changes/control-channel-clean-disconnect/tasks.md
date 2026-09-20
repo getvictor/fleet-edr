@@ -6,4 +6,7 @@
 - [ ] Make both select cases check the RPC context, so the disconnect race cannot decide the span status.
 - [ ] Tests for each of the four reasons, for the clean client disconnect, for a genuine receive failure, and for the race.
 - [ ] Mutation-check the context test in the receive branch and each reason, not only the `nil` return.
+- [ ] Record the span from the gateway's verdict rather than from the transport's error, which is what a client disconnect actually sets.
+- [ ] Keep it fail-safe: an RPC refused before the handler ran keeps the failure gRPC reported for it.
+- [ ] Assert the recorded span over a real transport, served as production serves it, with the client's socket killed rather than closed.
 - [ ] QA on the dev server with a real agent: restart it and confirm through SigNoz that its `Connect` span is OK, and that a revocation still produces an error span naming the token.

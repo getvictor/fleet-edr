@@ -12,6 +12,8 @@ A failure of the receive loop itself SHALL still end the RPC with that error.
 
 The verdict SHALL NOT depend on which of the concurrent end conditions is observed first. A client that goes away both cancels the RPC context and fails the pending receive, so the outcome MUST be decided by whether the client is gone rather than by whichever signal arrived first.
 
+The recorded outcome SHALL be the one the system itself reached, and MUST NOT be the transport's account of how the stream ended. A client that disappears takes its transport with it, and the transport reports that as a failure independently of anything the system concludes, so a system that let that reporting stand would record every ordinary disconnect as a fault however it had classified it. Where no verdict was reached, because the connection was refused before it was served, the reported failure SHALL stand.
+
 Reporting an ordinary disconnect as successful SHALL NOT change what the agent does: it reconnects on a clean end of stream exactly as it does on a retryable status, through the same backoff.
 
 #### Scenario: A client that disconnects ends its connection cleanly

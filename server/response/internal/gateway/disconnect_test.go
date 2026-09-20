@@ -16,10 +16,10 @@ import (
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 )
 
-// These tests call the Connect handler directly rather than over bufconn, because what they pin is the value it returns. That value
-// is what the gRPC layer turns into the RPC's status, and what otelgrpc's stats handler then records as the span's status, so it is
-// the whole of what an operator sees about how a connection ended (issue #1124). Over a real transport it is unobservable in exactly
-// the case that matters, where the client has already gone.
+// These tests call the Connect handler directly rather than over a transport, because what they pin is the verdict it reaches: how
+// the gateway itself classifies the end of a connection (issue #1124). The span that verdict produces is pinned separately, over a
+// real transport, in spanverdict_test.go. Both halves are needed, and finding that out cost a round of QA: the handler's return is
+// NOT what colours the span when a client disappears, because gRPC ends the RPC with the transport's own error regardless.
 
 // fakeStream is a server stream whose RPC context, receive result and send outcome the test controls.
 type fakeStream struct {
@@ -170,7 +170,8 @@ func TestConnectReportsWhyTheServerToreTheConnectionDown(t *testing.T) {
 	})
 }
 
-// A stream that fails under a client that is still there is the case this whole change exists to keep visible.
+// A stream that fails under a client that is still there is the case this whole change exists to keep visible. The failure is a
+// gRPC status, as the real ones are: a frame this server cannot read is rejected with a code.
 //
 // spec:agent-control-channel/how-a-connection-ended-is-what-its-telemetry-reports/a-receive-failure-is-still-recorded-as-a-failure
 func TestConnectReportsAReceiveFailureWhileTheClientIsAttached(t *testing.T) {
@@ -178,10 +179,10 @@ func TestConnectReportsAReceiveFailureWhileTheClientIsAttached(t *testing.T) {
 	stream := newFakeStream(t.Context(), "host-a", "tok-a")
 	_, returned := connectedGateway(t, stream)
 
-	brokenStream := errors.New("stream failed")
-	stream.recvErr <- brokenStream
+	unreadable := status.Error(codes.Internal, "grpc: error unmarshalling request")
+	stream.recvErr <- unreadable
 
-	require.ErrorIs(t, returnedFrom(t, returned), brokenStream)
+	require.ErrorIs(t, returnedFrom(t, returned), unreadable)
 }
 
 // closedConn is a connection the server has torn down for the given reason, with no live stream behind it.
@@ -220,21 +221,30 @@ func TestEndAfterTeardown(t *testing.T) {
 
 func TestEndAfterReceive(t *testing.T) {
 	t.Parallel()
-	failed := errors.New("stream failed")
+	// A frame this server could not read: gRPC spells that as a status, because the server is rejecting it with a code.
+	unreadable := status.Error(codes.Internal, "grpc: error unmarshalling request")
+	// The transport ending under the stream: a bare error carrying no status, which is what grpc-go's ErrConnClosing is.
+	transportDied := errors.New("transport is closing")
 
-	t.Run("a failure under an attached client is the failure", func(t *testing.T) {
+	t.Run("a frame this server could not read is the failure", func(t *testing.T) {
 		t.Parallel()
-		assert.ErrorIs(t, endAfterReceive(t.Context(), failed), failed)
+		assert.ErrorIs(t, endAfterReceive(t.Context(), unreadable), unreadable)
 	})
 
-	// The same failure, once the client has gone, IS the disconnect: cancelling the RPC context is what made the pending receive
-	// fail. Both select cases have to reach this verdict, or which one the scheduler picks would decide the span's status.
+	// The definitive signal, and the one that arrives second often enough to matter on its own.
 	t.Run("the same failure once the client has gone is the disconnect", func(t *testing.T) {
 		t.Parallel()
 		gone, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		assert.NoError(t, endAfterReceive(gone, failed))
+		assert.NoError(t, endAfterReceive(gone, unreadable))
+	})
+
+	// The case that needs the error's shape read: the transport died and gRPC has not cancelled the context yet, so the context
+	// test alone would call this a fault. Measured on edr-dev, where it was one.
+	t.Run("the transport ending under a live context is still a disconnect", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, endAfterReceive(t.Context(), transportDied))
 	})
 
 	// A client half-close reaches here as no error at all, and has always ended the RPC cleanly.

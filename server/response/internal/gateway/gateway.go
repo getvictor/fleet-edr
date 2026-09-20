@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 
 	"github.com/fleetdm/edr/internal/control"
@@ -75,6 +76,10 @@ type Deps struct {
 	Verifier  TokenVerifier
 	Heartbeat Heartbeat // optional; nil disables the last-seen bump
 	Logger    *slog.Logger
+	// Stats is the telemetry handler the gRPC server reports to; nil takes the OTel one, which is what production uses. New wraps
+	// whatever it is given so the connection's span carries the gateway's verdict (issue #1124), which is what lets a test see the
+	// events the real server produces without reaching for a global tracer provider.
+	Stats stats.Handler
 }
 
 // Gateway holds the agent control connections and the gRPC server that serves them.
@@ -122,6 +127,10 @@ func New(deps Deps) *Gateway {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	telemetry := deps.Stats
+	if telemetry == nil {
+		telemetry = otelgrpc.NewServerHandler()
+	}
 	g := &Gateway{
 		src:                deps.Source,
 		verifier:           deps.Verifier,
@@ -137,7 +146,7 @@ func New(deps Deps) *Gateway {
 		revocationInterval: defaultRevocationInterval,
 	}
 	opts := []grpc.ServerOption{
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.StatsHandler(handlerVerdictStats{Handler: telemetry}),
 		grpc.StreamInterceptor(g.authInterceptor),
 	}
 	// No grpc.Creds and no keepalive enforcement: the gateway is served via grpc.Server.ServeHTTP behind the shared HTTPS listener
@@ -232,7 +241,17 @@ func (g *Gateway) deliverPending(ctx context.Context, hostIDs []string) {
 
 // Connect implements the gRPC service. The auth interceptor has already verified the token and pinned the host id, so here we register
 // the connection, start its writer and maintenance goroutines, push any backlog, and read outcomes until the stream ends.
+//
+// The verdict is recorded for the connection's span before returning, because nothing else can reach it: when a client disappears,
+// gRPC ends the RPC with the transport's own error whatever this handler returns, and the span would be coloured by that (issue
+// #1124). See spanVerdict.
 func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
+	err := g.connect(stream)
+	recordSpanVerdict(stream.Context(), err)
+	return err
+}
+
+func (g *Gateway) connect(stream control.ControlChannel_ConnectServer) error {
 	ctx := stream.Context()
 	hostID, ok := endpointapi.HostIDFromContext(ctx)
 	if !ok {
@@ -295,11 +314,27 @@ func endAfterTeardown(ctx context.Context, c *conn) error {
 // endAfterReceive is the status the RPC ends with when it was the receive loop that ended, carrying its result: nil for a client
 // half-close, which is an ordinary end of stream, or the failure that ended it.
 //
-// The ctx check is what keeps the two cases in agreement. A client going away both cancels this context and fails the pending Recv,
-// so either select case can win, and the recv error is then the disconnect itself rather than a fault. Without this, which case the
-// scheduler happened to pick would decide whether the connection was recorded as a failure.
+// Two things say the client is gone rather than at fault, and BOTH are needed because they arrive in either order.
+//
+// The context is the definitive one: a client going away cancels it. It is not sufficient on its own, though, because gRPC fails the
+// pending receive and cancels the stream context as two steps, and the receive loses that race often enough to matter. Measured on
+// edr-dev: with only the context test, restarting the agent still produced an error span, reading `transport is closing`.
+//
+// So the error itself is read too. A server-side receive fails for exactly two kinds of reason, and gRPC spells them differently. A
+// frame this server could not read (a malformed message, one over the size limit) comes back as a gRPC STATUS, because the server is
+// rejecting it with a code. The transport ending under the stream comes back as a bare transport error carrying no status at all,
+// which is what `transport is closing` is. That is a connection ending, not a connection failing, so it ends the RPC cleanly; a
+// status error is a fault and keeps its error span.
+//
+// Reading the shape of the error rather than its text is deliberate: the message is grpc-go's to change, and a server that decided
+// what to report by matching on a dependency's prose would break silently on an upgrade. The bufconn test below kills a real client
+// transport and asserts the verdict, so a grpc-go release that changed this shape fails that test rather than quietly recolouring
+// every disconnect on a fleet.
 func endAfterReceive(ctx context.Context, recvErr error) error {
-	if ctx.Err() != nil {
+	if recvErr == nil || ctx.Err() != nil {
+		return nil
+	}
+	if _, isStatus := status.FromError(recvErr); !isStatus {
 		return nil
 	}
 	return recvErr
