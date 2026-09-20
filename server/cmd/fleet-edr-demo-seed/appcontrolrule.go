@@ -69,6 +69,14 @@ func upsertRuleAndBumpPolicy(ctx context.Context, db dbExecQuerier, policyID int
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once committed
 
+	// The policy row first, which is the order every application-control rule mutation takes (issue #1057). The seeder runs
+	// against a server that is already serving, so an operator's rule change and this can be in flight together: if this wrote
+	// its rule first and bumped the policy after, the two would approach the same pair of rows from opposite ends and MySQL
+	// would abort one of them as a deadlock.
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM app_control_policies WHERE id = ? FOR UPDATE`, policyID); err != nil {
+		return 0, fmt.Errorf("lock demo app-control policy: %w", err)
+	}
+
 	// enforcement PROTECT because the block event reports an execution that was actually denied; DETECT would mean the binary
 	// ran and was only recorded, which is not what the alert says happened. Restored on a duplicate too: someone may have moved
 	// the demo rule to Detect in the console, and a re-seed that left it there would fabricate a block the rule no longer makes.

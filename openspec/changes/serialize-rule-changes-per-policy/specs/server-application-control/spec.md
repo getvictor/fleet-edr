@@ -8,7 +8,7 @@ The order SHALL be the policy first. That is the row every rule mutation has in 
 
 Serializing per policy SHALL NOT extend to different policies, which have no row in common and no reason to wait for each other.
 
-A mutation naming a policy or a rule that does not exist SHALL be reported as not found, and SHALL be reported that way whether the absence is discovered while ordering the locks or afterwards.
+A mutation naming a policy or a rule that does not exist SHALL be reported as not found, and SHALL be reported that way whether the absence is discovered while ordering the locks or afterwards. A database that cannot answer SHALL NOT be reported that way: an operator told their rule is gone believes someone else deleted it, which is a different event from a change that failed and can be retried.
 
 #### Scenario: Concurrent rule creates do not deadlock
 
@@ -23,3 +23,17 @@ A mutation naming a policy or a rule that does not exist SHALL be reported as no
 - **WHEN** single-rule changes and a bulk upsert of the same policy run at the same time
 - **THEN** each completes or fails on its own merits
 - **AND** none fails because the database aborted it to resolve a deadlock
+
+#### Scenario: A rule change waits for whoever holds the policy
+
+- **GIVEN** a policy another writer is already holding
+- **WHEN** an operator changes a rule in that policy
+- **THEN** the change waits for the holder rather than proceeding beside it
+- **AND** a wait that runs out is reported as a failed change, not as a missing rule
+
+#### Scenario: A database that cannot answer is not a missing rule
+
+- **GIVEN** a rule whose policy cannot be read because the database fails
+- **WHEN** an operator changes that rule
+- **THEN** the failure is reported as a failure
+- **AND** not as the rule having been deleted

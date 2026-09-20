@@ -906,6 +906,37 @@ func TestBlockedBinaryPathIn_RefusesAManifestItCannotReadThePathFrom(t *testing.
 	}
 }
 
+// demoPolicyLockWait is how long the seeder is given to acquire a policy another writer is holding. Long enough that the
+// lookup and the transaction cannot themselves consume it on a loaded runner, short enough to pay once.
+const demoPolicyLockWait = time.Second
+
+// The seeder waits for whoever holds the policy rather than racing them (issue #1057).
+//
+// It runs against a server that is already serving, so an operator's rule change can be in flight at the same time. Both now
+// take the policy row first, which makes them a queue; approaching the same two rows from opposite ends is what had MySQL abort
+// one of them as a deadlock. The elapsed time is the assertion that matters, because it comes from the clock rather than from
+// anything the seeder computes: before this the seeder wrote its rule first and never waited here at all.
+func TestUpsertRuleAndBumpPolicy_WaitsForWhoeverHoldsThePolicy(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	insertDemoPolicy(t, db, 1)
+
+	holder, err := db.BeginTxx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback() }()
+	var held int64
+	require.NoError(t, holder.QueryRowxContext(t.Context(),
+		`SELECT id FROM app_control_policies WHERE id = ? FOR UPDATE`, appControlPolicyID).Scan(&held))
+
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(t.Context(), demoPolicyLockWait)
+	defer cancel()
+	_, err = seedAppControlRule(ctx, db, discardLogger())
+	require.Error(t, err, "the seeder cannot write its rule while another writer holds the policy")
+	assert.GreaterOrEqual(t, time.Since(started), demoPolicyLockWait, "and it failed by waiting for the policy, not by skipping it")
+	assert.Contains(t, err.Error(), "lock demo app-control policy", "the wait is where it failed")
+}
+
 // failingBeginTx is a dbExecQuerier whose transaction cannot be opened, standing in for a database that has gone away between
 // the policy lookup and the write. The rule write and the version bump have to happen together, so failing to get a
 // transaction is a hard stop rather than something to paper over with two loose statements.

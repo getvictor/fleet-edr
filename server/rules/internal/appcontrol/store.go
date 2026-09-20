@@ -609,7 +609,7 @@ func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.
 	// The policy is locked first, and its id is read without a lock to learn which one. That unlocked read is safe because a rule
 	// never changes policy: no update sets policy_id, so the answer cannot go stale. A rule deleted between the two is handled
 	// below, where the locked read finds nothing and reports it missing (issue #1057).
-	if err := lockPolicyForRule(ctx, tx, req.RuleID); err != nil {
+	if _, err := lockPolicyForRule(ctx, tx, req.RuleID); err != nil {
 		return api.ApplicationControlRule{}, false, err
 	}
 
@@ -673,17 +673,11 @@ func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int6
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var policyID int64
-	if err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, req.RuleID).Scan(&policyID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, api.ErrAppControlRuleNotFound
-		}
-		return 0, fmt.Errorf("appcontrol lookup rule for delete: %w", err)
-	}
-	// The policy before the rule, as every other mutation does (issue #1057). The read above is unlocked and a rule never changes
-	// policy, so the id cannot go stale; a rule deleted in the meantime leaves the DELETE below affecting no rows, which is
-	// already handled.
-	if err := lockPolicy(ctx, tx, policyID); err != nil {
+	// The policy before the rule, as every other mutation does (issue #1057), and the rule's own policy id comes back for the
+	// caller's snapshot fan-out. A rule deleted in the meantime leaves the DELETE below affecting no rows, which is already
+	// handled.
+	policyID, err := lockPolicyForRule(ctx, tx, req.RuleID)
+	if err != nil {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM app_control_rules WHERE id = ?`, req.RuleID)
@@ -997,24 +991,32 @@ func rejectDuplicateBulkKeys(items []api.BulkUpsertRuleItem) error {
 	return nil
 }
 
-// lockPolicyForRule locks the policy a rule belongs to, reading which one without a lock first.
+// lockPolicyForRule locks the policy a rule belongs to and returns which one, reading that without a lock first.
 //
 // The unlocked read is sound because a rule never moves policy: no update sets policy_id, so the id it returns cannot be made
 // stale by a concurrent writer. A rule deleted between the read and the caller's own locked read is not this function's problem
 // to report: the caller reads the rule under a lock straight afterwards and finds it missing there.
 //
-// A rule that does not exist yields no policy to lock and is reported as a missing rule, which is what the caller would have
-// said anyway.
-func lockPolicyForRule(ctx context.Context, tx *sqlx.Tx, ruleID int64) error {
+// Both absences are reported as a MISSING RULE, including the policy having been deleted out from under it. That is what the
+// caller asked about, and it is the only answer its handler knows how to turn into a 404; a policy-shaped error here would reach
+// the operator as a 500 for a rule that is, correctly, gone. A cascading DeletePolicy between the read and the lock is exactly
+// how that happens.
+func lockPolicyForRule(ctx context.Context, tx *sqlx.Tx, ruleID int64) (int64, error) {
 	var policyID int64
 	err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, ruleID).Scan(&policyID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return api.ErrAppControlRuleNotFound
+		return 0, api.ErrAppControlRuleNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("appcontrol lookup rule's policy: %w", err)
+		return 0, fmt.Errorf("appcontrol lookup rule's policy: %w", err)
 	}
-	return lockPolicy(ctx, tx, policyID)
+	if err := lockPolicy(ctx, tx, policyID); err != nil {
+		if errors.Is(err, api.ErrAppControlPolicyNotFound) {
+			return 0, api.ErrAppControlRuleNotFound
+		}
+		return 0, err
+	}
+	return policyID, nil
 }
 
 // lockPolicy takes the row lock on the parent app_control_policies row, and EVERY rule mutation takes it FIRST (issue #1057).
