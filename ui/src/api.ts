@@ -1164,6 +1164,9 @@ export interface SSOConfig {
   groups_claim: string;
   group_roles: SSOGroupRole[];
   secret_set: boolean;
+  // version identifies the configuration this response describes. Send it back on a save to have that save refused if anything here
+  // changed in the meantime. Opaque: read it, send it, do not take it apart.
+  version: string;
 }
 
 // SSOGroupRole grants role to the members of the IdP group named group.
@@ -1185,6 +1188,23 @@ export interface SSOConfigUpdate {
   default_role: string;
   groups_claim: string;
   group_roles: SSOGroupRole[];
+  // version is the one read from this endpoint, sent back so the save is refused if the configuration changed since. OMIT it to
+  // overwrite whatever is stored. Sending an empty string is refused rather than treated as omission, because a field present with
+  // nothing in it is a caller that has not read yet, not one that means to overwrite.
+  version?: string;
+}
+
+// SSOApiError is a typed 4xx from the SSO settings surface. code is the server's wire code; the one the page acts on is
+// "version_conflict", which says the configuration changed since it was read and that nothing was saved.
+export class SSOApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "SSOApiError";
+    this.code = code;
+    this.status = status;
+  }
 }
 
 export async function getSSOConfig(): Promise<SSOConfig> {
@@ -1192,7 +1212,13 @@ export async function getSSOConfig(): Promise<SSOConfig> {
 }
 
 export async function updateSSOConfig(req: SSOConfigUpdate): Promise<SSOConfig> {
-  return fetchJSON<SSOConfig>("/settings/sso", { method: "PUT", body: JSON.stringify(req) });
+  return typedMutationEndpoint(
+    "PUT",
+    "/settings/sso",
+    req,
+    (res) => res.json() as Promise<SSOConfig>,
+    (code, message, status) => new SSOApiError(code, message, status),
+  );
 }
 
 // testSSOConnection probes a candidate issuer's discovery + token endpoint without

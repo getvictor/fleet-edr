@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getSSOConfig, updateSSOConfig, testSSOConnection, type SSOConfig, type SSOGroupRole } from "../../api";
+import { getSSOConfig, updateSSOConfig, testSSOConnection, SSOApiError, type SSOConfig, type SSOGroupRole } from "../../api";
 import { isHTTPURL } from "../../urls";
 import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
@@ -165,11 +165,24 @@ export function SSOSettings() {
         default_role: form.defaultRole,
         groups_claim: form.groupsClaim.trim(),
         group_roles: form.groupRoles,
+        // The configuration this page was editing. Sending it is what stops a save from overwriting a change made since the page
+        // loaded: the server refuses rather than replacing what it never showed the operator (issue #1046).
+        version: config.version,
       });
       setConfig(updated);
       setForm(toForm(updated));
       setSaved(true);
     } catch (err: unknown) {
+      // A conflict is not a failure to explain in transport terms. Nothing was saved, somebody else's change is what is stored, and
+      // the only way forward is to look at it: saying so beats "API error: 409 Conflict", and beats a retry that would overwrite
+      // the change the operator has not seen.
+      if (err instanceof SSOApiError && err.code === "version_conflict") {
+        setSaveError(
+          "Someone else changed these settings while this page was open. Nothing was saved. " +
+            "Reload the page to see their changes, then make yours again.",
+        );
+        return;
+      }
       setSaveError(err instanceof Error ? err.message : "Failed to save settings.");
     } finally {
       setSaving(false);
