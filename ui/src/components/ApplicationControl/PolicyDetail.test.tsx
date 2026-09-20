@@ -658,6 +658,36 @@ describe("PolicyDetail", () => {
       expect(normalize(empty.textContent)).toBe("This policy has no rules yet. Click Add rule to author the first one.");
     });
 
+    // A permission can go away while its dialog is open: the submit gets a 403, App.tsx refreshes the permission set, and the
+    // button behind the dialog disappears. The dialog has to go with it, or the operator is left looking at a Save button whose
+    // only remaining outcome is another 403. Qodo caught this on PR #1132: hiding the buttons alone left the two out of step.
+    // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-dialog-closes-when-its-permission-is-revoked
+    it.each([
+      { name: "Edit", dialog: /edit rule/i, needs: PermissionAction.AppControlRuleUpdate },
+      { name: "Delete", dialog: /delete rule/i, needs: PermissionAction.AppControlRuleDelete },
+    ])("closes the $name dialog when $needs is revoked while it is open", async ({ name, dialog, needs }) => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
+      const tree = (permissions: readonly string[]) => (
+        <PermissionsContext.Provider value={permissions}>
+          <MemoryRouter initialEntries={["/app-control/policies/7"]}>
+            <Routes>
+              <Route path="/app-control/policies/:id" element={<PolicyDetail />} />
+            </Routes>
+          </MemoryRouter>
+        </PermissionsContext.Provider>
+      );
+
+      const { rerender } = render(tree(EVERY_RULE_ACTION));
+      fireEvent.click(await screen.findByRole("button", { name }));
+      expect(await waitFor(() => openModal(dialog))).toBeTruthy();
+
+      rerender(tree(EVERY_RULE_ACTION.filter((action) => action !== needs)));
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog", { name: dialog })).toBeNull();
+      });
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    });
+
     // A server that returns no permission set at all (one predating the field) renders optimistically and leans on the 403,
     // which is the pre-gating behaviour the capability seam promises. Gating must not turn that into a page with no controls.
     it("still offers every control when the permission set is unknown", async () => {

@@ -10,6 +10,8 @@ An operator offered no rule controls SHALL still see the rules. The view SHALL N
 
 Gating SHALL follow the permission set the server computed, and an absent permission set SHALL continue to render every control optimistically, because only the server can deny.
 
+A permission that goes away while its dialog is open SHALL close that dialog. The refresh that hides a control has to reach the whole page: a dialog left open over a page that no longer offers it leaves the operator a submit button whose only remaining outcome is another denial.
+
 #### Scenario: A control is hidden without its own permission
 
 - **GIVEN** an operator whose permission set contains the application-control read action but not the action a given rule control performs
@@ -29,3 +31,10 @@ Gating SHALL follow the permission set the server computed, and an absent permis
 - **THEN** the rules and their details are shown
 - **AND** no actions column is rendered
 - **AND** an empty policy does not tell the operator to add the first rule
+
+#### Scenario: A dialog closes when its permission is revoked
+
+- **GIVEN** an operator with a rule dialog open
+- **WHEN** the permission that dialog's submit needs is revoked and the permission set refreshes
+- **THEN** the dialog is closed
+- **AND** the control that opened it is no longer shown

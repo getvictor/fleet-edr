@@ -42,6 +42,25 @@ type ActiveModal =
   | { kind: "confirm-toggle"; rule: ApplicationControlRule }
   | { kind: "confirm-enforcement"; rule: ApplicationControlRule };
 
+// modalPermission names the action a modal's submit would perform, so an open modal can be closed when that permission goes
+// away. The three that PATCH the rule share one, the same way their buttons do.
+function modalPermission(kind: ActiveModal["kind"]): string | null {
+  switch (kind) {
+    case "add":
+      return PermissionAction.AppControlRuleCreate;
+    case "paste-many":
+      return PermissionAction.AppControlRuleBulkUpsert;
+    case "edit":
+    case "confirm-toggle":
+    case "confirm-enforcement":
+      return PermissionAction.AppControlRuleUpdate;
+    case "confirm-delete":
+      return PermissionAction.AppControlRuleDelete;
+    case "none":
+      return null;
+  }
+}
+
 // truncateIdentifier renders the leading 16 chars of a SHA-256
 // identifier so the rules table stays scannable without dropping the
 // disambiguating prefix. Full value is in the row's title attribute
@@ -99,6 +118,17 @@ export function PolicyDetail() {
   const canUpdateRule = can(PermissionAction.AppControlRuleUpdate);
   const canDeleteRule = can(PermissionAction.AppControlRuleDelete);
   const canBulkUpsertRules = can(PermissionAction.AppControlRuleBulkUpsert);
+
+  // A permission can go away while its dialog is open. Submitting a stale action returns 403, which refreshes the permission
+  // set, and the button behind the dialog disappears; without this the dialog itself stays open over a page that no longer
+  // offers it, with a Save button whose only remaining outcome is another 403. Closing it is what makes the refresh reach the
+  // whole page rather than the parts of it that happen to re-read the permission on render.
+  const openModalPermission = modalPermission(activeModal.kind);
+  const openModalAllowed = openModalPermission === null || can(openModalPermission);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- close on permission loss, the same shape as the filter reset above
+    if (!openModalAllowed) closeModal();
+  }, [openModalAllowed, closeModal]);
 
   // What each Detect rule would have blocked, read from the monitor-match counts. Only for an operator who may read detection
   // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. Read once per visit: a
