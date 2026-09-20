@@ -86,14 +86,23 @@ The release pipeline SHALL produce a final installer artifact at `dist/fleet-edr
 
 ### Requirement: Mobile configuration profiles ship alongside the package
 
-The release pipeline SHALL produce two `.mobileconfig` profiles that operators upload to their MDM alongside the package: one that pre-approves the system extension so end users do not see the load-time approval prompt, and one that grants the agent the TCC Full Disk Access entitlement it needs to read system telemetry. Both profiles MUST be rendered with the project's team id substituted into the template, and MUST ship unsigned (plain XML, no CMS wrapper). The payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji, Intune, mosyle) signs profiles itself at delivery time, and Fleet rejects a pre-signed upload; download authenticity is provided by the cosign signature attached to each released artifact, not by a CMS signature on the profile.
+The release pipeline SHALL produce three `.mobileconfig` profiles that operators upload to their MDM alongside the package: one that pre-approves the system extension so end users do not see the load-time approval prompt, one that grants the agent the TCC Full Disk Access entitlement it needs to read system telemetry, and one that marks the product's background items as managed so a console user cannot turn off the agent daemon or the activation LaunchAgent. All three profiles MUST be rendered with the project's team id substituted into the template, and MUST ship unsigned (plain XML, no CMS wrapper). The payloads are MDM-only, every supported MDM channel (Fleet, Jamf, Kandji, Intune, mosyle) signs profiles itself at delivery time, and Fleet rejects a pre-signed upload; download authenticity is provided by the cosign signature attached to each released artifact, not by a CMS signature on the profile.
+
+The background items profile SHALL identify the items by the team identifier rather than by label or bundle identifier, so every background item the team signs is managed, including one a later release adds. The render step SHALL refuse to produce a background items profile whose rule does not name the team identifier.
 
 #### Scenario: Profiles are rendered unsigned
 
 - **GIVEN** a release build (real or dry-run)
 - **WHEN** the profile render step runs
-- **THEN** the build produces `edr-system-extension.mobileconfig` and `edr-tcc-fda.mobileconfig` with the team id substituted
+- **THEN** the build produces `edr-system-extension.mobileconfig`, `edr-tcc-fda.mobileconfig` and `edr-login-items.mobileconfig` with the team id substituted
 - **AND** each profile is plain XML with no CMS signature, accepted verbatim by an MDM that signs at delivery time
+
+#### Scenario: The background items profile manages the team's items
+
+- **GIVEN** a release build rendering its profiles
+- **WHEN** the background items profile is rendered
+- **THEN** it carries one managed login items rule, of type team identifier, naming the project's team id
+- **AND** the render step fails if the rendered rule names another type or team
 
 ### Requirement: Installation activates the system extensions
 
@@ -148,7 +157,7 @@ The script SHALL determine the actual outcome from live system-extension state r
 
 ### Requirement: Release artifacts carry a verifiable Sigstore signature
 
-From the first release that ships the bundle format (v0.2.0) onward, the release pipeline SHALL publish, alongside every signed blob artifact (the package, both `.mobileconfig` profiles, the `SHA256SUMS` manifest, and both SBOMs), a single Sigstore bundle file (`<artifact>.sigstore.json`) that carries the signature, the ephemeral Fulcio signing certificate, and the transparency-log proof in one file. Each bundle MUST verify the artifact against the GitHub Actions workflow identity that produced it, using only non-deprecated cosign flags, so a verifier on a current cosign release sees no deprecation warnings. The pipeline MUST NOT require the legacy `<artifact>.sig` + `<artifact>.pem` pair for releases that ship bundles; releases predating the bundle format keep their existing `.sig`/`.pem` files and the legacy verify command remains valid for them.
+From the first release that ships the bundle format (v0.2.0) onward, the release pipeline SHALL publish, alongside every signed blob artifact (the package, all three `.mobileconfig` profiles, the `SHA256SUMS` manifest, and both SBOMs), a single Sigstore bundle file (`<artifact>.sigstore.json`) that carries the signature, the ephemeral Fulcio signing certificate, and the transparency-log proof in one file. Each bundle MUST verify the artifact against the GitHub Actions workflow identity that produced it, using only non-deprecated cosign flags, so a verifier on a current cosign release sees no deprecation warnings. The pipeline MUST NOT require the legacy `<artifact>.sig` + `<artifact>.pem` pair for releases that ship bundles; releases predating the bundle format keep their existing `.sig`/`.pem` files and the legacy verify command remains valid for them.
 
 #### Scenario: Each released artifact verifies against its published bundle
 

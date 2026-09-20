@@ -8,7 +8,7 @@ The agent maintains a per-component health registry (extension XPC connectivity,
 
 ### Requirement: The agent maintains a per-component health registry
 
-The agent SHALL maintain a health registry mapping each monitored component to a current condition carrying a status, a machine-readable reason, a human-readable message, and the timestamp the condition last changed. The registry SHALL be updated from the agent's existing per-service XPC connectivity state and its connect and disconnect transitions. The last-transition timestamp of a component SHALL advance only when that component's status actually changes, so that the timestamp denotes the start of the current condition.
+The agent SHALL maintain a health registry mapping each monitored component to a current condition carrying a status, a machine-readable reason, a human-readable message, and the timestamp the condition last changed. The registry SHALL be updated from the agent's existing per-service XPC connectivity state and its connect and disconnect transitions. The last-transition timestamp of a component SHALL advance only when that component's status or reason actually changes, so that the timestamp denotes the start of the current condition: a new reason at the same status, such as `never_connected` becoming `reboot_required`, is a new condition. A change to the status or reason SHALL be reported without waiting for the next periodic post.
 
 #### Scenario: A connected extension is healthy
 
@@ -18,13 +18,13 @@ The agent SHALL maintain a health registry mapping each monitored component to a
 
 #### Scenario: The last-transition timestamp is stable across unchanged reads
 
-- **GIVEN** a component whose status has not changed since it was last set
-- **WHEN** the registry is updated again with the same status
+- **GIVEN** a component whose status and reason have not changed since they were last set
+- **WHEN** the registry is updated again with the same status and reason
 - **THEN** the component's last-transition timestamp is unchanged
 
 ### Requirement: The agent distinguishes never-connected from connection-lost per extension
 
-For each monitored extension the agent SHALL report reason `never_connected` while it has never established a session since the agent started, and reason `connection_lost` once it has established a session and then lost it while the agent continued running. Both conditions SHALL carry status `unhealthy`.
+For each monitored extension the agent SHALL report reason `never_connected` while it has never established a session since the agent started, and reason `connection_lost` once it has established a session and then lost it while the agent continued running. When the receiver attributes a sustained connect failure to a staged upgrade (a previous version of the extension still registered until the Mac restarts), the agent SHALL instead report reason `reboot_required`, with a message saying a restart finishes the upgrade, until the next session is established. All three conditions SHALL carry status `unhealthy`.
 
 #### Scenario: A fresh install with an unactivated extension reports never-connected
 
@@ -37,6 +37,13 @@ For each monitored extension the agent SHALL report reason `never_connected` whi
 - **GIVEN** an extension whose XPC session was established and then dropped while the agent kept running
 - **WHEN** the registry is read
 - **THEN** that component reports status `unhealthy` with reason `connection_lost`
+
+#### Scenario: Upgrade awaiting restart says so
+
+- **GIVEN** an agent whose network-extension receiver cannot connect because a previous version is waiting to be removed at the next restart
+- **WHEN** the receiver emits its reboot-required signal
+- **THEN** the `network_extension` component reports status `unhealthy` with reason `reboot_required` and a message saying to restart the Mac
+- **AND** it reports its connected state again once a session is established
 
 ### Requirement: The agent posts an idempotent status snapshot
 
@@ -142,7 +149,26 @@ The network extension SHALL report which of its capture providers are running, a
 
 The agent SHALL grade the `network_extension` component from that report. A report naming at least one running provider and no stopped provider SHALL be graded healthy. A report naming no running provider SHALL be graded unhealthy even while the XPC session is established, because the extension is running and nothing is capturing. A provider the extension reports as stopped SHALL be graded unhealthy and named in the component message. While the XPC session is established but no report has yet arrived, the component SHALL be graded degraded rather than healthy, so connectivity is never taken as proof of capture.
 
-The extension SHALL distinguish a stop that means deliberate absence from a stop that means a fault, using the reason the platform gives, and SHALL report a deliberately absent provider as absent rather than stopped. Absence SHALL NOT by itself make the component unhealthy. A stop that means the hosting session is going away or being replaced SHALL be treated as absence for any provider, because it occurs on ordinary logout and on activation. A stop that means an operator switched the provider off SHALL be treated as absence only for the optional DNS proxy, which is opt-in and therefore correctly configured when off; switching off the mandatory content filter SHALL be reported as stopped, so a host left without network capture stays visible.
+The extension SHALL distinguish three outcomes of a stop, using the reason the platform gives, and none of them SHALL by itself make the component unhealthy except the fault. A stop that means the hosting session is going away or being replaced SHALL drop the provider from the report, for any provider, because it occurs on ordinary logout and on activation and its last state describes nothing that still exists. A stop that means an operator switched the provider off SHALL be reported as `disabled` for the optional DNS proxy, which is opt-in and therefore correctly configured when off; switching off the mandatory content filter SHALL be reported as stopped, so a host left without network capture stays visible. Every other reason SHALL be reported as stopped.
+
+A provider reported `disabled` SHALL stay reported across extension restarts. A provider that is switched off never starts and therefore never stops, so a fresh extension process observes no transition that would tell it: the extension SHALL therefore remember which providers were switched off and report them from its first message, and SHALL correct that memory when such a provider is next seen capturing. It SHALL NOT read the state from the system's own configuration: measured on a live host, that answers `false` inside the extension in the same process and second as its own log line saying the provider started, so reading it would report every host as switched off. A provider disabled before the extension first recorded one SHALL be reported as absent, as it was, since nothing observed it stopping.
+
+The memory is what was observed, not what is configured, and that bounds what it can get wrong. A provider switched off and later enabled again, whose start then never begins, is reported switched off until it does begin, because the start is what clears the memory and nothing inside the extension can read the configuration to contradict it. That misattributes a failed start to an operator, which is worth knowing, but it suppresses no signal that would otherwise fire: a provider that never starts is not reported stopped either way, so remediation, the extension's own grade and the server's telemetry-loss derivation behave exactly as they did when such a provider was simply absent.
+
+A `disabled` provider SHALL be reported rather than omitted, and SHALL be graded as a state and not a fault: its own component SHALL say it is turned off, carrying a reason that distinguishes it from a provider that is capturing and from one that stopped, and it SHALL NOT make its parent component unhealthy. Omitting it, which an earlier version did, is indistinguishable from an extension too old to report anything, and leaves a reader unable to tell a host that switched the provider off from one that never said. That reader exists: host containment's restriction on which names a contained host resolves is the DNS proxy's work, and a contained host whose proxy is off resolves any name its own resolvers answer.
+
+#### Scenario: A disabled provider survives a restart
+
+- **GIVEN** an operator has switched off the optional DNS proxy
+- **WHEN** the extension restarts, so the provider never starts and never stops
+- **THEN** its first report still names the provider `disabled`
+- **AND** a provider found capturing again is no longer reported that way
+
+#### Scenario: A disabled provider is reported, not omitted
+
+- **GIVEN** an operator switches off the optional DNS proxy
+- **WHEN** the extension reports provider liveness
+- **THEN** the provider is reported `disabled` rather than omitted, its own component says it is turned off with a reason of its own, and neither it nor its parent component is graded a fault
 
 #### Scenario: A report with a running provider and no fault is healthy
 
@@ -167,7 +193,7 @@ The extension SHALL distinguish a stop that means deliberate absence from a stop
 
 - **GIVEN** an operator has disabled the opt-in DNS proxy
 - **WHEN** the extension reports its remaining running providers
-- **THEN** the disabled provider is absent from the report rather than reported as stopped
+- **THEN** the disabled provider is reported `disabled` rather than stopped, and stays in the report
 - **AND** the `network_extension` component reports status `healthy`
 
 #### Scenario: Disabling the mandatory content filter stays visible
@@ -234,15 +260,36 @@ The agent SHALL NOT require a logged-in user to remediate, because a host at the
 
 A capture provider the operator has deliberately disabled SHALL NOT be re-enabled by remediation. DNS proxying is opt-in, so re-enabling it against an operator's decision would make the product fight its own administrator, and an automatic control that cannot be turned off is worse than the outage it prevents.
 
-The agent SHALL distinguish the two cases by the report it already receives: a deliberately disabled provider is reported as absent from the provider map, and only a provider reported stopped is eligible for remediation.
+The agent SHALL distinguish the two cases by the report it already receives: a deliberately disabled provider is reported `disabled`, and only a provider reported stopped is eligible for remediation. Neither a `disabled` provider nor one missing from the map is eligible, so an extension that reports the state and one that predates it are both safe from remediation.
+
+Eligibility alone does not settle it, because an operator can disable a provider while a repair for it is already running. On learning that a provider is `disabled`, the agent SHALL stop any enable it currently has in flight for that provider and SHALL record nothing of that attempt. The agent cannot undo an enable that already completed before the decision reached it, so this bounds how long it keeps working against the operator rather than removing the race; what it does guarantee is that the agent stops as soon as it is told, and does not resume.
+
+Only the affirmative `disabled` state SHALL do this. Absence SHALL NOT, because absence is also how a host reports a provider before anything has started, how an extension predating the state reports a disable, and what remains when a report cannot be decoded; abandoning a repair on any of those would be the opposite failure.
+
+A provider whose repair was abandoned this way SHALL keep no state from that episode, so that a provider later turned back on which stops again is treated as a new fault, with a full grace window and a full attempt budget, rather than meeting the remains of the episode the operator interrupted.
 
 #### Scenario: A deliberately disabled provider is not re-enabled
 
 - **GIVEN** an operator has disabled the opt-in DNS proxy
-- **AND** the network extension therefore reports it absent rather than stopped
+- **AND** the network extension therefore reports it `disabled` rather than stopped
 - **WHEN** the agent evaluates the report for remediation
 - **THEN** no remediation is attempted for that provider
 - **AND** the provider stays disabled
+
+#### Scenario: An enable already running is abandoned
+
+- **GIVEN** the agent has an enable in flight for a stopped provider
+- **WHEN** a report arrives saying that provider is now `disabled`
+- **THEN** the agent stops the enable in flight
+- **AND** records no attempt and no escalation for it
+- **AND** a report that merely omits the provider does neither of those, because absence is not a decision
+
+#### Scenario: A provider turned back on starts fresh
+
+- **GIVEN** a provider whose repair was abandoned because an operator disabled it
+- **WHEN** it is later turned back on and stops again
+- **THEN** the agent serves a full grace window before remediating it
+- **AND** counts the next remediation as the first attempt of a full budget
 
 ### Requirement: Remediation attempts are bounded and escalate on exhaustion
 
@@ -251,6 +298,8 @@ Repeated failure to restore a provider means the fault is not one that re-enabli
 When the attempt budget is exhausted the component SHALL report a reason distinct from the one it reports while remediation is still being attempted, so that an operator can tell "recovery is in progress" from "recovery failed and a human is required".
 
 A successful remediation SHALL reset the budget, so a host that fails intermittently over a long period is retried each time rather than being permanently written off.
+
+An enable that finishes after the stop it was started for has ended SHALL have its outcome discarded. A provider can be reported running, or disabled, while an enable is still running, and can stop again before that enable returns; attributing the finished attempt to the stop that now stands would spend a budget that stop never used, and on the last attempt of a budget would tell the operator recovery had been given up on a fault nothing had yet been tried for.
 
 #### Scenario: Repeated failures stop retrying and escalate
 
@@ -265,13 +314,23 @@ A successful remediation SHALL reset the budget, so a host that fails intermitte
 - **WHEN** the same provider is later reported stopped again
 - **THEN** the agent attempts remediation again with a full budget
 
+#### Scenario: An attempt that outlives its episode is discarded
+
+- **GIVEN** an enable is in flight for a stopped provider
+- **AND** that provider is reported running and then stops again before the enable returns
+- **WHEN** the enable finishes
+- **THEN** nothing of it is recorded against the stop that now stands
+- **AND** no escalation is published for that stop, even when the finished attempt was the last of its own budget
+
 ### Requirement: The agent reports each capture provider as its own component
 
 The agent SHALL report the state of each capture provider the extension reports to it as its own component in the status snapshot, in addition to the existing single component for the extension that owns them.
 
 The collapsed component cannot carry this. It reports the worst state among the providers, so a host whose providers are all capturing and a host with one wedged provider are indistinguishable to any reader of the snapshot. The server needs each provider's state as a POSITIVE claim, because the only way to detect a provider that has stopped delivering while believing itself healthy is to contradict its own claim against the telemetry that actually arrived.
 
-A provider the extension does NOT report SHALL NOT appear in the snapshot, and one that stops being reported SHALL be removed from it. The extension reports a deliberate operator opt-out by omitting the provider, so a retained component would publish a positive claim for a provider that is switched off. That is worse than reporting nothing: a consumer that contradicts these claims against arriving telemetry would report a fault on a provider that is simply not running by choice.
+A provider the extension does NOT report SHALL NOT appear in the snapshot, and one that stops being reported SHALL be removed from it, because a retained component would publish a positive claim for a provider that is no longer reporting one.
+
+A provider the extension reports as switched off by an operator SHALL appear as its own component saying so, under a reason that distinguishes it from a provider that is capturing and from one that stopped, and SHALL NOT be graded a fault or make its owning component one. It SHALL NOT be a claim to be capturing: a consumer that contradicts such claims against arriving telemetry would otherwise report a fault on a provider that is simply not running by choice, which is the same outcome omitting it used to buy. Reporting it rather than omitting it is what lets a reader tell a provider an operator switched off from one an extension never mentioned, which omission cannot express (issue #1078).
 
 A provider whose reported state is unchanged SHALL keep the instant at which it entered that state. Liveness reports arrive on every extension handshake, so re-stamping each time would report every provider as having just changed.
 
@@ -290,10 +349,17 @@ The provider components SHALL be ordered stably across reports, since the server
 
 #### Scenario: A provider the extension stops reporting is dropped
 
-- **GIVEN** a snapshot carrying a component for an optional provider
-- **WHEN** the operator disables that provider and the extension stops reporting it
+- **GIVEN** a snapshot carrying a component for a provider
+- **WHEN** the extension stops reporting that provider at all
 - **THEN** the next snapshot does not carry a component for it
 - **AND** the extension's own component is not degraded by its absence
+
+#### Scenario: A disabled provider is its own component
+
+- **GIVEN** an extension reporting a provider an operator switched off
+- **WHEN** the agent posts its status snapshot
+- **THEN** the snapshot carries a component for that provider saying it is turned off, under its own reason
+- **AND** neither it nor the extension that owns it is graded a fault
 
 #### Scenario: An unchanged provider keeps its transition instant
 
@@ -348,7 +414,7 @@ A record that fires on ordinary operation is one operators learn to ignore, whic
 
 The first report received after an agent connects SHALL establish a baseline without recording transitions, because the extension re-publishes provider liveness on every handshake and that report describes state the agent has not observed change.
 
-A provider reported absent SHALL NOT produce a transition record. An operator who has deliberately disabled an optional provider is running a supported configuration, and absence is how the extension reports that.
+A provider reported `disabled`, or missing from the report entirely, SHALL NOT produce a transition record. An operator who has deliberately disabled an optional provider is running a supported configuration, and both are how an extension reports one. Neither SHALL leave the provider's last observed state standing as the baseline: turning the provider back on is a transition, and a baseline still holding the state from before the opt-out would read it as no change and record nothing.
 
 The record SHALL carry the platform's own reason for a stop, unreduced, so that a consumer can distinguish an operator-driven stop from one produced by an upgrade or a session ending without depending on a verdict already formed on its behalf.
 
@@ -361,7 +427,7 @@ The record SHALL carry the platform's own reason for a stop, unreduced, so that 
 #### Scenario: A deliberately disabled provider is not recorded as a fault
 
 - **GIVEN** an operator has disabled an optional capture provider
-- **AND** the extension therefore reports it absent rather than stopped
+- **AND** the extension therefore reports it `disabled`, or stops reporting it at all
 - **WHEN** the agent receives that report
 - **THEN** no transition is recorded for that provider
 

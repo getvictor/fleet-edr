@@ -156,3 +156,54 @@ The extension SHALL remove a peer from the broadcast set and stop sending events
 - **WHEN** the agent re-opens a Mach connection and re-passes peer code-signing validation
 - **THEN** the new connection is accepted as a fresh peer
 - **AND** the new connection begins receiving events from the moment it joins
+
+### Requirement: Inbound network containment update
+
+The network extension SHALL accept an inbound XPC dictionary message with `type = network_containment.update` from a validated peer, carrying a containment document as raw JSON bytes in a `data` field, and SHALL hand those bytes to its containment state unread.
+
+As with `application_control.update`, this requirement owns only the transport. What the document means and how it is persisted and applied are specified by `extension-network-response`.
+
+A message whose `data` field is absent, or present and empty, or larger than 16384 bytes, SHALL be rejected without changing the containment state and without closing the connection.
+
+#### Scenario: The agent pushes a containment update
+
+- **GIVEN** a validated agent connection is open to the network extension
+- **WHEN** the agent sends a `network_containment.update` message carrying a document in `data`
+- **THEN** the extension hands exactly those bytes to its containment state
+
+#### Scenario: A network_containment.update with no data is rejected
+
+- **GIVEN** a validated agent connection is open to the network extension
+- **WHEN** the agent sends a `network_containment.update` message whose `data` field is absent or empty
+- **THEN** the extension rejects the message
+- **AND** the containment state is unchanged
+- **AND** the connection stays open and continues to serve events
+
+#### Scenario: An oversized network_containment.update is rejected
+
+- **GIVEN** a validated agent connection is open to the network extension
+- **WHEN** the agent sends a `network_containment.update` message whose `data` is larger than 16384 bytes
+- **THEN** the extension rejects the message
+- **AND** the containment state is unchanged
+
+### Requirement: Inbound watched-path update
+
+The system extension SHALL accept an inbound XPC dictionary message with `type = watched_paths.update` from a validated peer, carrying a watched-path set as raw JSON bytes in a `data` field, and SHALL hand those bytes to the file-tamper client's watched set unread.
+
+As with `application_control.update`, this requirement owns only the transport. What the set means and how it is applied and persisted are specified by `endpoint-event-collection`.
+
+A message whose `data` field is absent, or present and empty, SHALL be rejected without changing the watched set and without closing the connection.
+
+#### Scenario: The agent pushes a watched-path set
+
+- **GIVEN** a validated agent connection is open to the system extension
+- **WHEN** the agent sends a `watched_paths.update` message carrying a set in `data`
+- **THEN** the extension hands exactly those bytes to the watched set
+
+#### Scenario: A watched_paths.update with no data is rejected
+
+- **GIVEN** a validated agent connection is open to the system extension
+- **WHEN** the agent sends a `watched_paths.update` message whose `data` field is absent or empty
+- **THEN** the extension rejects the message
+- **AND** the watched set is unchanged
+- **AND** the connection stays open and continues to serve events

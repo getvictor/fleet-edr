@@ -27,11 +27,13 @@ The system SHALL evaluate every rule that has been registered with the engine ag
 
 ### Requirement: Registered rule catalog
 
-The system SHALL register the following named rules at startup so each becomes evaluable against every batch of its target platform: `suspicious_exec`, `shell_network_connect`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, `sensor_tamper`, `application_control_block`, and `sensor_recovery_failed`. The registered-rule metadata SHALL report each rule's target platforms.
+The system SHALL register the following named rules at startup so each becomes evaluable against every batch of its target platform: `suspicious_exec`, `shell_network_connect`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, `sensor_tamper`, `application_control_block`, `application_control_would_block`, and `sensor_recovery_failed`. The registered-rule metadata SHALL report each rule's target platforms.
 
-The operator-facing catalog SHALL report the registered rules that are detections. Registration and evaluation are unchanged for the rest: a registered rule that is not a detection is still evaluated against every batch of its target platform and still persists its findings as alerts.
+The operator-facing catalog SHALL report the registered rules that are detections. Registration and evaluation are unchanged for the rest: a registered rule that is not a detection is still evaluated against every batch of its target platform.
 
-The changes from the prior requirement are the addition of `sensor_tamper` and `sensor_recovery_failed`, the first two rules whose subject is the EDR itself rather than the host it watches; the addition of `shell_network_connect`, the outbound-connection shape separated from `suspicious_exec` so each can be tuned and promoted on its own; the addition of `application_control_block`, which was registered and evaluated all along but was never named here; and that the operator-facing catalog now reports the registered rules that are detections rather than every registered rule. Naming `application_control_block` matters because of that last change: while registration and the catalog were the same thing, leaving it out was harmless, and now it would let the spec permit dropping its alerts entirely.
+Where its findings are RECORDED depends on what kind of non-detection it is, and the rule declares that kind itself. A projection renders a decision that was already made about activity on the host, so, like a detection's findings, its findings follow the mode the rule runs in: `application_control_block` renders a denied exec and persists alerts that are worked in the same queue as detections, and `application_control_would_block` renders an exec the policy allowed that a `DETECT` application-control rule matched, and declares monitor, so its findings are kept as monitor records, and its matches are counted under the application-control rule each finding names, the rule an operator decides whether to promote. A health signal reports a fault in this product's own software, so its findings are recorded as host health episodes and SHALL NOT persist as alerts: an operational fault in the queue an analyst works to decide whether the host is under attack is a claim the rule is not making. A registered rule that declares no kind is a detection and persists its findings as alerts, which is what every rule that says nothing continues to do.
+
+The changes from the prior requirement are that a non-detection's findings are no longer uniformly persisted as alerts: the destination now follows the declared kind, so a health signal is recorded as a host health episode while a projection is recorded in its mode; and the addition of `application_control_would_block`, which gives application-control Detect mode a place to record what a rule would have blocked.
 
 #### Scenario: The engine reports its rule catalog
 
@@ -44,6 +46,27 @@ The changes from the prior requirement are the addition of `sensor_tamper` and `
 - **GIVEN** a running detection engine in its default configuration
 - **WHEN** an operator inspects the registered-rule metadata
 - **THEN** each rule reports the operating-system platforms it targets
+
+#### Scenario: A health signal is recorded as an episode rather than an alert
+
+- **GIVEN** a registered rule that declares itself a health signal
+- **WHEN** that rule produces a finding
+- **THEN** a host health episode is recorded for the finding's host
+- **AND** no alert row is created for it
+
+#### Scenario: A projection is still an alert
+
+- **GIVEN** a registered rule that declares itself a projection and runs in alert mode
+- **WHEN** that rule produces a finding
+- **THEN** the finding persists as an alert, as a detection's would
+
+#### Scenario: A would-block match is kept as a monitor record
+
+- **GIVEN** an `application_control_would_block` event naming a process the graph knows
+- **WHEN** the engine evaluates the batch
+- **THEN** a monitor record is kept under the matched application-control rule's id, with that rule's severity
+- **AND** the match is counted under that rule's id
+- **AND** no alert is created for it
 
 ### Requirement: Persisted alert schema
 
@@ -63,7 +86,9 @@ The system SHALL persist each finding as an alert that carries a host identifier
 
 ### Requirement: Alert dedup by subject
 
-The system SHALL deduplicate alerts on the tuple (source, host id, rule id, subject), where the subject is a stable identity for the finding: for a process-backed finding the subject is its process identifier (preserving the historical (host, rule, process) dedup), and for a process-less finding the firing rule supplies the subject (for example the registered launch item). Re-evaluating a rule that yields the same subject on the same host in a later batch MUST NOT create a second alert row; the existing alert remains the single record for that finding.
+The system SHALL deduplicate alerts on the tuple (source, disposition, host id, rule id, subject), where the subject is a stable identity for the finding: for a process-backed finding the subject is its process identifier (preserving the historical (host, rule, process) dedup), and for a process-less finding the firing rule supplies the subject (for example the registered launch item). Re-evaluating a rule that yields the same subject on the same host in a later batch MUST NOT create a second row of the same disposition; the existing row remains the single record for that finding. Disposition is part of the tuple so that an alert and a monitor record for the same finding are two records rather than one absorbing the other.
+
+The change from the prior requirement is disposition in the tuple, which monitor records need (see "Monitor-mode matches are kept as records").
 
 #### Scenario: A rule re-fires on the same process in a later batch
 
@@ -76,6 +101,12 @@ The system SHALL deduplicate alerts on the tuple (source, host id, rule id, subj
 - **GIVEN** an existing alert for a process-less finding whose subject is its registered item
 - **WHEN** a later batch causes the same rule to yield the same subject on the same host
 - **THEN** the existing alert row is reused, while a finding with a different subject produces a distinct alert
+
+#### Scenario: An alert and a monitor record for one finding are separate records
+
+- **GIVEN** an existing monitor record for a (host, rule, subject)
+- **WHEN** the same finding is persisted as an alert
+- **THEN** a new alert row is inserted and the monitor record is not reused
 
 ### Requirement: Alert-to-event linkage
 
@@ -500,7 +531,11 @@ Every registered rule SHALL declare one or more target platforms, each one of `d
 
 ### Requirement: Signature-based parent exclusions
 
-The `suspicious_exec` rule SHALL suppress a finding when the chain's non-shell parent process matches an operator exclusion by its code-signing identity, in addition to the existing parent-path-glob match. The consulted signature dimensions are the parent's Apple Developer team ID (`team_id`), its code-signing identifier (`signing_id`), and its code-directory hash (`cdhash`), read from the parent process's already-persisted code-signing record; no agent or event-wire change is required. A finding with no resolved non-shell parent, or a parent that carries no signing identity, MUST NOT be suppressed by a signature exclusion, so an unsigned binary at a benign-looking path is not silently allowed. This lets an operator exclude a code-signed developer tool by its non-spoofable signing identity instead of a path glob that an attacker who can write to a world-writable directory could land inside.
+The `suspicious_exec` rule SHALL suppress a finding when the chain's non-shell parent process matches an operator exclusion by its code-signing identity, in addition to the existing parent-path-glob match. The consulted signature dimensions are the parent's Apple Developer team ID (`team_id`), its code-signing identifier (`signing_id`), and its code-directory hash (`cdhash`), read from the parent process's already-persisted code-signing record; no agent or event-wire change is required.
+
+A `signing_id` exclusion SHALL name the identifier QUALIFIED by who signed it: `<TEAMID>:<identifier>`, or `platform:<identifier>` for a binary the operating system vendor ships. Both parts SHALL match. A parent that carries an identifier but no team ID and is not a platform binary SHALL NOT be suppressed by any `signing_id` exclusion.
+
+The identifier alone is not an identity: an ad-hoc signature sets it to any value with no privilege and no vendor account, so an unqualified match let a planted binary inherit the exclusion written for the vendor whose identifier it claimed. The system SHALL refuse an unqualified `signing_id` exclusion value when it is created, naming the expected form, because an exclusion that can never match is one an operator believes is suppressing something. A finding with no resolved non-shell parent, or a parent that carries no signing identity, MUST NOT be suppressed by a signature exclusion, so an unsigned binary at a benign-looking path is not silently allowed. This lets an operator exclude a code-signed developer tool by a signing identity a planted binary cannot claim, instead of a path glob that an attacker who can write to a world-writable directory could land inside.
 
 #### Scenario: A signed parent is suppressed by its team ID
 
@@ -508,7 +543,7 @@ The `suspicious_exec` rule SHALL suppress a finding when the chain's non-shell p
 - **AND** an exclusion of match type `team_id` with value `Q6L2SF6YDW` for `suspicious_exec`
 - **WHEN** the engine evaluates the rule against the batch
 - **THEN** the engine produces no `suspicious_exec` finding, because the parent's signing team ID matches the exclusion
-- **AND** the same holds for a `signing_id` exclusion matching the parent's signing identifier and a `cdhash` exclusion matching the parent's code-directory hash
+- **AND** the same holds for a `signing_id` exclusion whose value is that team ID and the parent's signing identifier, and a `cdhash` exclusion matching the parent's code-directory hash
 
 #### Scenario: An unsigned lookalike parent is not suppressed
 
@@ -516,6 +551,27 @@ The `suspicious_exec` rule SHALL suppress a finding when the chain's non-shell p
 - **AND** a `suspicious_exec` chain whose non-shell parent is an unsigned binary at a path resembling the benign tool (for example `/tmp/claude/versions/1.0/claude`)
 - **WHEN** the engine evaluates the rule against the batch
 - **THEN** the finding is produced, because the unsigned parent carries no team ID for the signature exclusion to match
+
+#### Scenario: An ad-hoc parent claiming an identifier is not suppressed
+
+- **GIVEN** an exclusion of match type `signing_id` with value `Q6L2SF6YDW:com.anthropic.claude-code` for `suspicious_exec`
+- **AND** a chain whose non-shell parent is an ad-hoc signed binary carrying that identifier, with no team ID and no platform flag
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the finding is produced, because the identifier is whatever the signer typed and nothing vouches for it
+
+#### Scenario: A platform binary is suppressed by a platform-qualified value
+
+- **GIVEN** an exclusion of match type `signing_id` with value `platform:com.apple.osascript` for `suspicious_exec`
+- **AND** a chain whose non-shell parent is a platform binary carrying that identifier and no team ID
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no finding, because the platform flag is the qualifier the operating system's own binaries carry
+
+#### Scenario: A bare signing id exclusion is refused
+
+- **GIVEN** an operator creating a `signing_id` exclusion whose value is a bare identifier
+- **WHEN** the request is made
+- **THEN** it is rejected as an invalid request, naming both accepted forms
+- **AND** nothing is stored
 
 ### Requirement: Retryable evaluation on unmaterialized flow process
 
@@ -595,27 +651,34 @@ Non-retryable failures keep their existing semantics: an ordinary rule-evaluatio
 
 A stopped capture provider that the agent cannot restore leaves the host not reporting that telemetry until a person intervenes, and the existing stop finding cannot say so: it is raised seconds after the stop, when the outcome is not yet known, and it therefore reads identically for a host that repaired itself and one that did not. The system SHALL register a `sensor_recovery_failed` rule that raises a finding when the agent reports that its automatic repair of a capture provider has exhausted its attempts.
 
+The finding SHALL be recorded as a host health episode rather than as an alert. Both outcomes it can report name this product's own software, so it establishes nothing about an adversary and does not belong in the queue an analyst works to decide whether a host is under attack. Its urgency is unchanged by the move: a host that is not capturing needs someone to act whether or not anyone attacked it.
+
 The finding SHALL carry no ATT&CK technique, and its text SHALL name none either. The rule's own documentation sends an analyst to this product's components as the likely cause of what it reports, so there is no actor for it to attribute. Stated here as well as in the change that decided it, because a requirement mandating the technique would archive alongside the one forbidding it.
 
 The finding SHALL carry a higher severity than the stop finding that precedes it, because a stop may already have been repaired by the time an analyst looks whereas this state persists until someone acts.
 
-The finding SHALL name the provider to restore and SHALL report how many repair attempts were made, so it is distinguishable from a repair that was never attempted.
+The finding SHALL name the provider to restore and SHALL report how many repair attempts were made, so it is distinguishable from a repair that was never attempted. Those facts SHALL reach the episode as fields rather than only inside its prose, because the surface that reads them is a health record rather than an analyst reading a description.
 
 The finding SHALL report which failure shape was reached, because they implicate different parts of the host: the repair command failing points at the host application or the configuration daemon, while every repair reporting success and the provider staying stopped means re-enabling is not what the fault needs. An outcome the server does not recognise SHALL still produce a finding, described in general terms rather than dropped, so that a newer agent reporting a new shape is not silently unreported.
 
 The rule SHALL NOT wait or re-evaluate before deciding. Unlike the stop finding, whose meaning depends on what happens next, its input reports a settled outcome.
 
-Repeated evaluation of one exhaustion SHALL collapse to a single alert, while a separate exhaustion SHALL raise its own.
+Repeated evaluation of one exhaustion SHALL collapse to a single episode, whether or not that episode has closed in between, while a separate exhaustion SHALL open its own.
+
+An operator's mode setting for this rule SHALL be honoured as it is for any other rule: a rule an operator disabled records nothing. The rule is absent from the tunable catalog, but the settings API does not validate a rule id against the registered set, so such a setting can exist and ignoring it would silently override a deliberate choice.
 
 A provider an operator has deliberately disabled SHALL NOT produce a finding. The agent does not attempt to repair a provider reported as a supported opt-out, so no record exists for it to evaluate.
 
-#### Scenario: Automatic recovery gives up and raises a finding
+Alerts this rule raised before it became a health signal SHALL be left as they are. They are the only record of the episodes they describe, and rewriting them would have to invent a resolution time nobody observed.
+
+#### Scenario: Automatic recovery gives up and opens a health episode
 
 - **GIVEN** a host whose capture provider stopped
 - **WHEN** the agent reports that its repair attempts for that provider are exhausted
 - **THEN** the engine produces one `sensor_recovery_failed` finding
 - **AND** that finding carries no ATT&CK technique
 - **AND** the finding names the provider and reports how many repairs were attempted
+- **AND** the finding is recorded as an open host health episode rather than as an alert
 
 #### Scenario: The finding outranks the stop it follows
 
@@ -721,6 +784,10 @@ The system SHALL decode an event's payload once and reuse it for every rule eval
 
 The system SHALL report a field as absent when the payload does not carry it, so that a rule matching on absence behaves as its author intended.
 
+The system SHALL supply a process-creation rule's original file name from the acting process's code-signing identifier. Sigma's `OriginalFileName` is the name a binary was compiled as, which does not change when the file is renamed, and a rule reading it is detecting a tool renamed to hide it. macOS carries that property in the code signature rather than in version info: the signing identifier is embedded in the signature and cannot be changed without invalidating it.
+
+A process carrying no signing identity SHALL supply the field as ABSENT rather than as an empty value, which is the general absence rule above applied to this field. The difference is observable: Sigma's `Field: null` matches a field the event does not carry, and `Field: ""` matches one that is present and empty. Supplying an empty value for an unsigned process would make the first fail and the second match, so the field would misreport what it knows in both directions.
+
 The system SHALL supply a file-event rule's target filename only for an open that carries write access AND a flag that changes the file's contents. The Sigma category names file creation and modification rather than any access, so an open that only reads, and an open that only takes a write-mode lock, are both routine background activity rather than modifications. Supplying either would present known noise to every such rule as a detection.
 
 Deciding this where the field is supplied, rather than in each rule, is what lets a file rule read only fields from Sigma's own taxonomy.
@@ -748,6 +815,20 @@ Deciding this where the field is supplied, rather than in each rule, is what let
 - **GIVEN** a rule whose logsource names one event type
 - **WHEN** it is evaluated against an event of a different type
 - **THEN** it does not match, rather than matching on a field that happens to share a name
+
+#### Scenario: A renamed binary is matched by its signature
+
+- **GIVEN** a process-creation rule reading `OriginalFileName`
+- **AND** a signed binary whose file has been renamed on disk
+- **WHEN** the rule is evaluated against its exec event
+- **THEN** the rule sees the code-signing identifier, which the rename did not change
+
+#### Scenario: An unsigned process supplies no original file name
+
+- **GIVEN** the same rule
+- **AND** an exec event for a process carrying no code-signing identity
+- **WHEN** the rule is evaluated
+- **THEN** the field is absent rather than empty, so a substring or prefix test does not match it
 
 ### Requirement: A rule reading a field we do not supply is refused when it loads
 
@@ -928,7 +1009,9 @@ A registered rule MAY declare that it is not a detection, and SHALL state which 
 
 The system SHALL omit non-detections from the operator-facing rule catalog, from the ATT&CK coverage export, and from the generated rule documentation. Those surfaces describe detections an operator reads, tunes, and reasons about; a rule with no detection logic offers a tuning surface that does not exist, and one that makes no adversary claim inflates a coverage figure that is read during procurement.
 
-The system SHALL NOT change how a non-detection is registered, evaluated, or persisted. The exclusion is confined to the catalog surfaces, so a non-detection continues to raise the same alerts with the same identifiers and severities.
+The system SHALL NOT change how a non-detection is registered or evaluated. The declared kind decides only where its findings are RECORDED, which the registered-rule-catalog requirement states: a projection is recorded in the mode it runs in, as a detection is, and a health signal is recorded as a host health episode. Identifiers and severities are unchanged in either case.
+
+The change from the prior requirement is that persistence is no longer uniform across non-detections. It previously held that a non-detection "continues to raise the same alerts", which was true while the only recording surface was the alerts table and is what issue #778 changed for health signals and application-control Detect mode changed for a projection that runs in monitor.
 
 #### Scenario: The catalog omits a non-detection
 
@@ -937,11 +1020,12 @@ The system SHALL NOT change how a non-detection is registered, evaluated, or per
 - **THEN** that rule is absent from the catalog
 - **AND** it is absent from the ATT&CK coverage export
 
-#### Scenario: A non-detection still evaluates and alerts
+#### Scenario: A non-detection still evaluates
 
 - **GIVEN** a registered rule that declares itself a projection or a health signal
 - **WHEN** the engine evaluates a batch that satisfies it
-- **THEN** the rule is evaluated and its finding is persisted as an alert unchanged
+- **THEN** the rule is evaluated and its finding is recorded, with the identifier and severity the rule gave it
+- **AND** which surface it is recorded on follows the kind it declares
 
 #### Scenario: A rule that declares nothing is a detection
 
@@ -1945,7 +2029,7 @@ The rule SHALL NOT conclude that capture failed to resume until the recovery win
 
 A finding SHALL cite the stop it fired on and SHALL identify the provider, so an analyst can tell which telemetry stream the host stopped reporting. Repeated evaluation of one stop SHALL collapse to a single alert, while a separate stop SHALL raise its own.
 
-A provider an operator has deliberately disabled SHALL NOT produce a finding. The agent reports a supported opt-out as the provider being absent rather than stopped, and records no transition for it, so no suppression list is involved.
+A provider an operator has deliberately disabled SHALL NOT produce a finding, and the rule SHALL need no suppression list to achieve it. The agent reports a supported opt-out as the provider being `disabled` rather than stopped, or omits the provider entirely on an extension predating that report, and records a transition for neither, so no stop record for that provider reaches the rule at all.
 
 The rule reports that capture stopped, NOT whether it was later restored. Whether the repair succeeded, is still pending, or gave up is carried by the subsequent transition records, and none of it is known at the time the stop must be reported. Gating the finding on the outcome would suppress the most serious case, a provider that never comes back at all.
 
@@ -1974,7 +2058,7 @@ The rule reports that capture stopped, NOT whether it was later restored. Whethe
 #### Scenario: A deliberately disabled provider does not fire
 
 - **GIVEN** an operator has disabled an optional capture provider
-- **WHEN** the agent reports its providers
+- **WHEN** the agent reports its providers, naming that provider `disabled`
 - **THEN** no stop record exists for that provider and the engine produces no `sensor_tamper` finding
 
 ### Requirement: Rules evaluating one batch derive shared work once
@@ -2200,3 +2284,308 @@ Narrowing the matched paths and observing renames are one change, not two. The n
 - **GIVEN** a `file_rename` event whose destination is `/etc/sudoers.d/backup.old`, a name sudo skips
 - **WHEN** the rule evaluates it
 - **THEN** no finding is produced, because the destination is not policy sudo will parse
+
+### Requirement: Alerts expire on their own window
+
+The system SHALL delete an alert whose last triage activity is older than a configured alert retention window. Before this, nothing deleted alerts, so an alert and the process record it pins were kept for the life of the deployment: an indefinite retention period that no one chose, and a poor answer to a framework that expects a stated one.
+
+The alert window's default SHALL be the longest retention tier, well above the default window for derived records, because an alert is the investigation and compliance record rather than a row the server can rebuild. That default SHALL be documented as the deployment's stated alert retention policy. An operator MAY configure a shorter alert window than the derived-record window; the windows are independent, and choosing one is a policy decision this system does not second-guess.
+
+The alert window SHALL be configured independently of the retention window for derived records, in both directions. Disabling one SHALL NOT disable, lengthen, or shorten the other: an operator who stops pruning process records to preserve a forensic window has not thereby decided anything about alerts. A window of zero SHALL disable alert pruning, which keeps the prior behaviour available to a deployment that wants it. A window too long for the system to represent SHALL be refused at startup, for both windows: accepting it and letting the arithmetic wrap would place the cutoff in the future and delete every record the window was meant to keep.
+
+An alert's age SHALL be measured from its last triage activity, not from when it was raised. An alert an analyst acknowledged or reopened within the window is part of an investigation in progress and SHALL be kept, whenever it was first raised. A finding re-firing against an existing alert is not triage activity, so a standing condition that nobody triages still ages out, and a later re-fire raises a new alert rather than being lost. Neither is a write the system makes for its own bookkeeping, such as crediting an alert to the author of the rule that raised it: such a write SHALL NOT restart the alert's retention clock.
+
+Deleting an alert SHALL remove its links to the events that triggered it, and SHALL do so atomically with the alert: a pass that fails part way SHALL leave every alert it did not delete with all of its evidence. A finding re-firing against an alert while that alert is being deleted SHALL complete without error, either before the deletion, in which case its evidence is deleted with the alert, or after it, in which case it raises a new alert. Neither the detection write nor the retention pass may be the casualty of the other. The same holds for an analyst changing the alert's status while it is being deleted: if the change lands first it is triage activity and the alert SHALL be kept, and if the deletion lands first the change SHALL report that the alert no longer exists rather than failing with an internal error.
+
+An expired alert SHALL release the process record it referenced to the ordinary process prune, so a long-lived deployment does not keep process records alive solely for alerts no one can see any more. An alert inside its window SHALL continue to pin its process record, so the pivot from every visible alert keeps working.
+
+#### Scenario: An alert past the window is pruned and one inside it survives
+
+- **GIVEN** an alert whose last triage activity is older than the alert window, and another whose last triage activity is inside it
+- **WHEN** a retention pass runs
+- **THEN** the older alert and its event links are deleted
+- **AND** the alert inside the window survives with all of its event links
+
+#### Scenario: An alert raised long ago but recently triaged is kept
+
+- **GIVEN** an alert raised long before the alert window began, and acknowledged inside it
+- **WHEN** a retention pass runs
+- **THEN** the alert is kept
+
+#### Scenario: An expired alert releases the process row it pinned
+
+- **GIVEN** a completed process record past the process window, referenced only by an alert past the alert window
+- **AND** another such process record referenced by an alert inside the alert window
+- **WHEN** a retention pass runs
+- **THEN** the process record referenced only by the expired alert is deleted
+- **AND** the process record referenced by the surviving alert is kept
+
+#### Scenario: A disabled window prunes nothing
+
+- **GIVEN** the alert window set to zero, and an alert of any age
+- **WHEN** a retention pass runs
+- **THEN** the alert is kept
+
+#### Scenario: The alert window is independent of the process window
+
+- **GIVEN** the process window set to zero and the alert window enabled
+- **WHEN** a retention pass runs
+- **THEN** alerts past the alert window are still pruned, and no process record is
+- **AND** with the alert window set to zero and the process window enabled, process records are pruned and no alert is
+
+#### Scenario: A re-fire during a prune completes cleanly
+
+- **GIVEN** an alert past the alert window, and a finding re-firing against it that has claimed the alert but not yet linked its evidence
+- **WHEN** a retention pass starts before that re-fire finishes
+- **THEN** both the re-fire and the retention pass complete without error
+- **AND** the alert is deleted with every event link, including the one the re-fire added
+
+#### Scenario: Crediting an alert does not restart its retention clock
+
+- **GIVEN** an alert whose last triage activity was long ago, and that has not yet been credited to the author of the rule that raised it
+- **WHEN** the system credits it
+- **THEN** the alert's last triage activity is unchanged
+
+#### Scenario: A window too long to represent is refused at startup
+
+- **GIVEN** an alert window or a derived-record window above the supported maximum
+- **WHEN** the server starts
+- **THEN** it refuses to start, naming the setting and the maximum
+- **AND** a window at the maximum is accepted
+
+#### Scenario: Triage during a prune keeps the alert or reports it gone
+
+- **GIVEN** an alert past the alert window
+- **WHEN** an analyst changes its status while a retention pass is deleting it
+- **THEN** if the status change lands first, the alert is kept with its evidence
+- **AND** if the deletion lands first, the status change reports that the alert was not found
+
+### Requirement: Monitor records are written per batch
+
+The monitor records a batch of events produces SHALL be written together when the batch's evaluation ends, not one transaction per finding. Their triggering events SHALL be read from the event archive in bounded chunks of records, not once per record, so neither the read nor the evidence held for it grows with the size of the batch. Each record SHALL carry the same row, deduplication, event links and evidence it would carry if written alone, and SHALL enqueue no webhook delivery. The records SHALL be written whether the batch's evaluation succeeds or ends in an error, so a batch that is not processed again still keeps what it found. A failure to write them SHALL fail the batch without hiding the batch's own error.
+
+#### Scenario: A batch's monitor records are written together
+
+- **GIVEN** a batch in which several monitor-mode findings from more than one rule match
+- **WHEN** the batch is evaluated
+- **THEN** all of its monitor records are written in one store call, in the order they were found
+- **AND** each record has its event links and the evidence the archive holds, an event shared by two records included
+
+#### Scenario: A failed batch keeps the monitor records it found
+
+- **GIVEN** a batch in which a monitor-mode finding matches before another rule fails, either retryably or not
+- **WHEN** the batch's evaluation ends in that failure
+- **THEN** the monitor record is still written, and the batch's own error still reaches the processor
+
+### Requirement: Detection-config changes commit their audit entry
+
+The audit entry for a detection-config change (creating or deleting an exclusion, changing a rule setting, or replacing the watched-path set) SHALL be committed in the same transaction as the change, so an audit reader can never find the change without its entry. Because the audit store belongs to another bounded context and cannot join that transaction, the entry SHALL be committed to an outbox and delivered to the audit store afterwards. Delivery MAY lag the change, SHALL be retried until it succeeds, and SHALL NOT drop an entry. Delivery SHALL NOT be carried out by the change's own request: the request SHALL commit its entry, ask for delivery, and answer, so that an audit store that is slow or unavailable delays the row rather than the response to a change that has already taken effect. Delivery SHALL also be attempted periodically and independently of any request, so that an entry whose request ended before it was delivered, or one written by another replica, is still delivered. A change that is refused or rolled back SHALL leave no entry. The delivered row SHALL carry the trace of the request that made the change.
+
+A watched-path replacement's audit row SHALL report how many hosts the set was queued for and missed, which is known only after the change commits. Its entry SHALL therefore be withheld from delivery until the writer adds those counts. When the writer stops before adding them, or adds them only after the hold has passed, the entry SHALL still be delivered, without the counts, once a bounded hold has passed.
+
+#### Scenario: A change commits with its audit entry
+
+- **GIVEN** an operator creating an exclusion, changing a rule setting, and deleting the exclusion
+- **WHEN** each change commits
+- **THEN** its audit entry has committed with it, naming the actor, the target, the reason, and the request's trace
+
+#### Scenario: A delivery failure delays the audit row
+
+- **GIVEN** an audit store that is unavailable when a detection-config change is made
+- **WHEN** the change is made
+- **THEN** the change succeeds and its entry stays in the outbox
+- **AND** a later delivery, once the store is available, records the row and clears the entry
+
+#### Scenario: A refused change leaves no audit entry
+
+- **GIVEN** an exclusion for a match type its rule does not consult, a rule setting with an unknown mode, a deletion of a missing exclusion, or an invalid watched-path set
+- **WHEN** the change is refused
+- **THEN** no audit entry is left in the outbox
+
+#### Scenario: A replacement's audit row reports its push
+
+- **GIVEN** a watched-path replacement whose entry has committed with the set
+- **WHEN** the push has not yet reported its host counts
+- **THEN** the entry is not delivered
+- **AND** once the counts are added, the delivered row carries them
+
+#### Scenario: An entry whose writer stops is still delivered
+
+- **GIVEN** a held entry whose writer never adds to it
+- **WHEN** its hold passes
+- **THEN** the entry is delivered as first written
+
+### Requirement: An exclusion covers only what it names
+
+A rule whose detection matches on a command argument SHALL evaluate EVERY argument the detection matched, not the first. It SHALL suppress the finding only when an operator exclusion covers all of them, and the finding's description SHALL name the candidates that were not excluded.
+
+`launchctl` accepts several plist paths in one invocation, and `persistence_launchagent` read back only the first. An exclusion for a benign plist therefore suppressed whatever was registered alongside it:
+
+```sh
+launchctl load /Library/LaunchAgents/com.logi.ghub.plist ~/Library/LaunchAgents/evil.plist
+```
+
+Planting a plist under `/Library/LaunchAgents` needs root; this needs none, because the first argument only has to NAME an excluded plist and the second is the user's own LaunchAgent. The description had the same shape of fault with no exclusion at all: it named the first argument, so an analyst reading the alert never learned the second plist had been registered.
+
+#### Scenario: An excluded candidate does not cover its neighbour
+
+- **GIVEN** an exclusion for a benign LaunchAgent plist
+- **AND** a `launchctl load` naming that plist and a second plist the exclusion does not cover
+- **WHEN** the engine evaluates the rule
+- **THEN** a finding is produced
+- **AND** its description names the second plist and not the excluded one
+
+#### Scenario: Every candidate excluded suppresses the finding
+
+- **GIVEN** exclusions covering each of several LaunchAgent plists
+- **AND** a `launchctl load` naming exactly those plists
+- **WHEN** the engine evaluates the rule
+- **THEN** no finding is produced
+
+#### Scenario: Several candidates are all named
+
+- **GIVEN** a `launchctl load` naming several LaunchAgent plists and no exclusion for any of them
+- **WHEN** the engine evaluates the rule
+- **THEN** the finding's description names every one of them
+
+### Requirement: Monitor-mode matches are kept as records
+
+A finding from a detection rule that resolves to `monitor` for its host SHALL be persisted as a monitor record, carrying the same context an alert carries: the host, the rule, the severity, the title, the description, the linked process where there is one, the technique identifiers, and the triggering events with their evidence copies. The daily monitor-match counter SHALL continue to count the match as it did before. A count alone cannot tell an operator whether a rule's matches are benign, and that judgement is what promoting a rule turns on.
+
+A rule that declares itself a health signal SHALL NOT keep monitor records; its match in monitor mode is counted and nothing else. Out of monitor mode its findings are recorded as host health episodes rather than alerts, so a monitor record of one would put an operational fault in the alert store that route exists to keep it out of.
+
+A monitor record SHALL NOT be an alert. It SHALL NOT be delivered to any webhook destination, SHALL NOT be counted as a created alert, and SHALL NOT be triaged: a request to change its status SHALL be refused, because a monitor record has not been triaged and a status write would restart its retention clock. A finding from a rule that resolves to `alert` SHALL raise an alert as before and SHALL NOT also be kept as a monitor record.
+
+Monitor records SHALL be deduplicated the way alerts are, so a list of them reads as distinct findings rather than being padded by batch retries. The monitor-match counter counts every match, so the two can differ, and neither is wrong.
+
+Promoting a rule SHALL NOT rewrite the records already stored for it. A finding raised after promotion SHALL raise an alert even where a monitor record for the same finding already exists: deduplication applies within a disposition, never across one, or promotion would be silently absorbed by the record it was meant to replace.
+
+Monitor records SHALL be deleted once they are older than a monitor-record retention window, measured from when the record was last written. The window SHALL default to 7 days, the window the promote decision is made over, and SHALL be configured independently of the alert retention window and of the derived-record window: the alert window SHALL NOT delete a monitor record, and the monitor window SHALL NOT delete an alert. A window of zero SHALL disable the monitor-record prune, and a window too long for the system to represent SHALL be refused at startup.
+
+#### Scenario: A monitor-mode match is kept as a monitor record
+
+- **GIVEN** a rule resolved to `monitor` for a host
+- **WHEN** an event it matches is evaluated for that host
+- **THEN** a monitor record is persisted carrying the rule, host, severity, title, description, process link, techniques, and triggering events
+- **AND** no alert is persisted, and the match is counted as before
+
+#### Scenario: A health-signal rule in monitor mode keeps no record
+
+- **GIVEN** a rule that declares itself a health signal, resolved to `monitor` for a host
+- **WHEN** a finding from it is evaluated
+- **THEN** no monitor record is persisted, and the match is counted
+
+#### Scenario: An alert-mode match is not also kept as a monitor record
+
+- **GIVEN** a rule resolved to `alert` for a host
+- **WHEN** an event it matches is evaluated for that host
+- **THEN** an alert is persisted and no monitor record is
+
+#### Scenario: A monitor record is not notified or triaged
+
+- **GIVEN** a webhook destination subscribed to new alerts, and a rule resolved to `monitor`
+- **WHEN** the rule's finding is kept as a monitor record
+- **THEN** no delivery is enqueued for it
+- **AND** a request to change the monitor record's status is refused and the record is unchanged
+
+#### Scenario: Promotion raises an alert for an already recorded finding
+
+- **GIVEN** a monitor record for a rule's finding on a host
+- **WHEN** the rule is promoted to `alert` and the same finding is raised again
+- **THEN** an alert is persisted for it
+- **AND** the monitor record is still there, unchanged
+
+#### Scenario: Monitor records and alerts expire on their own windows
+
+- **GIVEN** a monitor record and an alert, both older than the monitor-record window and younger than the alert window
+- **WHEN** a retention pass runs
+- **THEN** the monitor record is deleted with its event links
+- **AND** the alert is kept, and an alert older than the alert window is deleted while a monitor record younger than its own window is kept
+
+#### Scenario: A zero monitor-record window prunes no monitor record
+
+- **GIVEN** the monitor-record window set to zero, and a monitor record of any age
+- **WHEN** a retention pass runs
+- **THEN** the monitor record is kept
+
+### Requirement: The rule guide matches the registered detections
+
+The system SHALL keep the generated operator rule guide in agreement with the registered detections, and a guide that has drifted SHALL fail the build, naming the file and the command that regenerates it.
+
+The guide is what an operator reads to decide whether a detection is worth tuning, suppressing or trusting. A description that lags the rule is worse than a missing one: it reads as current and is wrong, and the reader has no way to tell. The rule pack is already held to this; the guide is the half that operators actually read.
+
+The check SHALL compare the committed guide against what the generator itself renders, rather than against a second description of the same rules, so that the two cannot agree with each other while both disagree with the catalog.
+
+#### Scenario: A guide that lags the catalog fails the build
+
+- **GIVEN** a registered detection whose documentation was changed without regenerating the guide
+- **WHEN** the guide is checked
+- **THEN** the check fails, names the guide and the command that regenerates it, and points at where the two first disagree
+
+### Requirement: The vendored corpus is compared with upstream
+
+The project SHALL be able to compare its vendored SigmaHQ macOS rules with one snapshot of upstream, across every upstream rule tree that has macOS rules, and report each rule upstream added, each it changed, each it moved to another category, and each vendored rule it no longer carries among its rules. A rule SHALL be matched by its rule id, not its path, so a moved rule is not read as one withdrawn and one added. A vendored rule that differs from upstream by any byte SHALL be reported as changed.
+
+Bringing the corpus up to date SHALL copy new, changed and moved rules byte-for-byte, remove a moved rule's old copy, and regenerate the vendored manifest. It SHALL NOT delete a rule upstream withdrew, because upstream may have withdrawn it for a reason worth recording first. It SHALL NOT change the pinned import and refusal counts, so a new rule fails the corpus test until a person has read it. A downloaded file that does not match the snapshot SHALL leave the corpus unchanged.
+
+#### Scenario: A corpus that matches upstream changes nothing
+
+- **GIVEN** a vendored corpus identical to the upstream snapshot
+- **WHEN** it is compared, and when it is brought up to date
+- **THEN** no difference is reported and no file or manifest line changes
+
+#### Scenario: New and changed upstream rules are copied verbatim
+
+- **GIVEN** an upstream snapshot with a rule the corpus lacks, in a tree other than `rules/`, and a rule whose bytes differ from the vendored copy
+- **WHEN** the corpus is compared
+- **THEN** both are reported and nothing is written
+- **AND** bringing it up to date writes both byte-for-byte under their log-source category and records them in the manifest
+
+#### Scenario: A rule withdrawn upstream is reported and kept
+
+- **GIVEN** a vendored rule upstream no longer carries among its rules, one of them moved to upstream's deprecated tree
+- **WHEN** the corpus is brought up to date
+- **THEN** each is reported as withdrawn, the moved one with where it went, and neither is deleted
+
+#### Scenario: A rule moved upstream is moved, not kept twice
+
+- **GIVEN** a vendored rule upstream now keeps in another category, or under a name differing only in case
+- **WHEN** the corpus is brought up to date
+- **THEN** the rule is written at its new path and its old copy is removed, so one rule id has one file
+
+### Requirement: Upstream drift is checked weekly
+
+A scheduled job SHALL compare the vendored corpus with upstream every week, and on demand, always from the main branch. When the corpus matches upstream it SHALL change nothing and close its open tracking issue, if there is one. When upstream differs, the job SHALL bring a copy of main up to date, regenerate the generated rule reference, run the catalog tests, commit the result to a single review branch, and open a pull request from that branch carrying the comparison report and the catalog test result. It SHALL open the pull request with a credential whose pull requests start CI, because CI is what makes a person update the pinned counts after reading a new rule. It SHALL NOT push to main or merge. A failure to regenerate or to pass the tests SHALL be reported in the pull request rather than stop the job, and a regeneration that fails SHALL leave the generated files as they were committed. The job SHALL NOT update a review branch that has an open pull request, nor one that changed after the job checked it, so a reviewer's commits are never overwritten. It SHALL keep one open tracking issue for what no pull request carries: a difference that is only a withdrawn rule, which changes no file, and changes found while a pull request from the branch is open, reported with that run's test result. It SHALL close that issue when it opens a pull request.
+
+#### Scenario: A matching corpus changes nothing and closes the report
+
+- **GIVEN** a vendored corpus identical to upstream and an open tracking issue
+- **WHEN** the weekly job runs
+- **THEN** no branch is pushed and the tracking issue is closed
+
+#### Scenario: Upstream changes open a pull request
+
+- **GIVEN** an upstream rule that differs from its vendored copy, and no open pull request from the review branch
+- **WHEN** the weekly job runs
+- **THEN** the review branch carries the upstream bytes and the regenerated rule reference
+- **AND** a pull request from the branch carries the report and the catalog test result
+- **AND** an open tracking issue is closed with a link to that pull request
+
+#### Scenario: A withdrawal alone is reported without a branch change
+
+- **GIVEN** a vendored rule upstream no longer carries, and no other difference
+- **WHEN** the weekly job runs
+- **THEN** the review branch is not updated and the tracking issue reports the withdrawn rule
+
+#### Scenario: A pull request under review is left alone
+
+- **GIVEN** an open pull request from the review branch
+- **WHEN** the weekly job finds upstream changes
+- **THEN** the review branch is not updated and the tracking issue links the open pull request
+- **AND** the tracking issue still carries this run's test result
+
+#### Scenario: A rule that breaks the corpus is still reported
+
+- **GIVEN** an upstream change that makes the rule reference fail to regenerate or the catalog tests fail
+- **WHEN** the weekly job runs
+- **THEN** the review branch is still pushed, without a generated file the failure truncated, and the pull request carries the failing output
