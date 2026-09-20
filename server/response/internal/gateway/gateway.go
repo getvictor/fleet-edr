@@ -245,14 +245,15 @@ func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
 	c := newConn(hostID, token, cancel)
 
 	if evicted := g.reg.add(c); evicted != nil {
-		evicted.close() // at most one connection per host: tear down the prior one so it cannot leak or receive a duplicate push
+		// At most one connection per host: tear down the prior one so it cannot leak or receive a duplicate push.
+		evicted.close(reasonReplaced)
 		g.logger.InfoContext(ctx, "control gateway replaced existing connection", attrkeys.HostID, hostID)
 	}
 	defer g.reg.remove(hostID, c)
 	// If Stop raced ahead of this registration, close immediately so a connection accepted during shutdown can't strand
 	// http.Server.Shutdown waiting on a long-lived stream. Checked after add so closeAll cannot miss us.
 	if g.closing.Load() {
-		c.close()
+		c.close(reasonShuttingDown)
 		return status.Error(codes.Unavailable, "control gateway shutting down")
 	}
 
@@ -264,13 +265,44 @@ func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
 	recvErr := make(chan error, 1)
 	go func() { recvErr <- g.recvLoop(connCtx, stream, c) }()
 
+	// Whichever of the two ends the connection, the status returned here is what otelgrpc's stats handler records as the span's
+	// status, so each case decides it from whether the client is still there to receive one (issue #1124).
 	select {
 	case <-connCtx.Done():
-		// Torn down locally (revocation, expiry, or replacement). Returning ends the RPC, which closes the stream and unblocks recvLoop.
-		return status.Error(codes.Unavailable, "control connection closed")
+		// Returning ends the RPC, which closes the stream and unblocks recvLoop.
+		return endAfterTeardown(ctx, c)
 	case err := <-recvErr:
-		return err
+		return endAfterReceive(ctx, err)
 	}
+}
+
+// endAfterTeardown is the status the RPC ends with when the connection's context was cancelled.
+//
+// ctx is the RPC's own context. Its being done means the client is already gone: an agent restart, a suspended host, a dropped link.
+// There is nobody left to return a status to, so the RPC ends cleanly and the connection is recorded as successful. That is how a
+// long-lived control connection ordinarily ends, and recording every one of them as a fault left the operation permanently
+// error-coloured, which hid the faults that were real (issue #1124).
+//
+// Otherwise the server tore the connection down while the client was still attached, and this retryable status is what tells it to
+// reconnect. Those stay errors, carrying which teardown it was, because a connection the server ended is the one an operator wants.
+func endAfterTeardown(ctx context.Context, c *conn) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return status.Errorf(codes.Unavailable, "control connection closed: %s", c.closedBecause())
+}
+
+// endAfterReceive is the status the RPC ends with when it was the receive loop that ended, carrying its result: nil for a client
+// half-close, which is an ordinary end of stream, or the failure that ended it.
+//
+// The ctx check is what keeps the two cases in agreement. A client going away both cancels this context and fails the pending Recv,
+// so either select case can win, and the recv error is then the disconnect itself rather than a fault. Without this, which case the
+// scheduler happened to pick would decide whether the connection was recorded as a failure.
+func endAfterReceive(ctx context.Context, recvErr error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return recvErr
 }
 
 // writeLoop is the connection's single sender (gRPC allows one concurrent Send). It drains the send queue until the context ends or a
@@ -291,7 +323,7 @@ func (c *conn) writeLoop(ctx context.Context, stream control.ControlChannel_Conn
 				// A dead outbound means this connection can no longer deliver commands. Tear the whole connection down (not just this
 				// goroutine) so it is unregistered and the agent reconnects, rather than lingering "online" with delivery silently broken.
 				logger.DebugContext(ctx, "control gateway send", attrkeys.HostID, c.hostID, "err", err)
-				c.close()
+				c.close(reasonSendFailed)
 				return
 			}
 		}
@@ -383,7 +415,7 @@ func (g *Gateway) maintain(ctx context.Context, c *conn) {
 				}
 				g.logger.InfoContext(ctx, "control gateway closing connection: token no longer valid",
 					attrkeys.HostID, c.hostID, "err", err)
-				c.close()
+				c.close(reasonTokenInvalid)
 				return
 			}
 		}

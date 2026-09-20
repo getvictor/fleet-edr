@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/fleetdm/edr/internal/control"
 )
@@ -11,6 +12,21 @@ import (
 // a small buffer is ample; if it ever fills, deliverPending drops the push and the 1s watch re-offers the command next tick, so a slow
 // or wedged connection never blocks the watch loop or strands a command.
 const sendBuffer = 64
+
+// closeReason is why the server tore a connection down. It rides the RPC's closing status, which is the status message a trace query
+// already filters on, so an operator asking why a host's channel dropped can separate these from each other (issue #1124). They are
+// four different operational stories and were previously one sentence covering all of them.
+//
+// Revocation is not separated from expiry: the verifier answers with one ErrInvalidToken for a token that is unknown, revoked,
+// expired or malformed, so drawing that line here would put a guess in the telemetry.
+type closeReason string
+
+const (
+	reasonReplaced     closeReason = "replaced by a newer connection from the same host"
+	reasonTokenInvalid closeReason = "token no longer valid"
+	reasonShuttingDown closeReason = "gateway shutting down"
+	reasonSendFailed   closeReason = "outbound send failed"
+)
 
 // conn is one live agent control connection. It is the gateway's only per-connection in-process state (ADR-0010 carve-out): the live
 // stream's outbound queue, the token used to re-check revocation, the cancel that tears the connection down, and the set of command
@@ -26,6 +42,10 @@ type conn struct {
 	inflight map[int64]struct{}
 
 	closeOnce sync.Once
+	// reason is written once, inside closeOnce and before the cancel, and read only after the connection's context is done, so the
+	// cancel is the happens-before edge between the two. Holds a closeReason; empty when nothing here closed the connection, which
+	// means the client went away.
+	reason atomic.Value
 }
 
 func newConn(hostID, token string, cancel context.CancelFunc) *conn {
@@ -38,9 +58,22 @@ func newConn(hostID, token string, cancel context.CancelFunc) *conn {
 	}
 }
 
-// close cancels the connection's context exactly once. Cancellation unblocks the writer and maintenance goroutines and makes the
-// Connect handler return, which ends the RPC and tears down the stream.
-func (c *conn) close() { c.closeOnce.Do(c.cancel) }
+// close records why the connection is being torn down and cancels its context, exactly once. Cancellation unblocks the writer and
+// maintenance goroutines and makes the Connect handler return, which ends the RPC and tears down the stream. The first reason wins,
+// because it is the one that caused the teardown; anything the teardown then trips over is a consequence of it.
+func (c *conn) close(reason closeReason) {
+	c.closeOnce.Do(func() {
+		c.reason.Store(reason)
+		c.cancel()
+	})
+}
+
+// closedBecause is why the server tore this connection down, or "" when the server did not: then the client went away and cancelled
+// the RPC itself. Meaningful only once the connection's context is done.
+func (c *conn) closedBecause() closeReason {
+	reason, _ := c.reason.Load().(closeReason)
+	return reason
+}
 
 // markInflight records that command id is being pushed and reports whether the caller now owns delivery. It returns false when the id
 // is already in flight, which is how the fast path and the 1s watch avoid pushing the same command twice within one ack window.
@@ -137,6 +170,6 @@ func (r *registry) closeAll() {
 	}
 	r.mu.Unlock()
 	for _, c := range conns {
-		c.close()
+		c.close(reasonShuttingDown)
 	}
 }
