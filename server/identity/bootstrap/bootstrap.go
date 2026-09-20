@@ -535,8 +535,7 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 	resolver := oidc.NewResolver(newOIDCProviderConfigFn(store, in.appCfg), in.deps.OIDC.HTTPClient, in.logger)
 
 	prov := oidc.NewProvisioner(in.deps.DB, in.users, in.identities, in.rbac, in.audit, oidc.ProvisionerOptions{
-		Logger:   in.logger,
-		PolicyFn: newOIDCJITPolicyFn(store),
+		Logger: in.logger,
 	})
 
 	return oidc.NewHandler(oidc.HandlerOptions{
@@ -581,28 +580,22 @@ func newOIDCProviderConfigFn(store *ssoconfig.Store, appConfig *appconfig.Store)
 			RedirectURL:  redirectURL,
 			Scopes:       c.Scopes,
 			Stamp:        fmt.Sprintf("%d.%d", c.Version, appVersion),
+			// The sign-in policy from the SAME row as the connection settings. Reading it separately at provision time is what let an
+			// admin's save land between verifying a token and judging its claims (issue #1044).
+			Policy: signInPolicy(c),
 		}, nil
 	}
 }
 
-// newOIDCJITPolicyFn returns the sign-in policy the OIDC provisioner reads at provision time, so a UI edit of the toggle, default role,
-// or group mapping applies on the next sign-in. No stored config means JIT is off (unknown subjects are denied), matching the wave-1
-// default, and no group mapping.
-func newOIDCJITPolicyFn(store *ssoconfig.Store) func(ctx context.Context) (oidc.Policy, error) {
-	return func(ctx context.Context) (oidc.Policy, error) {
-		c, err := store.Get(ctx)
-		if errors.Is(err, ssoconfig.ErrNotFound) {
-			return oidc.Policy{}, nil
-		}
-		if err != nil {
-			return oidc.Policy{}, err
-		}
-		groupRoles := make(map[string]string, len(c.GroupRoles))
-		for _, gr := range c.GroupRoles {
-			groupRoles[gr.Group] = gr.Role
-		}
-		return oidc.Policy{AllowJIT: c.JITEnabled, DefaultRole: c.DefaultRole, GroupsClaim: c.GroupsClaim, GroupRoles: groupRoles}, nil
+// signInPolicy is the sign-in policy a stored configuration carries: the JIT toggle, the default role, and the group mapping. It
+// travels with the connection settings it was read beside, so a UI edit of any of them applies on the next sign-in and no sign-in is
+// ever judged half under one configuration and half under the next.
+func signInPolicy(c *ssoconfig.Config) oidc.Policy {
+	groupRoles := make(map[string]string, len(c.GroupRoles))
+	for _, gr := range c.GroupRoles {
+		groupRoles[gr.Group] = gr.Role
 	}
+	return oidc.Policy{AllowJIT: c.JITEnabled, DefaultRole: c.DefaultRole, GroupsClaim: c.GroupsClaim, GroupRoles: groupRoles}
 }
 
 // ApplySchema applies identity's goose migration corpus and seeds the

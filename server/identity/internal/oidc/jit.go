@@ -91,29 +91,22 @@ var ErrEmailConflict = errors.New("oidc: email already bound to another account"
 // by setting the user's role to that mapped role, which writes a role binding and an audit row when the role changes (see
 // reconcileRole). Shape 2 then no longer keeps the pre-assigned role.
 type Provisioner struct {
-	db          *sqlx.DB
-	users       *users.Store
-	identities  *identities.Store
-	rbac        *rbac.Store
-	audit       api.AuditRecorder
-	logger      *slog.Logger
+	db         *sqlx.DB
+	users      *users.Store
+	identities *identities.Store
+	rbac       *rbac.Store
+	audit      api.AuditRecorder
+	logger     *slog.Logger
+	// defaultRole is the deployment fallback for a policy whose role is empty. The policy itself arrives per sign-in from the caller,
+	// read alongside the provider configuration that verified the token, so this never has to go and look it up.
 	defaultRole string
-	allowJIT    bool
-	// policyFn, when non-nil, supplies the sign-in policy per call from the runtime OIDC configuration store, overriding the static
-	// defaultRole/allowJIT above. Production wires this to ssoconfig so a UI edit of the JIT toggle, default role, or group mapping
-	// takes effect on the next sign-in without a restart; tests that need no mapping omit it and exercise the static fields.
-	policyFn func(ctx context.Context) (Policy, error)
 }
 
 // ProvisionerOptions bundles the per-deployment knobs. Zero values fall through to wave-1 defaults: defaultRole="analyst",
 // allowJIT=false (spec wave-1 default: unknown subjects are denied unless the operator opts in). Logger defaults to slog.Default.
 type ProvisionerOptions struct {
-	AllowJIT    bool
 	DefaultRole string
 	Logger      *slog.Logger
-	// PolicyFn, when non-nil, supplies the sign-in policy at provision time from the runtime OIDC config, taking precedence over the
-	// static AllowJIT/DefaultRole above. Production wires this to the ssoconfig store.
-	PolicyFn func(ctx context.Context) (Policy, error)
 }
 
 // NewProvisioner constructs a Provisioner over an existing DB + already-constructed stores. db is the same handle the stores share so
@@ -142,8 +135,6 @@ func NewProvisioner(
 		audit:       audit,
 		logger:      logger,
 		defaultRole: role,
-		allowJIT:    opts.AllowJIT,
-		policyFn:    opts.PolicyFn,
 	}
 }
 
@@ -168,14 +159,14 @@ func NewProvisioner(
 //
 // With group mapping on, every outcome but a fresh JIT create (which binds the mapped role directly) then sets the user's role to the
 // one their groups map to.
-func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, identityID int64, err error) {
+// The policy is a PARAMETER rather than something read here, and that is the point: it comes from the same configuration read that
+// built the client which verified this token. Reading it here read it again, so an admin saving during the token exchange had the
+// token verified under one configuration and its claims judged under the next (issue #1044).
+func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims, policy Policy) (userID, identityID int64, err error) {
 	if c == nil || c.Subject == "" {
 		return 0, 0, errors.New("oidc: claims.Subject is required")
 	}
-	policy, err := p.resolvePolicy(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
+	policy = p.withDefaults(policy)
 	mapping := policy.GroupsClaim != ""
 	role, matched := policy.DefaultRole, []string{}
 	if mapping {
@@ -364,21 +355,13 @@ func (p *Provisioner) adoptPreProvisioned(ctx context.Context, c *Claims, userID
 	return idID, nil
 }
 
-// resolvePolicy returns the sign-in policy for this provision. When policyFn is wired (production), it reads the runtime OIDC config so
-// a UI edit applies on the next sign-in; otherwise it falls back to the static fields. An empty DefaultRole from policyFn falls through
-// to the static default so a misconfigured row never binds an empty role.
-func (p *Provisioner) resolvePolicy(ctx context.Context) (Policy, error) {
-	if p.policyFn == nil {
-		return Policy{AllowJIT: p.allowJIT, DefaultRole: p.defaultRole}, nil
-	}
-	policy, err := p.policyFn(ctx)
-	if err != nil {
-		return Policy{}, fmt.Errorf("oidc: resolve sign-in policy: %w", err)
-	}
+// withDefaults fills the deployment defaults into a caller-supplied policy. An empty DefaultRole falls through to the static default
+// so a misconfigured row never binds an empty role.
+func (p *Provisioner) withDefaults(policy Policy) Policy {
 	if policy.DefaultRole == "" {
 		policy.DefaultRole = p.defaultRole
 	}
-	return policy, nil
+	return policy
 }
 
 // isDuplicateKey returns true when err wraps a MySQL 1062
