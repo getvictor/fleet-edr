@@ -51,7 +51,8 @@ func (g *groupsDB) signIn(ctx context.Context, policy oidc.Policy, c *oidc.Claim
 // ssoUser signs a subject in for the first time with no group mapping, so it exists as an SSO user holding role, and clears the audit.
 func (g *groupsDB) ssoUser(t *testing.T, subject, role string) int64 {
 	t.Helper()
-	uid, _, err := g.signIn(t.Context(), oidc.Policy{AllowJIT: true, DefaultRole: role}, &oidc.Claims{Subject: subject, Email: subject + "@example.com"})
+	uid, _, err := g.signIn(t.Context(), oidc.Policy{AllowJIT: true, DefaultRole: role},
+		&oidc.Claims{Subject: subject, Email: subject + "@example.com"})
 	require.NoError(t, err)
 	g.rec.events = nil
 	return uid
