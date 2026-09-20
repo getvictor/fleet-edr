@@ -128,46 +128,55 @@ func TestConnectEndsCleanlyWhenTheClientWentAway(t *testing.T) {
 func TestConnectReportsWhyTheServerToreTheConnectionDown(t *testing.T) {
 	t.Parallel()
 
-	t.Run("replaced by a reconnect from the same host", func(t *testing.T) {
-		t.Parallel()
-		first := newFakeStream(t.Context(), "host-a", "tok-a")
-		g, returned := connectedGateway(t, first)
+	cases := []struct {
+		desc string
+		// prepare runs before the connection is made, for a teardown whose cause has to already be in place.
+		prepare func(stream *fakeStream)
+		// tearDown runs once the connection is registered.
+		tearDown func(t *testing.T, g *Gateway)
+		want     closeReason
+	}{
+		{
+			desc: "replaced by a reconnect from the same host",
+			tearDown: func(t *testing.T, g *Gateway) {
+				t.Helper()
+				second := newFakeStream(t.Context(), "host-a", "tok-a")
+				go func() { _ = g.Connect(second) }()
+			},
+			want: reasonReplaced,
+		},
+		{
+			desc:     "the host token is no longer valid",
+			tearDown: func(_ *testing.T, g *Gateway) { g.verifier.(*fakeVerifier).revoke("tok-a") },
+			want:     reasonTokenInvalid,
+		},
+		{
+			desc:     "the gateway is shutting down",
+			tearDown: func(_ *testing.T, g *Gateway) { g.Stop() },
+			want:     reasonShuttingDown,
+		},
+		{
+			// Set before connecting, so the first heartbeat the maintenance loop pushes fails the send and tears it down unprompted.
+			desc:     "the outbound can no longer carry frames",
+			prepare:  func(stream *fakeStream) { stream.sendErr = errors.New("broken pipe") },
+			tearDown: func(*testing.T, *Gateway) {},
+			want:     reasonSendFailed,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			stream := newFakeStream(t.Context(), "host-a", "tok-a")
+			if tc.prepare != nil {
+				tc.prepare(stream)
+			}
+			g, returned := connectedGateway(t, stream)
 
-		second := newFakeStream(t.Context(), "host-a", "tok-a")
-		go func() { _ = g.Connect(second) }()
+			tc.tearDown(t, g)
 
-		requireTornDownBecause(t, returned, reasonReplaced)
-	})
-
-	t.Run("the host token is no longer valid", func(t *testing.T) {
-		t.Parallel()
-		stream := newFakeStream(t.Context(), "host-a", "tok-a")
-		g, returned := connectedGateway(t, stream)
-
-		g.verifier.(*fakeVerifier).revoke("tok-a")
-
-		requireTornDownBecause(t, returned, reasonTokenInvalid)
-	})
-
-	t.Run("the gateway is shutting down", func(t *testing.T) {
-		t.Parallel()
-		stream := newFakeStream(t.Context(), "host-a", "tok-a")
-		g, returned := connectedGateway(t, stream)
-
-		g.Stop()
-
-		requireTornDownBecause(t, returned, reasonShuttingDown)
-	})
-
-	t.Run("the outbound can no longer carry frames", func(t *testing.T) {
-		t.Parallel()
-		// Set before connecting, so the first heartbeat the maintenance loop pushes fails the send.
-		stream := newFakeStream(t.Context(), "host-a", "tok-a")
-		stream.sendErr = errors.New("broken pipe")
-		_, returned := connectedGateway(t, stream)
-
-		requireTornDownBecause(t, returned, reasonSendFailed)
-	})
+			requireTornDownBecause(t, returned, tc.want)
+		})
+	}
 }
 
 // A stream that fails under a client that is still there is the case this whole change exists to keep visible. The failure is a
@@ -185,36 +194,73 @@ func TestConnectReportsAReceiveFailureWhileTheClientIsAttached(t *testing.T) {
 	require.ErrorIs(t, returnedFrom(t, returned), unreadable)
 }
 
+// liveConn is a registered connection the server has not torn down.
+func liveConn(t *testing.T) *conn {
+	t.Helper()
+	_, cancel := context.WithCancel(t.Context())
+	return newConn("host-a", "tok-a", cancel)
+}
+
 // closedConn is a connection the server has torn down for the given reason, with no live stream behind it.
 func closedConn(t *testing.T, reason closeReason) *conn {
 	t.Helper()
-	_, cancel := context.WithCancel(t.Context())
-	c := newConn("host-a", "tok-a", cancel)
+	c := liveConn(t)
 	c.close(reason)
 	return c
 }
 
+// doneCtx is a context whose client has already gone.
+func doneCtx(t *testing.T) context.Context {
+	t.Helper()
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	return gone
+}
+
+// requireUnavailableBecause asserts err is the retryable status a server teardown ends with, naming that teardown.
+func requireUnavailableBecause(t *testing.T, err error, reason closeReason) {
+	t.Helper()
+	require.Error(t, err)
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), string(reason))
+}
+
 func TestEndAfterTeardown(t *testing.T) {
 	t.Parallel()
-
-	t.Run("the client is already gone, so there is nobody to return a status to", func(t *testing.T) {
-		t.Parallel()
-		gone, cancel := context.WithCancel(t.Context())
-		cancel()
-
-		// Even though something here also closed the connection: the client leaving is what ended it, and a teardown racing the
-		// disconnect is a consequence of it, not a fault to report.
-		assert.NoError(t, endAfterTeardown(gone, closedConn(t, reasonSendFailed)))
-	})
-
-	for _, reason := range []closeReason{reasonReplaced, reasonTokenInvalid, reasonShuttingDown, reasonSendFailed} {
-		t.Run("the server ended it: "+string(reason), func(t *testing.T) {
+	cases := []struct {
+		desc string
+		// clientGone makes the RPC's own context done, which is the definitive "there is nobody to return a status to".
+		clientGone bool
+		reason     closeReason
+		wantReason closeReason // "" means the RPC must end cleanly
+	}{
+		{
+			// Even though something also closed the connection: the client leaving is what ended it, and a teardown racing the
+			// disconnect is a consequence of it, not a fault to report.
+			desc:       "the client is already gone, so there is nobody to return a status to",
+			clientGone: true,
+			reason:     reasonSendFailed,
+		},
+		{desc: "the server replaced it", reason: reasonReplaced, wantReason: reasonReplaced},
+		{desc: "the token is no longer valid", reason: reasonTokenInvalid, wantReason: reasonTokenInvalid},
+		{desc: "the gateway is shutting down", reason: reasonShuttingDown, wantReason: reasonShuttingDown},
+		{desc: "the outbound failed", reason: reasonSendFailed, wantReason: reasonSendFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
-			err := endAfterTeardown(t.Context(), closedConn(t, reason))
+			ctx := t.Context()
+			if tc.clientGone {
+				ctx = doneCtx(t)
+			}
 
-			require.Error(t, err)
-			assert.Equal(t, codes.Unavailable, status.Code(err))
-			assert.Contains(t, status.Convert(err).Message(), string(reason))
+			err := endAfterTeardown(ctx, closedConn(t, tc.reason))
+
+			if tc.wantReason == "" {
+				assert.NoError(t, err)
+				return
+			}
+			requireUnavailableBecause(t, err, tc.wantReason)
 		})
 	}
 }
@@ -226,30 +272,72 @@ func TestEndAfterReceive(t *testing.T) {
 	// The transport ending under the stream: a bare error carrying no status, which is what grpc-go's ErrConnClosing is.
 	transportDied := errors.New("transport is closing")
 
-	t.Run("a frame this server could not read is the failure", func(t *testing.T) {
-		t.Parallel()
-		assert.ErrorIs(t, endAfterReceive(t.Context(), unreadable), unreadable)
-	})
+	cases := []struct {
+		desc       string
+		clientGone bool
+		// tornDownBecause is non-empty when the server had already torn the connection down when the receive loop ended.
+		tornDownBecause closeReason
+		recvErr         error
+		wantErr         error       // the exact error the RPC must end with
+		wantReason      closeReason // or the teardown it must report instead
+	}{
+		{
+			desc:    "a frame this server could not read is the failure",
+			recvErr: unreadable,
+			wantErr: unreadable,
+		},
+		{
+			// The definitive signal.
+			desc:       "the same failure once the client has gone is the disconnect",
+			clientGone: true,
+			recvErr:    unreadable,
+		},
+		{
+			// The case that needs the error's shape read: the transport died and gRPC has not cancelled the context yet, so the
+			// context test alone would call this a fault. Measured on edr-dev, where it was one.
+			desc:    "the transport ending under a live context is still a disconnect",
+			recvErr: transportDied,
+		},
+		{
+			// A client half-close reaches here as no error at all, and has always ended the RPC cleanly.
+			desc: "an end of stream with no failure stays clean",
+		},
+		{
+			// The race the two cases have to agree on: cancelling the connection does not unblock a pending Recv, so a receive can
+			// end for its own reasons while a teardown is already recorded. The teardown is the more specific answer.
+			desc:            "a receive ending after the server tore the connection down reports the teardown",
+			tornDownBecause: reasonTokenInvalid,
+			recvErr:         transportDied,
+			wantReason:      reasonTokenInvalid,
+		},
+		{
+			desc:            "and so does a clean end of stream landing at the same moment",
+			tornDownBecause: reasonReplaced,
+			wantReason:      reasonReplaced,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			if tc.clientGone {
+				ctx = doneCtx(t)
+			}
+			c := liveConn(t)
+			if tc.tornDownBecause != "" {
+				c = closedConn(t, tc.tornDownBecause)
+			}
 
-	// The definitive signal, and the one that arrives second often enough to matter on its own.
-	t.Run("the same failure once the client has gone is the disconnect", func(t *testing.T) {
-		t.Parallel()
-		gone, cancel := context.WithCancel(t.Context())
-		cancel()
+			err := endAfterReceive(ctx, c, tc.recvErr)
 
-		assert.NoError(t, endAfterReceive(gone, unreadable))
-	})
-
-	// The case that needs the error's shape read: the transport died and gRPC has not cancelled the context yet, so the context
-	// test alone would call this a fault. Measured on edr-dev, where it was one.
-	t.Run("the transport ending under a live context is still a disconnect", func(t *testing.T) {
-		t.Parallel()
-		assert.NoError(t, endAfterReceive(t.Context(), transportDied))
-	})
-
-	// A client half-close reaches here as no error at all, and has always ended the RPC cleanly.
-	t.Run("an end of stream with no failure stays clean", func(t *testing.T) {
-		t.Parallel()
-		assert.NoError(t, endAfterReceive(t.Context(), nil))
-	})
+			switch {
+			case tc.wantReason != "":
+				requireUnavailableBecause(t, err, tc.wantReason)
+			case tc.wantErr != nil:
+				require.ErrorIs(t, err, tc.wantErr)
+			default:
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

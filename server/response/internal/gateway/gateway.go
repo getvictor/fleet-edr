@@ -291,7 +291,7 @@ func (g *Gateway) connect(stream control.ControlChannel_ConnectServer) error {
 		// Returning ends the RPC, which closes the stream and unblocks recvLoop.
 		return endAfterTeardown(ctx, c)
 	case err := <-recvErr:
-		return endAfterReceive(ctx, err)
+		return endAfterReceive(ctx, c, err)
 	}
 }
 
@@ -308,7 +308,13 @@ func endAfterTeardown(ctx context.Context, c *conn) error {
 	if ctx.Err() != nil {
 		return nil
 	}
-	return status.Errorf(codes.Unavailable, "control connection closed: %s", c.closedBecause())
+	return teardownStatus(c.closedBecause())
+}
+
+// teardownStatus is what a connection the server ended reports: retryable, so a client still attached reconnects, and naming which
+// teardown it was. Shared by both cases so a teardown reads the same whichever of them observes it.
+func teardownStatus(reason closeReason) error {
+	return status.Errorf(codes.Unavailable, "control connection closed: %s", reason)
 }
 
 // endAfterReceive is the status the RPC ends with when it was the receive loop that ended, carrying its result: nil for a client
@@ -330,8 +336,18 @@ func endAfterTeardown(ctx context.Context, c *conn) error {
 // what to report by matching on a dependency's prose would break silently on an upgrade. The bufconn test below kills a real client
 // transport and asserts the verdict, so a grpc-go release that changed this shape fails that test rather than quietly recolouring
 // every disconnect on a fleet.
-func endAfterReceive(ctx context.Context, recvErr error) error {
-	if recvErr == nil || ctx.Err() != nil {
+func endAfterReceive(ctx context.Context, c *conn, recvErr error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	// A teardown this server started is the more specific answer, and it can be in flight while the receive loop ends for its own
+	// reasons: cancelling the connection does not unblock a pending Recv, so a client half-close landing at the same instant as a
+	// revocation would otherwise be reported as an ordinary end of stream and lose the reason. The verdict must not turn on which
+	// of the two the select happened to pick.
+	if reason := c.closedBecause(); reason != "" {
+		return teardownStatus(reason)
+	}
+	if recvErr == nil {
 		return nil
 	}
 	if _, isStatus := status.FromError(recvErr); !isStatus {
