@@ -181,7 +181,11 @@ func TestARefusedProxyIsReportedByNameAndScheme(t *testing.T) {
 // directly would otherwise hand a dialer a proxy the agent cannot speak.
 func TestProxyFuncRefusesAnUnspeakableSchemeHoweverTheConfigWasBuilt(t *testing.T) {
 	t.Parallel()
-	byHand := ProxyConfig{HTTPSProxy: "ftp://ir:s3cret@proxy.corp:2121", HTTPProxy: "gopher://proxy.corp:70"} //nolint:gosec // G101: deliberate, see above.
+	//nolint:gosec // G101: the credential in these URLs is the input under test.
+	byHand := ProxyConfig{
+		HTTPSProxy: "ftp://ir:s3cret@proxy.corp:2121",
+		HTTPProxy:  "gopher://proxy.corp:70",
+	}
 
 	assert.Empty(t, proxyFor(t, byHand, "https://edr.example.com:8443"))
 	assert.Empty(t, proxyFor(t, byHand, "http://edr.example.com:8080"))

@@ -10,7 +10,9 @@ Resolving the agent's proxy SHALL NOT yield a proxy whose scheme it cannot speak
 
 Where a configured proxy is refused, the agent SHALL connect directly and SHALL continue to run. An endpoint whose agent will not start is an unmonitored endpoint, which is a worse outcome than one that reports and keeps working, and the traffic concerned reaches only the agent's own configured server.
 
-The agent SHALL report the refusal at startup, naming the setting, its scheme, and that it is connecting directly. Without that, the operator sees only connection failures and no indication that the setting they wrote is the cause.
+The agent SHALL report the refusal at startup, naming the setting and its scheme. Without that, the operator sees only connection failures and no indication that the setting they wrote is the cause.
+
+It SHALL report that it is connecting directly only where that is true. The settings are refused independently, so a host may have one the agent cannot speak and another carrying all of its traffic; stating a direct connection there would describe the opposite of what the agent is doing.
 
 #### Scenario: A refused proxy receives nothing
 
@@ -23,8 +25,16 @@ The agent SHALL report the refusal at startup, naming the setting, its scheme, a
 
 - **GIVEN** a proxy setting whose scheme the agent cannot speak
 - **WHEN** the agent starts
-- **THEN** it reports the setting's name and its scheme, and that it is connecting directly
+- **THEN** it reports the setting's name and its scheme
+- **AND** it reports connecting directly, because no usable proxy remains
 - **AND** the agent starts and keeps running
+
+#### Scenario: A refused setting does not imply a direct connection
+
+- **GIVEN** one proxy setting the agent cannot speak and another it can, both configured
+- **WHEN** the agent starts
+- **THEN** it reports the refused setting by name and scheme
+- **AND** it does NOT report connecting directly, because the traffic goes through the proxy it can speak
 
 #### Scenario: A supported proxy is unaffected
 

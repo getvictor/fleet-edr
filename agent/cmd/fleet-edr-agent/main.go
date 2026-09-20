@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -345,8 +346,15 @@ func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config)
 	// server simply being unreachable: without it an operator sees connection failures and nothing pointing at the line they
 	// wrote (issue #1128). The value is deliberately not logged, because it carries the proxy credentials.
 	for _, refused := range cfg.Proxy.Refused {
-		logger.WarnContext(ctx, "proxy setting ignored: the agent does not speak this proxy scheme; connecting directly",
-			"setting", refused.Setting, "scheme", refused.Scheme)
+		logger.WarnContext(ctx, "proxy setting ignored: the agent does not speak this proxy scheme",
+			"setting", refused.Setting, "scheme", refused.Scheme,
+			"supported", strings.Join(config.ProxySchemesSupported(), ", "))
+	}
+	// Said separately, and only when it is true. The two variables are refused independently, so a host can have an unusable
+	// HTTP_PROXY and a perfectly good HTTPS_PROXY still carrying all of its traffic; claiming a direct connection there would
+	// describe the opposite of what the agent is doing.
+	if len(cfg.Proxy.Refused) > 0 && !cfg.Proxy.Set() {
+		logger.WarnContext(ctx, "no usable proxy is configured; connecting to the server directly")
 	}
 }
 

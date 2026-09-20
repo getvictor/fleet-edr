@@ -118,7 +118,8 @@ func TestAnUnspeakableProxyReachesNeitherTheControlDialNorTheLifeline(t *testing
 	t.Parallel()
 	cfg := &config.Config{
 		ServerURL: "https://edr.example.com:8443",
-		Proxy:     config.ProxyConfig{HTTPSProxy: "ftp://ir:s3cret@proxy.corp:2121"}, //nolint:gosec // G101: the credential is the input under test.
+		//nolint:gosec // G101: the credential is the input under test.
+		Proxy: config.ProxyConfig{HTTPSProxy: "ftp://ir:s3cret@proxy.corp:2121"},
 	}
 	mgr := containment.New(containment.Options{
 		Target: containment.Target{Host: "edr.example.com", Port: 8443},

@@ -3,6 +3,7 @@ package config
 import (
 	"net/http"
 	"net/url"
+	"sort"
 
 	"golang.org/x/net/http/httpproxy"
 )
@@ -50,6 +51,21 @@ var supportedProxySchemes = map[string]bool{"http": true, "https": true, "socks5
 // scheme rather than the proxy's, so an unrecognised one is still sent a plaintext CONNECT carrying whatever credentials the
 // operator put in the address. That is the leak this predicate exists to stop (issue #1128).
 func ProxySchemeSupported(scheme string) bool { return supportedProxySchemes[scheme] }
+
+// ProxySchemesSupported is every scheme the agent speaks, sorted, as a fresh slice.
+//
+// It is what an operator whose setting was refused is shown, so the message says what would work rather than only what did not.
+// It is also what lets the dial's own tests assert this list and their dispatch are the SAME set rather than merely overlapping:
+// a scheme added here without an arm to speak it would otherwise fall through to the plain CONNECT default and put the
+// operator's credentials on a wire that cannot parse them, which is the leak one layer along.
+func ProxySchemesSupported() []string {
+	out := make([]string, 0, len(supportedProxySchemes))
+	for scheme := range supportedProxySchemes {
+		out = append(out, scheme)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // loadProxy reads the proxy variables through getenv, uppercase first then lowercase, which is the order net/http itself uses,
 // and drops any whose scheme the agent cannot speak.

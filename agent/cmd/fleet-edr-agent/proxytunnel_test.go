@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -1091,10 +1092,16 @@ func TestEveryProxySchemeTheAgentSpeaksHasItsOwnDispatch(t *testing.T) {
 		})
 	}
 
-	// And the agent claims no scheme this test does not speak for, so adding one to the list without an arm fails here.
-	for _, scheme := range []string{"ftp", "gopher", "socks4", "quic", "ssh"} {
-		assert.False(t, config.ProxySchemeSupported(scheme), "%s has no dispatch arm, so it must not be claimed", scheme)
+	// The sets must be EQUAL, not merely overlapping. A fixed list of schemes to reject would miss a novel one added to the
+	// agent's list, and that scheme would fall through to the plain CONNECT default and be sent the operator's credentials.
+	// Comparing against the exported list means any addition fails here until it gains an arm above.
+	spoken := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		spoken = append(spoken, tc.scheme)
 	}
+	sort.Strings(spoken)
+	assert.Equal(t, spoken, config.ProxySchemesSupported(),
+		"every scheme the agent claims to speak needs a dispatch arm here, and every arm needs to be claimed")
 }
 
 // The operator's only signal. A refused proxy means the agent connects directly, and without this line the operator sees
@@ -1120,7 +1127,33 @@ func TestStartupReportsARefusedProxyByNameAndScheme(t *testing.T) {
 	out := logged.String()
 	assert.Contains(t, out, "HTTPS_PROXY", "the operator searches their conf file for the setting's name")
 	assert.Contains(t, out, "ftp", "and what they got wrong is the scheme")
-	assert.Contains(t, out, "connecting directly", "and what the agent did instead")
+	assert.Contains(t, out, "socks5", "and what would have worked, so the fix is in the same line")
+	assert.Contains(t, out, "connecting to the server directly", "and what the agent did instead, which here is true")
+}
+
+// The direct-connection claim belongs only where it is true. The two variables are refused independently, so a host can have an
+// unusable HTTP_PROXY and a perfectly good HTTPS_PROXY still carrying everything; saying it connected directly there would
+// describe the opposite of what it did.
+//
+// spec:agent-configuration/a-proxy-the-agent-cannot-speak-is-refused-rather-than-used/a-refused-setting-does-not-imply-a-direct-connection
+func TestStartupDoesNotClaimDirectWhenAUsableProxyRemains(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logged, nil))
+	cfg := &config.Config{
+		ServerURL: "https://edr.example.com:8443",
+		Proxy: config.ProxyConfig{
+			HTTPSProxy: "socks5://proxy.corp:1080",
+			Refused:    []config.RefusedProxy{{Setting: "HTTP_PROXY", Scheme: "ftp"}},
+		},
+	}
+
+	logAgentStart(t.Context(), logger, cfg)
+
+	out := logged.String()
+	assert.Contains(t, out, "HTTP_PROXY", "the refused setting is still reported")
+	assert.NotContains(t, out, "connecting to the server directly",
+		"the agent is not connecting directly: HTTPS_PROXY is carrying its traffic")
 }
 
 // Nothing to report means nothing reported, so the line is a signal rather than noise every host emits.
