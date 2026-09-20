@@ -178,7 +178,8 @@ export function SSOSettings() {
       // the change the operator has not seen.
       if (err instanceof SSOApiError && err.code === "version_conflict") {
         setSaveError(
-          "Someone else changed these settings while this page was open. Nothing was saved. Reload the page to see their changes, then make yours again.",
+          "Someone else changed these settings while this page was open. Nothing was saved. " +
+            "Reload the page to see their changes, then make yours again.",
         );
         return;
       }
