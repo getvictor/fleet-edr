@@ -78,9 +78,7 @@ func newCallbackEnv(t *testing.T, jitEnabled bool, claims *oidc.Claims) *callbac
 	rbacStore := rbac.New(db)
 	sessionsStore := sessions.New(db, sessions.Options{})
 	rec := &recAudit{}
-	prov := oidc.NewProvisioner(db, usersStore, identitiesStore, rbacStore, rec, oidc.ProvisionerOptions{
-		AllowJIT: jitEnabled,
-	})
+	prov := oidc.NewProvisioner(db, usersStore, identitiesStore, rbacStore, rec, oidc.ProvisionerOptions{})
 
 	signingKey := make([]byte, 32)
 	for i := range signingKey {
@@ -88,7 +86,7 @@ func newCallbackEnv(t *testing.T, jitEnabled bool, claims *oidc.Claims) *callbac
 	}
 	idp := &fakeIDPClient{claims: claims}
 	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
-	h := oidc.NewHandlerForTest(idp, prov, sessionsStore, signingKey, rec, logger)
+	h := oidc.NewHandlerForTest(idp, oidc.Policy{AllowJIT: jitEnabled}, prov, sessionsStore, signingKey, rec, logger)
 	return &callbackTestEnv{
 		db: db, handler: h, idp: idp, rec: rec,
 		signingKey: signingKey, now: time.Now(),
@@ -331,4 +329,72 @@ func TestRegisterPublicRoutes(t *testing.T) {
 		_, pat := mux.Handler(req)
 		assert.Equal(t, "GET "+path, pat, "%s must be registered", path)
 	}
+}
+
+// --- the sign-in policy is bound to the configuration that verified the token (issue #1044) ---
+
+// mutatingIDPClient flips the deployment's stored configuration during the token exchange, which is the window an admin's save lands
+// in: the code has been sent to the provider and the claims have not yet been judged.
+type mutatingIDPClient struct {
+	claims     *oidc.Claims
+	onExchange func()
+}
+
+func (m *mutatingIDPClient) AuthURL(state, _, _ string) string {
+	return "https://idp.example.com/authorize?state=" + state
+}
+
+func (m *mutatingIDPClient) Exchange(context.Context, string, string, string) (*oidc.Claims, error) {
+	m.onExchange()
+	return m.claims, nil
+}
+
+// A sign-in is judged under the configuration that verified its token, not the one stored by the time its claims are read.
+//
+// The callback resolves a provider client and then judges the claims it gets back. Those were two reads of the stored configuration,
+// so an admin saving during the exchange had the token verified under one and its group mapping applied from the next. Reaching it
+// needs an account at the outgoing provider whose sign-in completes inside the admin's save; this holds that window open on purpose.
+//
+// The assertion is the role actually bound to the user, which is the thing an operator would see and which the handler does not
+// compute: under the old configuration alice is an admin, under the new one her group means nothing.
+//
+// spec:sso-configuration/a-sign-in-is-judged-under-one-configuration/a-save-during-the-exchange-does-not-change-this-sign-in
+func TestHandleCallback_policyIsBoundToTheConfigurationThatVerifiedTheToken(t *testing.T) {
+	t.Parallel()
+	db := testdb.Open(t)
+	require.NoError(t, testkit.ApplySchema(t.Context(), db))
+	rec := &recAudit{}
+	prov := oidc.NewProvisioner(db, users.New(db), identities.New(db), rbac.New(db), rec, oidc.ProvisionerOptions{})
+
+	// The stored configuration, as both reads of the callback see it. Starts mapping edr-admins to admin.
+	stored := oidc.Policy{
+		AllowJIT: true, DefaultRole: "analyst", GroupsClaim: "groups",
+		GroupRoles: map[string]string{"edr-admins": "admin"},
+	}
+	claims := &oidc.Claims{Subject: "okta-alice", Email: "alice@example.com", Raw: map[string]any{"groups": []any{"edr-admins"}}}
+	idp := &mutatingIDPClient{claims: claims, onExchange: func() {
+		// The admin saves: the mapping is gone, so under this configuration alice's group means nothing.
+		stored = oidc.Policy{AllowJIT: true, DefaultRole: "analyst"}
+	}}
+
+	signingKey := make([]byte, 32)
+	for i := range signingKey {
+		signingKey[i] = byte(i + 1)
+	}
+	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	// Both the client and the policy come from one read, exactly as production's resolver returns them.
+	h := oidc.NewHandlerForTestWithResolve(func(context.Context) (oidc.IDPClient, oidc.Policy, error) {
+		return idp, stored, nil
+	}, prov, sessions.New(db, sessions.Options{}), signingKey, rec, logger)
+
+	env := &callbackTestEnv{db: db, handler: h, rec: rec, signingKey: signingKey, now: time.Now()}
+	w := httptest.NewRecorder()
+	h.HandleCallbackForTest()(w, env.callbackRequest(t, ""))
+	require.Equal(t, http.StatusFound, w.Code, "the sign-in itself must succeed")
+
+	var roles []string
+	require.NoError(t, db.SelectContext(t.Context(), &roles,
+		`SELECT rb.role_id FROM role_bindings rb JOIN users u ON u.id = rb.user_id WHERE u.email = ?`, "alice@example.com"))
+	assert.Equal(t, []string{"admin"}, roles,
+		"alice signed in under the configuration that mapped her group; the save that landed mid-exchange applies to the next sign-in")
 }

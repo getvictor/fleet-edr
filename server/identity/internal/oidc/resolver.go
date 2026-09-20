@@ -25,6 +25,11 @@ type ProviderConfig struct {
 	// every input that shapes the client (e.g. the oidc_config version AND the app_config version, since the redirect URL is derived
 	// from the deployment external URL that lives in app_config). Any change to either flips the stamp and forces a rebuild.
 	Stamp string
+	// Policy is the sign-in policy stored alongside the connection settings: JIT on or off, the default role, and the group mapping.
+	// It rides here so a sign-in is judged under the SAME configuration that verified its token. Read separately, it could be the
+	// next one: an admin saving during the token exchange meant a token from the outgoing provider was judged against a mapping
+	// written for its replacement (issue #1044).
+	Policy Policy
 }
 
 // ConfigFunc supplies the current provider configuration. It returns ErrNotConfigured when OIDC is unset for the deployment.
@@ -80,17 +85,17 @@ func newResolverWithBuilder(config ConfigFunc, build clientBuilder) *Resolver {
 
 // Current returns the IDPClient for the current configuration, building and caching it on first use or after a config change. It
 // propagates ErrNotConfigured from the config func unchanged so callers can distinguish "OIDC is off" from a build failure.
-func (r *Resolver) Current(ctx context.Context) (IDPClient, error) {
+func (r *Resolver) Current(ctx context.Context) (IDPClient, Policy, error) {
 	cfg, err := r.config(ctx)
 	if err != nil {
-		return nil, err
+		return nil, Policy{}, err
 	}
 
 	r.mu.Lock()
 	if r.cachedSet && r.cachedStamp == cfg.Stamp {
 		c := r.cached
 		r.mu.Unlock()
-		return c, nil
+		return c, cfg.Policy, nil
 	}
 	r.mu.Unlock()
 
@@ -98,7 +103,7 @@ func (r *Resolver) Current(ctx context.Context) (IDPClient, error) {
 	// every concurrent login during a rebuild.
 	client, err := r.build(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, Policy{}, err
 	}
 
 	r.mu.Lock()
@@ -111,5 +116,7 @@ func (r *Resolver) Current(ctx context.Context) (IDPClient, error) {
 	}
 	c := r.cached
 	r.mu.Unlock()
-	return c, nil
+	// The policy comes from THIS call's read, never from the cache: only the built client is cached, because only it is expensive.
+	// Returning a cached policy would reintroduce the staleness this exists to remove.
+	return c, cfg.Policy, nil
 }

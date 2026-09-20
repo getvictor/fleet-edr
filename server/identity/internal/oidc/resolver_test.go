@@ -36,10 +36,10 @@ func TestResolver_cachesUntilVersionChanges(t *testing.T) {
 	)
 
 	// First call builds; repeated calls at the same version reuse the cached client (one build total).
-	first, err := r.Current(t.Context())
+	first, _, err := r.Current(t.Context())
 	require.NoError(t, err)
 	for range 5 {
-		again, err := r.Current(t.Context())
+		again, _, err := r.Current(t.Context())
 		require.NoError(t, err)
 		assert.Same(t, first, again, "same version must return the cached client")
 	}
@@ -47,7 +47,7 @@ func TestResolver_cachesUntilVersionChanges(t *testing.T) {
 
 	// A config change (new issuer + bumped version) forces exactly one rebuild, reflecting the new issuer without a restart.
 	cfg.Store(&ProviderConfig{Issuer: "https://b.example.com", Stamp: "2"})
-	rebuilt, err := r.Current(t.Context())
+	rebuilt, _, err := r.Current(t.Context())
 	require.NoError(t, err)
 	assert.NotSame(t, first, rebuilt, "a version bump must rebuild")
 	assert.Equal(t, "https://b.example.com", rebuilt.AuthURL("", "", ""))
@@ -63,7 +63,7 @@ func TestResolver_propagatesNotConfigured(t *testing.T) {
 			return nil, nil
 		},
 	)
-	_, err := r.Current(t.Context())
+	_, _, err := r.Current(t.Context())
 	require.ErrorIs(t, err, ErrNotConfigured)
 }
 
@@ -76,7 +76,7 @@ func TestResolver_propagatesBuildError(t *testing.T) {
 		},
 		func(context.Context, ProviderConfig) (IDPClient, error) { return nil, wantErr },
 	)
-	_, err := r.Current(t.Context())
+	_, _, err := r.Current(t.Context())
 	require.ErrorIs(t, err, wantErr)
 }
 
@@ -94,7 +94,7 @@ func TestResolver_concurrentCurrentIsSafe(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
-			clients[i], errs[i] = r.Current(t.Context())
+			clients[i], _, errs[i] = r.Current(t.Context())
 		})
 	}
 	wg.Wait()

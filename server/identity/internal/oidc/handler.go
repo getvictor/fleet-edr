@@ -44,7 +44,7 @@ type IDPClient interface {
 type Handler struct {
 	// resolve returns the IDPClient for the current OIDC configuration. In production it is a *Resolver's Current method, which builds
 	// the client from the stored config and rebuilds it on a config change (no restart). It returns ErrNotConfigured when SSO is unset.
-	resolve     func(ctx context.Context) (IDPClient, error)
+	resolve     func(ctx context.Context) (IDPClient, Policy, error)
 	provisioner *Provisioner
 	sessions    *sessions.Store
 	signingKey  []byte
@@ -67,7 +67,7 @@ type Handler struct {
 type HandlerOptions struct {
 	// Resolve returns the IDPClient for the current configuration; production passes a *Resolver's Current method so a UI config edit
 	// applies without a restart. Required.
-	Resolve     func(ctx context.Context) (IDPClient, error)
+	Resolve     func(ctx context.Context) (IDPClient, Policy, error)
 	Provisioner *Provisioner
 	Sessions    *sessions.Store
 	SigningKey  []byte
@@ -133,7 +133,7 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Resolve the client first so an unconfigured deployment fails fast without minting a state cookie. ErrNotConfigured means no
 	// admin has set up SSO yet; any other error is a provider-build failure (e.g. discovery unreachable).
-	client, err := h.resolve(r.Context())
+	client, _, err := h.resolve(r.Context())
 	if err != nil {
 		h.loginUnavailable(r, w, err)
 		return
@@ -212,7 +212,9 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Resolve the client only after state validation so the failure-path responses above never depend on a configured provider. A
 	// resolve failure here (config changed/removed mid-flow, or discovery down) maps to 502.
-	client, err := h.resolve(ctx)
+	// The policy rides back with the client, from the one configuration read. Both halves of this sign-in are then judged under the
+	// configuration that verified its token, whatever an admin saves while the exchange below is in flight (issue #1044).
+	client, policy, err := h.resolve(ctx)
 	if err != nil {
 		h.callbackError(r, w, http.StatusBadGateway, "provider_unavailable", err)
 		return
@@ -225,7 +227,7 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		h.callbackError(r, w, http.StatusBadGateway, "exchange_failed", err)
 		return
 	}
-	userID, identityID, err := h.provisioner.ProvisionOrFind(ctx, claims)
+	userID, identityID, err := h.provisioner.ProvisionOrFind(ctx, claims, policy)
 	if err != nil {
 		if errors.Is(err, ErrUnknownIdentity) {
 			h.failureAudit(r, "oidc.unknown_subject", api.AuditEvent{

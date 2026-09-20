@@ -41,17 +41,18 @@ func newGroupsDB(t *testing.T) *groupsDB {
 	return &groupsDB{db: db, rec: &captureAudit{}}
 }
 
-func (g *groupsDB) provisioner(policy oidc.Policy) *oidc.Provisioner {
-	return oidc.NewProvisioner(g.db, users.New(g.db), identities.New(g.db), rbac.New(g.db), g.rec, oidc.ProvisionerOptions{
-		PolicyFn: func(context.Context) (oidc.Policy, error) { return policy, nil },
-	})
+// signIn provisions under a named policy. The policy is an argument to the sign-in rather than a property of the provisioner,
+// because that is how production supplies it: read once alongside the provider configuration that verified the token (issue #1044).
+func (g *groupsDB) signIn(ctx context.Context, policy oidc.Policy, c *oidc.Claims) (userID, identityID int64, err error) {
+	prov := oidc.NewProvisioner(g.db, users.New(g.db), identities.New(g.db), rbac.New(g.db), g.rec, oidc.ProvisionerOptions{})
+	return prov.ProvisionOrFind(ctx, c, policy)
 }
 
 // ssoUser signs a subject in for the first time with no group mapping, so it exists as an SSO user holding role, and clears the audit.
 func (g *groupsDB) ssoUser(t *testing.T, subject, role string) int64 {
 	t.Helper()
-	uid, _, err := g.provisioner(oidc.Policy{AllowJIT: true, DefaultRole: role}).
-		ProvisionOrFind(t.Context(), &oidc.Claims{Subject: subject, Email: subject + "@example.com"})
+	uid, _, err := g.signIn(t.Context(), oidc.Policy{AllowJIT: true, DefaultRole: role},
+		&oidc.Claims{Subject: subject, Email: subject + "@example.com"})
 	require.NoError(t, err)
 	g.rec.events = nil
 	return uid
@@ -78,9 +79,7 @@ func TestProvisionOrFind_GroupMappedToAdminPromotesAtSignIn(t *testing.T) {
 	t.Parallel()
 	g := newGroupsDB(t)
 	uid := g.ssoUser(t, "alice", "analyst")
-	p := g.provisioner(mappingPolicy)
-
-	got, _, err := p.ProvisionOrFind(t.Context(), withGroups("alice", "edr-admins", "engineering"))
+	got, _, err := g.signIn(t.Context(), mappingPolicy, withGroups("alice", "edr-admins", "engineering"))
 	require.NoError(t, err)
 	assert.Equal(t, uid, got)
 	assert.Equal(t, []string{"admin"}, g.roles(t, uid))
@@ -93,7 +92,7 @@ func TestProvisionOrFind_GroupMappedToAdminPromotesAtSignIn(t *testing.T) {
 		e.Payload)
 
 	// Signing in again with the same groups changes nothing and records nothing.
-	_, _, err = p.ProvisionOrFind(t.Context(), withGroups("alice", "edr-admins"))
+	_, _, err = g.signIn(t.Context(), mappingPolicy, withGroups("alice", "edr-admins"))
 	require.NoError(t, err)
 	assert.Len(t, g.rec.events, 1)
 }
@@ -116,7 +115,7 @@ func TestProvisionOrFind_LeavingTheGroupReturnsToTheDefaultRole(t *testing.T) {
 			g.ssoUser(t, "other-admin", "admin")
 			uid := g.ssoUser(t, "bob", "admin")
 
-			_, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), tc.claims)
+			_, _, err := g.signIn(t.Context(), mappingPolicy, tc.claims)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"analyst"}, g.roles(t, uid))
 			require.Len(t, g.rec.events, 1)
@@ -131,7 +130,7 @@ func TestProvisionOrFind_TheMostPrivilegedMappedRoleWins(t *testing.T) {
 	g := newGroupsDB(t)
 	uid := g.ssoUser(t, "carol", "analyst")
 
-	_, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(),
+	_, _, err := g.signIn(t.Context(), mappingPolicy,
 		withGroups("carol", "edr-auditors", "engineering", "edr-senior", "edr-senior"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"senior_analyst"}, g.roles(t, uid))
@@ -144,7 +143,7 @@ func TestProvisionOrFind_ANewAccountIsCreatedInItsMappedRole(t *testing.T) {
 	t.Parallel()
 	g := newGroupsDB(t)
 
-	uid, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("dave", "edr-senior"))
+	uid, _, err := g.signIn(t.Context(), mappingPolicy, withGroups("dave", "edr-senior"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"senior_analyst"}, g.roles(t, uid))
 	require.Len(t, g.rec.events, 1, "a creation records user.created and no separate role change")
@@ -161,7 +160,7 @@ func TestProvisionOrFind_ASuperAdminKeepsTheirRole(t *testing.T) {
 	g.ssoUser(t, "other-admin", "admin")
 	uid := g.ssoUser(t, "erin", "super_admin")
 
-	_, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("erin", "edr-auditors"))
+	_, _, err := g.signIn(t.Context(), mappingPolicy, withGroups("erin", "edr-auditors"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"super_admin"}, g.roles(t, uid))
 	assert.Empty(t, g.rec.events)
@@ -173,7 +172,7 @@ func TestProvisionOrFind_TheLastActiveAdminKeepsTheirRole(t *testing.T) {
 	g := newGroupsDB(t)
 	uid := g.ssoUser(t, "frank", "admin")
 
-	got, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("frank", "engineering"))
+	got, _, err := g.signIn(t.Context(), mappingPolicy, withGroups("frank", "engineering"))
 	require.NoError(t, err, "the sign-in still succeeds")
 	assert.Equal(t, uid, got)
 	assert.Equal(t, []string{"admin"}, g.roles(t, uid))
@@ -188,7 +187,7 @@ func TestProvisionOrFind_WithoutAGroupsClaimTheRoleIsLeftAlone(t *testing.T) {
 	noClaim := mappingPolicy
 	noClaim.GroupsClaim = ""
 
-	_, _, err := g.provisioner(noClaim).ProvisionOrFind(t.Context(), withGroups("grace", "edr-admins"))
+	_, _, err := g.signIn(t.Context(), noClaim, withGroups("grace", "edr-admins"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"senior_analyst"}, g.roles(t, uid))
 	assert.Empty(t, g.rec.events)
@@ -202,7 +201,7 @@ func TestProvisionOrFind_ADisabledOperatorsRoleIsNotChanged(t *testing.T) {
 	_, err := g.db.ExecContext(t.Context(), `UPDATE users SET status = 'disabled' WHERE id = ?`, uid)
 	require.NoError(t, err)
 
-	_, _, err = g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("ivan", "edr-admins"))
+	_, _, err = g.signIn(t.Context(), mappingPolicy, withGroups("ivan", "edr-admins"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"analyst"}, g.roles(t, uid))
 	assert.Empty(t, g.rec.events)
@@ -216,7 +215,7 @@ func TestProvisionOrFind_AnAdoptedAccountTakesItsMappedRole(t *testing.T) {
 	claims := verifiedClaims("heidi", "heidi@example.com")
 	claims.Raw = map[string]any{"groups": []any{"edr-senior"}}
 
-	uid, _, err := g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), claims)
+	uid, _, err := g.signIn(t.Context(), mappingPolicy, claims)
 	require.NoError(t, err)
 	assert.Equal(t, staged, uid)
 	assert.Equal(t, []string{"senior_analyst"}, g.roles(t, uid))
@@ -234,7 +233,7 @@ func TestProvisionOrFind_AUserWithNoRoleIsBoundToTheirMappedRole(t *testing.T) {
 	_, err := g.db.ExecContext(t.Context(), `DELETE FROM role_bindings WHERE user_id = ?`, uid)
 	require.NoError(t, err)
 
-	_, _, err = g.provisioner(mappingPolicy).ProvisionOrFind(t.Context(), withGroups("judy", "edr-auditors"))
+	_, _, err = g.signIn(t.Context(), mappingPolicy, withGroups("judy", "edr-auditors"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"auditor"}, g.roles(t, uid))
 	require.Len(t, g.rec.events, 1)

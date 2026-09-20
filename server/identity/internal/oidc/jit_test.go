@@ -30,7 +30,10 @@ func (c *captureAudit) Record(_ context.Context, e api.AuditEvent) error {
 	return nil
 }
 
-func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, *sqlx.DB, *captureAudit) {
+// newProvisioner returns a provisioner plus the sign-in policy these tests provision under. The policy is a value passed to each
+// sign-in, not a property of the provisioner, because that is how production supplies it: read once alongside the provider
+// configuration that verified the token (issue #1044).
+func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, oidc.Policy, *sqlx.DB, *captureAudit) {
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
@@ -38,10 +41,8 @@ func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, *sqlx.DB, *
 	identitiesStore := identities.New(db)
 	rbacStore := rbac.New(db)
 	rec := &captureAudit{}
-	p := oidc.NewProvisioner(db, usersStore, identitiesStore, rbacStore, rec, oidc.ProvisionerOptions{
-		AllowJIT: allowJIT,
-	})
-	return p, db, rec
+	p := oidc.NewProvisioner(db, usersStore, identitiesStore, rbacStore, rec, oidc.ProvisionerOptions{})
+	return p, oidc.Policy{AllowJIT: allowJIT}, db, rec
 }
 
 // JIT path: an unknown subject creates a user + identity + role binding atomically, audits user_created, returns ids the handler uses
@@ -55,12 +56,12 @@ func newProvisioner(t *testing.T, allowJIT bool) (*oidc.Provisioner, *sqlx.DB, *
 // "a user is the row" scenario (exactly one kind='oidc' identity for the user, with NULL password_hash/password_salt).
 func TestProvisionOrFind_JITNewUser(t *testing.T) {
 	t.Parallel()
-	p, db, rec := newProvisioner(t, true)
+	p, policy, db, rec := newProvisioner(t, true)
 	uid, idID, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-1",
 		Email:   "alice@example.com",
 		Name:    "Alice",
-	})
+	}, policy)
 	require.NoError(t, err)
 	assert.Positive(t, uid)
 	assert.Positive(t, idID)
@@ -119,7 +120,7 @@ func TestProvisionOrFind_JITNewUser(t *testing.T) {
 // graceful-degradation gap.
 func TestProvisionOrFind_EmailCollision(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 
 	// Pre-seed a local-password user with the email the IdP will claim.
 	_, err := db.ExecContext(t.Context(),
@@ -130,7 +131,7 @@ func TestProvisionOrFind_EmailCollision(t *testing.T) {
 	_, _, err = p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-collision",
 		Email:   "taken@example.com",
-	})
+	}, policy)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, oidc.ErrEmailConflict),
 		"email collision must surface as ErrEmailConflict, not a generic insert error")
@@ -141,13 +142,13 @@ func TestProvisionOrFind_EmailCollision(t *testing.T) {
 // window.
 func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 
 	// Bootstrap the "winner" via a normal JIT call.
 	winnerUID, winnerIdentityID, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-race",
 		Email:   "race@example.com",
-	})
+	}, policy)
 	require.NoError(t, err)
 
 	// Hand-truncate the identities row's lookup pathway is hard to fake without driver hooks. Instead, prove the resolution path: a second
@@ -156,7 +157,7 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 	uid2, idID2, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-race",
 		Email:   "race@example.com",
-	})
+	}, policy)
 	require.NoError(t, err)
 	assert.Equal(t, winnerUID, uid2)
 	assert.Equal(t, winnerIdentityID, idID2)
@@ -173,14 +174,14 @@ func TestProvisionOrFind_RaceDuplicateKeyResolves(t *testing.T) {
 // primary email; fall back to the subject-prefixed sentinel so an admin promotion path can attach the real email later.
 func TestProvisionOrFind_EmailUnverifiedFallsBackToSentinel(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 
 	verified := false
 	uid, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject:       "okta-unverified",
 		Email:         "spoofable@example.com",
 		EmailVerified: &verified,
-	})
+	}, policy)
 	require.NoError(t, err)
 
 	var email string
@@ -194,13 +195,13 @@ func TestProvisionOrFind_EmailUnverifiedFallsBackToSentinel(t *testing.T) {
 // Wave-1 trusts the seeded IdPs (Okta / Auth0) which always emit it.
 func TestProvisionOrFind_EmailUnclaimedIsTrusted(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 
 	uid, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-no-claim",
 		Email:   "trusted@example.com",
 		// EmailVerified left nil
-	})
+	}, policy)
 	require.NoError(t, err)
 
 	var email string
@@ -213,13 +214,13 @@ func TestProvisionOrFind_EmailUnclaimedIsTrusted(t *testing.T) {
 // inserted, no audit row is emitted (the chokepoint will audit the subsequent privileged-route call separately).
 func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
 	t.Parallel()
-	p, db, rec := newProvisioner(t, true)
+	p, policy, db, rec := newProvisioner(t, true)
 
 	// Pre-seed an existing user + OIDC identity.
 	uid, idID, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-2",
 		Email:   "bob@example.com",
-	})
+	}, policy)
 	require.NoError(t, err)
 	require.Len(t, rec.events, 1) // first call audited
 
@@ -228,7 +229,7 @@ func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
 	uid2, idID2, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-2",
 		Email:   "bob@example.com",
-	})
+	}, policy)
 	require.NoError(t, err)
 	assert.Equal(t, uid, uid2)
 	assert.Equal(t, idID, idID2)
@@ -246,11 +247,11 @@ func TestProvisionOrFind_ExistingIdentity(t *testing.T) {
 // actor-shaped to record yet).
 func TestProvisionOrFind_JITDisabledUnknownSubject(t *testing.T) {
 	t.Parallel()
-	p, _, rec := newProvisioner(t, false)
+	p, policy, _, rec := newProvisioner(t, false)
 	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-3",
 		Email:   "carol@example.com",
-	})
+	}, policy)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, oidc.ErrUnknownIdentity))
 	assert.Empty(t, rec.events, "no audit on JIT-disabled deny path; handler emits unknown_subject row")
@@ -261,22 +262,21 @@ func TestProvisionOrFind_JITDisabledUnknownSubject(t *testing.T) {
 func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 	t.Parallel()
 	// Bootstrap an existing identity via the JIT-enabled path.
-	pEnabled, db, _ := newProvisioner(t, true)
+	pEnabled, policy, db, _ := newProvisioner(t, true)
 	uid, _, err := pEnabled.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-4",
 		Email:   "dan@example.com",
-	})
+	}, policy)
 	require.NoError(t, err)
 
 	// New provisioner against the same DB with AllowJIT=false; the existing identity still resolves because the gate sits on the create
 	// branch only.
 	pDisabled := oidc.NewProvisioner(db,
-		users.New(db), identities.New(db), rbac.New(db), &captureAudit{},
-		oidc.ProvisionerOptions{AllowJIT: false})
+		users.New(db), identities.New(db), rbac.New(db), &captureAudit{}, oidc.ProvisionerOptions{})
 	uid2, _, err := pDisabled.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-sub-4",
 		Email:   "dan@example.com",
-	})
+	}, oidc.Policy{AllowJIT: false})
 	require.NoError(t, err)
 	assert.Equal(t, uid, uid2)
 }
@@ -288,11 +288,11 @@ func TestProvisionOrFind_JITDisabledExistingIdentity(t *testing.T) {
 // constraint (the insert errors), so the same Okta account cannot fan out to two users in the deployment.
 func TestProvisionOrFind_SubjectUniqueAcrossUsers(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 	ctx := t.Context()
 
 	const subject = "okta-shared-subject"
-	uidA, _, err := p.ProvisionOrFind(ctx, &oidc.Claims{Subject: subject, Email: "a@example.com"})
+	uidA, _, err := p.ProvisionOrFind(ctx, &oidc.Claims{Subject: subject, Email: "a@example.com"}, policy)
 	require.NoError(t, err)
 
 	// Create a second, distinct user that an attacker-controlled re-bind would target.
@@ -324,8 +324,8 @@ func TestProvisionOrFind_SubjectUniqueAcrossUsers(t *testing.T) {
 // per OIDC spec), the provisioner refuses rather than creating a user keyed on the empty string.
 func TestProvisionOrFind_EmptySubject(t *testing.T) {
 	t.Parallel()
-	p, _, _ := newProvisioner(t, true)
-	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: ""})
+	p, policy, _, _ := newProvisioner(t, true)
+	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: ""}, policy)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Subject")
 }
@@ -361,10 +361,10 @@ func verifiedClaims(subject, email string) *oidc.Claims {
 // spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/a-pre-provisioned-operator-lands-in-the-staged-role-on-first-login
 func TestProvisionOrFind_AdoptsPreProvisioned(t *testing.T) {
 	t.Parallel()
-	p, db, rec := newProvisioner(t, true)
+	p, policy, db, rec := newProvisioner(t, true)
 	staged := seedProvisioned(t, db, "alice@example.com", "senior_analyst")
 
-	uid, idID, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-alice", "alice@example.com"))
+	uid, idID, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-alice", "alice@example.com"), policy)
 	require.NoError(t, err)
 	assert.Equal(t, staged, uid, "first login adopts the staged row rather than creating a new user")
 	assert.Positive(t, idID)
@@ -389,10 +389,10 @@ func TestProvisionOrFind_AdoptsPreProvisioned(t *testing.T) {
 // spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/adoption-is-honored-even-when-jit-provisioning-is-disabled
 func TestProvisionOrFind_AdoptsWhenJITDisabled(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, false)
+	p, policy, db, _ := newProvisioner(t, false)
 	staged := seedProvisioned(t, db, "bob@example.com", "auditor")
 
-	uid, _, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-bob", "bob@example.com"))
+	uid, _, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-bob", "bob@example.com"), policy)
 	require.NoError(t, err)
 	assert.Equal(t, staged, uid)
 	var status string
@@ -405,10 +405,10 @@ func TestProvisionOrFind_AdoptsWhenJITDisabled(t *testing.T) {
 // spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/an-email-already-bound-to-a-real-account-is-not-adopted
 func TestProvisionOrFind_RealAccountEmailNotAdopted(t *testing.T) {
 	t.Parallel()
-	p, _, _ := newProvisioner(t, true)
-	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-carol-1", Email: "carol@example.com"})
+	p, policy, _, _ := newProvisioner(t, true)
+	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-carol-1", Email: "carol@example.com"}, policy)
 	require.NoError(t, err)
-	_, _, err = p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-carol-2", Email: "carol@example.com"})
+	_, _, err = p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-carol-2", Email: "carol@example.com"}, policy)
 	require.ErrorIs(t, err, oidc.ErrEmailConflict)
 }
 
@@ -416,12 +416,12 @@ func TestProvisionOrFind_RealAccountEmailNotAdopted(t *testing.T) {
 // intact and the unverified login provisions a separate synthetic-email account instead.
 func TestProvisionOrFind_UnverifiedEmailDoesNotAdopt(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 	staged := seedProvisioned(t, db, "dora@example.com", "admin")
 	verified := false
 	uid, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
 		Subject: "okta-dora", Email: "dora@example.com", EmailVerified: &verified,
-	})
+	}, policy)
 	require.NoError(t, err)
 	assert.NotEqual(t, staged, uid, "an unverified email must not adopt the staged account")
 	var status string
@@ -436,10 +436,10 @@ func TestProvisionOrFind_UnverifiedEmailDoesNotAdopt(t *testing.T) {
 // spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/an-absent-verification-claim-does-not-adopt
 func TestProvisionOrFind_AbsentVerificationDoesNotAdopt(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 	staged := seedProvisioned(t, db, "erin@example.com", "admin")
 	// EmailVerified left nil (claim omitted) -> not explicitly verified -> no adoption.
-	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-erin", Email: "erin@example.com"})
+	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-erin", Email: "erin@example.com"}, policy)
 	require.ErrorIs(t, err, oidc.ErrEmailConflict, "an absent email_verified claim must not adopt a staged (possibly elevated) account")
 	var status string
 	require.NoError(t, db.GetContext(t.Context(), &status, `SELECT status FROM users WHERE id = ?`, staged))
@@ -455,14 +455,14 @@ func TestProvisionOrFind_AbsentVerificationDoesNotAdopt(t *testing.T) {
 // spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/a-second-subject-cannot-claim-an-adopted-staged-account
 func TestProvisionOrFind_SecondSubjectCannotClaimStaged(t *testing.T) {
 	t.Parallel()
-	p, db, _ := newProvisioner(t, true)
+	p, policy, db, _ := newProvisioner(t, true)
 	staged := seedProvisioned(t, db, "frank@example.com", "senior_analyst")
 
-	uid1, _, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-frank-1", "frank@example.com"))
+	uid1, _, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-frank-1", "frank@example.com"), policy)
 	require.NoError(t, err)
 	assert.Equal(t, staged, uid1)
 
-	_, _, err = p.ProvisionOrFind(t.Context(), verifiedClaims("okta-frank-2", "frank@example.com"))
+	_, _, err = p.ProvisionOrFind(t.Context(), verifiedClaims("okta-frank-2", "frank@example.com"), policy)
 	require.ErrorIs(t, err, oidc.ErrEmailConflict, "a different subject must not bind to an already-adopted staged account")
 
 	var idCount int

@@ -369,47 +369,27 @@ func TestNewOIDCProviderConfigFn(t *testing.T) {
 	})
 }
 
-// TestNewOIDCJITPolicyFn exercises the sign-in policy closure the provisioner reads: no stored config means JIT off (deny unknown
-// subjects); a stored config surfaces its JIT toggle, default role, and group mapping.
-func TestNewOIDCJITPolicyFn(t *testing.T) {
+// The sign-in policy travels with the connection settings it was read beside, so a sign-in cannot be verified under one stored
+// configuration and judged under the next (issue #1044). This drives the provider-config closure the resolver reads through, rather
+// than a policy closure of its own, because having only one read is the property under test.
+func TestNewOIDCProviderConfigFn_carriesTheSignInPolicy(t *testing.T) {
 	t.Parallel()
+	db, store := newSSOStore(t, sealerKeyA)
+	ctx := t.Context()
+	secret := "shh"
+	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
+		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: &secret, JITEnabled: true, DefaultRole: "auditor",
+		GroupsClaim: "groups",
+		GroupRoles:  []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
+	}))
+	appCfg := appconfig.New(db)
+	require.NoError(t, appCfg.Put(ctx, appconfig.AppConfig{ExternalURL: "https://edr.example.com"}, 0, ""))
 
-	t.Run("no stored config means JIT off", func(t *testing.T) {
-		t.Parallel()
-		_, store := newSSOStore(t, sealerKeyA)
-		fn := newOIDCJITPolicyFn(store)
-		policy, err := fn(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, oidc.Policy{}, policy)
-	})
-
-	t.Run("stored config surfaces its JIT toggle, role, and group mapping", func(t *testing.T) {
-		t.Parallel()
-		_, store := newSSOStore(t, sealerKeyA)
-		ctx := t.Context()
-		secret := "shh"
-		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
-			Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: &secret, JITEnabled: true, DefaultRole: "auditor",
-			GroupsClaim: "groups",
-			GroupRoles:  []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-senior", Role: "senior_analyst"}},
-		}))
-		fn := newOIDCJITPolicyFn(store)
-		policy, err := fn(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, oidc.Policy{
-			AllowJIT: true, DefaultRole: "auditor", GroupsClaim: "groups",
-			GroupRoles: map[string]string{"edr-admins": "admin", "edr-senior": "senior_analyst"},
-		}, policy)
-	})
-
-	t.Run("a non-ErrNotFound store read error is surfaced, not silently JIT-off", func(t *testing.T) {
-		t.Parallel()
-		// A closed handle makes store.Get fail with a driver error (not ErrNotFound). The closure must return that error so a store
-		// fault propagates to the provisioner rather than being flattened into the "JIT off, deny unknown subject" default.
-		db, store := newSSOStore(t, sealerKeyA)
-		require.NoError(t, db.Close())
-		fn := newOIDCJITPolicyFn(store)
-		_, err := fn(t.Context())
-		require.Error(t, err)
-	})
+	cfg, err := newOIDCProviderConfigFn(store, appCfg)(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, oidc.Policy{
+		AllowJIT: true, DefaultRole: "auditor", GroupsClaim: "groups",
+		GroupRoles: map[string]string{"edr-admins": "admin", "edr-senior": "senior_analyst"},
+	}, cfg.Policy)
+	assert.Equal(t, "cid", cfg.ClientID, "and the connection settings it was read with")
 }
