@@ -14,6 +14,17 @@ import (
 // to wait for in-flight requests before we give up and let the process exit.
 const ShutdownTimeout = 15 * time.Second
 
+// RulesJoinTimeout and ResponseJoinTimeout bound the waits for each context's background loops to return, which cmd/main performs
+// after this function returns. They live here, with the rest of the shutdown contract, because what a deployment has to allow is
+// the SUM of every stage: a caller that knows only the drain and ShutdownTimeout allows about two thirds of it (issue #1127).
+//
+// RulesJoinTimeout only has to outlast the eval-stats flush. ResponseJoinTimeout is shorter because nothing is lost by giving up
+// on those loops.
+const (
+	RulesJoinTimeout    = 10 * time.Second
+	ResponseJoinTimeout = 5 * time.Second
+)
+
 // DrainState carries the graceful-shutdown readiness signal between the readiness probe and the shutdown path. On SIGTERM the
 // server begins draining: /readyz reports not-ready (503) so a load balancer removes this replica from rotation before the listener
 // closes, while in-flight and new requests keep being served for the drain window. The zero value is ready (not draining); safe for

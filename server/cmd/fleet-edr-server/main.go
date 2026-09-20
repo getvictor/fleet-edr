@@ -262,7 +262,7 @@ func run() error {
 		stopRulesLoops()
 		select {
 		case <-rulesDone:
-		case <-time.After(rulesShutdownWait):
+		case <-time.After(httpserver.RulesJoinTimeout):
 			logger.WarnContext(ctx, "rules background loops did not finish before shutdown; per-rule statistics for the last window may be lost")
 		}
 	}()
@@ -316,7 +316,7 @@ func run() error {
 		stopResponseLoops()
 		select {
 		case <-responseDone:
-		case <-time.After(responseShutdownWait):
+		case <-time.After(httpserver.ResponseJoinTimeout):
 			logger.WarnContext(ctx, "response background loops did not finish before shutdown; an audit entry may wait for the next sweep")
 		}
 	}()
@@ -329,15 +329,6 @@ func run() error {
 	// in-flight batch had produced, against a table read over days. Documented in the spec rather than left to be discovered.
 	return httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
 }
-
-// rulesShutdownWait bounds how long shutdown waits for the rules context's loops to return. Only has to outlast the eval-stats
-// flush's own timeout, which is what it is waiting for.
-const rulesShutdownWait = 10 * time.Second
-
-// responseShutdownWait bounds the join on the response loops. Shorter than the rules one because nothing is lost by giving up: an
-// entry the sweep did not deliver stays in the outbox for the next replica, where the rules flush is holding statistics that exist
-// nowhere else.
-const responseShutdownWait = 5 * time.Second
 
 // controlChannel adapts the response control gateway to httpserver.ControlMux so shutdown also ends the gateway's delivery loop. The
 // gateway's ServeHTTP is promoted from the embedded interface; Stop first cancels the delivery-loop context (started with SIGTERM

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
+	"github.com/fleetdm/edr/server/bootstrap"
 	serverconfig "github.com/fleetdm/edr/server/config"
 	"github.com/fleetdm/edr/server/httpserver"
 )
@@ -30,14 +32,28 @@ import (
 // of ours to wait for.
 const serverImage = "ghcr.io/getvictor/fleet-edr-server"
 
-// composeFiles are every deployment artefact in this repository that runs the server, relative to the repo root. Listed rather
-// than discovered so that adding a stack is a deliberate act that includes deciding this: a glob would let a new compose file
-// arrive with no allowance and no failure.
-var composeFiles = []string{
-	"docker-compose.prod.yml",
-	"docker-compose.quickstart.yml",
-	"docker-compose.demo.yml",
-	"packaging/docker-compose-multi-replica.yml",
+// composeGlobs are where this project keeps compose files. Every one of them is read and any service running the server image is
+// checked, rather than working from a list of known files: a new stack must not be able to arrive with no allowance and no
+// failure, and a list is exactly what would let it. Files that run something else are skipped by the image check, so the glob
+// being broad costs nothing.
+var composeGlobs = []string{"docker-compose*.yml", "packaging/docker-compose*.yml"}
+
+// minimumComposeFilesRunningTheServer guards the discovery itself. A glob that stopped matching, or an image name that changed,
+// would otherwise leave this test passing while checking nothing at all, which is the failure mode a discovering test has and a
+// listing one does not.
+const minimumComposeFilesRunningTheServer = 4
+
+// composeFilesRunningTheServer finds every compose file in the repository, relative to the repo root.
+func composeFilesRunningTheServer(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	for _, glob := range composeGlobs {
+		matches, err := filepath.Glob(filepath.Join("..", "..", glob))
+		require.NoError(t, err)
+		found = append(found, matches...)
+	}
+	sort.Strings(found)
+	return found
 }
 
 // composeDoc is the part of a compose file this reads: its services, and the anchor block the multi-replica stack shares between
@@ -53,10 +69,24 @@ type composeService struct {
 	StopGracePeriod string `json:"stop_grace_period"`
 }
 
-// shutdownNeeds is the longest a graceful shutdown can take: the drain window the operator configures, then the deadline for
-// in-flight requests. Read from the server's own constants so this cannot restate them wrongly.
+// shutdownNeeds is the longest a graceful shutdown can take, as the sum of EVERY bounded stage, in the order they run: the drain
+// window, the deadline for in-flight requests, the two loop joins cmd/main performs after serving stops, and the telemetry flush.
+//
+// Summing all of them is the point. Counting only the drain and the in-flight deadline gives 45s and looks reasonable, but the
+// stages after it add 20s more, so a deployment sized against the short answer is killed during the flush rather than during the
+// drain: later, and just as fatal to the thing it was meant to allow.
+//
+// Every term is read from the constant that governs it, so raising any one of them moves this and fails the deployments that no
+// longer outlast it. That is the whole mechanism: five numbers in four packages, and nothing else reads them together.
+//
+// The drain term is the compiled DEFAULT. An operator who raises EDR_SHUTDOWN_DRAIN has to raise their allowance to match, which
+// no test here can see and the operator documentation therefore says.
 func shutdownNeeds() time.Duration {
-	return serverconfig.DefaultShutdownDrain() + httpserver.ShutdownTimeout
+	return serverconfig.DefaultShutdownDrain() +
+		httpserver.ShutdownTimeout +
+		httpserver.RulesJoinTimeout +
+		httpserver.ResponseJoinTimeout +
+		bootstrap.OTelFlushTimeout
 }
 
 // spec:server-availability/deployments-allow-the-server-to-finish-shutting-down/a-shipped-deployment-outlasts-the-shutdown-it-triggers
@@ -64,27 +94,30 @@ func TestShippedDeploymentsOutlastTheServersShutdown(t *testing.T) {
 	t.Parallel()
 	needs := shutdownNeeds()
 
-	for _, file := range composeFiles {
-		t.Run(file, func(t *testing.T) {
-			t.Parallel()
-			//nolint:gosec // G304: the path comes from composeFiles above, a hardcoded list, not from any input.
-			raw, err := os.ReadFile(filepath.Join("..", "..", file))
-			require.NoError(t, err, "every listed deployment must exist; a renamed one is a drift this test exists to catch")
+	filesRunningTheServer := 0
+	for _, path := range composeFilesRunningTheServer(t) {
+		//nolint:gosec // G304: the path came from a glob over this repository, not from any input.
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
 
-			var doc composeDoc
-			require.NoError(t, yaml.Unmarshal(raw, &doc))
+		var doc composeDoc
+		require.NoError(t, yaml.Unmarshal(raw, &doc), "%s is not readable as a compose file", path)
 
-			checked := 0
-			for name, svc := range doc.Services {
-				if !runsTheServer(svc, doc) {
-					continue
-				}
-				checked++
-				assertOutlasts(t, file+" service "+name, gracePeriodFor(svc, doc), needs)
+		runs := false
+		for name, svc := range doc.Services {
+			if !runsTheServer(svc, doc) {
+				continue
 			}
-			require.Positive(t, checked, "this file is listed as running the server and no service in it does")
-		})
+			runs = true
+			assertOutlasts(t, filepath.Base(path)+" service "+name, gracePeriodFor(svc, doc), needs)
+		}
+		if runs {
+			filesRunningTheServer++
+		}
 	}
+	require.GreaterOrEqual(t, filesRunningTheServer, minimumComposeFilesRunningTheServer,
+		"found %d compose files running the server; the discovery or the image name has drifted and this test is checking "+
+			"less than it thinks", filesRunningTheServer)
 }
 
 // runsTheServer reports whether a service runs the EDR server, directly or by inheriting the shared anchor.
@@ -122,9 +155,11 @@ func outlasts(grace string, needs time.Duration) (bool, string) {
 		return false, fmt.Sprintf("has an unparseable stop_grace_period %q", grace)
 	}
 	if allowed <= needs {
-		return false, fmt.Sprintf("allows %s, which does not outlast the %s a graceful shutdown needs (drain %s plus "+
-			"shutdown deadline %s); the server would be killed part-way through the drain the load balancer is watching",
-			allowed, needs, serverconfig.DefaultShutdownDrain(), httpserver.ShutdownTimeout)
+		return false, fmt.Sprintf("allows %s, which does not outlast the %s a graceful stop needs: drain %s, in-flight "+
+			"deadline %s, rules join %s, response join %s, telemetry flush %s. The server would be killed part-way through, "+
+			"and the load balancer would never see the drain it is watching for",
+			allowed, needs, serverconfig.DefaultShutdownDrain(), httpserver.ShutdownTimeout,
+			httpserver.RulesJoinTimeout, httpserver.ResponseJoinTimeout, bootstrap.OTelFlushTimeout)
 	}
 	return true, ""
 }
@@ -167,4 +202,16 @@ func TestTooLittleGraceIsCaught(t *testing.T) {
 			assert.NotEmpty(t, why, "a refusal has to say what is wrong, since the reader is looking at YAML and Go at once")
 		})
 	}
+}
+
+// The budget has to count the stages that run AFTER serving stops, and nothing else here can notice if it stops doing so: the
+// allowances are deliberately generous, so a budget that shrank would still pass the comparison above. That is exactly the
+// mistake this change was filed to fix, made once already: 45 seconds looks like the whole shutdown and is two thirds of it.
+func TestTheBudgetCountsTheStagesAfterServing(t *testing.T) {
+	t.Parallel()
+	serving := serverconfig.DefaultShutdownDrain() + httpserver.ShutdownTimeout
+
+	assert.Greater(t, shutdownNeeds(), serving,
+		"the budget must include the loop joins and the telemetry flush, which run after the listener closes; counting only "+
+			"the serving stages is what left every shipped deployment short")
 }
