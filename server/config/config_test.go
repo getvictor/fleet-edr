@@ -106,6 +106,11 @@ func TestLoad(t *testing.T) {
 				assert.Equal(t, 180, c.AlertRetentionDays)
 				// Monitor records are kept for the week the promote decision is made over (issue #994).
 				assert.Equal(t, 7, c.MonitorRecordRetentionDays)
+				// The exported default has to BE the one a loaded config carries: it exists so the deployments this project
+				// ships can be checked against the drain they must outlast, and an accessor that drifted from the value in
+				// use would have that check validating the wrong number (issue #1127).
+				assert.Equal(t, DefaultShutdownDrain(), c.ShutdownDrain,
+					"the drain deployments are checked against must be the drain the server uses")
 			},
 		},
 		{
