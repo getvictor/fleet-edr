@@ -15,6 +15,7 @@ const baseConfig: api.SSOConfig = {
   groups_claim: "",
   group_roles: [],
   secret_set: true,
+  version: "4.7",
 };
 
 afterEach(() => {
@@ -343,5 +344,69 @@ describe("SSOSettings", () => {
 
     expect(() => { fireEvent.click(screen.getByRole("button", { name: "Copy" })); }).not.toThrow();
     vi.unstubAllGlobals();
+  });
+  // --- lost update (issue #1046) ---------------------------------------------
+
+  // The page sends the configuration it was shown, which is what lets the server refuse a save that would replace a change the
+  // operator never saw. Sending nothing would leave the save an overwrite, which is the bug.
+  // spec:sso-configuration/the-single-sign-on-page-saves-against-the-configuration-it-was-shown/the-page-saves-against-what-it-was-shown
+  it("sends the version it was shown when saving", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue({ ...baseConfig, version: "9.3" });
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue({ ...baseConfig, version: "10.4" });
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => { expect(upd).toHaveBeenCalled(); });
+    expect(upd.mock.calls[0][0].version).toBe("9.3");
+  });
+
+  // After a save the page holds a newer configuration, so the next save names that one. Sending the version it loaded with would
+  // conflict against its own previous save and the operator could never save twice without reloading.
+  // spec:sso-configuration/the-single-sign-on-page-saves-against-the-configuration-it-was-shown/a-second-save-names-the-first-s-version
+  it("saves again with the version its last save returned", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue({ ...baseConfig, version: "9.3" });
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue({ ...baseConfig, version: "10.4" });
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "changed-again" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => { expect(upd).toHaveBeenCalledTimes(2); });
+    expect(upd.mock.calls[1][0].version).toBe("10.4");
+  });
+
+  // A conflict says what happened and what to do, not what the transport returned. The operator needs three facts: nothing was
+  // saved, somebody else changed it, and reloading is how they see what.
+  // spec:sso-configuration/the-single-sign-on-page-saves-against-the-configuration-it-was-shown/a-refused-save-says-what-happened
+  it("explains a conflict instead of showing the status code", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    vi.spyOn(api, "updateSSOConfig").mockRejectedValue(
+      new api.SSOApiError("version_conflict", "version_conflict", 409),
+    );
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    const message = await screen.findByText(/someone else changed these settings/i);
+    expect(message).toBeVisible();
+    expect(message.textContent).toMatch(/nothing was saved/i);
+    expect(message.textContent).toMatch(/reload/i);
+    expect(screen.queryByText(/409/)).toBeNull();
+  });
+
+  // Only a conflict gets the conflict message. Another failure reported that way would tell the operator to reload over a problem
+  // reloading does not fix.
+  it("reports a non-conflict failure as itself", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    vi.spyOn(api, "updateSSOConfig").mockRejectedValue(new api.SSOApiError("invalid_issuer", "invalid_issuer", 400));
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/invalid_issuer/)).toBeVisible();
+    expect(screen.queryByText(/someone else changed these settings/i)).toBeNull();
   });
 });
