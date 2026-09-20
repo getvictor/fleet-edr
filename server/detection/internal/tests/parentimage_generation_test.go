@@ -14,6 +14,9 @@
 // Both implementations of the lookup are asserted at every instant here, on purpose. The batch overlay is what production folds
 // against and the store's SQL is the per-event reference, and the existing differential test cannot catch a divergence between them
 // because both of its arms drive the overlay.
+//
+// The lookup resolves the whole image, not only its path, since the child inherits the parent's signing identity with it (issue
+// #1123). What these scenarios pin is WHICH image is resolved; fork_inherits_signing_test.go pins what is carried across from it.
 
 package tests
 
@@ -74,9 +77,9 @@ func requireInheritedPath(ctx context.Context, t *testing.T, b *graph.Builder, s
 	host string, parentPID, childPID int, forkAt int64, want string,
 ) {
 	t.Helper()
-	got, err := store.GetParentPath(ctx, host, parentPID, forkAt)
+	got, err := store.GetParentImage(ctx, host, parentPID, forkAt)
 	require.NoError(t, err)
-	require.Equal(t, want, got, "store predicate at fork time %d", forkAt)
+	require.Equal(t, want, got.Path, "store predicate at fork time %d", forkAt)
 
 	fork := childForkEvt(fmt.Sprintf("child-fork-%d", childPID), forkAt, childPID, parentPID)
 	require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{fork}, host)))
@@ -314,9 +317,9 @@ func TestInheritedPathWhenTwoGenerationsShareAForkTimestamp(t *testing.T) {
 	}
 
 	// Before either exec landed, neither image was applied, so the fallback takes the chain's earliest: the newer generation's.
-	early, err := store.GetParentPath(ctx, host, parentPID, 150)
+	early, err := store.GetParentImage(ctx, host, parentPID, 150)
 	require.NoError(t, err)
-	require.Equal(t, secondImage, early, "no image applied yet, so the earliest application is the closest evidence")
+	require.Equal(t, secondImage, early.Path, "no image applied yet, so the earliest application is the closest evidence")
 
 	// After both, the latest application still wins, and pidversion deliberately does NOT override it even though the loser here
 	// carries the higher one. Issue #724 proposed inverting this assertion; it cannot be inverted without undoing issue #723.
@@ -328,9 +331,9 @@ func TestInheritedPathWhenTwoGenerationsShareAForkTimestamp(t *testing.T) {
 	//
 	// This fixture is also physically contradictory, which is why it is a poor case for pidversion to arbitrate: if the pidversion
 	// 9 generation really superseded the pidversion 7 one, the 7 generation cannot then exec at 900, after 9 exec'd at 200.
-	late, err := store.GetParentPath(ctx, host, parentPID, 1000)
+	late, err := store.GetParentImage(ctx, host, parentPID, 1000)
 	require.NoError(t, err)
-	require.Equal(t, firstImage, late,
+	require.Equal(t, firstImage, late.Path,
 		"the latest applied image wins; pidversion sorts after it so that issue #723's re-exec ordering is preserved")
 }
 
@@ -361,9 +364,9 @@ func TestForkOnlyGenerationsSharingAStampAreSeparatedByPIDVersion(t *testing.T) 
 		require.NoError(t, err)
 	}
 
-	got, err := store.GetParentPath(ctx, host, parentPID, 150)
+	got, err := store.GetParentImage(ctx, host, parentPID, 150)
 	require.NoError(t, err)
-	assert.Equal(t, secondImage, got,
+	assert.Equal(t, secondImage, got.Path,
 		"the higher kernel generation is the one holding the PID, whatever order the rows were ingested in")
 }
 
@@ -390,9 +393,9 @@ func TestGenerationWithPIDVersionOutranksOneWithout(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	got, err := store.GetParentPath(ctx, host, parentPID, 150)
+	got, err := store.GetParentImage(ctx, host, parentPID, 150)
 	require.NoError(t, err)
-	assert.Equal(t, secondImage, got,
+	assert.Equal(t, secondImage, got.Path,
 		"a row carrying kernel evidence outranks one carrying none, rather than the answer depending on NULL ordering")
 }
 

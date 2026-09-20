@@ -40,7 +40,7 @@ type HostPID struct {
 
 // LoadProcessesForKeys returns every process row for the given (host_id, pid) pairs, ordered oldest-first by (fork_time_ns, id).
 // The graph builder's batch path preloads the full candidate set in one round-trip and then resolves every per-event read
-// (GetProcessByPID, GetParentPath) against the in-memory overlay instead of issuing a SELECT per event. All rows for each key are
+// (GetProcessByPID, GetParentImage) against the in-memory overlay instead of issuing a SELECT per event. All rows for each key are
 // returned, including already-exited ones, because every overlay read is bracketed against the READING EVENT's timestamp rather
 // than against now, and a batch routinely carries events older than the newest persisted generation of a pid: a generation that has
 // since exited is still the right answer for an event stamped inside its lifetime, and for a fork's inherited path it stays a

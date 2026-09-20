@@ -462,7 +462,7 @@ func (s *seeder) slideArchiveEvents(ctx context.Context, inClause string, hostAr
 // waitForProcess polls until the host/pid has an EXEC-IMAGED process row (exec_time_ns set), or verifyTimeout elapses.
 //
 // Requiring the exec image, not merely a row, is the point. The graph builder writes the row on the fork and only fills in the real
-// path when it applies the exec; a fork row carries the path inherited from its parent (handleFork uses GetParentPath), and when the
+// path when it applies the exec; a fork row carries the path inherited from its parent (handleFork uses GetParentImage), and when the
 // fork and exec land in different claim batches the fork row is visible on its own for a while. Every consumer this barrier gates on
 // keys off the exec'd image: the app-control block references the exec path, and dns_c2_beacon's suspicion gate reads proc.Path and
 // silently declines a process whose path is still the parent shell. Waiting on a bare row therefore released the follow-up event
