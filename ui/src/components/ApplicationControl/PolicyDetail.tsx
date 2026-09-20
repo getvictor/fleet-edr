@@ -54,13 +54,9 @@ function truncateIdentifier(value: string): string {
   return value.slice(0, IDENTIFIER_DISPLAY_CHARS) + "…";
 }
 
-// PolicyDetail is the policy-rules surface the demo's Add Rule modal
-// hangs off. Demo beat #2 (admin pastes a SHA-256, hits Save, sees
-// the row appear) is its primary job; the per-row edit / disable /
-// delete buttons render disabled with the "coming soon" tooltip
-// pattern PoliciesList uses on its New Policy button. The Show
-// History toggle is the audit-history scaffolding for post-demo
-// work.
+// PolicyDetail is the policy-rules surface: one policy's rules, the controls that change them, and the filter bar over them.
+// Every control here is gated on the permission its own call needs, so an operator is offered only the changes the server
+// would accept from them.
 export function PolicyDetail() {
   const { id: idParam } = useParams<{ id: string }>();
   const policyID = idParam ? Number.parseInt(idParam, 10) : Number.NaN;
@@ -94,11 +90,21 @@ export function PolicyDetail() {
     setFilter(EMPTY_RULES_FILTER); // eslint-disable-line react-hooks/set-state-in-effect -- reset on prop change
   }, [policyID]);
 
+  // What this operator may actually do to a rule. Each affordance below is gated on the permission its own call needs, because
+  // the page as a whole is gated on application_control.read and a role that reads without writing is a real one: a
+  // senior_analyst could open every dialog, type an audit reason, and learn only from the 403 that the change was never theirs
+  // to make (issue #1056). The server remains the boundary; this is what stops offering work it will refuse.
+  const can = useCan();
+  const canCreateRule = can(PermissionAction.AppControlRuleCreate);
+  const canUpdateRule = can(PermissionAction.AppControlRuleUpdate);
+  const canDeleteRule = can(PermissionAction.AppControlRuleDelete);
+  const canBulkUpsertRules = can(PermissionAction.AppControlRuleBulkUpsert);
+
   // What each Detect rule would have blocked, read from the monitor-match counts. Only for an operator who may read detection
   // tuning, which is where those counts are served; anyone else sees the enforcement without the figure. Read once per visit: a
   // rule edit on this page does not change what was counted. A failed read leaves the figure out rather than failing the page,
   // since the rules are still usable without it.
-  const canReadMatchCounts = useCan()(PermissionAction.DetectionConfigRead);
+  const canReadMatchCounts = can(PermissionAction.DetectionConfigRead);
   const [impact, setImpact] = useState<WouldBlockImpact | null>(null);
   useEffect(() => {
     if (!canReadMatchCounts) return;
@@ -182,20 +188,24 @@ export function PolicyDetail() {
 
   const actions = (
     <>
-      <Button
-        variant="inverse"
-        onClick={() => { setActiveModal({ kind: "paste-many" }); }}
-        disabled={!policy}
-      >
-        Paste many
-      </Button>
-      <Button
-        variant="primary"
-        onClick={() => { setActiveModal({ kind: "add" }); }}
-        disabled={!policy}
-      >
-        Add rule
-      </Button>
+      {canBulkUpsertRules && (
+        <Button
+          variant="inverse"
+          onClick={() => { setActiveModal({ kind: "paste-many" }); }}
+          disabled={!policy}
+        >
+          Paste many
+        </Button>
+      )}
+      {canCreateRule && (
+        <Button
+          variant="primary"
+          onClick={() => { setActiveModal({ kind: "add" }); }}
+          disabled={!policy}
+        >
+          Add rule
+        </Button>
+      )}
     </>
   );
 
@@ -220,8 +230,15 @@ export function PolicyDetail() {
           )}
           {rules.length === 0 ? (
             <EmptyState>
-              This policy has no rules yet. Click <strong>Add rule</strong> to
-              author the first one.
+              {canCreateRule ? (
+                <>
+                  This policy has no rules yet. Click <strong>Add rule</strong> to
+                  author the first one.
+                </>
+              ) : (
+                // Pointing an operator at a button they cannot see reads as a broken page rather than as a permission they lack.
+                <>This policy has no rules yet.</>
+              )}
             </EmptyState>
           ) : (
             <>
@@ -251,6 +268,8 @@ export function PolicyDetail() {
                 <RulesTable
                   rules={visibleRules}
                   impact={shownImpact}
+                  canUpdate={canUpdateRule}
+                  canDelete={canDeleteRule}
                   onEnforcement={(rule) => { setActiveModal({ kind: "confirm-enforcement", rule }); }}
                   onEdit={(rule) => { setActiveModal({ kind: "edit", rule }); }}
                   onToggle={(rule) => { setActiveModal({ kind: "confirm-toggle", rule }); }}
@@ -426,13 +445,18 @@ function confirmReasonPlaceholderFor(active: ActiveModal): string {
 interface RulesTableProps {
   readonly rules: ApplicationControlRule[];
   readonly impact: WouldBlockImpact | null;
+  // Promote / Move to Detect, Edit, and Disable / Enable all PATCH the rule, so one permission gates the three of them.
+  readonly canUpdate: boolean;
+  readonly canDelete: boolean;
   readonly onEnforcement: (rule: ApplicationControlRule) => void;
   readonly onEdit: (rule: ApplicationControlRule) => void;
   readonly onToggle: (rule: ApplicationControlRule) => void;
   readonly onDelete: (rule: ApplicationControlRule) => void;
 }
 
-function RulesTable({ rules, impact, onEnforcement, onEdit, onToggle, onDelete }: RulesTableProps) {
+function RulesTable({ rules, impact, canUpdate, canDelete, onEnforcement, onEdit, onToggle, onDelete }: RulesTableProps) {
+  // An operator who may change nothing gets no Actions column at all, rather than a header over four empty cells.
+  const anyAction = canUpdate || canDelete;
   return (
     <Table>
       <thead>
@@ -443,7 +467,7 @@ function RulesTable({ rules, impact, onEnforcement, onEdit, onToggle, onDelete }
           <th>Severity</th>
           <th>Custom message</th>
           <th>Last modified</th>
-          <th>Actions</th>
+          {anyAction && <th>Actions</th>}
         </tr>
       </thead>
       <tbody>
@@ -476,39 +500,47 @@ function RulesTable({ rules, impact, onEnforcement, onEdit, onToggle, onDelete }
             </td>
             <td>{rule.custom_msg ?? <span className="app-control__muted">-</span>}</td>
             <td>{new Date(rule.updated_at).toLocaleString()}</td>
-            <td className="app-control__row-actions">
-              {/* Edit / Disable / Delete each open a modal that prompts for an audit reason before firing the PATCH / DELETE
-                  endpoint server-side. The handlers live on PolicyDetail so refresh-on-success is wired in one place. */}
-              <Button
-                variant="text-link"
-                size="small"
-                onClick={() => { onEnforcement(rule); }}
-              >
-                {isDetect(rule) ? "Promote" : "Move to Detect"}
-              </Button>
-              <Button
-                variant="text-link"
-                size="small"
-                onClick={() => { onEdit(rule); }}
-              >
-                Edit
-              </Button>
-              <Button
-                variant="text-link"
-                size="small"
-                onClick={() => { onToggle(rule); }}
-                title={rule.enabled ? "Pause enforcement for this rule" : "Resume enforcement for this rule"}
-              >
-                {rule.enabled ? "Disable" : "Enable"}
-              </Button>
-              <Button
-                variant="text-link"
-                size="small"
-                onClick={() => { onDelete(rule); }}
-              >
-                Delete
-              </Button>
-            </td>
+            {anyAction && (
+              <td className="app-control__row-actions">
+                {/* Edit / Disable / Delete each open a modal that prompts for an audit reason before firing the PATCH / DELETE
+                    endpoint server-side. The handlers live on PolicyDetail so refresh-on-success is wired in one place. */}
+                {canUpdate && (
+                  <>
+                    <Button
+                      variant="text-link"
+                      size="small"
+                      onClick={() => { onEnforcement(rule); }}
+                    >
+                      {isDetect(rule) ? "Promote" : "Move to Detect"}
+                    </Button>
+                    <Button
+                      variant="text-link"
+                      size="small"
+                      onClick={() => { onEdit(rule); }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="text-link"
+                      size="small"
+                      onClick={() => { onToggle(rule); }}
+                      title={rule.enabled ? "Pause enforcement for this rule" : "Resume enforcement for this rule"}
+                    >
+                      {rule.enabled ? "Disable" : "Enable"}
+                    </Button>
+                  </>
+                )}
+                {canDelete && (
+                  <Button
+                    variant="text-link"
+                    size="small"
+                    onClick={() => { onDelete(rule); }}
+                  >
+                    Delete
+                  </Button>
+                )}
+              </td>
+            )}
           </tr>
         ))}
       </tbody>

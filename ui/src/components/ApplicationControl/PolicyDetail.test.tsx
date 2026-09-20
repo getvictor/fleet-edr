@@ -38,6 +38,21 @@ const makePolicy = (over: Partial<ApplicationControlPolicy> = {}): ApplicationCo
   ...over,
 });
 
+// Every rule affordance the page offers, and nothing else. A test about something other than permissions grants this so a
+// gated button is present for the reason the test is about rather than missing for one it is not. Detection tuning is
+// deliberately absent: the would-block figure is gated separately and several tests below turn on that distinction.
+const EVERY_RULE_ACTION = [
+  PermissionAction.AppControlRead,
+  PermissionAction.AppControlRuleCreate,
+  PermissionAction.AppControlRuleUpdate,
+  PermissionAction.AppControlRuleDelete,
+  PermissionAction.AppControlRuleBulkUpsert,
+];
+
+// normalize collapses the whitespace JSX leaves between a text node and an inline element, so an assertion can name the whole
+// message an operator reads rather than a fragment of it.
+const normalize = (text: string | null) => text?.replace(/\s+/g, " ").trim();
+
 // PolicyDetail uses useParams, so we route through MemoryRouter +
 // Routes so the :id parameter is bound. Wrapping the rendered
 // component this way keeps the test focused on the page output
@@ -183,7 +198,7 @@ describe("PolicyDetail", () => {
     const countsSpy = vi.spyOn(api, "listDetectionRuleMatchCounts");
     vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
 
-    renderPolicyDetailAt("/app-control/policies/7", [PermissionAction.AppControlRead]);
+    renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION);
     expect(await screen.findByRole("button", { name: "Promote" })).toBeInTheDocument();
     expect(countsSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(/would-block|would have blocked/i)).toBeNull();
@@ -207,7 +222,7 @@ describe("PolicyDetail", () => {
 
     const { rerender } = render(tree());
     expect(await screen.findByRole("link", { name: /would have blocked 12 runs/i })).toBeVisible();
-    rerender(tree([PermissionAction.AppControlRead]));
+    rerender(tree(EVERY_RULE_ACTION));
     expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Promote" }));
     const dialog = await waitFor(() => openModal(/promote rule to protect/i));
@@ -235,7 +250,7 @@ describe("PolicyDetail", () => {
 
     const { rerender } = render(tree());
     expect(await screen.findByRole("link", { name: /would have blocked 12 runs/i })).toBeVisible();
-    rerender(tree([PermissionAction.AppControlRead]));
+    rerender(tree(EVERY_RULE_ACTION));
     rerender(tree());
     await waitFor(() => {
       expect(countsSpy).toHaveBeenCalledTimes(2);
@@ -580,5 +595,77 @@ describe("PolicyDetail", () => {
     expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
     const searchInput = screen.getByLabelText(/search rules by identifier or comment/i);
     expect(searchInput).toHaveProperty("value", "");
+  });
+
+  // An operator who can read the page and change nothing is a real role (senior_analyst), and every one of these controls was
+  // offered to them before issue #1056. Each is named by the control's own label rather than by a container, because the label
+  // is what the operator sees and what a future refactor would have to keep meaning the same thing.
+  describe("gates each control on the permission its own call needs", () => {
+    const CONTROLS = [
+      { name: "Paste many", needs: PermissionAction.AppControlRuleBulkUpsert },
+      { name: "Add rule", needs: PermissionAction.AppControlRuleCreate },
+      { name: "Move to Detect", needs: PermissionAction.AppControlRuleUpdate },
+      { name: "Edit", needs: PermissionAction.AppControlRuleUpdate },
+      { name: "Disable", needs: PermissionAction.AppControlRuleUpdate },
+      { name: "Delete", needs: PermissionAction.AppControlRuleDelete },
+    ];
+
+    // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-control-is-hidden-without-its-own-permission
+    it.each(CONTROLS)("hides $name from an operator without $needs", async ({ name, needs }) => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
+      renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION.filter((action) => action !== needs));
+      await waitFor(() => {
+        expect(screen.getByRole("heading", { name: "Default" })).toBeVisible();
+      });
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    });
+
+    // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-control-is-shown-with-its-own-permission
+    it.each(CONTROLS)("shows $name to an operator who holds $needs", async ({ name }) => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
+      renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION);
+      expect(await screen.findByRole("button", { name })).toBeVisible();
+    });
+
+    // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-read-only-operator-still-sees-the-rules
+    it("leaves a read-only operator the rules themselves, with no Actions column over empty cells", async () => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
+      renderPolicyDetailAt("/app-control/policies/7", [PermissionAction.AppControlRead]);
+      expect(await screen.findByText("aaaaaaaaaaaaaaaa…")).toBeVisible();
+      expect(screen.getByText(/blocked by corp policy/i)).toBeVisible();
+      expect(screen.queryByRole("columnheader", { name: "Actions" })).toBeNull();
+      const row = within(screen.getByRole("table")).getAllByRole("row")[1];
+      expect(within(row).queryAllByRole("button")).toEqual([]);
+    });
+
+    // The empty state told the operator to click a button that is no longer there, which reads as a broken page rather than as
+    // a permission they lack.
+    // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-read-only-operator-still-sees-the-rules
+    it("does not tell a read-only operator to click Add rule on an empty policy", async () => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [] }));
+      renderPolicyDetailAt("/app-control/policies/7", [PermissionAction.AppControlRead]);
+      const empty = await screen.findByText(/this policy has no rules yet/i);
+      expect(empty).toBeVisible();
+      // The whole message, not a substring: the prompt it used to carry is split across a <strong>, so a text query for it
+      // matches nothing whether the prompt is there or not.
+      expect(normalize(empty.textContent)).toBe("This policy has no rules yet.");
+    });
+
+    it("still tells an operator who may add rules how to add the first one", async () => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [] }));
+      renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION);
+      const empty = await screen.findByText(/this policy has no rules yet/i);
+      expect(normalize(empty.textContent)).toBe("This policy has no rules yet. Click Add rule to author the first one.");
+    });
+
+    // A server that returns no permission set at all (one predating the field) renders optimistically and leans on the 403,
+    // which is the pre-gating behaviour the capability seam promises. Gating must not turn that into a page with no controls.
+    it("still offers every control when the permission set is unknown", async () => {
+      vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
+      renderPolicyDetailAt("/app-control/policies/7");
+      for (const { name } of CONTROLS) {
+        expect(await screen.findByRole("button", { name })).toBeVisible();
+      }
+    });
   });
 });
