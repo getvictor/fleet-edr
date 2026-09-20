@@ -24,6 +24,11 @@
 x-server: &server
   image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
   restart: unless-stopped
+  # Longer than EDR_SHUTDOWN_DRAIN (30s) plus the shutdown deadline (15s). This is the
+  # stack the rolling upgrade runs on, so it is where being killed part-way through the
+  # drain costs most: the proxy keeps routing to a replica that never finished reporting
+  # itself unready. Docker's default of 10s does exactly that (issue #1127).
+  stop_grace_period: 60s
   depends_on:
     mysql:
       condition: service_healthy

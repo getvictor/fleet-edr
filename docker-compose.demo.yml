@@ -104,6 +104,11 @@ services:
   server:
     image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
     restart: unless-stopped
+    # Longer than EDR_SHUTDOWN_DRAIN (30s) plus the shutdown deadline (15s), so the
+    # server finishes draining instead of being killed part-way through it. Docker's
+    # default is 10s, which cuts the drain the load balancer is watching for and
+    # severs in-flight requests (issue #1127). test/arch holds the two in step.
+    stop_grace_period: 60s
     depends_on:
       mysql:
         condition: service_healthy

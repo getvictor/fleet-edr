@@ -45,6 +45,7 @@ This is the zero-downtime upgrade path for the multi-replica topology ([install-
 What makes it hitless, and the piece each part plays:
 
 - **Drain.** On SIGTERM a replica reports `/readyz` 503 for `EDR_SHUTDOWN_DRAIN` (default 30s) before closing its listener, so the LB pulls it from rotation and finishes in-flight requests elsewhere. Set the LB's health-check interval shorter than the drain window so it notices the 503 in time.
+- **Time to finish it.** Whatever stops the container has to wait longer than the drain plus the shutdown deadline (30s + 15s by default), or the server is killed part-way through and none of the above happens: the LB never sees the full 503 window, in-flight requests are severed instead of drained, and agents lose their control streams by timeout rather than being told to reconnect. The compose files here set `stop_grace_period: 60s` for this reason; Docker's own default is 10 seconds, which is not enough. On Kubernetes set `terminationGracePeriodSeconds`, and under systemd `TimeoutStopSec`, to the same allowance.
 - **Migrations.** The first new-version replica to boot applies any pending goose migrations under a MySQL advisory lock; replicas that boot while it holds the lock block briefly, then see an already-applied corpus and no-op. No two replicas ever run the migration tool against the database at once.
 - **Stateless tier.** Sessions and CSRF tokens are MySQL-backed, so a logged-in operator whose replica is being replaced is served by another replica with no re-login (no sticky sessions). See [ADR-0010](adr/0010-stateless-server.md).
 - **Leader failover.** Retention and the stale-process TTL reconciler run on a single replica via an advisory lock; when that replica is drained the lock frees and another replica takes over on its next poll. The event processor is not coordinated: it scales across every replica via `SKIP LOCKED`.
@@ -56,8 +57,9 @@ Procedure:
 cd /srv/fleet-edr   # the directory holding docker-compose-multi-replica.yml
 docker compose -f docker-compose-multi-replica.yml --env-file .env pull
 
-# 2. Recreate one replica at a time. Compose sends SIGTERM (drain), waits, then
-#    starts the new container with a fresh IP. Reload the proxy so NGINX
+# 2. Recreate one replica at a time. Compose sends SIGTERM, waits out the drain
+#    (which needs the stack's stop_grace_period, already set), then starts the
+#    new container with a fresh IP. Reload the proxy so NGINX
 #    re-resolves the upstream IPs (it caches them at start, so a recreated
 #    container's new IP would otherwise 502). Then confirm THIS replica is up by
 #    reading its own log, not by curling the LB: a /readyz through the LB can be

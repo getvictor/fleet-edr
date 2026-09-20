@@ -80,6 +80,13 @@ const (
 // (sub, email, name) without leaking unused permissions. Returned as a fresh slice so callers can't mutate a shared backing array.
 func DefaultOIDCScopes() []string { return []string{"openid", "email", "profile"} }
 
+// DefaultShutdownDrain returns how long the server keeps serving after SIGTERM before closing its listener.
+//
+// Exported so the deployments this project ships can be checked against it: the drain is time a container runtime has to be told
+// to allow, and Docker's own default is shorter than this one, so a compose file that says nothing kills the server part-way
+// through the drain its load balancer is watching for (issue #1127).
+func DefaultShutdownDrain() time.Duration { return defaultShutdownDrain }
+
 // Config is the resolved server configuration.
 type Config struct {
 	DSN           string
