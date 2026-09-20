@@ -341,6 +341,13 @@ func logAgentStart(ctx context.Context, logger *slog.Logger, cfg *config.Config)
 	if cfg.AllowInsecure {
 		logger.WarnContext(ctx, "EDR_ALLOW_INSECURE=1 is set; use https:// in production")
 	}
+	// A proxy the agent cannot speak is not used at all, and saying so here is the only thing that distinguishes this from the
+	// server simply being unreachable: without it an operator sees connection failures and nothing pointing at the line they
+	// wrote (issue #1128). The value is deliberately not logged, because it carries the proxy credentials.
+	for _, refused := range cfg.Proxy.Refused {
+		logger.WarnContext(ctx, "proxy setting ignored: the agent does not speak this proxy scheme; connecting directly",
+			"setting", refused.Setting, "scheme", refused.Scheme)
+	}
 }
 
 // newAgentHTTPClient wires one TLS config into every agent HTTP client so the

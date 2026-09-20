@@ -381,14 +381,23 @@ func TestControlDialOptionsLeavesUnspokenProxiesAlone(t *testing.T) {
 
 	// Carrying credentials deliberately: the point of the opt-in is that an unsupported scheme is sent NOTHING, so these never
 	// reach a protocol that would misread them.
+	//
+	// Since issue #1128 the refusal happens in the agent's own proxy resolution rather than here, so what this asserts is that
+	// such a proxy reaches neither the dial nor the target: the configuration collapses to the unproxied case, which is the
+	// better of the two outcomes it could have had. Before, an unspeakable proxy left the control channel on gRPC's own dialing,
+	// and a contained host could not reconnect it at all; now it dials the server at its pinned address like any unproxied host.
 	for _, scheme := range []string{"ftp", "quic", "socks4"} {
 		t.Run(scheme, func(t *testing.T) {
 			t.Parallel()
 			proxied := *cfg
 			proxied.Proxy = config.ProxyConfig{HTTPSProxy: scheme + "://ir:s3cret@proxy.corp:3128"}
+
+			assert.Nil(t, serverProxy(proxied.ServerURL, proxied.Proxy.ProxyFunc()),
+				"nothing downstream may be offered a proxy this build cannot speak")
+
 			target, opts := controlDialOptions(&proxied, "edr.example.com:8443", mgr, dial, nil)
-			assert.Equal(t, "edr.example.com:8443", target, "gRPC resolves and dials it, as it did before this change")
-			assert.Empty(t, opts, "no dialer of ours, so nothing writes a request this proxy cannot parse")
+			assert.Equal(t, "passthrough:///edr.example.com:8443", target, "the unproxied path, so containment still pins the server")
+			assert.Len(t, opts, 1)
 		})
 	}
 
@@ -1021,4 +1030,110 @@ func TestEnrollmentIsBuiltWithTheConfiguredProxy(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, chosen)
 	assert.Equal(t, "http://proxy.corp:3128", chosen.String())
+}
+
+// The list of schemes the agent says it speaks and the dispatch that actually speaks them have to agree, and nothing else
+// enforces that: a scheme added to config.ProxySchemeSupported without an arm below would fall through to the plain CONNECT
+// default and write the operator's credentials at a proxy that cannot parse them, which is the leak issue #1128 closed.
+//
+// Asserted by what each scheme puts on the wire FIRST, because that is what distinguishes the arms from each other and from the
+// default. The per-scheme behaviour has its own tests above; this is the one that fails when the two lists drift apart.
+func TestEveryProxySchemeTheAgentSpeaksHasItsOwnDispatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		scheme string
+		// firstByte is what the agent must send before anything else: a CONNECT request, a TLS ClientHello, or a SOCKS5 greeting.
+		firstByte byte
+		what      string
+	}{
+		{scheme: "http", firstByte: 'C', what: "a CONNECT request"},
+		{scheme: "https", firstByte: 0x16, what: "a TLS handshake, before the CONNECT carrying the credentials"},
+		{scheme: "socks5", firstByte: 0x05, what: "a SOCKS5 greeting"},
+		{scheme: "socks5h", firstByte: 0x05, what: "a SOCKS5 greeting"},
+	}
+	supported := make(map[string]bool, len(cases))
+	for _, tc := range cases {
+		supported[tc.scheme] = true
+		t.Run(tc.scheme, func(t *testing.T) {
+			t.Parallel()
+			require.True(t, config.ProxySchemeSupported(tc.scheme), "this test speaks for a scheme the agent claims")
+
+			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = listener.Close() })
+			first := make(chan byte, 1)
+			go func() {
+				conn, aerr := listener.Accept()
+				if aerr != nil {
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				buf := make([]byte, 1)
+				if _, rerr := io.ReadFull(conn, buf); rerr == nil {
+					first <- buf[0]
+				}
+			}()
+
+			proxyURL, err := url.Parse(tc.scheme + "://user:secret@" + listener.Addr().String())
+			require.NoError(t, err)
+			var dialed []string
+			var mu sync.Mutex
+			// The dial is expected to fail: nothing answers the handshake. What it sent before failing is the assertion.
+			_, _ = dialThroughProxy(t.Context(), recordingDial(&dialed, &mu), proxyURL,
+				listener.Addr().String(), "edr.example.com:8443", &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // a QA listener
+
+			select {
+			case got := <-first:
+				assert.Equal(t, tc.firstByte, got, "%s must open with %s", tc.scheme, tc.what)
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s sent nothing; it has no dispatch arm and fell through", tc.scheme)
+			}
+		})
+	}
+
+	// And the agent claims no scheme this test does not speak for, so adding one to the list without an arm fails here.
+	for _, scheme := range []string{"ftp", "gopher", "socks4", "quic", "ssh"} {
+		assert.False(t, config.ProxySchemeSupported(scheme), "%s has no dispatch arm, so it must not be claimed", scheme)
+	}
+}
+
+// The operator's only signal. A refused proxy means the agent connects directly, and without this line the operator sees
+// connection failures with nothing pointing at the conf-file line that caused them (issue #1128).
+//
+// The value is deliberately absent from the report: it carries the proxy credentials this change exists to keep off the wire,
+// and a log is somewhere they would travel and be retained.
+//
+// spec:agent-configuration/a-proxy-the-agent-cannot-speak-is-refused-rather-than-used/the-operator-is-told-which-setting-was-refused
+func TestStartupReportsARefusedProxyByNameAndScheme(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logged, nil))
+	cfg := &config.Config{
+		ServerURL: "https://edr.example.com:8443",
+		Proxy: config.ProxyConfig{
+			Refused: []config.RefusedProxy{{Setting: "HTTPS_PROXY", Scheme: "ftp"}},
+		},
+	}
+
+	logAgentStart(t.Context(), logger, cfg)
+
+	out := logged.String()
+	assert.Contains(t, out, "HTTPS_PROXY", "the operator searches their conf file for the setting's name")
+	assert.Contains(t, out, "ftp", "and what they got wrong is the scheme")
+	assert.Contains(t, out, "connecting directly", "and what the agent did instead")
+}
+
+// Nothing to report means nothing reported, so the line is a signal rather than noise every host emits.
+func TestStartupReportsNothingWhenEveryProxyIsSpeakable(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logged, nil))
+	cfg := &config.Config{
+		ServerURL: "https://edr.example.com:8443",
+		Proxy:     config.ProxyConfig{HTTPSProxy: "socks5://proxy.corp:1080"},
+	}
+
+	logAgentStart(t.Context(), logger, cfg)
+
+	assert.NotContains(t, logged.String(), "proxy setting ignored")
 }

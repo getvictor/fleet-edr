@@ -376,11 +376,13 @@ NO_PROXY=internal.example.com,10.0.0.0/8
 
 Use `HTTP_PROXY` instead when `EDR_SERVER_URL` is an `http://` URL. The names, the scheme rules and the `NO_PROXY` matching are the conventional ones, so a value that works for other tools on the host works here. Credentials in the address (`http://user:pass@proxy.corp:3128`) are presented to the proxy. A value set in the agent's process environment overrides the file, so one host can be pointed elsewhere without editing it.
 
+The agent speaks four proxy schemes: `http`, `https`, `socks5` and `socks5h`. A value written without one, `proxy.corp:3128`, is read as `http`. Anything else is ignored: the agent logs the setting's name and scheme at startup, connects to the server directly, and sends that address nothing at all, so credentials written on it are never transmitted to a proxy that was never going to be usable.
+
 The proxy applies to everything the agent sends: enrollment, event uploads, command polling, token refresh, and the control channel. It is deliberately all or nothing. A proxy that covered only some of that would hide the parts it did not cover, and the containment lifeline would pin an address the rest of the agent was not using.
 
 Restart the agent after changing it: `sudo launchctl kickstart -k system/com.fleetdm.edr.agent`.
 
-**A contained host keeps reaching its proxy.** Containment pins the proxy's addresses rather than the server's, because the proxy is what the host actually dials, and the agent tunnels the control channel through it so commands keep arriving in real time while the host is contained. That works for HTTP, HTTPS and SOCKS5 (`socks5`, `socks5h`) proxies. A proxy of any other kind is dialed as before and its control channel stays down while contained, with commands arriving by the slower polling path.
+**A contained host keeps reaching its proxy.** Containment pins the proxy's addresses rather than the server's, because the proxy is what the host actually dials, and the agent tunnels the control channel through it so commands keep arriving in real time while the host is contained. That works for every scheme the agent speaks. A host whose proxy setting was ignored is contained to the server's own addresses instead, as an unproxied host is, and its control channel keeps working there.
 
 ## Handling offline hosts
 
