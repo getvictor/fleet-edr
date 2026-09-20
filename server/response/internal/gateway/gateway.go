@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 
 	"github.com/fleetdm/edr/internal/control"
@@ -75,6 +76,10 @@ type Deps struct {
 	Verifier  TokenVerifier
 	Heartbeat Heartbeat // optional; nil disables the last-seen bump
 	Logger    *slog.Logger
+	// Stats is the telemetry handler the gRPC server reports to; nil takes the OTel one, which is what production uses. New wraps
+	// whatever it is given so the connection's span carries the gateway's verdict (issue #1124), which is what lets a test see the
+	// events the real server produces without reaching for a global tracer provider.
+	Stats stats.Handler
 }
 
 // Gateway holds the agent control connections and the gRPC server that serves them.
@@ -122,6 +127,10 @@ func New(deps Deps) *Gateway {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	telemetry := deps.Stats
+	if telemetry == nil {
+		telemetry = otelgrpc.NewServerHandler()
+	}
 	g := &Gateway{
 		src:                deps.Source,
 		verifier:           deps.Verifier,
@@ -137,7 +146,7 @@ func New(deps Deps) *Gateway {
 		revocationInterval: defaultRevocationInterval,
 	}
 	opts := []grpc.ServerOption{
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.StatsHandler(handlerVerdictStats{Handler: telemetry}),
 		grpc.StreamInterceptor(g.authInterceptor),
 	}
 	// No grpc.Creds and no keepalive enforcement: the gateway is served via grpc.Server.ServeHTTP behind the shared HTTPS listener
@@ -232,7 +241,17 @@ func (g *Gateway) deliverPending(ctx context.Context, hostIDs []string) {
 
 // Connect implements the gRPC service. The auth interceptor has already verified the token and pinned the host id, so here we register
 // the connection, start its writer and maintenance goroutines, push any backlog, and read outcomes until the stream ends.
+//
+// The verdict is recorded for the connection's span before returning, because nothing else can reach it: when a client disappears,
+// gRPC ends the RPC with the transport's own error whatever this handler returns, and the span would be coloured by that (issue
+// #1124). See spanVerdict.
 func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
+	err := g.connect(stream)
+	recordSpanVerdict(stream.Context(), err)
+	return err
+}
+
+func (g *Gateway) connect(stream control.ControlChannel_ConnectServer) error {
 	ctx := stream.Context()
 	hostID, ok := endpointapi.HostIDFromContext(ctx)
 	if !ok {
@@ -245,14 +264,15 @@ func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
 	c := newConn(hostID, token, cancel)
 
 	if evicted := g.reg.add(c); evicted != nil {
-		evicted.close() // at most one connection per host: tear down the prior one so it cannot leak or receive a duplicate push
+		// At most one connection per host: tear down the prior one so it cannot leak or receive a duplicate push.
+		evicted.close(reasonReplaced)
 		g.logger.InfoContext(ctx, "control gateway replaced existing connection", attrkeys.HostID, hostID)
 	}
 	defer g.reg.remove(hostID, c)
 	// If Stop raced ahead of this registration, close immediately so a connection accepted during shutdown can't strand
 	// http.Server.Shutdown waiting on a long-lived stream. Checked after add so closeAll cannot miss us.
 	if g.closing.Load() {
-		c.close()
+		c.close(reasonShuttingDown)
 		return status.Error(codes.Unavailable, "control gateway shutting down")
 	}
 
@@ -264,13 +284,76 @@ func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
 	recvErr := make(chan error, 1)
 	go func() { recvErr <- g.recvLoop(connCtx, stream, c) }()
 
+	// Whichever of the two ends the connection, the status returned here is what otelgrpc's stats handler records as the span's
+	// status, so each case decides it from whether the client is still there to receive one (issue #1124).
 	select {
 	case <-connCtx.Done():
-		// Torn down locally (revocation, expiry, or replacement). Returning ends the RPC, which closes the stream and unblocks recvLoop.
-		return status.Error(codes.Unavailable, "control connection closed")
+		// Returning ends the RPC, which closes the stream and unblocks recvLoop.
+		return endAfterTeardown(ctx, c)
 	case err := <-recvErr:
-		return err
+		return endAfterReceive(ctx, c, err)
 	}
+}
+
+// endAfterTeardown is the status the RPC ends with when the connection's context was cancelled.
+//
+// ctx is the RPC's own context. Its being done means the client is already gone: an agent restart, a suspended host, a dropped link.
+// There is nobody left to return a status to, so the RPC ends cleanly and the connection is recorded as successful. That is how a
+// long-lived control connection ordinarily ends, and recording every one of them as a fault left the operation permanently
+// error-coloured, which hid the faults that were real (issue #1124).
+//
+// Otherwise the server tore the connection down while the client was still attached, and this retryable status is what tells it to
+// reconnect. Those stay errors, carrying which teardown it was, because a connection the server ended is the one an operator wants.
+func endAfterTeardown(ctx context.Context, c *conn) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return teardownStatus(c.closedBecause())
+}
+
+// teardownStatus is what a connection the server ended reports: retryable, so a client still attached reconnects, and naming which
+// teardown it was. Shared by both cases so a teardown reads the same whichever of them observes it.
+func teardownStatus(reason closeReason) error {
+	return status.Errorf(codes.Unavailable, "control connection closed: %s", reason)
+}
+
+// endAfterReceive is the status the RPC ends with when it was the receive loop that ended, carrying its result: nil for a client
+// half-close, which is an ordinary end of stream, or the failure that ended it.
+//
+// Two things say the client is gone rather than at fault, and BOTH are needed because they arrive in either order.
+//
+// The context is the definitive one: a client going away cancels it. It is not sufficient on its own, though, because gRPC fails the
+// pending receive and cancels the stream context as two steps, and the receive loses that race often enough to matter. Measured on
+// edr-dev: with only the context test, restarting the agent still produced an error span, reading `transport is closing`.
+//
+// So the error itself is read too. A server-side receive fails for exactly two kinds of reason, and gRPC spells them differently. A
+// frame this server could not read (a malformed message, one over the size limit) comes back as a gRPC STATUS, because the server is
+// rejecting it with a code. The transport ending under the stream comes back as a bare transport error carrying no status at all,
+// which is what `transport is closing` is. That is a connection ending, not a connection failing, so it ends the RPC cleanly; a
+// status error is a fault and keeps its error span.
+//
+// Reading the shape of the error rather than its text is deliberate: the message is grpc-go's to change, and a server that decided
+// what to report by matching on a dependency's prose would break silently on an upgrade. The bufconn test below kills a real client
+// transport and asserts the verdict, so a grpc-go release that changed this shape fails that test rather than quietly recolouring
+// every disconnect on a fleet.
+func endAfterReceive(ctx context.Context, c *conn, recvErr error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	// A teardown this server started is the more specific answer, and it can be in flight while the receive loop ends for its own
+	// reasons: cancelling the connection does not unblock a pending Recv, so a client half-close landing at the same instant as a
+	// revocation would otherwise be reported as an ordinary end of stream and lose the reason. The verdict must not turn on which
+	// of the two the select happened to pick.
+	if reason := c.closedBecause(); reason != "" {
+		return teardownStatus(reason)
+	}
+	if recvErr == nil {
+		return nil
+	}
+	if _, isStatus := status.FromError(recvErr); !isStatus {
+		return nil
+	}
+	return recvErr
 }
 
 // writeLoop is the connection's single sender (gRPC allows one concurrent Send). It drains the send queue until the context ends or a
@@ -291,7 +374,7 @@ func (c *conn) writeLoop(ctx context.Context, stream control.ControlChannel_Conn
 				// A dead outbound means this connection can no longer deliver commands. Tear the whole connection down (not just this
 				// goroutine) so it is unregistered and the agent reconnects, rather than lingering "online" with delivery silently broken.
 				logger.DebugContext(ctx, "control gateway send", attrkeys.HostID, c.hostID, "err", err)
-				c.close()
+				c.close(reasonSendFailed)
 				return
 			}
 		}
@@ -383,7 +466,7 @@ func (g *Gateway) maintain(ctx context.Context, c *conn) {
 				}
 				g.logger.InfoContext(ctx, "control gateway closing connection: token no longer valid",
 					attrkeys.HostID, c.hostID, "err", err)
-				c.close()
+				c.close(reasonTokenInvalid)
 				return
 			}
 		}

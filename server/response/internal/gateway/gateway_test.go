@@ -514,6 +514,9 @@ func TestGateway(t *testing.T) {
 		_, err = recvCommand(t, stream)
 		require.Error(t, err)
 		assert.Equal(t, codes.Unavailable, status.Code(err))
+		// Over the real transport, not just in the handler's return value: this is the sentence an operator reads on the span for a
+		// connection the server ended, and it has to say which teardown it was (issue #1124).
+		assert.Contains(t, status.Convert(err).Message(), string(reasonTokenInvalid))
 	})
 
 	// A command queued on a different replica never signals this replica's fast path (no Notify): the connection-holding replica must
