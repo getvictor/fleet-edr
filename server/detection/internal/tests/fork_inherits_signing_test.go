@@ -67,7 +67,12 @@ func persistedImage(ctx context.Context, t *testing.T, db *sqlx.DB, hostID strin
 // how it is stored and how the exclusion matcher reads it.
 func requireSameIdentity(t *testing.T, want, got mysql.ParentImage, msg string) {
 	t.Helper()
-	assert.JSONEq(t, string(want.CodeSigning), string(got.CodeSigning), msg)
+	if len(want.CodeSigning) == 0 {
+		// JSONEq cannot compare two absent identities, and "neither carries one" is an answer these tests assert.
+		assert.Empty(t, got.CodeSigning, msg)
+	} else {
+		assert.JSONEq(t, string(want.CodeSigning), string(got.CodeSigning), msg)
+	}
 	assert.Equal(t, want.SHA256, got.SHA256, msg)
 	assert.Equal(t, want.CDHash, got.CDHash, msg)
 }
@@ -178,50 +183,94 @@ func TestAnExecReplacesTheInheritedIdentity(t *testing.T) {
 	requireSameIdentity(t, after, resolved, "the store's lookup agrees with what the overlay stored")
 }
 
-// The identity has to come from the SAME image the path came from. A re-exec chain is where they can diverge: every row in it
-// carries the generation's original fork timestamp and the rows differ only by exec time, so an identity selected by any other
-// ordering would describe one binary's path with another binary's signature.
+// The identity has to come from the SAME image the path came from, and only when that image was actually in force. A re-exec chain
+// is where those come apart: every row in it carries the generation's original fork timestamp and the rows differ only by exec time.
 //
 // spec:server-process-graph-builder/a-forked-process-inherits-its-parent-s-signature/a-forked-worker-carries-the-daemon-s-signature
-func TestTheInheritedIdentityComesFromTheSameImageAsThePath(t *testing.T) {
+// spec:server-process-graph-builder/a-forked-process-inherits-its-parent-s-signature/an-image-not-yet-in-force-lends-its-path-only
+func TestTheInheritedIdentityComesFromTheImageInForce(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	store, db := openProcessStore(t)
-	b := graph.NewBuilder(store, discardLogger())
 
-	const host = "inherit-same-image"
 	const parentPID = 730
 	const firstPath, secondPath = "/usr/libexec/sshd", "/opt/vendor/tool"
 
-	// One generation, two images: the platform binary until 400, the vendor binary after it.
-	require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{
-		forkEvt(100, parentPID, 1),
-		execEvtSigned(101, parentPID, 1, firstPath, platformSigning, platformSHA, platformCDHash),
-	}, host)))
-	require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{
-		execEvtSigned(400, parentPID, 1, secondPath, vendorSigning, vendorSHA, vendorCDHash),
-	}, host)))
+	cases := []struct {
+		desc      string
+		forkAt    int64
+		childPID  int
+		wantPath  string
+		wantSig   string // "" when the child must inherit no identity at all
+		wantSHA   string
+		whyItIsSo string
+	}{
+		{
+			desc:      "forked between the two execs",
+			forkAt:    300,
+			childPID:  731,
+			wantPath:  firstPath,
+			wantSig:   platformSigning,
+			wantSHA:   platformSHA,
+			whyItIsSo: "the image in force at that instant, not whatever the pid ran last",
+		},
+		{
+			desc:      "forked after the re-exec",
+			forkAt:    500,
+			childPID:  732,
+			wantPath:  secondPath,
+			wantSig:   vendorSigning,
+			wantSHA:   vendorSHA,
+			whyItIsSo: "the later image, both halves of it",
+		},
+		{
+			// The documented last resort: the child's stamp falls inside its parent's own fork-to-exec window, so no image in the
+			// chain had been applied yet and the EARLIEST one is the closest surviving evidence of the path. Its signature is not
+			// evidence of anything, and inheriting it would let a signature exclusion suppress activity that never ran under it.
+			desc:      "forked before any image in the chain had been applied",
+			forkAt:    50,
+			childPID:  733,
+			wantPath:  firstPath,
+			wantSig:   "",
+			whyItIsSo: "the exec that produced this signature had not happened when the child forked",
+		},
+	}
 
-	// A child forked between the two execs gets the image in force then: the first path AND the first signature.
-	require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{childForkEvt("between", 300, 731, parentPID)}, host)))
-	between := persistedImage(ctx, t, db, host, 731)
-	assert.Equal(t, firstPath, between.Path)
-	assert.JSONEq(t, platformSigning, string(between.CodeSigning),
-		"the signature of the image in force, not of whatever the pid ran last")
-	assert.Equal(t, platformSHA, *between.SHA256)
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			store, db := openProcessStore(t)
+			b := graph.NewBuilder(store, discardLogger())
+			host := "inherit-in-force-" + tc.desc
 
-	// A child forked after the re-exec gets the second image, both halves.
-	require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{childForkEvt("after", 500, 732, parentPID)}, host)))
-	after := persistedImage(ctx, t, db, host, 732)
-	assert.Equal(t, secondPath, after.Path)
-	assert.JSONEq(t, vendorSigning, string(after.CodeSigning))
-	assert.Equal(t, vendorSHA, *after.SHA256)
+			// One generation, two images: the platform binary from 101, the vendor binary from 400. The parent forked at 40, so an
+			// instant below 101 is inside its own fork-to-exec window.
+			require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{
+				forkEvt(40, parentPID, 1),
+				execEvtSigned(101, parentPID, 1, firstPath, platformSigning, platformSHA, platformCDHash),
+			}, host)))
+			require.NoError(t, b.ProcessBatch(ctx, rewriteHost([]api.Event{
+				execEvtSigned(400, parentPID, 1, secondPath, vendorSigning, vendorSHA, vendorCDHash),
+			}, host)))
 
-	// The store's SQL resolves both instants the same way the overlay did.
-	early, err := store.GetParentImage(ctx, host, parentPID, 300)
-	require.NoError(t, err)
-	requireSameIdentity(t, between, early, "store predicate between the execs")
-	late, err := store.GetParentImage(ctx, host, parentPID, 500)
-	require.NoError(t, err)
-	requireSameIdentity(t, after, late, "store predicate after the re-exec")
+			require.NoError(t, b.ProcessBatch(ctx,
+				rewriteHost([]api.Event{childForkEvt("child", tc.forkAt, tc.childPID, parentPID)}, host)))
+
+			child := persistedImage(ctx, t, db, host, tc.childPID)
+			assert.Equal(t, tc.wantPath, child.Path, "the path is inherited whatever the identity does")
+			if tc.wantSig == "" {
+				assert.Empty(t, child.CodeSigning, tc.whyItIsSo)
+				assert.Nil(t, child.SHA256)
+				assert.Nil(t, child.CDHash)
+			} else {
+				assert.JSONEq(t, tc.wantSig, string(child.CodeSigning), tc.whyItIsSo)
+				assert.Equal(t, tc.wantSHA, *child.SHA256)
+			}
+
+			// The store's SQL and the batch overlay have to answer identically; only the overlay wrote the row above.
+			resolved, err := store.GetParentImage(ctx, host, parentPID, tc.forkAt)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPath, resolved.Path, "store predicate at fork time %d", tc.forkAt)
+			requireSameIdentity(t, child, resolved, "the two implementations must agree")
+		})
+	}
 }

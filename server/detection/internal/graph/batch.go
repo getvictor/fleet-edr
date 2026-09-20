@@ -160,12 +160,15 @@ func (s *batchSession) GetParentImage(_ context.Context, hostID string, pid int,
 	if best == nil {
 		return mysql.ParentImage{}, nil
 	}
-	return mysql.ParentImage{
+	image := mysql.ParentImage{
 		Path:        best.proc.Path,
 		CodeSigning: best.proc.CodeSigning,
 		SHA256:      best.proc.SHA256,
 		CDHash:      best.proc.CDHash,
-	}, nil
+	}
+	// Scoped through the store's own rule, not a second copy of it: the ordering's last resort can select an image whose exec is
+	// still in the future, and its signature is not evidence of what this child was running.
+	return image.IdentityInForceAt(best.proc.ExecTimeNs, atTimeNs), nil
 }
 
 // imageRankGreater reports whether a is the better answer than b for "what was this PID running at atTimeNs", mirroring the store's

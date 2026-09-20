@@ -431,6 +431,28 @@ type ParentImage struct {
 	CDHash      *string         `db:"cdhash"`
 }
 
+// IdentityInForceAt returns the image with its signing identity kept only if that identity was in force at atTimeNs, where
+// execTimeNs is the selected row's own exec time.
+//
+// The path and the identity part company in exactly one case, the documented fallback below: when no image in the parent's chain had
+// been applied at the child's fork instant, the lookup answers with the chain's EARLIEST image, whose exec is in the FUTURE relative
+// to that fork. Its path is the closest surviving evidence of what the parent was running, because the pre-exec image is overwritten
+// in place and unrecoverable. Its signature is not evidence of anything: the child was running some other binary, and the one thing
+// a wrong answer here does is let a signature exclusion suppress activity that never ran under that signature. An exclusion that
+// suppresses too much is the failure an EDR cannot have, so the identity is dropped and the child inherits none, which is what it
+// had before any of this and leaves a signature exclusion correctly declining to match it.
+//
+// A selected row with no exec of its own keeps its identity: that row is itself a fork-only child, so what it carries was inherited
+// at ITS fork, which is necessarily before this child's.
+//
+// Shared by the store query and the batch overlay so the two cannot drift, for the same reason the ordering is not duplicated.
+func (p ParentImage) IdentityInForceAt(execTimeNs *int64, atTimeNs int64) ParentImage {
+	if execTimeNs != nil && *execTimeNs > atTimeNs {
+		p.CodeSigning, p.SHA256, p.CDHash = nil, nil, nil
+	}
+	return p
+}
+
 // GetParentImage returns the image of the newest generation of the given PID that had forked by atTimeNs, for a fork-without-exec
 // child to inherit as its own. atTimeNs is the child's fork timestamp. Zero only when no generation of that PID had forked yet.
 //
@@ -507,9 +529,15 @@ type ParentImage struct {
 // and is not to be reinstated here. GetProcessByPID resolves an arbitrary instant that arrives from an unrelated event (a network
 // flow), has no such guarantee, and therefore does need both bounds.
 func (s *Store) GetParentImage(ctx context.Context, hostID string, pid int, atTimeNs int64) (ParentImage, error) {
-	var img ParentImage
-	err := s.db.GetContext(ctx, &img, `
-		SELECT path, code_signing, sha256, cdhash FROM processes
+	// exec_time_ns comes back with the image so the identity can be scoped to what was in force at atTimeNs, which the ordering
+	// alone does not guarantee: its documented last resort selects an image whose exec is still in the future. Scoped in Go rather
+	// than in the SELECT to keep that rule readable and in one place, shared with the overlay.
+	var row struct {
+		ParentImage
+		ExecTimeNs *int64 `db:"exec_time_ns"`
+	}
+	err := s.db.GetContext(ctx, &row, `
+		SELECT path, code_signing, sha256, cdhash, exec_time_ns FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
@@ -524,7 +552,10 @@ func (s *Store) GetParentImage(ctx context.Context, hostID string, pid int, atTi
 	if errors.Is(err, sql.ErrNoRows) {
 		return ParentImage{}, nil
 	}
-	return img, err
+	if err != nil {
+		return ParentImage{}, err
+	}
+	return row.IdentityInForceAt(row.ExecTimeNs, atTimeNs), nil
 }
 
 // processTreeWindowPredicate is the lifetime-overlap predicate shared by GetProcessTree and CountProcessTree: a process overlaps the

@@ -8,6 +8,8 @@ All of it SHALL be resolved by the same lookup, from the same generation and the
 
 A parent carrying no identity SHALL yield none. Inheritance copies what the parent has, and where the parent's signature was never observed there is nothing to copy; asserting one would be an invention rather than an inheritance.
 
+Where the resolved image was not yet in force at the child's fork, the child SHALL inherit its path and no identity. That case is the documented last resort of the path resolution: no image in the parent's chain had been applied at that instant, so the earliest one is answered because it is the closest surviving evidence of the binary, the pre-exec image being overwritten in place and unrecoverable. Its signature is evidence of nothing, and the one thing a wrong answer here does is let a signature exclusion suppress activity that never ran under that signature, which is the direction an exclusion must never err in.
+
 An exec on that PID SHALL replace the inherited identity with the exec'd image's, in the same write that replaces the path, so no inherited identity survives across an exec boundary.
 
 An identity the record inherited SHALL remain distinguishable from one observed directly: a record that has never been imaged by an exec can only have inherited what it carries. A reader asking what signed a process is entitled to know which of the two answers it has, because they are different qualities of evidence even though both are correct.
@@ -34,6 +36,13 @@ Records written before this SHALL NOT be retrospectively given an identity. Reso
 - **WHEN** an exec event for that PID is applied
 - **THEN** the record carries the exec'd image's identity, hash and code-directory hash
 - **AND** a chain parented by that process is matched on the exec'd identity, never on the inherited one
+
+#### Scenario: An image not yet in force lends its path only
+
+- **GIVEN** a child whose fork timestamp falls before any image in its parent's chain had been applied
+- **WHEN** the fork is applied
+- **THEN** the child record carries that chain's earliest image path and no code-signing identity
+- **AND** a signature exclusion written for that image does not suppress a chain parented by the child
 
 #### Scenario: A fork from an unsigned parent inherits nothing
 
