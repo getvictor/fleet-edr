@@ -62,3 +62,20 @@ func TestVersionDistinguishesItsTwoParts(t *testing.T) {
 	t.Parallel()
 	assert.NotEqual(t, Version{OIDC: 1, App: 2}.String(), Version{OIDC: 2, App: 1}.String())
 }
+
+// The version arrives in an HTTP body, so it is untrusted input to a hand-rolled parser. Fuzzing asserts the two properties that
+// matter: it never panics, and anything it accepts is a version this could have issued. The second is what keeps strictness honest.
+// Without it ParseInt quietly accepts "+1", "01" and "1_0", and the server would honour as a concurrency check a string it and the
+// client disagree about the meaning of.
+func FuzzParseVersion(f *testing.F) {
+	for _, seed := range []string{"0.0", "1.2", "9223372036854775807.0", "", "3", "x.2", "1.2.3", "-1.0", "+1.2", "01.2", "1_0.2"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		v, err := ParseVersion(s)
+		if err != nil {
+			return
+		}
+		assert.Equal(t, s, v.String(), "a version that parses must be one this issues, spelled the way it issues it")
+	})
+}

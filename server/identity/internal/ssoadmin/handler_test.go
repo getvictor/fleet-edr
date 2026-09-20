@@ -533,7 +533,7 @@ func TestHandleUpdate_sendsTheCallersVersionToTheWrite(t *testing.T) {
 	h := NewHandler(okStoreCfg(), read.fn, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 
 	body := validUpdateBody()
-	body.Version = Version{OIDC: 4, App: 7}.String()
+	body.Version = new(Version{OIDC: 4, App: 7}.String())
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, body))
 
@@ -563,19 +563,55 @@ func TestHandleUpdate_noVersionIsAnOverwriteGuardedByItsOwnRead(t *testing.T) {
 
 // A version the server did not issue is refused, and nothing is written. Reading it as "no version" would silently promote the
 // caller's conditional save to an overwrite: the save would succeed, and the caller would believe it had been checked.
+// spec:sso-configuration/a-save-can-name-the-configuration-it-was-editing/a-version-supplied-with-no-value-is-refused
 func TestHandleUpdate_anUnreadableVersionIsRefusedWithoutWriting(t *testing.T) {
 	t.Parallel()
-	for _, bad := range []string{"3", "x.1", "1.2.3", "-1.0"} {
-		t.Run(bad, func(t *testing.T) {
+	cases := []struct {
+		name string
+		sent string
+	}{
+		{"present but empty, which is a client with a version field and nothing in it", ""},
+		{"one part", "3"},
+		{"first part is not a number", "x.1"},
+		{"three parts", "1.2.3"},
+		{"negative", "-1.0"},
+		{"signed, which this never issues", "+1.2"},
+		{"zero-padded, which this never issues", "01.2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ap := &captureApply{}
 			h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			body := validUpdateBody()
-			body.Version = bad
+			body.Version = &tc.sent
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, body))
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.False(t, ap.called, "an unreadable version must not reach the write as an overwrite")
+		})
+	}
+}
+
+// An omitted field and a present-but-empty one mean opposite things, and the string zero value cannot carry both. The empty case is
+// covered above as a refusal; this is the other half, that a genuinely absent field still overwrites.
+func TestHandleUpdate_anAbsentVersionFieldIsNotAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"the field is absent":    `{"issuer":"https://idp.example.com","client_id":"cid","external_url":"https://edr.example.com","scopes":["openid"],"jit_enabled":true,"default_role":"analyst"}`,
+		"the field is JSON null": `{"issuer":"https://idp.example.com","client_id":"cid","external_url":"https://edr.example.com","scopes":["openid"],"jit_enabled":true,"default_role":"analyst","version":null}`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ap := &captureApply{}
+			h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			r := withActor(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(raw)), 42)
+			w := httptest.NewRecorder()
+			h.handleUpdate(w, r)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.True(t, ap.called)
+			assert.False(t, ap.expected.Checked, "nothing to check against, so the save overwrites as a script expects")
 		})
 	}
 }
@@ -595,7 +631,7 @@ func TestHandleUpdate_eitherPartsConflictIsA409(t *testing.T) {
 			ap := &captureApply{err: conflict}
 			h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			body := validUpdateBody()
-			body.Version = Version{OIDC: 1, App: 1}.String()
+			body.Version = new(Version{OIDC: 1, App: 1}.String())
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, body))
 			assert.Equal(t, http.StatusConflict, w.Code)

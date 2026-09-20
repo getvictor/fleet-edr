@@ -8,7 +8,9 @@ The version SHALL cover every separately stored part of the configuration, and a
 
 A version SHALL be read from one consistent snapshot of those parts, on the read and on a save's response alike. Parts read at different moments can pair one part's new version with another's old value, describing a state that never existed; a client sending that version back would pass the check while holding stale data, which is the overwrite this prevents wearing a version number.
 
-A version the system did not issue SHALL be refused rather than treated as absent, because treating it as absent turns the caller's conditional save into the unconditional one, and the caller is told its save was checked when it was not.
+A version the system did not issue SHALL be refused rather than treated as absent, because treating it as absent turns the caller's conditional save into the unconditional one, and the caller is told its save was checked when it was not. A version supplied with no value is such a version: naming no version and naming an empty one mean opposite things, and a client that has a version field and nothing to put in it, which is the state a page is in before its first read completes, SHALL be refused rather than have its save promoted to an overwrite.
+
+A version SHALL be accepted only in the spelling the system issues it in. Accepting a version that means the same number written differently would let the client and the system disagree about what a version says while the save proceeds as though they agreed.
 
 Two saves of a configuration that does not exist yet SHALL have one winner, and the loser SHALL be told it was refused. This is the case with nothing stored to compare a version against or to lock, and it SHALL NOT be left to the isolation level to decide.
 
@@ -36,6 +38,13 @@ The version SHALL be opaque to clients: read it, send it back, do not take it ap
 - **THEN** exactly one save succeeds
 - **AND** every other is refused as a conflict
 - **AND** the stored configuration is one operator's, whole
+
+#### Scenario: A version supplied with no value is refused
+
+- **GIVEN** a client that sends a version field with nothing in it
+- **WHEN** it saves
+- **THEN** the save is refused as a bad request
+- **AND** nothing is written
 
 #### Scenario: A save naming no version overwrites
 

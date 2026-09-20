@@ -331,7 +331,11 @@ func newSSOApplyFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.
 // reads can be landed between and pair one part's new version with the other's old value (issue #1046).
 func newSSOReadFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.Store) ssoadmin.ReadFunc {
 	return func(ctx context.Context) (ssoadmin.Snapshot, error) {
-		tx, err := db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+		// Repeatable read is named rather than inherited. One snapshot is the whole point of reading both parts in a transaction, and
+		// under read committed the two queries are not one: a save committing between them would produce a response pairing one
+		// part's new value with the other's old one, and a version describing neither. MySQL defaults to repeatable read, but a
+		// deployment can set transaction_isolation, and a correctness property should not rest on a setting nothing here checks.
+		tx, err := db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			return ssoadmin.Snapshot{}, fmt.Errorf("identity bootstrap: begin sso read tx: %w", err)
 		}

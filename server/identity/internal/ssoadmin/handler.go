@@ -171,9 +171,14 @@ type updateRequest struct {
 	DefaultRole  string                `json:"default_role"`
 	GroupsClaim  string                `json:"groups_claim"`
 	GroupRoles   []ssoconfig.GroupRole `json:"group_roles"`
-	// Version is the one read from this endpoint, sent back to have the save refused if the configuration changed since. Omit it to
+	// Version is the one read from this endpoint, sent back to have the save refused if the configuration changed since. OMIT it to
 	// overwrite whatever is stored, which is what automation that means to set the configuration outright wants.
-	Version string `json:"version"`
+	//
+	// A pointer so an absent field is distinguishable from a present one, because the two mean opposite things here and the string
+	// zero value cannot carry both. Sending "" is a client that has a version field and nothing to put in it, which is the state a
+	// page has before its first read completes: refused, rather than quietly promoted to the overwrite. JSON null reads as absent,
+	// the same as ClientSecret above, since a client that writes null is saying the field has no value.
+	Version *string `json:"version"`
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -206,8 +211,8 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	// to read it first. A version that does not parse is refused rather than dropped, because dropping it would quietly turn a
 	// conditional save into that overwrite.
 	expected := Expectation{}
-	if req.Version != "" {
-		parsed, parseErr := ParseVersion(req.Version)
+	if req.Version != nil {
+		parsed, parseErr := ParseVersion(*req.Version)
 		if parseErr != nil {
 			writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_version")
 			return

@@ -27,9 +27,13 @@ func (v Version) String() string {
 	return strconv.FormatInt(v.OIDC, 10) + "." + strconv.FormatInt(v.App, 10)
 }
 
-// ParseVersion reads the wire form back. It is deliberately strict: a version the server did not issue cannot be honoured as a
-// concurrency check, and treating it as "no version" would turn a client's conditional save into an unconditional one, which is the
-// overwrite the check exists to prevent.
+// ParseVersion reads the wire form back, accepting ONLY what String would have produced. A version the server did not issue cannot
+// be honoured as a concurrency check, and treating one as "no version" would turn a client's conditional save into an unconditional
+// one, which is the overwrite the check exists to prevent.
+//
+// The canonical-form check is what makes that strictness real rather than nearly real. ParseInt alone accepts "+1", "01" and
+// "1_0", none of which this ever emitted, and accepting them would mean honouring a version as a check while the client and the
+// server disagree about what it says.
 func ParseVersion(s string) (Version, error) {
 	oidc, app, ok := strings.Cut(s, ".")
 	if !ok {
@@ -43,5 +47,9 @@ func ParseVersion(s string) (Version, error) {
 	if err != nil || appVersion < 0 {
 		return Version{}, fmt.Errorf("ssoadmin: version %q has an unreadable second part", s)
 	}
-	return Version{OIDC: oidcVersion, App: appVersion}, nil
+	v := Version{OIDC: oidcVersion, App: appVersion}
+	if v.String() != s {
+		return Version{}, fmt.Errorf("ssoadmin: version %q is not in the form this issues", s)
+	}
+	return v, nil
 }
