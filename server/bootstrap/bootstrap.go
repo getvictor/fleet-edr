@@ -24,9 +24,12 @@ import (
 	"github.com/fleetdm/edr/server/config"
 )
 
-// otelFlushTimeout caps the OTel exporter flush so a dead collector cannot
+// OTelFlushTimeout caps the OTel exporter flush so a dead collector cannot
 // stall server shutdown.
-const otelFlushTimeout = 5 * time.Second
+//
+// Exported because a deployment has to allow for it: it is the last stage of a graceful stop, after the drain, the in-flight
+// wait and the loop joins, and a container killed before it loses the telemetry describing its own shutdown (issue #1127).
+const OTelFlushTimeout = 5 * time.Second
 
 // instanceID returns this process's OTel service.instance.id. It is generated once (sync.OnceValue) and stable for the process
 // lifetime, so every span and metric the binary emits carries the same replica identifier. That is what lets an operator tell
@@ -107,10 +110,10 @@ func Init(opts Options) (context.Context, *Env, error) {
 	}, nil
 }
 
-// flushWithTimeout caps OTel flush at otelFlushTimeout so a dead collector
+// flushWithTimeout caps OTel flush at OTelFlushTimeout so a dead collector
 // doesn't stall the shutdown path.
 func flushWithTimeout(shutdown func(context.Context) error) {
-	ctx, cancel := context.WithTimeout(context.Background(), otelFlushTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), OTelFlushTimeout)
 	defer cancel()
 	if err := shutdown(ctx); err != nil {
 		slog.Default().WarnContext(ctx, "otel shutdown", "err", err)

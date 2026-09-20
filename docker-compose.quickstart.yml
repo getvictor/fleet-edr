@@ -64,6 +64,12 @@ services:
     # when it defaults to `latest`.
     image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
     restart: unless-stopped
+    # Longer than every stage of a graceful stop put together: the drain (EDR_SHUTDOWN_DRAIN,
+    # 30s), the in-flight deadline (15s), the two loop joins (10s + 5s) and the telemetry
+    # flush (5s): 65s in all. Docker's default is 10s, which cuts the drain the load
+    # balancer is watching and severs in-flight requests (#1127). test/arch keeps this
+    # in step with those five constants. Raise it too if you raise EDR_SHUTDOWN_DRAIN.
+    stop_grace_period: 90s
     depends_on:
       mysql:
         condition: service_healthy
