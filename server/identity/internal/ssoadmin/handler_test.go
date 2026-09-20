@@ -32,43 +32,53 @@ func (f *fakeStore) Get(context.Context) (*ssoconfig.Config, error) {
 	return f.cfg, nil
 }
 
-// fakeAppCfg is an in-memory appConfigStore (read side). err overrides with an arbitrary failure.
-type fakeAppCfg struct {
-	cfg     appconfig.AppConfig
-	version int64
+// fakeRead is an in-memory ReadFunc source: the snapshot the handler reads, or an arbitrary failure.
+type fakeRead struct {
+	cfg     *ssoconfig.Config
+	appCfg  appconfig.AppConfig
+	version Version
 	err     error
 }
 
-func (f *fakeAppCfg) Get(context.Context) (appconfig.AppConfig, int64, error) {
+func (f *fakeRead) fn(context.Context) (Snapshot, error) {
 	if f.err != nil {
-		return appconfig.AppConfig{}, 0, f.err
+		return Snapshot{}, f.err
 	}
-	return f.cfg, f.version, nil
+	return Snapshot{Config: f.cfg, AppConfig: f.appCfg, Version: f.version}, nil
 }
 
 // captureApply records the transactional write the handler requests, and can inject an error (e.g. a version conflict). It stands in
-// for the bootstrap-provided transaction so the handler is testable without a DB.
+// for the bootstrap-provided transaction so the handler is testable without a DB. saved is what it reports back; the zero value is
+// enough for tests that only assert on what was requested.
 type captureApply struct {
-	called          bool
-	oidcIn          ssoconfig.UpsertInput
-	appCfg          appconfig.AppConfig
-	expectedVersion int64
-	updatedBy       string
-	err             error
+	called    bool
+	oidcIn    ssoconfig.UpsertInput
+	appCfg    appconfig.AppConfig
+	expected  Expectation
+	updatedBy string
+	saved     Snapshot
+	err       error
 }
 
-func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedVersion int64, updatedBy string) error {
+func (c *captureApply) fn(
+	_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expected Expectation, updatedBy string,
+) (Snapshot, error) {
 	c.called = true
 	c.oidcIn = oidcIn
 	c.appCfg = appCfg
-	c.expectedVersion = expectedVersion
+	c.expected = expected
 	c.updatedBy = updatedBy
-	return c.err
+	if c.err != nil {
+		return Snapshot{}, c.err
+	}
+	return c.saved, nil
 }
 
-func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, int64, string) error {
-	return nil
+func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, Expectation, string) (Snapshot, error) {
+	return Snapshot{}, nil
 }
+
+func noopRead(context.Context) (Snapshot, error) { return Snapshot{}, nil }
 
 type allowAuthZ struct{}
 
@@ -106,7 +116,7 @@ func putReq(t *testing.T, body any) *http.Request {
 
 func TestHandleGet_unconfiguredReturnsConfiguredFalse(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 
@@ -124,8 +134,8 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 		Issuer: "https://idp.example.com", ClientID: "cid", HasSecret: true,
 		Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}}
-	appCfg := &fakeAppCfg{cfg: appconfig.AppConfig{ExternalURL: "https://edr.example.com"}, version: 1}
-	h := NewHandler(store, appCfg, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	read := &fakeRead{cfg: store.cfg, appCfg: appconfig.AppConfig{ExternalURL: "https://edr.example.com"}, version: Version{OIDC: 2, App: 1}}
+	h := NewHandler(store, read.fn, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 
@@ -141,7 +151,7 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 
 func TestHandleGet_deniedIsForbidden(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, denyAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, noopRead, noopApply, denyAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 	assert.Equal(t, http.StatusForbidden, w.Code)
@@ -154,7 +164,7 @@ func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	audit := &captureAudit{}
 	// Pre-populate the read store so the handler's post-write response re-read succeeds (the fake apply records but does not persist).
 	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid", HasSecret: true}}
-	h := NewHandler(store, &fakeAppCfg{version: 3}, ap.fn, allowAuthZ{}, audit, okProbe, nil)
+	h := NewHandler(store, (&fakeRead{version: Version{App: 3}}).fn, ap.fn, allowAuthZ{}, audit, okProbe, nil)
 
 	secret := "rotate-me"
 	w := httptest.NewRecorder()
@@ -169,7 +179,8 @@ func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	assert.Equal(t, "rotate-me", *ap.oidcIn.NewSecret)
 	assert.Equal(t, "usr_42", ap.updatedBy, "a human actor stamps updated_by with its principal id")
 	assert.Equal(t, "https://edr.example.com", ap.appCfg.ExternalURL)
-	assert.Equal(t, int64(3), ap.expectedVersion, "the read app-config version must flow into the OCC check")
+	assert.Equal(t, int64(3), ap.expected.Version.App, "a caller naming no version is still guarded by the version this request read")
+	assert.False(t, ap.expected.Checked, "and the save is an overwrite, because the caller named no version")
 
 	require.Len(t, audit.events, 1)
 	assert.Equal(t, api.AuditAction("sso.config.updated"), audit.events[0].Action)
@@ -196,7 +207,7 @@ func TestHandleUpdate_secretKeepSemantics(t *testing.T) {
 			t.Parallel()
 			ap := &captureApply{}
 			store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid"}}
-			h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			h := NewHandler(store, noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, updateRequest{
 				Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: tc.secret,
@@ -212,7 +223,7 @@ func TestHandleUpdate_secretKeepSemantics(t *testing.T) {
 func TestHandleUpdate_versionConflictIs409(t *testing.T) {
 	t.Parallel()
 	ap := &captureApply{err: appconfig.ErrVersionConflict}
-	h := NewHandler(&fakeStore{}, &fakeAppCfg{version: 5}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, (&fakeRead{version: Version{App: 5}}).fn, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid",
@@ -244,7 +255,7 @@ func TestHandleUpdate_validationRejectsBeforeApply(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ap := &captureApply{}
-			h := NewHandler(&fakeStore{}, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			h := NewHandler(&fakeStore{}, noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, tc.req))
 			require.Equal(t, http.StatusBadRequest, w.Code)
@@ -259,7 +270,7 @@ func TestHandleTestConnection(t *testing.T) {
 	// spec:sso-configuration/test-connection-probes-the-provider-without-persisting/reachable-provider-verifies
 	t.Run("reachable", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(&fakeStore{}, noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"issuer":"https://idp.example.com"}`)))
 		require.Equal(t, http.StatusOK, w.Code)
@@ -271,7 +282,7 @@ func TestHandleTestConnection(t *testing.T) {
 	t.Run("invalid candidate issuer is 400", func(t *testing.T) {
 		t.Parallel()
 		probed := false
-		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{},
+		h := NewHandler(&fakeStore{}, noopRead, noopApply, allowAuthZ{}, &captureAudit{},
 			func(context.Context, string) error { probed = true; return nil }, nil)
 		w := httptest.NewRecorder()
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"issuer":"not a url"}`)))
@@ -284,7 +295,7 @@ func TestHandleTestConnection(t *testing.T) {
 	t.Run("unreachable returns ok=false with reason", func(t *testing.T) {
 		t.Parallel()
 		failProbe := func(context.Context, string) error { return errors.New("discovery unreachable") }
-		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, failProbe, nil)
+		h := NewHandler(&fakeStore{}, noopRead, noopApply, allowAuthZ{}, &captureAudit{}, failProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"issuer":"https://down.example.com"}`)))
 		require.Equal(t, http.StatusOK, w.Code)
@@ -297,8 +308,8 @@ func TestHandleTestConnection(t *testing.T) {
 
 // --- error / edge branch coverage -------------------------------------------------
 
-func errStore() *fakeStore   { return &fakeStore{err: errors.New("boom")} }
-func errAppCfg() *fakeAppCfg { return &fakeAppCfg{err: errors.New("boom")} }
+func errStore() *fakeStore { return &fakeStore{err: errors.New("boom")} }
+func errRead() ReadFunc    { return (&fakeRead{err: errors.New("boom")}).fn }
 func okStoreCfg() *fakeStore {
 	return &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp", ClientID: "cid"}}
 }
@@ -306,29 +317,21 @@ func validUpdateBody() updateRequest {
 	return updateRequest{Issuer: "https://idp.example.com", ClientID: "cid", ExternalURL: "https://edr.example.com", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst"}
 }
 
+// Both stored parts now come from one snapshot read, so there is one failure to report rather than the two the handler used to
+// distinguish. An erroring config store no longer reaches the GET at all.
 func TestHandleGet_storeErrorsAre500(t *testing.T) {
 	t.Parallel()
-	t.Run("app config read error", func(t *testing.T) {
-		t.Parallel()
-		h := NewHandler(&fakeStore{}, errAppCfg(), noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
-		w := httptest.NewRecorder()
-		h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-	})
-	t.Run("oidc config read error", func(t *testing.T) {
-		t.Parallel()
-		h := NewHandler(errStore(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
-		w := httptest.NewRecorder()
-		h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-	})
+	h := NewHandler(&fakeStore{}, errRead(), noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	w := httptest.NewRecorder()
+	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func TestHandleUpdate_errorBranches(t *testing.T) {
 	t.Parallel()
 	t.Run("no actor on context is 500", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(okStoreCfg(), noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		// Marshal through `any` so gosec G117 doesn't flag the concrete client_secret field (the fixture carries no real secret).
 		var body any = validUpdateBody()
 		b, _ := json.Marshal(body)
@@ -340,7 +343,7 @@ func TestHandleUpdate_errorBranches(t *testing.T) {
 	})
 	t.Run("app config read error is 500", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(okStoreCfg(), errAppCfg(), noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(okStoreCfg(), errRead(), noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleUpdate(w, putReq(t, validUpdateBody()))
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -348,14 +351,14 @@ func TestHandleUpdate_errorBranches(t *testing.T) {
 	t.Run("apply generic error is 500", func(t *testing.T) {
 		t.Parallel()
 		ap := &captureApply{err: errors.New("tx failed")}
-		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleUpdate(w, putReq(t, validUpdateBody()))
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 	t.Run("invalid json is 400", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(okStoreCfg(), noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		req := withActor(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/x", strings.NewReader("{not json")), 42)
 		w := httptest.NewRecorder()
 		h.handleUpdate(w, req)
@@ -364,7 +367,7 @@ func TestHandleUpdate_errorBranches(t *testing.T) {
 	})
 	t.Run("oversized body is 413", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(okStoreCfg(), noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		big := strings.Repeat("a", (1<<16)+10)
 		req := withActor(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/x", strings.NewReader(big)), 42)
 		w := httptest.NewRecorder()
@@ -373,7 +376,7 @@ func TestHandleUpdate_errorBranches(t *testing.T) {
 	})
 	t.Run("nil audit recorder does not panic", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, nil, okProbe, nil)
+		h := NewHandler(okStoreCfg(), noopRead, noopApply, allowAuthZ{}, nil, okProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleUpdate(w, putReq(t, validUpdateBody()))
 		assert.Equal(t, http.StatusOK, w.Code)
@@ -384,7 +387,7 @@ func TestHandleTestConnection_storedIssuerAndErrors(t *testing.T) {
 	t.Parallel()
 	t.Run("empty issuer unconfigured is 400 no_issuer", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(&fakeStore{}, noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{}`)))
 		require.Equal(t, http.StatusBadRequest, w.Code)
@@ -393,7 +396,7 @@ func TestHandleTestConnection_storedIssuerAndErrors(t *testing.T) {
 	t.Run("empty issuer falls back to stored", func(t *testing.T) {
 		t.Parallel()
 		probed := ""
-		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{},
+		h := NewHandler(okStoreCfg(), noopRead, noopApply, allowAuthZ{}, &captureAudit{},
 			func(_ context.Context, issuer string) error { probed = issuer; return nil }, nil)
 		w := httptest.NewRecorder()
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{}`)))
@@ -402,7 +405,7 @@ func TestHandleTestConnection_storedIssuerAndErrors(t *testing.T) {
 	})
 	t.Run("stored read error is 500", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(errStore(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(errStore(), noopRead, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{}`)))
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -441,7 +444,7 @@ func TestHandleUpdate_groupMappingValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ap := &captureApply{}
-			h := NewHandler(&fakeStore{}, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			h := NewHandler(&fakeStore{}, noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, tc.req))
 			require.Equal(t, http.StatusBadRequest, w.Code)
@@ -458,7 +461,9 @@ func TestHandleUpdate_groupMappingIsNormalizedWrittenAuditedAndReturned(t *testi
 	audit := &captureAudit{}
 	saved := []ssoconfig.GroupRole{{Group: "edr-admins", Role: "admin"}, {Group: "edr-auditors", Role: "auditor"}}
 	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid", GroupsClaim: "groups", GroupRoles: saved}}
-	h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, audit, okProbe, nil)
+	// The response is what the write read back inside its own transaction, not a re-read afterwards, so the fake reports it.
+	ap.saved = Snapshot{Config: store.cfg, Version: Version{OIDC: 1, App: 1}}
+	h := NewHandler(store, noopRead, ap.fn, allowAuthZ{}, audit, okProbe, nil)
 
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
@@ -490,7 +495,7 @@ func TestHandleGet_groupRolesIsAnArrayWhenOff(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			h := NewHandler(store, &fakeAppCfg{}, noopApply, allowAuthZ{}, nil, okProbe, nil)
+			h := NewHandler(store, noopRead, noopApply, allowAuthZ{}, nil, okProbe, nil)
 			w := httptest.NewRecorder()
 			h.handleGet(w, withActor(httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil), 42))
 			require.Equal(t, http.StatusOK, w.Code)
@@ -506,7 +511,7 @@ func TestHandleUpdate_groupFieldsAreBoundedInCharacters(t *testing.T) {
 	wide := strings.Repeat("日", maxGroupFieldLen)
 	ap := &captureApply{}
 	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://i", ClientID: "c"}}
-	h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(store, noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst",
@@ -514,4 +519,169 @@ func TestHandleUpdate_groupFieldsAreBoundedInCharacters(t *testing.T) {
 	}))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Equal(t, wide, ap.oidcIn.GroupsClaim)
+}
+
+// --- optimistic concurrency (issue #1046) ------------------------------------------
+
+// The version a client read is what its save is conditioned on, both parts of it. Passing only one through would leave the other
+// open, which is how a save that named a version could still overwrite an external URL somebody changed in the meantime.
+func TestHandleUpdate_sendsTheCallersVersionToTheWrite(t *testing.T) {
+	t.Parallel()
+	ap := &captureApply{}
+	// A read that reports something else entirely, so the expectation cannot be coming from here.
+	read := &fakeRead{version: Version{OIDC: 99, App: 99}}
+	h := NewHandler(okStoreCfg(), read.fn, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+
+	body := validUpdateBody()
+	body.Version = new(Version{OIDC: 4, App: 7}.String())
+	w := httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, body))
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.True(t, ap.called)
+	assert.True(t, ap.expected.Checked, "a caller who named a version gets its save conditioned on it")
+	assert.Equal(t, Version{OIDC: 4, App: 7}, ap.expected.Version, "both parts, as the caller read them")
+}
+
+// Omitting the version is how a script says "set this configuration, whatever is there". It stays available on purpose: automation
+// that means to overwrite should not have to read first. The write is still guarded by the version this request itself read, which
+// is what kept a change landing mid-request from being lost before any of this.
+func TestHandleUpdate_noVersionIsAnOverwriteGuardedByItsOwnRead(t *testing.T) {
+	t.Parallel()
+	ap := &captureApply{}
+	read := &fakeRead{version: Version{OIDC: 4, App: 7}}
+	h := NewHandler(okStoreCfg(), read.fn, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+
+	w := httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, validUpdateBody()))
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.True(t, ap.called)
+	assert.False(t, ap.expected.Checked, "no version named means no conditional save")
+	assert.Equal(t, Version{OIDC: 4, App: 7}, ap.expected.Version, "and the request's own read still guards the write")
+}
+
+// A version the server did not issue is refused, and nothing is written. Reading it as "no version" would silently promote the
+// caller's conditional save to an overwrite: the save would succeed, and the caller would believe it had been checked.
+// spec:sso-configuration/a-save-can-name-the-configuration-it-was-editing/a-version-supplied-with-no-value-is-refused
+func TestHandleUpdate_anUnreadableVersionIsRefusedWithoutWriting(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		sent string
+	}{
+		{"present but empty, which is a client with a version field and nothing in it", ""},
+		{"one part", "3"},
+		{"first part is not a number", "x.1"},
+		{"three parts", "1.2.3"},
+		{"negative", "-1.0"},
+		{"signed, which this never issues", "+1.2"},
+		{"zero-padded, which this never issues", "01.2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ap := &captureApply{}
+			h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			body := validUpdateBody()
+			body.Version = &tc.sent
+			w := httptest.NewRecorder()
+			h.handleUpdate(w, putReq(t, body))
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.False(t, ap.called, "an unreadable version must not reach the write as an overwrite")
+		})
+	}
+}
+
+// An omitted field and a present-but-empty one mean opposite things, and the string zero value cannot carry both. The empty case is
+// covered above as a refusal; this is the other half, that a genuinely absent field still overwrites.
+func TestHandleUpdate_anAbsentVersionFieldIsNotAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"the field is absent":    `{"issuer":"https://idp.example.com","client_id":"cid","external_url":"https://edr.example.com","scopes":["openid"],"jit_enabled":true,"default_role":"analyst"}`,
+		"the field is JSON null": `{"issuer":"https://idp.example.com","client_id":"cid","external_url":"https://edr.example.com","scopes":["openid"],"jit_enabled":true,"default_role":"analyst","version":null}`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ap := &captureApply{}
+			h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			r := withActor(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(raw)), 42)
+			w := httptest.NewRecorder()
+			h.handleUpdate(w, r)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.True(t, ap.called)
+			assert.False(t, ap.expected.Checked, "nothing to check against, so the save overwrites as a script expects")
+		})
+	}
+}
+
+// Either stored part having moved on is the same answer to the caller: nothing was saved. The two are separate tables with separate
+// counters, and a handler that mapped only one of them would report the other as a server error, which reads as "try again" rather
+// than "reload and look at what changed".
+func TestHandleUpdate_eitherPartsConflictIsA409(t *testing.T) {
+	t.Parallel()
+	cases := map[string]error{
+		"the deployment settings moved on": appconfig.ErrVersionConflict,
+		"the OIDC configuration moved on":  ssoconfig.ErrVersionConflict,
+	}
+	for name, conflict := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ap := &captureApply{err: conflict}
+			h := NewHandler(okStoreCfg(), noopRead, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			body := validUpdateBody()
+			body.Version = new(Version{OIDC: 1, App: 1}.String())
+			w := httptest.NewRecorder()
+			h.handleUpdate(w, putReq(t, body))
+			assert.Equal(t, http.StatusConflict, w.Code)
+			assert.Contains(t, w.Body.String(), "version_conflict")
+		})
+	}
+}
+
+// The read reports the version of what it read, and an unconfigured deployment reports one too. A client with no version to send
+// could only overwrite, which is exactly the race a first save needs closed.
+func TestHandleGet_reportsTheVersionOfWhatItRead(t *testing.T) {
+	t.Parallel()
+	cases := map[string]*fakeRead{
+		"configured":   {cfg: &ssoconfig.Config{Issuer: "https://idp", ClientID: "cid"}, version: Version{OIDC: 3, App: 8}},
+		"unconfigured": {version: Version{App: 2}},
+	}
+	for name, read := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := NewHandler(&fakeStore{}, read.fn, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			w := httptest.NewRecorder()
+			h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp configResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, read.version.String(), resp.Version)
+		})
+	}
+}
+
+// The saved response carries what the write read back inside its own transaction, not what a read afterwards would find. A re-read
+// can be overtaken by the next writer, and the caller would be handed a version that does not describe the values beside it: send
+// that version back and the check passes while the caller holds someone else's configuration.
+func TestHandleUpdate_reportsTheVersionTheWriteRead(t *testing.T) {
+	t.Parallel()
+	ap := &captureApply{saved: Snapshot{
+		Config:    &ssoconfig.Config{Issuer: "https://saved.example.com", ClientID: "saved"},
+		AppConfig: appconfig.AppConfig{ExternalURL: "https://saved.example.com"},
+		Version:   Version{OIDC: 5, App: 9},
+	}}
+	// A read reporting something else, so a response built from it rather than from the write would be visibly wrong.
+	read := &fakeRead{cfg: &ssoconfig.Config{Issuer: "https://stale", ClientID: "stale"}, version: Version{OIDC: 1, App: 1}}
+	h := NewHandler(okStoreCfg(), read.fn, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+
+	w := httptest.NewRecorder()
+	h.handleUpdate(w, putReq(t, validUpdateBody()))
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp configResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "5.9", resp.Version)
+	assert.Equal(t, "https://saved.example.com", resp.Issuer, "and the values the version describes")
 }

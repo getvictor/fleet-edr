@@ -31,23 +31,44 @@ var allowedJITRoles = map[string]bool{"analyst": true, "auditor": true}
 // maxGroupFieldLen bounds the groups claim name and a mapped group name in characters, matching the groups_claim column (VARCHAR(255)).
 const maxGroupFieldLen = 255
 
-// configStore is the read subset of *ssoconfig.Store the handler needs. Writes go through applyUpdate (transactional). Narrowed to an
-// interface so tests inject a fake.
+// configStore is the read subset of *ssoconfig.Store the handler needs outside a snapshot: the stored issuer the test-connection
+// probe falls back to. Everything the settings surface reports goes through ReadFunc instead. Narrowed to an interface so tests
+// inject a fake.
 type configStore interface {
 	Get(ctx context.Context) (*ssoconfig.Config, error)
 }
 
-// appConfigStore is the read subset of *appconfig.Store the handler needs: the general settings document the external URL lives in.
-type appConfigStore interface {
-	Get(ctx context.Context) (appconfig.AppConfig, int64, error)
+// Snapshot is the whole SSO settings surface as it stood at one instant: both stored parts and the version covering them.
+//
+// Reading it in one go is the point. The two parts were read separately before, so a response could pair one part's new version with
+// the other's old value, describing a state that never existed; a client sending that version back passed the concurrency check
+// while holding stale data (issue #1046). Config is nil when OIDC has not been configured, which is a state to report rather than an
+// error: the deployment may still have an external URL.
+type Snapshot struct {
+	Config    *ssoconfig.Config
+	AppConfig appconfig.AppConfig
+	Version   Version
 }
 
-// applyUpdate persists the OIDC config and the app-config document ATOMICALLY (one DB transaction), so a partial write can never leave
-// a new issuer/client paired with a stale derived redirect. expectedAppVersion drives the app-config optimistic-concurrency check;
-// implementations return appconfig.ErrVersionConflict on a concurrent edit. Injected so the handler stays unit-testable without a DB.
-type applyUpdate func(
-	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string,
-) error
+// ReadFunc reads both stored parts and their versions from one transaction. Injected so the handler stays unit-testable without
+// a DB.
+type ReadFunc func(ctx context.Context) (Snapshot, error)
+
+// Expectation says what a save is conditioned on. Checked is false when the caller named no version, which is the unconditional
+// overwrite a script that means to overwrite keeps asking for; the write is then still guarded against a change landing between the
+// server's own read and its write, as it always was.
+type Expectation struct {
+	Version Version
+	Checked bool
+}
+
+// ApplyFunc persists the OIDC config and the app-config document ATOMICALLY (one DB transaction), so a partial write can never
+// leave a new issuer/client paired with a stale derived redirect, and reads the result back inside that same transaction so the
+// response cannot report a version that does not describe the values beside it. Implementations return a version-conflict error
+// (appconfig.ErrVersionConflict or ssoconfig.ErrVersionConflict) when the Expectation does not hold, having written nothing.
+type ApplyFunc func(
+	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expected Expectation, updatedBy string,
+) (Snapshot, error)
 
 // prober verifies a candidate issuer is reachable. Production wraps oidc.Probe with the deployment HTTP client; tests inject a fake.
 type prober func(ctx context.Context, issuer string) error
@@ -56,8 +77,8 @@ type prober func(ctx context.Context, issuer string) error
 // middleware. It spans two stores: the typed oidc_config (with its sealed secret) and the appconfig document (external URL).
 type Handler struct {
 	store  configStore
-	appCfg appConfigStore
-	apply  applyUpdate
+	read   ReadFunc
+	apply  ApplyFunc
 	authz  api.AuthZ
 	audit  api.AuditRecorder
 	probe  prober
@@ -67,14 +88,14 @@ type Handler struct {
 // NewHandler builds the handler. store, appCfg, apply, authz, and probe are load-bearing; logger defaults to slog.Default. audit may
 // be nil only in tests that do not assert on the audit row.
 func NewHandler(
-	store configStore, appCfg appConfigStore, apply applyUpdate,
+	store configStore, read ReadFunc, apply ApplyFunc,
 	authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger,
 ) *Handler {
 	if store == nil {
 		panic("ssoadmin.NewHandler: store is required")
 	}
-	if appCfg == nil {
-		panic("ssoadmin.NewHandler: appCfg is required")
+	if read == nil {
+		panic("ssoadmin.NewHandler: read is required")
 	}
 	if apply == nil {
 		panic("ssoadmin.NewHandler: apply is required")
@@ -88,7 +109,7 @@ func NewHandler(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{store: store, appCfg: appCfg, apply: apply, authz: authz, audit: audit, probe: probe, logger: logger}
+	return &Handler{store: store, read: read, apply: apply, authz: authz, audit: audit, probe: probe, logger: logger}
 }
 
 // RegisterAuthedRoutes mounts the SSO settings routes. The mux is expected to be wrapped in the session + CSRF middleware before being
@@ -116,6 +137,9 @@ type configResponse struct {
 	GroupsClaim string                `json:"groups_claim"`
 	GroupRoles  []ssoconfig.GroupRole `json:"group_roles"`
 	SecretSet   bool                  `json:"secret_set"`
+	// Version identifies the configuration this response describes. Send it back on a save to have that save refused if anything
+	// here changed in the meantime. Opaque: read it, send it, do not take it apart.
+	Version string `json:"version"`
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -123,29 +147,15 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionSSOManage, api.Resource{Type: "sso_config"}) {
 		return
 	}
-	// External URL is deployment-level (appconfig) and may be set even before OIDC is configured; always include it.
-	appCfg, _, err := h.appCfg.Get(ctx)
+	// Both parts from one snapshot, so the version this reports describes the values reported beside it. The external URL is
+	// deployment-level and may be set before OIDC is configured, so it is included either way.
+	snap, err := h.read(ctx)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "app config get", "err", err)
+		h.logger.ErrorContext(ctx, "sso settings read", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	cfg, err := h.store.Get(ctx)
-	if errors.Is(err, ssoconfig.ErrNotFound) {
-		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, configResponse{
-			Configured:  false,
-			ExternalURL: appCfg.ExternalURL,
-			RedirectURL: ssoconfig.RedirectURLFor(appCfg.ExternalURL),
-			GroupRoles:  []ssoconfig.GroupRole{},
-		})
-		return
-	}
-	if err != nil {
-		h.logger.ErrorContext(ctx, "sso config get", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
-	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, appCfg.ExternalURL))
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(snap))
 }
 
 // updateRequest is the write shape. ClientSecret is a pointer so the field is distinguishable as absent (keep the stored secret) vs
@@ -161,6 +171,14 @@ type updateRequest struct {
 	DefaultRole  string                `json:"default_role"`
 	GroupsClaim  string                `json:"groups_claim"`
 	GroupRoles   []ssoconfig.GroupRole `json:"group_roles"`
+	// Version is the one read from this endpoint, sent back to have the save refused if the configuration changed since. OMIT it to
+	// overwrite whatever is stored, which is what automation that means to set the configuration outright wants.
+	//
+	// A pointer so an absent field is distinguishable from a present one, because the two mean opposite things here and the string
+	// zero value cannot carry both. Sending "" is a client that has a version field and nothing to put in it, which is the state a
+	// page has before its first read completes: refused, rather than quietly promoted to the overwrite. JSON null reads as absent,
+	// the same as ClientSecret above, since a client that writes null is saying the field has no value.
+	Version *string `json:"version"`
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -188,18 +206,37 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	// FK targets, so a service-account SSO update is attributed to the service account rather than the interim NULL the #515 stopgap
 	// recorded. See ADR-0017.
 	in.UpdatedBy = actor.Principal.ID
-	// Read the app-config document (read-modify-write preserves unrelated settings) and capture its version for the optimistic-
-	// concurrency check inside the transactional apply.
-	appCfg, appVersion, err := h.appCfg.Get(ctx)
+	// A version the caller named is the configuration it was editing. One it did not is the unconditional overwrite a script asks
+	// for by omission, which stays available deliberately: automation that means to set the configuration outright should not have
+	// to read it first. A version that does not parse is refused rather than dropped, because dropping it would quietly turn a
+	// conditional save into that overwrite.
+	expected := Expectation{}
+	if req.Version != nil {
+		parsed, parseErr := ParseVersion(*req.Version)
+		if parseErr != nil {
+			writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_version")
+			return
+		}
+		expected = Expectation{Version: parsed, Checked: true}
+	}
+	// Read-modify-write on the app-config document so unrelated settings survive. The snapshot.s own versions guard the write when
+	// the caller named none, which is what kept a concurrent edit from being lost between this read and the write below.
+	snap, err := h.read(ctx)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "app config read for update", "err", err)
+		h.logger.ErrorContext(ctx, "sso settings read for update", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
+	if !expected.Checked {
+		expected.Version = snap.Version
+	}
+	appCfg := snap.AppConfig
 	appCfg.ExternalURL = externalURL
-	// One transaction writes oidc_config + app_config together: a partial write can never pair a new issuer with a stale redirect.
-	if err := h.apply(ctx, in, appCfg, appVersion, in.UpdatedBy); err != nil {
-		if errors.Is(err, appconfig.ErrVersionConflict) {
+	// One transaction writes oidc_config + app_config together and reads both back: a partial write can never pair a new issuer
+	// with a stale redirect, and the version returned describes the values returned with it.
+	saved, err := h.apply(ctx, in, appCfg, expected, in.UpdatedBy)
+	if err != nil {
+		if errors.Is(err, appconfig.ErrVersionConflict) || errors.Is(err, ssoconfig.ErrVersionConflict) {
 			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
 			return
 		}
@@ -208,14 +245,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordUpdate(ctx, r, actor.Principal, in, externalURL)
-
-	cfg, err := h.store.Get(ctx)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "sso config re-read after update", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
-	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, externalURL))
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(saved))
 }
 
 // testConnectionRequest carries the candidate issuer to probe. Empty issuer means "probe the stored config".
@@ -368,7 +398,20 @@ func validGroupMapping(claim string, in []ssoconfig.GroupRole) (string, []ssocon
 	return claim, out, ""
 }
 
-func toResponse(c *ssoconfig.Config, externalURL string) configResponse {
+// toResponse renders a Snapshot. An unconfigured deployment still reports its external URL and its version, because the version is
+// what the first save is conditioned on: a client with no version to send could only overwrite, which is the race this closes.
+func toResponse(snap Snapshot) configResponse {
+	externalURL := snap.AppConfig.ExternalURL
+	if snap.Config == nil {
+		return configResponse{
+			Configured:  false,
+			ExternalURL: externalURL,
+			RedirectURL: ssoconfig.RedirectURLFor(externalURL),
+			GroupRoles:  []ssoconfig.GroupRole{},
+			Version:     snap.Version.String(),
+		}
+	}
+	c := snap.Config
 	groupRoles := c.GroupRoles
 	if groupRoles == nil {
 		groupRoles = []ssoconfig.GroupRole{}
@@ -385,6 +428,7 @@ func toResponse(c *ssoconfig.Config, externalURL string) configResponse {
 		GroupsClaim: c.GroupsClaim,
 		GroupRoles:  groupRoles,
 		SecretSet:   c.HasSecret,
+		Version:     snap.Version.String(),
 	}
 }
 

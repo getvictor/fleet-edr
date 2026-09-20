@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/identity/api"
@@ -47,9 +48,16 @@ func New(db *sqlx.DB) *Store {
 // Get returns the parsed config and its version. A deployment with no row yet returns a zero-value AppConfig and version 0 (not an
 // error), so callers always get a usable document.
 func (s *Store) Get(ctx context.Context) (AppConfig, int64, error) {
+	return s.GetTx(ctx, s.db)
+}
+
+// GetTx is Get against a caller-supplied executor, so a caller can take the read inside a transaction alongside another table's and
+// get one snapshot. Two separate reads can be landed between, which pairs one table's new version with the other's old value; a
+// client that sends such a version back then passes the concurrency check holding stale data (issue #1046).
+func (s *Store) GetTx(ctx context.Context, ext sqlx.ExtContext) (AppConfig, int64, error) {
 	var rawConfig []byte
 	var version int64
-	err := s.db.QueryRowxContext(ctx, `SELECT config, version FROM app_config WHERE id = 1`).Scan(&rawConfig, &version)
+	err := ext.QueryRowxContext(ctx, `SELECT config, version FROM app_config WHERE id = 1`).Scan(&rawConfig, &version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AppConfig{}, 0, nil
 	}
@@ -110,4 +118,51 @@ func (s *Store) PutTx(ctx context.Context, ext sqlx.ExtContext, cfg AppConfig, e
 		return ErrVersionConflict
 	}
 	return nil
+}
+
+// PutAtVersionTx is PutTx for a caller who named the version it read, rather than one recovering a version the server itself read a
+// moment earlier. The difference is the first write: PutTx inserts with ON DUPLICATE KEY UPDATE, which keeps the env seed idempotent
+// but makes two racing first writes both succeed with the second silently replacing the first. Here a first write is a plain INSERT,
+// so the race has a defined winner and the loser is told (issue #1046).
+//
+// Locking the row first is not the alternative it looks like: there is no row yet to lock, and what a SELECT ... FOR UPDATE would
+// take in its place is a gap lock whose behaviour depends on the isolation level. An insert needs no such reasoning, because the
+// primary key is the thing being contended for.
+func (s *Store) PutAtVersionTx(ctx context.Context, ext sqlx.ExtContext, cfg AppConfig, expectedVersion int64, updatedBy string) error {
+	if expectedVersion > 0 {
+		return s.PutTx(ctx, ext, cfg, expectedVersion, updatedBy)
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("appconfig: marshal: %w", err)
+	}
+	by := updatedBy
+	if by == "" {
+		by = api.PrincipalSystemID
+	}
+	_, err = ext.ExecContext(ctx, `INSERT INTO app_config (id, config, version, updated_by) VALUES (1, ?, 1, ?)`, encoded, by)
+	if isDuplicateKey(err) {
+		return ErrVersionConflict
+	}
+	if err != nil {
+		return fmt.Errorf("appconfig: put insert at version: %w", err)
+	}
+	return nil
+}
+
+// mysqlErrDupEntry is the MySQL "Duplicate entry" code. A collision on the singleton primary key means another writer created the
+// row first, which for a write conditioned on "there was nothing here" is a conflict to report rather than a failure.
+//
+// Local rather than shared, as in identity's rbac, seed, oidc and breakglass packages: arch-go confines this context's internal
+// packages to identity's own tree plus a short allowlist, and server/sqlhelpers (where IsDeadlockErr lives) is not on it.
+const mysqlErrDupEntry = 1062
+
+func isDuplicateKey(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	// Early-return rather than `errors.As(...) && mysqlErr.Number == ...`: the one-liner trips nilaway, which cannot prove mysqlErr
+	// is non-nil across the && short-circuit.
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == mysqlErrDupEntry
 }
