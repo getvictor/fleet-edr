@@ -406,7 +406,11 @@ uat_wait_for_pkg_receipt() {
   # zsh ECHOES a `local` re-declaration on the second iteration, so a loop-local would print `installed=<epoch>` to stdout
   # on every retry. The scripts all run under bash, but common.sh is sourced by hand during triage on a machine whose login
   # shell is zsh, and stray stdout from a helper is the kind of thing that corrupts whatever captures it next.
-  while (( $(date +%s) < deadline )); do
+  # Read the receipt BEFORE consulting the deadline, so a window that has already elapsed still gets one look. Testing the
+  # deadline first meant the clock crossing a second boundary between these two `date` calls skipped the read entirely and
+  # reported a good install as a failure (issue #1055). The deadline still bounds the waiting, which is what it is for; it
+  # just no longer decides whether to look at all.
+  while :; do
     installed=$(uat_ssh "$vm" "pkgutil --pkg-info '$pkg_id' 2>/dev/null | awk '/^install-time:/{print \$2}'" 2>/dev/null || echo "")
     if [[ -n "$installed" && "$installed" =~ ^[0-9]+$ ]] && (( installed >= since )); then
       return 0
@@ -414,7 +418,7 @@ uat_wait_for_pkg_receipt() {
     if [[ "${UAT_DRY_RUN:-0}" == "1" ]]; then
       return 0
     fi
+    (( $(date +%s) < deadline )) || return 1
     sleep 5
   done
-  return 1
 }
