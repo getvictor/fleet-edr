@@ -456,6 +456,13 @@ func (s *Store) CreateRule(ctx context.Context, req api.CreateRuleRequest) (api.
 	// returns below leave the transaction to roll back here.
 	defer func() { _ = tx.Rollback() }()
 
+	// The policy first, before the INSERT takes its shared lock on that same row through the foreign key. Holding the exclusive
+	// lock already is what stops two concurrent creates deadlocking on the upgrade the version bump needs (issue #1057). It also
+	// makes a missing policy an explicit answer here rather than a foreign-key violation to interpret afterwards.
+	if err := lockPolicy(ctx, tx, req.PolicyID); err != nil {
+		return api.ApplicationControlRule{}, err
+	}
+
 	const insert = `INSERT INTO app_control_rules
 		(policy_id, rule_type, identifier, action, enforcement, enabled, severity, source, custom_msg, custom_url, comment, created_by)
 		VALUES (?, ?, ?, 'BLOCK', ?, 1, ?, 'admin', ?, ?, ?, ?)`
@@ -599,10 +606,17 @@ func (s *Store) UpdateRule(ctx context.Context, req api.UpdateRuleRequest) (api.
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The policy is locked first, and its id is read without a lock to learn which one. That unlocked read is safe because a rule
+	// never changes policy: no update sets policy_id, so the answer cannot go stale. A rule deleted between the two is handled
+	// below, where the locked read finds nothing and reports it missing (issue #1057).
+	if _, err := lockPolicyForRule(ctx, tx, req.RuleID); err != nil {
+		return api.ApplicationControlRule{}, false, err
+	}
+
 	// Read the rule under a row lock: it names the policy to bump, and it is what the request is compared against. Whether anything
 	// changes is decided here rather than from the UPDATE's affected-row count, which reports changed or matched rows depending on
 	// the DSN's clientFoundRows. The UPDATE takes this same lock anyway, so taking it here adds no lock the transaction did not
-	// already hold, and keeps the rule-then-policy order it always had.
+	// already hold.
 	current, err := scanRuleRow(tx.QueryRowxContext(ctx, ruleByIDQuery+" FOR UPDATE", req.RuleID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return api.ApplicationControlRule{}, false, api.ErrAppControlRuleNotFound
@@ -659,12 +673,12 @@ func (s *Store) DeleteRule(ctx context.Context, req api.DeleteRuleRequest) (int6
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var policyID int64
-	if err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, req.RuleID).Scan(&policyID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, api.ErrAppControlRuleNotFound
-		}
-		return 0, fmt.Errorf("appcontrol lookup rule for delete: %w", err)
+	// The policy before the rule, as every other mutation does (issue #1057), and the rule's own policy id comes back for the
+	// caller's snapshot fan-out. A rule deleted in the meantime leaves the DELETE below affecting no rows, which is already
+	// handled.
+	policyID, err := lockPolicyForRule(ctx, tx, req.RuleID)
+	if err != nil {
+		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM app_control_rules WHERE id = ?`, req.RuleID)
 	if err != nil {
@@ -977,19 +991,58 @@ func rejectDuplicateBulkKeys(items []api.BulkUpsertRuleItem) error {
 	return nil
 }
 
-// lockPolicyForBulkUpsert serialises concurrent bulk-upserts against the same policy by taking a row lock on the parent
-// app_control_policies row inside the txn. Two concurrent bulk-upserts on the same policy would otherwise have a TOCTOU race
-// between preflight (SELECT existing keys) and upsert (INSERT ... ON DUPLICATE KEY UPDATE): both could classify the same key
-// as Insert and over-report inserted counts. Returns ErrAppControlPolicyNotFound when the policy doesn't exist (the row lock
-// surfaces missing rows as sql.ErrNoRows).
-func lockPolicyForBulkUpsert(ctx context.Context, tx *sqlx.Tx, policyID int64) error {
+// lockPolicyForRule locks the policy a rule belongs to and returns which one, reading that without a lock first.
+//
+// The unlocked read is sound because a rule never moves policy: no update sets policy_id, so the id it returns cannot be made
+// stale by a concurrent writer. A rule deleted between the read and the caller's own locked read is not this function's problem
+// to report: the caller reads the rule under a lock straight afterwards and finds it missing there.
+//
+// Both absences are reported as a MISSING RULE, including the policy having been deleted out from under it. That is what the
+// caller asked about, and it is the only answer its handler knows how to turn into a 404; a policy-shaped error here would reach
+// the operator as a 500 for a rule that is, correctly, gone. A cascading DeletePolicy between the read and the lock is exactly
+// how that happens.
+func lockPolicyForRule(ctx context.Context, tx *sqlx.Tx, ruleID int64) (int64, error) {
+	var policyID int64
+	err := tx.QueryRowxContext(ctx, `SELECT policy_id FROM app_control_rules WHERE id = ?`, ruleID).Scan(&policyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, api.ErrAppControlRuleNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("appcontrol lookup rule's policy: %w", err)
+	}
+	if err := lockPolicy(ctx, tx, policyID); err != nil {
+		if errors.Is(err, api.ErrAppControlPolicyNotFound) {
+			return 0, api.ErrAppControlRuleNotFound
+		}
+		return 0, err
+	}
+	return policyID, nil
+}
+
+// lockPolicy takes the row lock on the parent app_control_policies row, and EVERY rule mutation takes it FIRST (issue #1057).
+//
+// The order is the point. Each mutation touches two rows, the rule and its policy, and the policy bump is what makes a change
+// visible to hosts. Taking them in two different orders is what deadlocked: the single-rule paths wrote or locked the rule
+// first and then bumped the policy, while bulk upsert locked the policy first, so each writer ended up holding what the other
+// needed and MySQL aborted one with error 1213, reaching the caller as a 500. Creates had a second shape of their own: the
+// INSERT takes a SHARED lock on the policy row through the foreign key and the bump then needs an EXCLUSIVE one, so two
+// concurrent creates in one policy deadlocked on the upgrade without any bulk upsert involved.
+//
+// Locking the policy first serialises rule changes per policy, which is the behaviour the version counter already implies: the
+// bump makes them a sequence, and this makes them take their turn to join it rather than discovering the conflict too late.
+//
+// It also serves the reason it was first written, for bulk upsert: without it, two concurrent bulk-upserts race between the
+// preflight that reads existing keys and the upsert that writes them, and both classify the same key as an insert.
+//
+// Returns ErrAppControlPolicyNotFound when the policy does not exist, which the row lock surfaces as sql.ErrNoRows.
+func lockPolicy(ctx context.Context, tx *sqlx.Tx, policyID int64) error {
 	var id int64
 	err := tx.QueryRowxContext(ctx, `SELECT id FROM app_control_policies WHERE id = ? FOR UPDATE`, policyID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return api.ErrAppControlPolicyNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("appcontrol bulk upsert: lock policy: %w", err)
+		return fmt.Errorf("appcontrol lock policy: %w", err)
 	}
 	return nil
 }
@@ -1121,7 +1174,7 @@ func (s *Store) BulkUpsertRules(ctx context.Context, req api.BulkUpsertRulesRequ
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockPolicyForBulkUpsert(ctx, tx, req.PolicyID); err != nil {
+	if err := lockPolicy(ctx, tx, req.PolicyID); err != nil {
 		return api.BulkUpsertResult{}, err
 	}
 	existing, err := s.collectExistingBulkKeys(ctx, tx, req.PolicyID, sortedItems)
