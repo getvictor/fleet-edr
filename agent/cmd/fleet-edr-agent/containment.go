@@ -74,31 +74,13 @@ func controlDialOptions(cfg *config.Config, target string, mgr *containment.Mana
 	}
 	// The agent's own proxy, from its own configuration. Taken from cfg rather than passed in, so there is ONE answer to which
 	// proxy the agent uses and the control channel cannot end up on a different one from its uploads (issue #1117).
+	// A proxy this build cannot speak never arrives here: the agent's own proxy resolution refuses it, for every path rather
+	// than this one, so that its credentials are not written into a protocol that cannot parse them (issue #1128). What reaches
+	// this is either a proxy the dial below speaks or nothing, and nothing takes the same path an unproxied server takes: the
+	// containment dialer stays installed, so a contained host still reaches the SERVER at its pinned address.
 	proxyURL := serverProxy(cfg.ServerURL, cfg.Proxy.ProxyFunc())
-	if proxyURL != nil && !tunnelable(proxyURL) {
-		// A proxy this build does not speak keeps gRPC's own dialing, which is what every proxied server had before this change:
-		// the channel still cannot reconnect while the host is contained, and commands arrive by polling. Taking the dial over
-		// without speaking the protocol would be worse than that, not better, since an unsupported scheme would be sent a request
-		// it cannot parse, carrying the credentials the operator configured on it.
-		return target, nil
-	}
 	return "passthrough:///" + target, []grpc.DialOption{
 		grpc.WithContextDialer(controlDial(dial, proxyURL, mgr.Target().Address(), proxyTLS)),
-	}
-}
-
-// tunnelable reports whether this build can establish a tunnel through the proxy: an HTTP or HTTPS proxy speaking CONNECT, or a
-// SOCKS5 proxy speaking its own handshake (issues #1064, #1110).
-//
-// A scheme is opted IN rather than ruled out: net/http hands back whatever an operator put in the environment, `ftp://proxy`
-// included, so a default branch would eventually be handed a scheme nobody considered, and would write the operator's proxy
-// credentials into a protocol that cannot parse them.
-func tunnelable(proxyURL *url.URL) bool {
-	switch proxyURL.Scheme {
-	case "http", "https", "socks5", "socks5h":
-		return true
-	default:
-		return false
 	}
 }
 

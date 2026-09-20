@@ -107,6 +107,52 @@ func TestControlDialOptions(t *testing.T) {
 	assert.Len(t, opts, 1)
 }
 
+// A proxy the agent cannot speak reaches no part of the agent, and this is the wiring that proves it for the two consumers a
+// config-level test cannot see: the control channel's dial, and the lifeline address a contained host is pinned to.
+//
+// The configuration is built by hand rather than loaded, deliberately. That is the path the loader's own check does not cover,
+// and the one a future caller is most likely to take (issue #1128).
+//
+// spec:agent-configuration/a-proxy-the-agent-cannot-speak-is-refused-rather-than-used/a-refused-proxy-receives-nothing
+func TestAnUnspeakableProxyReachesNeitherTheControlDialNorTheLifeline(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		ServerURL: "https://edr.example.com:8443",
+		//nolint:gosec // G101: the credential is the input under test.
+		Proxy: config.ProxyConfig{HTTPSProxy: "ftp://ir:s3cret@proxy.corp:2121"},
+	}
+	mgr := containment.New(containment.Options{
+		Target: containment.Target{Host: "edr.example.com", Port: 8443},
+		Send:   func([]byte) error { return nil },
+	})
+	dial := func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("unused") }
+
+	// The control channel's own resolution refuses it, so nothing downstream is even offered the proxy.
+	proxyURL := serverProxy(cfg.ServerURL, cfg.Proxy.ProxyFunc())
+	require.Nil(t, proxyURL, "the refusal has to hold here, not only where the configuration was read")
+
+	// What the dial then does is the whole of "receives no bytes": it reaches the server, and the proxy's host is never dialed.
+	var dialed []string
+	recording := func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return nil, errors.New("recorded")
+	}
+	_, _ = controlDial(recording, proxyURL, mgr.Target().Address(), nil)(t.Context(), "edr.example.com:8443")
+	assert.Equal(t, []string{"edr.example.com:8443"}, dialed, "the server, never proxy.corp:2121")
+
+	// The options are those of an unproxied server rather than none at all, which is correct and worth pinning: a contained host
+	// still has to reach the SERVER by its pinned address, so the containment dialer stays installed.
+	target, opts := controlDialOptions(cfg, "edr.example.com:8443", mgr, dial, nil)
+	assert.Equal(t, "passthrough:///edr.example.com:8443", target)
+	assert.Len(t, opts, 1)
+
+	// And the lifeline is pinned to the SERVER. Pinning the proxy would contain the host to an address it never dials, which is
+	// the failure that makes this worth checking here rather than trusting the resolver alone.
+	lifeline, err := containment.TargetFor(cfg.ServerURL, cfg.Proxy.ProxyFunc())
+	require.NoError(t, err)
+	assert.Equal(t, containment.Target{Host: "edr.example.com", Port: 8443}, lifeline)
+}
+
 // eventConnector is a receiver.Connector that delivers a fixed list of events once connected and then stays open.
 type eventConnector struct {
 	events chan receiver.Event
