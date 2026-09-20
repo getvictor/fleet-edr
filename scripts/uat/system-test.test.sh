@@ -132,8 +132,12 @@ RECEIPT_OUT=""
 # Recorded to a FILE, not a variable: the helper calls uat_ssh inside a command substitution, which is a subshell, so an
 # assignment here would never reach the assertion below.
 RECEIPT_SAW="$TMP/receipt-cmd.txt"
+# RECEIPT_SAW_COUNT gets one line per call, so a test can assert HOW MANY times the receipt was read. Same subshell reason as
+# above, and appended rather than overwritten because counting is the point.
+RECEIPT_SAW_COUNT="$TMP/receipt-calls.txt"
+: > "$RECEIPT_SAW_COUNT"
 # shellcheck disable=SC2317,SC2329  # invoked indirectly: the helper under test calls `uat_ssh`, which this shadows
-uat_ssh() { printf '%s' "$*" > "$RECEIPT_SAW"; printf '%s' "$RECEIPT_OUT"; }
+uat_ssh() { printf '%s' "$*" > "$RECEIPT_SAW"; echo "call" >> "$RECEIPT_SAW_COUNT"; printf '%s' "$RECEIPT_OUT"; }
 
 RECEIPT_OUT="2000"
 uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 1 && got=0 || got=1
@@ -175,6 +179,24 @@ check "refuses a non-numeric install mark" "1" "$got"
 RECEIPT_OUT="2000"
 uat_wait_for_pkg_receipt vm com.example.other 1000 1 >/dev/null
 check "queries the package id it was passed" "1" "$(grep -c 'com.example.other' "$RECEIPT_SAW")"
+
+# A window that has already elapsed must still get one look at the receipt. `within=0` makes the deadline past on the first
+# evaluation, which is deterministically what the wall clock crossing a second boundary did to a `within` of 1: the loop never
+# ran, the receipt was never read, and an install that had worked was reported as a failure (issue #1055). The pair matters:
+# reading once must not turn into accepting anything, so the stale receipt is still refused over the same elapsed window.
+RECEIPT_OUT="2000"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 0 && got=0 || got=1
+check "reads the receipt even when the window has already elapsed" "0" "$got"
+
+RECEIPT_OUT="999"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 0 && got=0 || got=1
+check "still refuses a stale receipt over an elapsed window" "1" "$got"
+
+# And the read happens exactly once over an elapsed window: looking is right, spinning is not.
+RECEIPT_OUT="999"
+: > "$RECEIPT_SAW_COUNT"
+uat_wait_for_pkg_receipt vm com.fleetdm.edr.agent 1000 0 >/dev/null || true
+check "looks once over an elapsed window, not repeatedly" "1" "$(wc -l < "$RECEIPT_SAW_COUNT" | tr -d ' ')"
 
 unset -f sleep uat_ssh
 
