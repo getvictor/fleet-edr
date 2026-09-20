@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -285,19 +286,20 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 	}
 	oidcHTTPClient := in.deps.OIDC.HTTPClient
 	apply := newSSOApplyFn(in.deps.DB, in.ssoStore, in.appConfig)
-	return ssoadmin.NewHandler(in.ssoStore, in.appConfig, apply, in.authz, in.audit,
+	read := newSSOReadFn(in.deps.DB, in.ssoStore, in.appConfig)
+	return ssoadmin.NewHandler(in.ssoStore, read, apply, in.authz, in.audit,
 		func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, in.logger)
 }
 
 // newSSOApplyFn builds the atomic apply callback ssoadmin.NewHandler takes. It writes oidc_config and app_config in ONE transaction so a
 // partial failure can't pair a new issuer with a stale derived redirect; app_config carries the optimistic-concurrency version check.
-func newSSOApplyFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.Store) func(
-	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string,
-) error {
-	return func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string) error {
+func newSSOApplyFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.Store) ssoadmin.ApplyFunc {
+	return func(
+		ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expected ssoadmin.Expectation, updatedBy string,
+	) (ssoadmin.Snapshot, error) {
 		tx, err := db.BeginTxx(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
+			return ssoadmin.Snapshot{}, fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
 		}
 		committed := false
 		defer func() {
@@ -305,18 +307,59 @@ func newSSOApplyFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.
 				_ = tx.Rollback()
 			}
 		}()
-		if err := ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
-			return err
+		if err := ssoStore.UpsertAtVersionTx(ctx, tx, oidcIn, expected.Version.OIDC); err != nil {
+			return ssoadmin.Snapshot{}, err
 		}
-		if err := appConfig.PutTx(ctx, tx, appCfg, expectedAppVersion, updatedBy); err != nil {
-			return err
+		if err := appConfig.PutAtVersionTx(ctx, tx, appCfg, expected.Version.App, updatedBy); err != nil {
+			return ssoadmin.Snapshot{}, err
+		}
+		// Read back inside the same transaction, so the version returned to the caller describes the values returned with it. A
+		// re-read afterwards could be overtaken by the next writer and hand the caller a version its own values do not match.
+		saved, err := readSSOSnapshotTx(ctx, tx, ssoStore, appConfig)
+		if err != nil {
+			return ssoadmin.Snapshot{}, err
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("identity bootstrap: commit sso update tx: %w", err)
+			return ssoadmin.Snapshot{}, fmt.Errorf("identity bootstrap: commit sso update tx: %w", err)
 		}
 		committed = true
-		return nil
+		return saved, nil
 	}
+}
+
+// newSSOReadFn builds the snapshot read ssoadmin.NewHandler takes. Both stored parts come from ONE transaction, because two separate
+// reads can be landed between and pair one part's new version with the other's old value (issue #1046).
+func newSSOReadFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.Store) ssoadmin.ReadFunc {
+	return func(ctx context.Context) (ssoadmin.Snapshot, error) {
+		tx, err := db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return ssoadmin.Snapshot{}, fmt.Errorf("identity bootstrap: begin sso read tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		return readSSOSnapshotTx(ctx, tx, ssoStore, appConfig)
+	}
+}
+
+// readSSOSnapshotTx reads both stored parts and their versions from one transaction. A deployment with no OIDC row yet is a snapshot
+// with no configuration and an OIDC version of 0, not an error: it may still have an external URL, and 0 is the version a first save
+// is conditioned on.
+func readSSOSnapshotTx(
+	ctx context.Context, tx *sqlx.Tx, ssoStore *ssoconfig.Store, appConfig *appconfig.Store,
+) (ssoadmin.Snapshot, error) {
+	appCfg, appVersion, err := appConfig.GetTx(ctx, tx)
+	if err != nil {
+		return ssoadmin.Snapshot{}, err
+	}
+	snap := ssoadmin.Snapshot{AppConfig: appCfg, Version: ssoadmin.Version{App: appVersion}}
+	cfg, err := ssoStore.GetTx(ctx, tx)
+	if errors.Is(err, ssoconfig.ErrNotFound) {
+		return snap, nil
+	}
+	if err != nil {
+		return ssoadmin.Snapshot{}, err
+	}
+	snap.Config, snap.Version.OIDC = cfg, cfg.Version
+	return snap, nil
 }
 
 // serviceAccountSurface bundles the optional service-account handlers plus the API-auth middleware. All fields are nil/zero in
