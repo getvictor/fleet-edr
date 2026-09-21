@@ -1,5 +1,10 @@
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDismiss } from "./useDismiss";
 import "./ActionsMenu.scss";
+
+// PANEL_GAP is the space between the trigger and the panel it opens, in pixels. A number rather than a class, because the panel is
+// positioned against the viewport and the offset has to be part of that arithmetic.
+const PANEL_GAP = 4;
 
 export interface ActionsMenuItem {
   readonly label: string;
@@ -31,11 +36,61 @@ interface ActionsMenuProps {
 // are plain buttons, so menu/menuitem roles would promise arrow-key navigation this does not implement. Tab reaches every item.
 export function ActionsMenu({ items, label }: ActionsMenuProps) {
   const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  // The panel is positioned against the VIEWPORT rather than against the row, because the table it lives in scrolls sideways and so
+  // carries overflow-x: auto. A box with overflow on one axis computes the other to auto as well, so the table clips vertically too:
+  // measured before this, the menu on the last row ran 153px past the wrapper's bottom edge and was simply not visible. A fixed box
+  // is not clipped by an ancestor's overflow, which is what gets the panel out of the table.
+  //
+  // Fixed rather than moved into document.body, which is the other way out of a clipping ancestor: the panel stays inside the root
+  // this component's outside-click handler watches, so a click on one of its own items still counts as a click inside.
+  //
+  // Measured rather than estimated, and after the panel is in the document: its height depends on how many actions the operator's
+  // permissions left in it, so a constant would flip the wrong way for a two-item menu.
+  //
+  // The measurement has to be written back as state, which is what the set-state-in-effect rule is about: there is no way to know a
+  // box's height before it is laid out, so a render, a measure and a second render is the shape this takes.
+  /* eslint-disable react-hooks/set-state-in-effect -- position is measured from the laid-out panel, so it cannot be derived */
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const trigger = triggerRef.current;
+    const panel = panelRef.current;
+    if (!trigger || !panel) return;
+    const rect = trigger.getBoundingClientRect();
+    const height = panel.offsetHeight;
+    const below = rect.bottom + PANEL_GAP;
+    // Opens upward when it would otherwise run off the bottom of the window, unless there is even less room above it.
+    const above = rect.top - PANEL_GAP - height;
+    const flip = below + height > window.innerHeight && above >= 0;
+    setPos({ top: flip ? above : below, right: window.innerWidth - rect.right });
+  }, [open, items.length]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // A fixed panel does not travel with the row it belongs to, so a scroll would leave it pointing at whatever row slid under it.
+  // Closing is the honest response: the operator can reopen on the row they can now see. Capture phase, because the scroll that
+  // matters is the table wrapper's own and that does not bubble.
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = () => { setOpen(false); };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, setOpen]);
 
   return (
     <div className="actions-menu" ref={ref}>
       <button
         type="button"
+        ref={triggerRef}
         className="actions-menu__trigger"
         aria-haspopup="true"
         aria-expanded={open}
@@ -45,12 +100,15 @@ export function ActionsMenu({ items, label }: ActionsMenuProps) {
         }}
       >
         Actions
-        <span className={`actions-menu__chevron${open ? " actions-menu__chevron--open" : ""}`} aria-hidden="true">
-          &#9654;
-        </span>
       </button>
       {open && (
-        <div className="actions-menu__dropdown">
+        <div
+          className="actions-menu__dropdown"
+          ref={panelRef}
+          // Hidden for the one frame between being in the document and having been measured, so it is never painted at the top-left
+          // corner of the window before moving to the row it belongs to.
+          style={pos ? { top: pos.top, right: pos.right } : { visibility: "hidden" }}
+        >
           {items.map((item) => (
             <button
               key={item.label}

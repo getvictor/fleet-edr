@@ -62,6 +62,33 @@ describe("ActionsMenu", () => {
     expect(screen.getByRole("button", { name: "Actions for /bin/sh" })).toHaveTextContent("Actions");
   });
 
+  // The table this sits in scrolls sideways, so it carries overflow-x, which makes it clip vertically too. A panel laid out inside
+  // that box is cut off on the lower rows. Fixed positioning is what takes it out of the table's clip.
+  // What is asserted here is the half the component owns: the panel is given measured viewport coordinates rather than being laid
+  // out by the row. The other half, `position: fixed` in the stylesheet, is what those coordinates mean, and jsdom loads no CSS, so
+  // that is verified in a browser instead.
+  it("places the panel at measured viewport coordinates rather than inside the row", () => {
+    render(<ActionsMenu label="Actions for rule-1" items={items()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Actions for rule-1" }));
+
+    const panel = screen.getByRole("button", { name: "Edit" }).parentElement as HTMLElement;
+    expect(panel.style.top).not.toBe("");
+    expect(panel.style.right).not.toBe("");
+    // Measured, so it is placed rather than left at the window's corner behind the visibility guard.
+    expect(panel.style.visibility).not.toBe("hidden");
+  });
+
+  // A fixed panel does not travel with the row it was opened from, so a scroll would leave it hanging over whichever row slid
+  // underneath. The scroll that matters is the table wrapper's own, which does not bubble, hence the capture-phase listener.
+  it("closes when something scrolls underneath it", () => {
+    render(<ActionsMenu label="Actions for rule-1" items={items()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Actions for rule-1" }));
+    expect(screen.getByRole("button", { name: "Edit" })).toBeVisible();
+
+    fireEvent.scroll(window);
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
   it("carries an item's explanation as its hover title", () => {
     render(<ActionsMenu label="Actions for rule-1" items={items()} />);
     fireEvent.click(screen.getByRole("button", { name: "Actions for rule-1" }));

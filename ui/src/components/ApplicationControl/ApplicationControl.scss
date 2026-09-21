@@ -38,10 +38,17 @@
   max-width: 22rem;
 }
 
+// The copy control is pushed to the trailing edge rather than trailing the value, so it lands in the same place on every row and
+// reads as a column of its own. Against the values, which vary from ten characters to sixty-four, a button that follows the text
+// lands somewhere different on each line and has to be hunted for.
 .app-control__identifier-inner {
   display: flex;
   align-items: center;
-  gap: $pad-xsmall;
+  gap: $pad-small;
+}
+
+.app-control__identifier-inner .copy-button {
+  margin-left: auto;
 }
 
 // The clipping itself. The element holds the WHOLE identifier and shows what fits, so selecting the cell copies the value rather

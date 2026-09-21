@@ -85,7 +85,7 @@ function IdentifierCell({ value }: { readonly value: string }) {
         <span ref={textRef} className="app-control__identifier-text" title={truncated ? value : undefined}>
           {value}
         </span>
-        <CopyButton value={value} label={`Copy identifier ${value}`} />
+        <CopyButton value={value} label={`Copy identifier ${value}`} size="small" />
       </div>
     </td>
   );

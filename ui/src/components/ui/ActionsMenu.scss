@@ -33,22 +33,9 @@
     }
   }
 
-  // Turns to point at the panel it opens, the same way the host header's Details caret does.
-  &__chevron {
-    display: inline-block;
-    font-size: 0.65em;
-    line-height: 1;
-    transition: transform 120ms ease-in-out;
-
-    &--open {
-      transform: rotate(90deg);
-    }
-  }
-
+  // Fixed, so the table's overflow cannot clip it; top and right come from the trigger's measured position. See ActionsMenu.tsx.
   &__dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
+    position: fixed;
     min-width: 176px;
     background: $core-fleet-white;
     border-radius: 8px;
