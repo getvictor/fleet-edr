@@ -79,13 +79,116 @@ func (q *Query) BuildTree(
 		res.TotalMatched, res.TotalMatchedCapped = resolveTotalMatched(res.Returned, total, capped)
 	}
 
-	forest := buildForest(procs)
+	// Put the pinned process and its ancestors in the result whatever the row limit admitted. Without this the page the alert view
+	// asks for could not contain the alert it was opened for: the read is ORDER BY fork_time_ns DESC LIMIT, so it returns the NEWEST
+	// rows in the window, and on a busy host everything newer than the alert fills the page. Measured on one host, 10,321 processes
+	// forked after the alert inside the alert's own 24h window, which put the alerted process about 10,000 rows past the limit. The
+	// page then showed the whole host and the analyst was looking at unrelated activity (issue #1138).
+	//
+	// The ancestors come too, not just the pinned row. buildForest links ppid to pid within the fetched rows ONLY, so a process
+	// whose parent missed the cut becomes a root; pinning the row alone would place the alerted process in the tree as an orphan,
+	// which is a different wrong answer rather than the right one.
+	procs, resolved, err := q.withPinnedChain(ctx, hostID, procs, pinnedID)
+	if err != nil {
+		return api.ProcessTreeResult{}, err
+	}
+
+	forest := buildForest(procs, resolved)
 	if flatten {
 		res.Roots = forest
 		return res, nil
 	}
 	res.Roots = aggregateSiblingsPinned(forest, pinnedID)
 	return res, nil
+}
+
+// maxPinnedChainDepth bounds the ancestor walk. A real process tree is a handful of levels deep; this is the same order as
+// GetExecChain's own cap and exists so a cycle in ppid, which the data should not contain and has no defence against, cannot spin.
+const maxPinnedChainDepth = 64
+
+// withPinnedChain returns procs with the pinned process and its ancestors added, plus the parent edge it resolved for each step so
+// the forest can link them by identity rather than by process number. Both are empty when nothing is pinned.
+//
+// Each parent is resolved with q.store.GetProcessByPID, which is the ONE lookup in this codebase that answers "which generation of
+// this pid was running at that instant". Its ordering is the product of issues #714, #723, #724 and #799, and its own comment warns
+// that a second copy of it would drift; this walk therefore asks it rather than joining on ppid itself. The cost is one query per
+// level, which is bounded by the depth of a process tree rather than by how busy the host is.
+//
+// The edges are the half that makes the answer survive contact with the forest. Resolving the right generation and then handing the
+// forest a bare row leaves it to match on the process number, which picks the newest row holding that number; on a host that has
+// recycled the number, that is a different process entirely.
+//
+// Rows already read are kept and never re-fetched, but the walk does NOT stop when it meets one: the page is bounded by time, not by
+// tree shape, so a parent being present says nothing about whether ITS parent is.
+func (q *Query) withPinnedChain(
+	ctx context.Context, hostID string, procs []api.Process, pinnedID int64,
+) ([]api.Process, map[int64]int64, error) {
+	if pinnedID == 0 {
+		return procs, nil, nil
+	}
+	have := make(map[int64]struct{}, len(procs)+maxPinnedChainDepth)
+	for i := range procs {
+		have[procs[i].ID] = struct{}{}
+	}
+
+	cur, err := q.pinnedProcess(ctx, hostID, procs, pinnedID)
+	if err != nil || cur == nil {
+		// A pinned id that names no row is not an error to fail the whole tree on: the process may have been pruned by retention
+		// since the alert was raised, and the host's tree is still worth rendering.
+		return procs, nil, err
+	}
+	if _, ok := have[cur.ID]; !ok {
+		procs = append(procs, *cur)
+		have[cur.ID] = struct{}{}
+	}
+
+	// walked is this walk's own path, which is what a cycle has to be detected against. The `have` set above cannot do it: it is
+	// seeded with the whole page, so a parent already on the page reads as "seen" on the first visit and the walk would stop at the
+	// first ancestor the page happened to contain. Tracking the path separately also bounds a genuine cycle at its own length rather
+	// than at the depth cap, and, more importantly, stops the closing edge being recorded: a cycle of edges gives the forest no root
+	// to emit the chain from, so the pinned process would vanish from a read that completed successfully (issue #1138 review).
+	resolved := make(map[int64]int64, maxPinnedChainDepth)
+	walked := map[int64]struct{}{cur.ID: {}}
+
+	for range maxPinnedChainDepth {
+		if cur.PPID == 0 {
+			resolved[cur.ID] = 0
+			return procs, resolved, nil
+		}
+		parent, perr := q.store.GetProcessByPID(ctx, hostID, cur.PPID, cur.ForkTimeNs)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		if parent == nil || parent.ID == cur.ID {
+			resolved[cur.ID] = 0
+			return procs, resolved, nil
+		}
+		if _, looped := walked[parent.ID]; looped {
+			resolved[cur.ID] = 0
+			return procs, resolved, nil
+		}
+		if _, seen := have[parent.ID]; !seen {
+			procs = append(procs, *parent)
+			have[parent.ID] = struct{}{}
+		}
+		resolved[cur.ID] = parent.ID
+		walked[parent.ID] = struct{}{}
+		cur = parent
+	}
+	return procs, resolved, nil
+}
+
+// pinnedProcess finds the pinned row among those already read, and reads it by id only when it is not there. The common case, an
+// alert whose process the window read already covered, therefore costs nothing.
+func (q *Query) pinnedProcess(
+	ctx context.Context, hostID string, procs []api.Process, pinnedID int64,
+) (*api.Process, error) {
+	for i := range procs {
+		if procs[i].ID == pinnedID {
+			return &procs[i], nil
+		}
+	}
+	return q.store.GetProcessByID(ctx, hostID, pinnedID)
 }
 
 // resolveTotalMatched composes what the count established with what the read already proved, for a page the lookahead showed was
@@ -282,13 +385,26 @@ func (q *Query) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 
 // buildForest constructs a tree from a flat list of processes by matching ppid -> pid. Uses Process.ID as map key to handle PID reuse
 // correctly, and builds parent-child links via pointers before converting to value tree so grandchildren aren't lost.
-func buildForest(procs []api.Process) []api.ProcessNode {
+func buildForest(procs []api.Process, resolved map[int64]int64) []api.ProcessNode {
 	nodeMap, pidToID := indexProcesses(procs)
 
 	childIDs := make(map[int64][]int64) // parentID -> child IDs
 	var rootIDs []int64
 	for _, node := range nodeMap {
-		parentDBID, parentFound := pidToID[node.PPID]
+		// A parent resolved by the caller wins over matching on the process number. pidToID keeps the NEWEST row per number, which
+		// is the right guess when the only evidence is the page, and the wrong answer when the number has been reused: a child
+		// whose parent generation was fetched deliberately would be hung under whichever later generation happens to share the
+		// number, and the correct ancestor left dangling as a root. That is a worse answer than the one this change set out to fix,
+		// because the child is now present and attributed to a process it never ran under (issue #1138 review).
+		// A resolved entry of 0 is the caller saying "I walked up from here and stopped": the top of a resolved chain, with no
+		// parent to find. It needs no branch of its own, because no row has id 0, so the nodeMap lookup below fails and the node
+		// falls through to rootIDs. What matters is that it does NOT fall through to the process number: where the walk stopped
+		// BECAUSE the ancestry looped, the number points straight back into the loop, every member gets a parent, none is a root,
+		// and the forest emits none of them, losing the pinned process from a read that completed successfully (#1138 review).
+		parentDBID, parentFound := resolved[node.ID]
+		if !parentFound {
+			parentDBID, parentFound = pidToID[node.PPID]
+		}
 		if parentFound {
 			if _, ok := nodeMap[parentDBID]; ok && parentDBID != node.ID {
 				childIDs[parentDBID] = append(childIDs[parentDBID], node.ID)

@@ -822,6 +822,32 @@ func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid i
 	return &proc, nil
 }
 
+// GetProcessByID returns one process row by its own id, scoped to the host so an id from another host's tree cannot be read
+// through it. Nil and no error when the row is not there, which a caller reaching for a process the retention sweep has since
+// removed will see.
+//
+// This is the one lookup that does not have to reason about pid reuse: the id names exactly one row. It exists for the tree read,
+// which is given an alerted process by id and has to place that process in its result whatever the row limit admitted.
+func (s *Store) GetProcessByID(ctx context.Context, hostID string, id int64) (*api.Process, error) {
+	var proc api.Process
+	err := s.db.GetContext(ctx, &proc, `
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
+		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		       is_snapshot, last_seen_ns
+		FROM processes
+		WHERE id = ? AND host_id = ?`,
+		id, hostID,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query process by id: %w", err)
+	}
+	return &proc, nil
+}
+
 // GetChildProcesses returns processes whose PPID matches the given PID and were forked within the given time range. Satisfies
 // api.GraphReader.
 func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, tr api.TimeRange) ([]api.Process, error) {

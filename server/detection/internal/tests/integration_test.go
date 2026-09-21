@@ -43,6 +43,7 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/testdb/full"
 	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
+	"github.com/jmoiron/sqlx"
 )
 
 // stubUserExists is a closure-typed UserExists fixture. Tests pin the known-user set up front; UpdateAlertStatus consults it for the
@@ -397,6 +398,16 @@ func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 // EventLog work queue is a real MySQL table (event_queue) so the processor's FOR UPDATE SKIP LOCKED claim is exercised for real; only
 // the durable archive is in-memory (the real ClickHouse archive has its own integration test). ADR-0015.
 func newDetectionWithArchive(t *testing.T, opts detectionOpts) (*bootstrap.Detection, *detectiontestkit.MemArchive) {
+	d, archive, _ := newDetectionWithDB(t, opts)
+	return d, archive
+}
+
+// newDetectionWithDB is newDetectionWithArchive plus the handle it opened, for a test that has to write rows the ingest path cannot
+// produce. Malformed process ancestry is the case it exists for: the pipeline derives ppid from agent events and will not emit a
+// cycle, so a reader's defence against one can only be exercised by writing the rows directly.
+func newDetectionWithDB(
+	t *testing.T, opts detectionOpts,
+) (*bootstrap.Detection, *detectiontestkit.MemArchive, *sqlx.DB) {
 	t.Helper()
 	db := full.Open(t)
 	vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db})
@@ -447,7 +458,7 @@ func newDetectionWithArchive(t *testing.T, opts detectionOpts) (*bootstrap.Detec
 			}
 		})
 	}
-	return d, archive
+	return d, archive, db
 }
 
 // withHostID pins host_id on the request context the way the real endpoint.HostToken middleware does. Lets the ingest handler tests
