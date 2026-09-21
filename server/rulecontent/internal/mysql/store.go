@@ -165,15 +165,15 @@ func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, 
 	return true, version, nil
 }
 
-// checkPackIsShipped refuses a pack whose content claims to be an operator's.
+// checkPackIsBuiltIn refuses a pack whose content claims to be an operator's.
 //
-// Shipped content is what a pack IS, so a document in one declaring otherwise is a contradiction rather than an edge case.
+// Built-in content is what a pack IS, so a document in one declaring otherwise is a contradiction rather than an edge case.
 // Accepting it would let a build install rows that no operator wrote and that carry no upstream credit, which is the attribution
 // failure #874 closed, arriving through a different door.
-func checkPackIsShipped(pack []api.Document) error {
+func checkPackIsBuiltIn(pack []api.Document) error {
 	for _, d := range pack {
 		if d.Source != "" && d.Source != api.SourceVendored {
-			return fmt.Errorf("%w: %s in a pack declares %q, and a pack is shipped content by definition",
+			return fmt.Errorf("%w: %s in a pack declares %q, and a pack is built-in content by definition",
 				api.ErrUnknownSource, d.Path, d.Source)
 		}
 	}
@@ -181,8 +181,8 @@ func checkPackIsShipped(pack []api.Document) error {
 }
 
 // packMinusOperatorRules returns the pack documents an upgrade may install: all of them except the ones whose RULE the operator
-// has taken over, each marked as the shipped content it is. It also reports what it skipped, because that is a divergence from
-// the shipped pack an operator is entitled to know about.
+// has taken over, each marked as the built-in content it is. It also reports what it skipped, because that is a divergence from
+// the built-in pack an operator is entitled to know about.
 //
 // Keyed on rule IDENTITY rather than on path, which is the correction review caught. A rule is identified by its file stem, so an
 // operator's `authored/foo.yml` and a pack's `imported/foo.yml` are the same rule stored twice. Installing both does not shadow
@@ -231,25 +231,25 @@ func (w *txWriter) exec(doing, query string, args ...any) {
 	}
 }
 
-// replaceShippedWithin bumps the corpus version and swaps the shipped documents for docs, in the caller's transaction.
+// replaceBuiltInWithin bumps the corpus version and swaps the built-in documents for docs, in the caller's transaction.
 //
 // Shared by installing a pack and by rolling one back, because they are the same three writes in the same order: bump, clear the
-// shipped half, insert the new one. They had a copy each, which is two places for the ordering to drift and twice the error
+// built-in half, insert the new one. They had a copy each, which is two places for the ordering to drift and twice the error
 // branches for one behaviour. `doing` names the caller so a failure still says which operation it came from.
-func replaceShippedWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document, doing string) error {
+func replaceBuiltInWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document, doing string) error {
 	w := &txWriter{ctx: ctx, tx: tx}
 	w.exec(doing+": bump rule corpus version", "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1")
-	w.exec(doing+": clear shipped rule corpus documents",
+	w.exec(doing+": clear built-in rule corpus documents",
 		"DELETE FROM rule_corpus_documents WHERE source = ?", string(api.SourceVendored))
 	for _, d := range docs {
-		w.exec(doing+": write shipped rule corpus document "+d.Path,
+		w.exec(doing+": write built-in rule corpus document "+d.Path,
 			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
 			d.Path, string(d.Content), string(api.SourceVendored))
 	}
 	return w.err
 }
 
-// retainCurrentShippedWithin snapshots the shipped content an upgrade is about to replace, so a bad pack is recoverable.
+// retainCurrentBuiltInWithin snapshots the built-in content an upgrade is about to replace, so a bad pack is recoverable.
 //
 // One generation, replaced wholesale each time. A deeper history would need a retention policy, a way to name a generation and a
 // way to choose between them, none of which anyone has asked for; restoring the set that was just replaced is what makes a bad
@@ -258,11 +258,11 @@ func replaceShippedWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document,
 // The operator's own rules are deliberately NOT snapshotted. An upgrade never touches them, so they cannot be lost by one, and
 // including them would make a rollback able to revert an operator's edit made after the upgrade, which is not what rolling back a
 // PACK means.
-func retainCurrentShippedWithin(ctx context.Context, tx *sqlx.Tx, shipped []api.Document) error {
+func retainCurrentBuiltInWithin(ctx context.Context, tx *sqlx.Tx, shipped []api.Document) error {
 	w := &txWriter{ctx: ctx, tx: tx}
-	w.exec("clear retained shipped content", "DELETE FROM rule_corpus_previous_documents")
+	w.exec("clear retained built-in content", "DELETE FROM rule_corpus_previous_documents")
 	for _, d := range shipped {
-		w.exec("retain shipped document "+d.Path,
+		w.exec("retain built-in document "+d.Path,
 			"INSERT INTO rule_corpus_previous_documents (path, content) VALUES (?, ?)", d.Path, string(d.Content))
 	}
 	// Derived from the snapshot rather than copied from pack_digest, which is deliberately EMPTY on a corpus that predates
@@ -273,26 +273,26 @@ func retainCurrentShippedWithin(ctx context.Context, tx *sqlx.Tx, shipped []api.
 	return w.err
 }
 
-// UpgradeVendoredTo installs pack as the shipped half of the corpus, leaving the operator's own content alone. It reports
+// UpgradeVendoredTo installs pack as the built-in half of the corpus, leaving the operator's own content alone. It reports
 // whether anything changed, and the version.
 //
-// Replacing only the shipped half is the whole point: an operator's rules are theirs and an upgrade is not a licence to discard
+// Replacing only the built-in half is the whole point: an operator's rules are theirs and an upgrade is not a licence to discard
 // them. Their TUNING survives for a different reason and without help here, because per-rule mode, severity overrides and
 // exclusions live in detection_rule_settings keyed by rule id, not in these files.
 //
-// A path the operator has taken over is left to them. Writing their own version of a shipped rule makes that document theirs
+// A path the operator has taken over is left to them. Writing their own version of a built-in rule makes that document theirs
 // (#874), so a pack that still ships the same path must not quietly take it back: the upgrade skips those paths, and the operator
 // keeps the rule they wrote until they delete it.
 //
 // The decision to write compares what this pack WOULD store against what is stored, rather than comparing the build's pack
 // against the recorded digest, and the difference is what makes this idempotent. The recorded digest describes the shipped
-// content actually held, so on a deployment that has overridden one shipped rule it can never equal the build's own pack digest;
+// content actually held, so on a deployment that has overridden one built-in rule it can never equal the build's own pack digest;
 // triggering on that comparison would re-run the upgrade on every boot, bumping the version each time and making every replica
 // reload a corpus that did not change.
 func (s *Store) UpgradeVendoredTo(
 	ctx context.Context, pack []api.Document, identity api.RuleIdentity,
 ) (api.PackInstall, error) {
-	if err := checkPackIsShipped(pack); err != nil {
+	if err := checkPackIsBuiltIn(pack); err != nil {
 		return api.PackInstall{}, err
 	}
 
@@ -329,7 +329,7 @@ func (s *Store) UpgradeVendoredTo(
 	// A pack the operator rolled back from is not installed again. Without this the next start would reinstall what they just
 	// rejected, and every start after that, so the only way to stay on the older generation would be never to restart.
 	//
-	// Compared on what this pack WOULD STORE rather than on the pack as shipped, which review caught: those differ on a
+	// Compared on what this pack WOULD STORE rather than on the pack as built in, which review caught: those differ on a
 	// deployment holding an override, so a build differing from the declined one only in an overridden rule would install the
 	// rest of it and undo the rollback. Like-for-like is the only comparison that means "this is the content you rejected".
 	if declined != "" && declined == target {
@@ -364,11 +364,11 @@ func (s *Store) UpgradeVendoredTo(
 	// Retain the generation this replaces, so it can be restored. Written in the same transaction as the replacement for the
 	// reason the digest is: separately, the retention could fail on its own and leave a corpus whose "previous" is a generation
 	// that was never actually replaced, which is worse than having none because a rollback would then install the wrong thing.
-	if err := retainCurrentShippedWithin(ctx, tx, api.VendoredDocuments(stored)); err != nil {
+	if err := retainCurrentBuiltInWithin(ctx, tx, api.VendoredDocuments(stored)); err != nil {
 		return api.PackInstall{}, err
 	}
 
-	if err := replaceShippedWithin(ctx, tx, want, "install"); err != nil {
+	if err := replaceBuiltInWithin(ctx, tx, want, "install"); err != nil {
 		return api.PackInstall{}, err
 	}
 	version++
@@ -387,13 +387,13 @@ func (s *Store) UpgradeVendoredTo(
 	return api.PackInstall{Changed: true, Version: version, Skipped: skipped}, nil
 }
 
-// RollbackPack restores the shipped content the last upgrade replaced, and records that this build's pack was declined.
+// RollbackPack restores the built-in content the last upgrade replaced, and records that this build's pack was declined.
 //
-// declinedShipped is the digest of the pack being rolled back FROM, which the caller supplies because only it knows what this
+// declinedBuiltIn is the digest of the pack being rolled back FROM, which the caller supplies because only it knows what this
 // build carries. Recording it is what makes the rollback survive a restart: the upgrade skips a pack whose digest matches, so the
 // operator does not have to avoid restarting to stay on the older generation.
 //
-// The operator's own rules are untouched, as they are by an upgrade. Rolling back a PACK means restoring the shipped generation,
+// The operator's own rules are untouched, as they are by an upgrade. Rolling back a PACK means restoring the built-in generation,
 // not reverting edits the operator made.
 //
 // Reports api.ErrNoPreviousPack when there is nothing retained, which is the ordinary state of a deployment that has never
@@ -413,9 +413,9 @@ func (s *Store) RollbackPack(
 	}
 
 	// Whether a generation is retained is the recorded DIGEST, not the row count, and review was right that the difference is
-	// reachable: a corpus holding only the operator's rules retains a generation with zero shipped documents, whose digest is the
+	// reachable: a corpus holding only the operator's rules retains a generation with zero built-in documents, whose digest is the
 	// digest of nothing rather than empty. Counting rows would report that as "never upgraded" and refuse to undo the upgrade
-	// that added shipped rules to it.
+	// that added built-in rules to it.
 	var meta struct {
 		Rejected string `db:"installed_pack_digest"`
 		Previous string `db:"previous_pack_digest"`
@@ -425,7 +425,7 @@ func (s *Store) RollbackPack(
 		return api.PackRollback{}, fmt.Errorf("read rule corpus meta: %w", err)
 	}
 	// What is declined is the generation the UPGRADE installed, not the corpus's current digest. Operator edits recompute the
-	// latter, so deleting a shipped rule between the upgrade and the rollback would record a decline describing content no build
+	// latter, so deleting a built-in rule between the upgrade and the rollback would record a decline describing content no build
 	// ever shipped, and the next start would reinstall the rejected generation.
 	rejected := meta.Rejected
 
@@ -435,7 +435,7 @@ func (s *Store) RollbackPack(
 	}
 	if err := tx.SelectContext(ctx, &retained,
 		"SELECT path, content FROM rule_corpus_previous_documents ORDER BY path"); err != nil {
-		return api.PackRollback{}, fmt.Errorf("read retained shipped content: %w", err)
+		return api.PackRollback{}, fmt.Errorf("read retained built-in content: %w", err)
 	}
 	var rows []corpusRow
 	if err := tx.SelectContext(ctx, &rows, selectCorpusDocuments); err != nil {
@@ -460,7 +460,7 @@ func (s *Store) RollbackPack(
 	}
 	restore, withheld := packMinusOperatorRules(snapshot, stored, identity)
 
-	if err := replaceShippedWithin(ctx, tx, restore, "restore"); err != nil {
+	if err := replaceBuiltInWithin(ctx, tx, restore, "restore"); err != nil {
 		return api.PackRollback{}, err
 	}
 	version++
@@ -472,7 +472,7 @@ func (s *Store) RollbackPack(
 	// The retained generation has been consumed: it is the live one now, so there is nothing behind it to go back to. Leaving it
 	// in place would let a second rollback "restore" the content already installed and report success having changed nothing.
 	w := &txWriter{ctx: ctx, tx: tx}
-	w.exec("clear retained shipped content", "DELETE FROM rule_corpus_previous_documents")
+	w.exec("clear retained built-in content", "DELETE FROM rule_corpus_previous_documents")
 	// The declined pack is the content being REPLACED, read before the restore overwrote it, and it is deliberately not derived
 	// from the build this process is running: during a rolling deployment a rollback served by an older replica would otherwise
 	// decline that replica's pack and leave the newer one free to reinstall. What the operator rejected is what was stored.
@@ -483,7 +483,7 @@ func (s *Store) RollbackPack(
 		return api.PackRollback{}, w.err
 	}
 	// In THIS transaction, so the audit entry commits with the rollback or not at all (issue #886). The rollback is the change
-	// with the widest blast radius here, since it replaces every shipped rule at once, which is why it was the one review
+	// with the widest blast radius here, since it replaces every built-in rule at once, which is why it was the one review
 	// objected to losing an audit row for. Built from the result rather than passed in, for the same reason the document paths
 	// build theirs from the version: what is worth recording is what the rollback DID, and only this transaction knows it yet.
 	result := api.PackRollback{Restored: restored, Version: version, Withheld: withheld}
@@ -502,7 +502,7 @@ func (s *Store) RollbackPack(
 	return result, nil
 }
 
-// PackStatusAgainst reports what shipped content is stored and how it differs from the pack this build carries.
+// PackStatusAgainst reports what built-in content is stored and how it differs from the pack this build carries.
 //
 // The comparison is by rule IDENTITY rather than by path, because that is what an operator recognises and what their per-rule
 // tuning is keyed on. A rule that moved between directories upstream is the same rule to them, and reporting it as one removed
@@ -548,7 +548,7 @@ func (s *Store) PackStatusAgainst(ctx context.Context, pack []api.Document, iden
 	return status, nil
 }
 
-// diffByIdentity reports which RULES differ between the shipped content stored and the pack a build carries.
+// diffByIdentity reports which RULES differ between the built-in content stored and the pack a build carries.
 func diffByIdentity(stored, pack []api.Document, identity api.RuleIdentity) (added, removed, changed []string) {
 	storedBy := make(map[string]string, len(stored))
 	for _, d := range stored {
@@ -690,7 +690,7 @@ func (s *Store) withVersionBump(
 	}
 	// Re-derived here rather than in each mutation, for the same reason the version bump is: neither single-document path can
 	// forget it. Both of them can change the VENDORED set even though neither looks like it does. PutDocument over a shipped
-	// document reclassifies that row as authored, and DeleteDocument can remove a shipped one; in both cases the corpus no
+	// document reclassifies that row as authored, and DeleteDocument can remove a built-in one; in both cases the corpus no
 	// longer holds the pack it did, and a digest left alone would keep asserting it does. That assertion is the one thing the
 	// digest exists to make, so a stale one is worse than none.
 	//

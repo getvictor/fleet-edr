@@ -6,7 +6,7 @@ import { ReauthModal } from "./ReauthModal";
 import { Button } from "./ui/Button";
 import "./RulePackPanel.scss";
 
-// ChangeList names the shipped rules one side of a difference holds, or nothing when there are none.
+// ChangeList names the built-in rules one side of a difference holds, or nothing when there are none.
 function ChangeList({ label, rules }: { readonly label: string; readonly rules: readonly string[] }) {
   if (rules.length === 0) return null;
   return (
@@ -19,11 +19,11 @@ function ChangeList({ label, rules }: { readonly label: string; readonly rules: 
   );
 }
 
-// RulePackPanel reports which generation of shipped rules the deployment runs and offers to roll it back (issue #1001). Installing the
+// RulePackPanel reports which generation of built-in rules the deployment runs and offers to roll it back (issue #1001). Installing the
 // rules a build ships replaces the previous set, and when one of the new rules turns out to be noisy or wrong the fix is to put the
 // previous set back, which the API already does.
 //
-// Rules the deployment wrote are never touched by a rollback. A shipped rule whose identifier one of them now holds is not restored over
+// Rules the deployment wrote are never touched by a rollback. A built-in rule whose identifier one of them now holds is not restored over
 // it, and the server names those after the rollback, which is when it knows them.
 export function RulePackPanel({ canWrite }: { readonly canWrite: boolean }) {
   const [status, setStatus] = useState<RulePackStatus | null>(null);
@@ -62,17 +62,17 @@ export function RulePackPanel({ canWrite }: { readonly canWrite: boolean }) {
       .finally(() => { setRollingBack(false); });
   };
 
-  if (error !== null) return <p className="rule-pack rule-pack__note">The shipped rules status could not be loaded: {error}</p>;
+  if (error !== null) return <p className="rule-pack rule-pack__note">The built-in rules status could not be loaded: {error}</p>;
   if (status === null) return null;
 
   return (
     <section className="rule-pack" aria-labelledby="rule-pack-heading">
-      <h2 id="rule-pack-heading" className="rule-pack__heading">Shipped rules</h2>
+      <h2 id="rule-pack-heading" className="rule-pack__heading">Built-in rules</h2>
       <p className="rule-pack__note">
         {status.current
-          ? "This deployment runs the shipped rules this build carries."
-          : "This deployment does not run the shipped rules this build carries."}
-        {status.declined !== "" && " A set of shipped rules was rolled back and will not be reinstalled."}
+          ? "This deployment runs the built-in rules this build carries."
+          : "This deployment does not run the built-in rules this build carries."}
+        {status.declined !== "" && " A set of built-in rules was rolled back and will not be reinstalled."}
       </p>
       {!status.current && (
         <>
@@ -83,7 +83,7 @@ export function RulePackPanel({ canWrite }: { readonly canWrite: boolean }) {
       )}
       {result !== null && (
         <div className="rule-pack__result" role="status">
-          Rolled back to the previous shipped rules. The server applies them when it next reloads its rules, within 30 seconds.
+          Rolled back to the previous built-in rules. The server applies them when it next reloads its rules, within 30 seconds.
           {result.withheld.length > 0 && (
             <>
               {" "}Not restored, because a rule you wrote now uses the identifier:{" "}
@@ -100,19 +100,19 @@ export function RulePackPanel({ canWrite }: { readonly canWrite: boolean }) {
       )}
       {canWrite && status.can_roll_back && (
         <Button size="small" variant="alert" onClick={() => { setRollbackError(null); setRollbackOpen(true); }}>
-          Roll back shipped rules
+          Roll back built-in rules
         </Button>
       )}
       {rollbackOpen && (
         <ReasonModal
-          title="Roll back shipped rules"
+          title="Roll back built-in rules"
           description={
-            "Restores the previous set of shipped rules and keeps this deployment from reinstalling the current one. Rules you wrote " +
-            "are untouched, and a shipped rule whose identifier one of yours uses is not restored."
+            "Restores the previous set of built-in rules and keeps this deployment from reinstalling the current one. Rules you wrote " +
+            "are untouched, and a built-in rule whose identifier one of yours uses is not restored."
           }
           confirmLabel="Roll back"
           confirmVariant="alert"
-          placeholder="Why are the shipped rules being rolled back?"
+          placeholder="Why are the built-in rules being rolled back?"
           busy={rollingBack}
           error={rollbackError}
           onConfirm={onConfirmRollback}

@@ -27,13 +27,13 @@ afterEach(() => {
 });
 
 describe("RulePackPanel", () => {
-  it("says the deployment runs the shipped rules this build carries", async () => {
+  it("says the deployment runs the built-in rules this build carries", async () => {
     vi.spyOn(api, "getRulePackStatus").mockResolvedValue(status());
     render(<RulePackPanel canWrite={false} />);
 
-    expect(await screen.findByText("This deployment runs the shipped rules this build carries.")).toBeVisible();
+    expect(await screen.findByText("This deployment runs the built-in rules this build carries.")).toBeVisible();
     // Reading status is not permission to change it.
-    expect(screen.queryByRole("button", { name: "Roll back shipped rules" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Roll back built-in rules" })).toBeNull();
   });
 
   it("names the rules that differ when the deployment is not current", async () => {
@@ -48,17 +48,17 @@ describe("RulePackPanel", () => {
   });
 
   // spec:web-ui/rules-can-be-written-in-the-console/an-operator-rolls-back-the-shipped-rules-with-a-reason
-  it("rolls back with a reason and names the shipped rules it did not restore", async () => {
+  it("rolls back with a reason and names the built-in rules it did not restore", async () => {
     vi.spyOn(api, "getRulePackStatus").mockResolvedValue(status());
     const rollback = vi.spyOn(api, "rollbackRulePack").mockResolvedValue({ restored: "pack-1", version: 9, withheld: ["keychain_dump"] });
     render(<RulePackPanel canWrite />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Roll back shipped rules" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Roll back built-in rules" }));
     fireEvent.change(screen.getByLabelText("Reason (required for audit log)"), { target: { value: "new pack is noisy" } });
     fireEvent.click(screen.getByRole("button", { name: "Roll back" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Rolled back to the previous shipped rules. The server applies them when it next reloads its rules, within 30 seconds.",
+      "Rolled back to the previous built-in rules. The server applies them when it next reloads its rules, within 30 seconds.",
     );
     expect(screen.getByRole("status")).toHaveTextContent("keychain_dump");
     expect(rollback).toHaveBeenCalledWith("new pack is noisy");
@@ -68,7 +68,7 @@ describe("RulePackPanel", () => {
     vi.spyOn(api, "getRulePackStatus").mockResolvedValue(status({ can_roll_back: false }));
     render(<RulePackPanel canWrite />);
 
-    await screen.findByText("This deployment runs the shipped rules this build carries.");
-    expect(screen.queryByRole("button", { name: "Roll back shipped rules" })).toBeNull();
+    await screen.findByText("This deployment runs the built-in rules this build carries.");
+    expect(screen.queryByRole("button", { name: "Roll back built-in rules" })).toBeNull();
   });
 });

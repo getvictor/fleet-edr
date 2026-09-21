@@ -7,7 +7,7 @@ import (
 	"slices"
 )
 
-// PackDigest identifies a set of shipped rule documents by their content.
+// PackDigest identifies a set of built-in rule documents by their content.
 //
 // Derived rather than declared, which is the point. A hand-maintained pack version has to be bumped by whoever edits the corpus,
 // and forgetting is SILENT: the deployment believes it is current while running different rules, and nothing anywhere disagrees.
@@ -46,7 +46,7 @@ func PackDigest(docs []Document) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// VendoredDocuments returns just the documents shipped with the product.
+// VendoredDocuments returns just the documents built in to the product.
 //
 // The counterpart to PackDigest, and separate from it so the choice of what counts as "the pack" is visible where it is made. An
 // operator's own rules are not part of the pack: adding one must not make a deployment look out of date, and removing one must

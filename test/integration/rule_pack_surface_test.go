@@ -13,7 +13,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/testkit"
 )
 
-// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-refused-restore-is-not-recorded
+// spec:rule-content/an-operator-can-see-and-restore-the-built-in-rule-content/a-refused-restore-is-not-recorded
 //
 // TestRulePackSurface_EndToEnd walks the pack surface against the real store, the real chokepoint and the real audit recorder.
 //

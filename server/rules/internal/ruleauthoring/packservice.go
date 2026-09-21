@@ -13,7 +13,7 @@ import (
 // PackService is the pack lifecycle with an actor, a reason and an audit row attached.
 //
 // Separate from Service beside it because the two operate on different nouns: that one changes individual rule documents, this
-// one replaces every shipped rule at once. Sharing a type would mean one audit target type for two very different blast radii.
+// one replaces every built-in rule at once. Sharing a type would mean one audit target type for two very different blast radii.
 //
 // It adds nothing to reading status, which changes nothing and needs no reason, so that method is a pass-through. The asymmetry
 // is deliberate: a reason is required exactly where something is being changed.
@@ -33,7 +33,7 @@ func NewPackService(packs rulecontentapi.PackLifecycle, drain *auditoutbox.Drain
 	return &PackService{packs: packs, drain: drain}, nil
 }
 
-// Status reports which generation of shipped rules is installed and how it differs from the one this build carries.
+// Status reports which generation of built-in rules is installed and how it differs from the one this build carries.
 func (s *PackService) Status(ctx context.Context) (rulecontentapi.PackStatus, error) {
 	return s.packs.Status(ctx)
 }
@@ -41,7 +41,7 @@ func (s *PackService) Status(ctx context.Context) (rulecontentapi.PackStatus, er
 // Rollback restores the generation the last install replaced, and records who did it and why.
 //
 // The reason is required, as it is for every other change to rule content. This one is the strongest case for it: the change
-// swaps out every shipped detection a deployment runs, so an entry saying only that it happened would be the least useful of the
+// swaps out every built-in detection a deployment runs, so an entry saying only that it happened would be the least useful of the
 // set.
 func (s *PackService) Rollback(
 	ctx context.Context, actor *identityapi.Actor, reason string,
@@ -51,7 +51,7 @@ func (s *PackService) Rollback(
 	}
 	// The audit entry is built from the rollback's own result and written in the transaction that performs it (issue #886), so
 	// the two commit together. It used to be written afterwards, with a failure logged rather than returned, which left a window
-	// in which every shipped rule changed durably and nothing named who did it. That was the lesser of the two outcomes then
+	// in which every built-in rule changed durably and nothing named who did it. That was the lesser of the two outcomes then
 	// available, since returning the error would have reported failure for a change that had already happened; the outbox is
 	// what makes a third outcome available.
 	rolled, err := s.packs.Rollback(ctx, func(r rulecontentapi.PackRollback) (rulecontentapi.AuditOutboxEntry, error) {
@@ -61,7 +61,7 @@ func (s *PackService) Rollback(
 			"corpus_version": r.Version,
 		}
 		if len(r.Withheld) > 0 {
-			// Recorded because the deployment is deliberately not running shipped rules it was offered, and a reviewer asking
+			// Recorded because the deployment is deliberately not running built-in rules it was offered, and a reviewer asking
 			// why a detection is absent wants that visible at the point the decision was made.
 			payload["withheld"] = r.Withheld
 		}

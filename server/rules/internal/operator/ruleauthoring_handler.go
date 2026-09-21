@@ -41,7 +41,7 @@ type ruleAuthoringService interface {
 	Check(ctx context.Context, doc rulecontentapi.Document) ([]string, error)
 }
 
-// rulePackService is the pack LIFECYCLE, as opposed to the individual documents above: which generation of shipped rules this
+// rulePackService is the pack LIFECYCLE, as opposed to the individual documents above: which generation of built-in rules this
 // deployment runs, and restoring the one before it. Its own port because it needs something the corpus does not, the pack this
 // build carries, which only the rulecontent side can read.
 type rulePackService interface {
@@ -107,7 +107,7 @@ func orEmpty(v []string) []string {
 	return v
 }
 
-// handlePackStatus reports which generation of shipped rules this deployment runs and how it differs from this build's.
+// handlePackStatus reports which generation of built-in rules this deployment runs and how it differs from this build's.
 //
 // Read authorization, because it changes nothing. It answers a question a deployment could not answer at all before: rule
 // content is seeded once and then installed from each build, and the only signal that it had moved on was the rules themselves.
@@ -139,7 +139,7 @@ func (h *RuleAuthoringHandler) handlePackStatus(w http.ResponseWriter, r *http.R
 	})
 }
 
-// handlePackRollback restores the generation of shipped rules the last install replaced.
+// handlePackRollback restores the generation of built-in rules the last install replaced.
 func (h *RuleAuthoringHandler) handlePackRollback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,

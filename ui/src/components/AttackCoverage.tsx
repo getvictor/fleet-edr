@@ -82,7 +82,7 @@ export function AttackCoverage() {
 
   const { groups, distinctRules } = useMemo(() => buildCoverageGroups(layer), [layer]);
   // Split by whether anything covering the technique actually alerts. The server scores a technique below 1 when every rule
-  // covering it raises nothing as shipped (issue #764), and most of the catalog is now in that state, so a single "techniques
+  // covering it raises nothing as built in (issue #764), and most of the catalog is now in that state, so a single "techniques
   // covered" figure would tell a reader the product raises alerts for sixty-odd techniques when it raises them for thirteen.
   //
   // The wording stays mode-neutral. A sub-1 score means monitor OR disabled, and calling it "monitored" would misstate a disabled

@@ -180,7 +180,7 @@ func legacyFindDumpKeychainArg(argv []string) (string, bool) {
 }
 
 // legacyDumpKeychainTokens and legacySecurityBinaryPaths are the two value sets the Go rule matched against, frozen alongside it.
-// The live values now live in the pack file's detection block, and TestShippedDetectionMatchesTheFrozenTokens holds them together.
+// The live values now live in the pack file's detection block, and TestBuiltInDetectionMatchesTheFrozenTokens holds them together.
 var legacyDumpKeychainTokens = map[string]bool{"dump-keychain": true}
 
 var legacySecurityBinaryPaths = map[string]bool{"/usr/bin/security": true}
@@ -208,8 +208,8 @@ var legacyLaunchctlPaths = map[string]bool{"/bin/launchctl": true, "/usr/bin/lau
 //
 // This is the difference between an oracle and a mirror. Review caught that the first version of these helpers read the live
 // symbols: a change to either would have moved both sides of the property together, and it would have kept passing while the
-// rule's meaning changed. Frozen literals mean the property compares the shipped detection against what the rule detected on the
-// day it was converted, which is the only comparison worth making. TestLiveSymbolsStillAgreeWithTheShippedDetections ties the live
+// rule's meaning changed. Frozen literals mean the property compares the built-in detection against what the rule detected on the
+// day it was converted, which is the only comparison worth making. TestLiveSymbolsStillAgreeWithTheBuiltInDetections ties the live
 // values back to the detection separately, so the two are kept in step without either one being able to hide a drift.
 var legacyLaunchAgentPath = regexp.MustCompile(`(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$`)
 
@@ -244,7 +244,7 @@ func legacyLaunchAgentFires(path string, argv []string) bool {
 	return plist != "" && legacyLaunchAgentPath.MatchString(plist)
 }
 
-// legacyMatchDyldArg is the reference the property compares the shipped detection against.
+// legacyMatchDyldArg is the reference the property compares the built-in detection against.
 //
 // Corrected for issue #792, which changed what this rule detects rather than how it is written. The previous version stopped the
 // assignment scan at the first token without "=", so an option ahead of the assignment ended it and the injection was invisible;
@@ -297,7 +297,7 @@ func legacyMatchDyldArg(path string, args []string) string {
 	return ""
 }
 
-// TestEquivalence_KeychainDump: the Go matcher and the shipped detection agree on every generated invocation.
+// TestEquivalence_KeychainDump: the Go matcher and the built-in detection agree on every generated invocation.
 func TestEquivalence_KeychainDump(t *testing.T) {
 	t.Parallel()
 
@@ -488,7 +488,7 @@ func TestEnvOptionPrefixIsTheOtherDeliberateChange(t *testing.T) {
 	require.Empty(t, legacyMatchDyldArg("/usr/bin/env", argv),
 		"the Go matcher stopped at env's own option and reported nothing, which was the bug")
 	require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", argv),
-		"the shipped detection must see past the option prefix and fire")
+		"the built-in detection must see past the option prefix and fire")
 
 	// And the correction is bounded: an option env does not have still reports nothing, because env execs nothing at all.
 	refused := []string{"env", "-z", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}
@@ -510,7 +510,7 @@ func TestEnvRefusalRemovesAFindingDeterministically(t *testing.T) {
 	require.NotEmpty(t, legacyMatchDyldArg("/usr/bin/env", argv),
 		"the Go matcher walked past the empty name and reported the assignment, which is the fabrication being removed")
 	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", argv),
-		"the shipped detection must report nothing for an invocation env refuses to run")
+		"the built-in detection must report nothing for an invocation env refuses to run")
 }
 
 // TestDetectionsAreCaseSensitiveWhereGoIs pins the reason each detection uses |re. A plain Sigma value folds case, so
@@ -521,7 +521,7 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	_, goFires := legacyFindDumpKeychainArg([]string{"security", "DUMP-KEYCHAIN"})
 	require.False(t, goFires, "the Go matcher was a case-sensitive map lookup")
 	require.False(t, evalCompiled(t, keychainDetection(), "/usr/bin/security", []string{"security", "DUMP-KEYCHAIN"}),
-		"the shipped detection must not fold case either")
+		"the built-in detection must not fold case either")
 
 	require.True(t, evalCompiled(t, keychainDetection(), "/usr/bin/security", []string{"security", "dump-keychain"}),
 		"and it must still fire on the real spelling")
@@ -531,7 +531,7 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	require.False(t, legacyKeychainFires("/usr/bin/SECURITY", []string{"security", "dump-keychain"}),
 		"the Go rule matched the binary against an exact set")
 	require.False(t, evalCompiled(t, keychainDetection(), "/usr/bin/SECURITY", []string{"security", "dump-keychain"}),
-		"so the shipped detection must not fold case on Image either")
+		"so the built-in detection must not fold case on Image either")
 
 	// The same trap on the other side: Sigma's |startswith folds case, so it would match a lowercased assignment key that
 	// strings.HasPrefix in the Go matcher rejects.
@@ -547,19 +547,19 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	require.False(t, legacyLaunchAgentFires("/bin/LAUNCHCTL", []string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}))
 	require.False(t, evalCompiled(t, launchAgentDetection(), "/bin/LAUNCHCTL",
 		[]string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}),
-		"the shipped detection must not fold case on Image either")
+		"the built-in detection must not fold case on Image either")
 }
 
-// TestShippedDetectionMatchesTheFrozenTokens ties the frozen oracle to the shipped file. The subcommand set moved out of Go and into
+// TestBuiltInDetectionMatchesTheFrozenTokens ties the frozen oracle to the shipped file. The subcommand set moved out of Go and into
 // the detection block, so nothing would otherwise notice if the two drifted apart and the property started comparing the rule
 // against a set it no longer uses.
-func TestShippedDetectionMatchesTheFrozenTokens(t *testing.T) {
+func TestBuiltInDetectionMatchesTheFrozenTokens(t *testing.T) {
 	t.Parallel()
 
 	for path := range legacySecurityBinaryPaths {
 		for token := range legacyDumpKeychainTokens {
 			require.True(t, evalCompiled(t, keychainDetection(), path, []string{"security", token}),
-				"the shipped detection must still match %q + %q, which the frozen oracle expects", path, token)
+				"the built-in detection must still match %q + %q, which the frozen oracle expects", path, token)
 		}
 	}
 	require.False(t, evalCompiled(t, keychainDetection(), "/usr/bin/security", []string{"security", "list-keychains"}),
@@ -568,7 +568,7 @@ func TestShippedDetectionMatchesTheFrozenTokens(t *testing.T) {
 		"nor by binary path")
 }
 
-// TestLiveSymbolsStillAgreeWithTheShippedDetections keeps the values production still reads in step with the detection blocks that
+// TestLiveSymbolsStillAgreeWithTheBuiltInDetections keeps the values production still reads in step with the detection blocks that
 // now decide the rules.
 //
 // Two symbols survived their rules' conversion because a finding has to NAME what fired and the evaluator reports only that some
@@ -576,10 +576,10 @@ func TestShippedDetectionMatchesTheFrozenTokens(t *testing.T) {
 // one. Both therefore restate a criterion the detection block already owns, and review was right that this is a drift path. Until
 // the evaluator can report the matched element (issue #796), these assertions are what stops the two descriptions of one criterion
 // from parting company: a detection widened without the Go symbol would produce findings with an empty variable or path.
-func TestLiveSymbolsStillAgreeWithTheShippedDetections(t *testing.T) {
+func TestLiveSymbolsStillAgreeWithTheBuiltInDetections(t *testing.T) {
 	t.Parallel()
 
-	t.Run("every dyldPrefixes entry is one the shipped detection matches", func(t *testing.T) {
+	t.Run("every dyldPrefixes entry is one the built-in detection matches", func(t *testing.T) {
 		t.Parallel()
 		for _, prefix := range dyldPrefixes {
 			// The env form, since #791 narrowed the rule to it: the shell form this used to pass never reaches the server.
@@ -634,7 +634,7 @@ func legacyShellFromOfficeFires(path, parentPath string) bool {
 	return legacyShellPaths[path] && legacyOfficeBinaries[parentPath]
 }
 
-// TestEquivalence_ShellFromOffice compares the shipped detection against the frozen oracle over both halves of the predicate: the
+// TestEquivalence_ShellFromOffice compares the built-in detection against the frozen oracle over both halves of the predicate: the
 // shell being executed and the parent that spawned it. ParentImage is supplied to the adapter the way the rule supplies it.
 func TestEquivalence_ShellFromOffice(t *testing.T) {
 	t.Parallel()
@@ -664,15 +664,15 @@ func TestEquivalence_ShellFromOffice(t *testing.T) {
 	})
 }
 
-// TestSharedShellListMatchesTheShippedDetection is the guard the detection block's comment promises.
+// TestSharedShellListMatchesTheBuiltInDetection is the guard the detection block's comment promises.
 //
 // Sigma cannot reference a list defined elsewhere, so converting a rule that read the shared `unix_shells` list necessarily inlined
 // it. suspicious_exec still reads the shared list, so the two descriptions of one set can part company.
 //
 // Compares the SETS rather than sampling either side, which review caught: checking that each shared entry fires, plus a handful of
 // hand-picked non-shells, still passed when a path was added to the detection alone. The detection's alternatives are read out of
-// the shipped pack file, so both directions of drift fail here.
-func TestSharedShellListMatchesTheShippedDetection(t *testing.T) {
+// the built-in pack file, so both directions of drift fail here.
+func TestSharedShellListMatchesTheBuiltInDetection(t *testing.T) {
 	t.Parallel()
 
 	body, err := os.ReadFile("pack/shell_from_office.yml")
@@ -716,7 +716,7 @@ func legacySudoersFires(path string, flags int, subjectPath string) bool {
 	return true
 }
 
-// isLockWithoutSudo is the one input shape on which the shipped rule and the frozen oracle now disagree: a writer OTHER than sudo
+// isLockWithoutSudo is the one input shape on which the built-in rule and the frozen oracle now disagree: a writer OTHER than sudo
 // opening a sudoers file write-mode with no content-changing bits.
 //
 // The oracle fires on it, because its suppression was scoped to sudo alone. The adapter now withholds TargetFilename for every
@@ -748,7 +748,7 @@ func isNameSudoSkips(path string) bool {
 	return strings.Contains(base, ".") || strings.HasSuffix(base, "~")
 }
 
-// TestEquivalence_SudoersTamper compares the shipped detection against the frozen oracle across paths, flag combinations and
+// TestEquivalence_SudoersTamper compares the built-in detection against the frozen oracle across paths, flag combinations and
 // writers, with ONE documented exception (#801).
 //
 // The exception is a lock taken by someone other than sudo: write access with no content-changing bits. The oracle fires on it,
@@ -915,7 +915,7 @@ func boundOpenEvent(t *testing.T, path string, flags int, subject string) *sigma
 // TestANamedSuppressionAppliesOnlyToWhatItNames pins the engine capability the requirement describes: a rule states an exception
 // as a named set of field tests its condition subtracts, and the exception applies only to events matching EVERY test in it.
 //
-// Tested against a literal detection rather than a shipped rule, and that is the honest subject: the requirement is about what
+// Tested against a literal detection rather than a built-in rule, and that is the honest subject: the requirement is about what
 // the engine lets a rule express, not about any one rule using it. It used to be tested through sudoers_tamper's flock
 // suppression, which #801 retired because the field it read was inert; the capability itself did not change, and the corpus still
 // depends on it, which the count below asserts rather than assumes.
@@ -950,7 +950,7 @@ func TestANamedSuppressionAppliesOnlyToWhatItNames(t *testing.T) {
 	}
 }
 
-// TestTheImportedCorpusDependsOnSubtractedFilters is why the capability above is not speculative. The shipped pack stopped using
+// TestTheImportedCorpusDependsOnSubtractedFilters is why the capability above is not speculative. The built-in pack stopped using
 // it when #801 retired the sudoers suppression, so without this the requirement would rest on a test rule alone.
 func TestTheImportedCorpusDependsOnSubtractedFilters(t *testing.T) {
 	t.Parallel()

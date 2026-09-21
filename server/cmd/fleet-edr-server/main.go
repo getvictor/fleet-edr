@@ -637,7 +637,7 @@ func openRuleContent(ctx context.Context, logger *slog.Logger, db *sqlx.DB) (*ru
 		logger.WarnContext(ctx, "rulecontent: corpus seed failed; the catalog will use the corpus embedded in this build",
 			"err", err)
 	}
-	// Then install this build's pack over the shipped half, which the seed cannot do: it acts only on an empty corpus, so a
+	// Then install this build's pack over the built-in half, which the seed cannot do: it acts only on an empty corpus, so a
 	// deployment that seeded once would otherwise run its first generation of detections forever (issue #768). A no-op when the
 	// stored pack already matches, so the ordinary restart writes nothing.
 	if _, err := rcCtx.UpgradePackFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,

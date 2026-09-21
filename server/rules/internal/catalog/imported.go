@@ -657,7 +657,7 @@ func LoadCorpus(fsys fs.FS, root string, authoredAt Provenance) ([]api.Rule, []r
 	return loadImported(fsys, root, authoredAt)
 }
 
-// Provenance reports whether the document at a path was written by an operator rather than shipped with the product.
+// Provenance reports whether the document at a path was written by an operator rather than built in to the product.
 //
 // Passed in rather than read off the path, which is the whole point of #874's fix. A rule's identity is its file STEM and not its
 // path (#873), operators choose their own paths, and a prefix rule would let someone launder an authored rule into a vendored one
@@ -693,7 +693,7 @@ func ImportedRejections() []rejection {
 //
 // It answers from the rule rather than by resolving an identifier, which is the fix for #879. The version this replaced looked the
 // id up in the corpus embedded in the BUILD, and a rule's identity is its file stem (#873), so an operator who stored their own
-// version of a shipped detection kept its id and the lookup went on finding the shipped document under it. Exporting the rule then
+// version of a built-in detection kept its id and the lookup went on finding the built-in document under it. Exporting the rule then
 // returned upstream's bytes: content the deployment was not running and the operator had not written.
 func (r *importedRule) Source() []byte { return r.source }
 
@@ -714,7 +714,7 @@ func (r *importedRule) UndiscriminatingSearches() []string {
 
 // Origin implements the origin accessor the catalog surfaces mirror.
 //
-// It names the upstream project and the rule's own author for content that shipped with the product, and the deployment for
+// It names the upstream project and the rule's own author for content that built in to the product, and the deployment for
 // content an operator wrote. Which of the two it is comes from the recorded provenance, never from the file's path or from what
 // the rule says about itself.
 func (r *importedRule) Origin() string {

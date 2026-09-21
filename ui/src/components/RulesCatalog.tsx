@@ -13,7 +13,7 @@ import { isLocallyAuthored } from "./ruleOrigin";
 import "./RulesCatalog.scss";
 
 
-type OwnershipFilter = "all" | "shipped" | "yours";
+type OwnershipFilter = "all" | "built-in" | "yours";
 
 // modeLabel names the mode a rule runs in. A server that does not report it (an older replica mid-upgrade) gets "Unknown" rather than
 // the rule's declared default: the declaration is not the mode in force, and a rule an operator disabled would read as running.
@@ -23,13 +23,14 @@ function modeLabel(rule: RuleDocEntry): string {
   return rule.mode_source === "setting" ? `${label} (set)` : label;
 }
 
-type Ownership = "shipped" | "yours" | "unknown";
+type Ownership = "built-in" | "yours" | "unknown";
 
-// ownership says whether a rule shipped or was written on this deployment. An absent origin comes only from a server that predates
-// reporting one, and it is "unknown", not "shipped": counting it as shipped would hide an operator's own rule from the Yours filter.
+// ownership says whether a rule came with the product or was written on this deployment. An absent origin comes only from a server
+// that predates reporting one, and it is "unknown", not "built-in": counting it as built-in would hide an operator's own rule from
+// the Yours filter.
 function ownership(rule: RuleDocEntry): Ownership {
   if (rule.origin === undefined) return "unknown";
-  return isLocallyAuthored(rule.origin) ? "yours" : "shipped";
+  return isLocallyAuthored(rule.origin) ? "yours" : "built-in";
 }
 
 // RulesCatalog is the browsable list of every rule this deployment runs (issue #1001). Before it, the rule detail page was reachable
@@ -70,23 +71,29 @@ export function RulesCatalog() {
   const ownCount = rules?.filter((r) => ownership(r) === "yours").length ?? 0;
 
   const filters = (
-    <div className="rules-catalog__filters">
+    <div className="rules-catalog__filters" role="search" aria-label="Filter rules">
+      {/* No visible labels. Input stacks its label above the box in uppercase, Select puts its own beside the control in mixed
+          case, so the two sat in different places in the same row and read as unrelated. Each control says what it does on its
+          own instead: the placeholder for the box, and option text that is a whole phrase for the dropdown, so the collapsed
+          control still reads as a statement about what is listed. Accessible names are kept on both. This is the filter bar the
+          application-control page already uses. */}
       <Input
         id="rules-catalog-search"
-        label="Search:"
+        type="search"
         value={query}
-        placeholder="Name or identifier"
+        placeholder="Search name or identifier"
+        aria-label="Search rules by name or identifier"
         onChange={(e) => { setQuery(e.target.value); }}
       />
       <Select
         id="rules-catalog-ownership"
-        label="Show:"
+        aria-label="Filter rules by who wrote them"
         value={ownershipFilter}
         onChange={(e) => { setOwnershipFilter(e.target.value as OwnershipFilter); }}
       >
         <option value="all">All rules</option>
-        <option value="shipped">Shipped</option>
-        <option value="yours">Yours</option>
+        <option value="built-in">Built-in rules</option>
+        <option value="yours">Your rules</option>
       </Select>
       {canWrite && (
         <Link className="button button--primary" to="/rules/new">
@@ -141,10 +148,10 @@ export function RulesCatalog() {
                 <td>{modeLabel(r)}</td>
                 <td>
                   {ownership(r) === "yours" && <Badge variant="info">Yours</Badge>}
-                  {ownership(r) === "unknown" && <span className="rules-catalog__shipped">Unknown</span>}
-                  {ownership(r) === "shipped" && (
+                  {ownership(r) === "unknown" && <span className="rules-catalog__built-in">Unknown</span>}
+                  {ownership(r) === "built-in" && (
                     <>
-                      <span className="rules-catalog__shipped">Shipped</span>
+                      <span className="rules-catalog__built-in">Built-in</span>
                       {/* The imported corpus's licence requires its authors be credited wherever the rule is described. */}
                       <div className="rules-catalog__origin">{r.origin}</div>
                     </>

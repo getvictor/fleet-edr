@@ -237,9 +237,9 @@ type SelfDescribingBreadth interface {
 // return and rendering one is a different operation with a different answer, which is why this is not spelled as an empty result.
 //
 // The bytes are the ones the rule was loaded from, which is not always the bytes this build ships. An operator can store their own
-// rule under a shipped rule's identifier, since a rule's identity is its file STEM and not its path (#873), and from then on the
+// rule under a built-in rule's identifier, since a rule's identity is its file STEM and not its path (#873), and from then on the
 // rule that runs is theirs. Answering from the rule itself is what makes that case come out right: resolving an identifier against
-// the corpus embedded in the build finds the shipped document under that stem and hands back content the deployment is not
+// the corpus embedded in the build finds the built-in document under that stem and hands back content the deployment is not
 // running and the operator did not write (#879).
 type SourceCarrier interface {
 	Source() []byte
@@ -477,7 +477,7 @@ type Documentation struct {
 	// must be event types the agent actually emits, per the enum in schema/events.json.
 	//
 	// An empty list means "invoke for every batch". That is the fail-open direction, chosen because over-invoking costs time while
-	// under-invoking costs detections, but a shipped rule relying on it forfeits dispatch and the catalog guard tests reject it.
+	// under-invoking costs detections, but a built-in rule relying on it forfeits dispatch and the catalog guard tests reject it.
 	EventTypes []string `json:"event_types"`
 	// FalsePositives names well-known legitimate sources that can trip the rule. Each entry is one short sentence; UI renders as a
 	// bullet list.

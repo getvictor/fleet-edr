@@ -104,7 +104,7 @@ describe("RuleEditor, new rule", () => {
     expect(screen.queryByText(passingCheck)).toBeNull();
   });
 
-  // The identifier is the stored path and can collide with a shipped rule, so the check was about a different document too.
+  // The identifier is the stored path and can collide with a built-in rule, so the check was about a different document too.
   it("disarms Save when the identifier changes after a passing check", async () => {
     vi.spyOn(api, "checkRuleContentDocument").mockResolvedValue({ would_apply: true, warnings: [] });
     renderEditor("/rules/new");
@@ -171,30 +171,39 @@ describe("RuleEditor, existing rule", () => {
 
   // spec:web-ui/rules-can-be-written-in-the-console/a-shipped-rule-is-not-opened-for-editing
   // The Edit link is only offered on the deployment's own rules; an address typed directly must not reach around it.
-  it("refuses a shipped rule, which is tuned rather than edited", async () => {
+  it("refuses a built-in rule, which is tuned rather than edited", async () => {
     const entry = (origin: string): api.RuleDocEntry => ({ id: "suspicious_exec", techniques: [], origin, doc: ruleDoc });
     vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([{ path: "imported/suspicious_exec.yml", bytes: 20 }]);
     const read = vi.spyOn(api, "getRuleContentDocument").mockResolvedValue("title: Suspicious exec\n");
 
     vi.mocked(api.fetchRuleDocs).mockResolvedValue([entry("SigmaHQ, by Someone")]);
-    const shipped = renderEditor("/rules/suspicious_exec/edit");
-    expect(await screen.findByText(/ships with the product/)).toBeVisible();
+    const vendored = renderEditor("/rules/suspicious_exec/edit");
+    expect(await screen.findByText(/is built in/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Detection tuning" })).toHaveAttribute("href", "/detection-config");
     expect(screen.queryByLabelText("Rule document")).toBeNull();
     expect(read).not.toHaveBeenCalled();
-    shipped.unmount();
+    vendored.unmount();
 
-    // A shipped rule built into the server has no stored document, and gets the same answer rather than "no stored document".
+    // A built-in rule has no stored document, and gets the same answer rather than "no stored document".
     vi.mocked(api.listRuleContentDocuments).mockResolvedValue([]);
     const builtIn = renderEditor("/rules/suspicious_exec/edit");
-    expect(await screen.findByText(/ships with the product/)).toBeVisible();
+    expect(await screen.findByText(/is built in/)).toBeVisible();
     builtIn.unmount();
 
     // A rule the server has not reported an origin for, one it refused or has not loaded yet, is still editable.
     vi.mocked(api.listRuleContentDocuments).mockResolvedValue([{ path: "imported/suspicious_exec.yml", bytes: 20 }]);
     vi.mocked(api.fetchRuleDocs).mockResolvedValue([]);
+    const unreported = renderEditor("/rules/suspicious_exec/edit");
+    await waitFor(() => { expect(content().value).toBe("title: Suspicious exec\n"); });
+    unreported.unmount();
+
+    // And the half this refusal exists to protect: a rule credited to THIS deployment opens. An origin that is reported and is the
+    // local one is the only combination that reaches the editor, so without this the refusal could widen to everything and the
+    // cases above would all still pass.
+    vi.mocked(api.fetchRuleDocs).mockResolvedValue([entry("Locally authored")]);
     renderEditor("/rules/suspicious_exec/edit");
     await waitFor(() => { expect(content().value).toBe("title: Suspicious exec\n"); });
+    expect(screen.queryByText(/is built in/)).toBeNull();
   });
 
   it("edits the deployment's own rule", async () => {

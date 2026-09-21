@@ -72,7 +72,7 @@ describe("RulesCatalog", () => {
   });
 
   // spec:web-ui/the-rule-catalogue-is-browsable/the-catalogue-distinguishes-shipped-rules-from-the-deployment-s-own
-  it("marks the deployment's own rules apart from shipped ones, crediting shipped authors", async () => {
+  it("marks the deployment's own rules apart from built-in ones, crediting their authors", async () => {
     vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(rules);
     renderCatalog();
 
@@ -80,15 +80,15 @@ describe("RulesCatalog", () => {
     const ownRow = within(table).getByRole("link", { name: "Keychain extra" }).closest("tr") as HTMLElement;
     expect(within(ownRow).getByText("Yours")).toBeVisible();
     const vendoredRow = within(table).getByRole("link", { name: "Curl download" }).closest("tr") as HTMLElement;
-    expect(within(vendoredRow).getByText("Shipped")).toBeVisible();
+    expect(within(vendoredRow).getByText("Built-in")).toBeVisible();
     expect(within(vendoredRow).getByText("SigmaHQ, by Someone")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Show:"), { target: { value: "yours" } });
+    fireEvent.change(screen.getByLabelText("Filter rules by who wrote them"), { target: { value: "yours" } });
     expect(within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent)).toEqual(["Keychain extra"]);
-    fireEvent.change(screen.getByLabelText("Show:"), { target: { value: "shipped" } });
-    const shipped = within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent);
-    // A rule whose origin the server did not report is neither shipped nor yours.
-    expect(shipped).toEqual(["Curl download", "Suspicious exec chain"]);
+    fireEvent.change(screen.getByLabelText("Filter rules by who wrote them"), { target: { value: "built-in" } });
+    const builtIn = within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent);
+    // A rule whose origin the server did not report is neither built-in nor yours.
+    expect(builtIn).toEqual(["Curl download", "Suspicious exec chain"]);
   });
 
   it("filters by name or identifier", async () => {
@@ -96,10 +96,25 @@ describe("RulesCatalog", () => {
     renderCatalog();
 
     await screen.findByRole("table");
-    fireEvent.change(screen.getByLabelText("Search:"), { target: { value: "macos_curl" } });
+    fireEvent.change(screen.getByLabelText("Search rules by name or identifier"), { target: { value: "macos_curl" } });
     expect(within(screen.getByRole("table")).getAllByRole("link").map((l) => l.textContent)).toEqual(["Curl download"]);
-    fireEvent.change(screen.getByLabelText("Search:"), { target: { value: "no such rule" } });
+    fireEvent.change(screen.getByLabelText("Search rules by name or identifier"), { target: { value: "no such rule" } });
     expect(screen.getByText("No rules match.")).toBeVisible();
+  });
+
+  // The two controls carried their labels in different places: Input stacks its own above the box in uppercase, Select puts its
+  // beside the control in mixed case, so one row held two labels in two treatments and read as unrelated halves. Each control now
+  // says what it does on its own, and keeps an accessible name so nothing is lost to anyone not reading the placeholder.
+  it("names its filter controls without printing a label beside either", async () => {
+    vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(rules);
+    const { container } = renderCatalog();
+    await screen.findByRole("table");
+
+    expect(container.querySelectorAll(".rules-catalog__filters .field__label")).toHaveLength(0);
+    expect(screen.getByLabelText("Search rules by name or identifier")).toHaveAttribute("placeholder", "Search name or identifier");
+    // Each option is a whole phrase, so the collapsed dropdown still reads as a statement about what the table is listing.
+    const show = screen.getByLabelText("Filter rules by who wrote them");
+    expect([...show.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["All rules", "Built-in rules", "Your rules"]);
   });
 
   // spec:web-ui/rules-can-be-written-in-the-console/an-operator-deletes-a-rule-with-a-reason

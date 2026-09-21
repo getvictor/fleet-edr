@@ -528,8 +528,8 @@ func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coord
 //
 // LocalOrigin is skipped for a sharper reason than either, and it is the reason this is a deny-list of the origins we must not
 // write rather than an allow-list of upstream ones. The rule id is the file STEM (#873), so an operator who writes their own
-// version of a shipped detection keeps its id: the LIVE rule is then theirs, while the historical alerts under that id were
-// raised by the shipped rule that used to hold it. Crediting those old alerts to the operator would state, permanently, that
+// version of a built-in detection keeps its id: the LIVE rule is then theirs, while the historical alerts under that id were
+// raised by the built-in rule that used to hold it. Crediting those old alerts to the operator would state, permanently, that
 // they wrote a detection they did not, which is this feature's own failure mode pointed the other way. Their alerts stay blank,
 // which keeps blank meaning "raised before attribution was recorded" rather than becoming a claim about authorship.
 func vendoredOrigins(rules []rulesapi.Rule) map[string]string {

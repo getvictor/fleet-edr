@@ -72,12 +72,12 @@ func SortDocuments(docs []Document) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
 
-// PackStatus is what shipped rule content a deployment is running, and what it would run if it took this build's pack.
+// PackStatus is what built-in rule content a deployment is running, and what it would run if it took this build's pack.
 //
 // Reported as digests plus the rules that differ, rather than as a version string, because a version has to be maintained by hand
 // and forgetting to bump one is silent: the deployment believes it is current while running different rules.
 type PackStatus struct {
-	// Installed identifies the shipped content stored now.
+	// Installed identifies the built-in content stored now.
 	Installed string
 	// Available identifies the pack this build carries. Equal to Installed on a current deployment.
 	Available string
@@ -93,7 +93,7 @@ type PackStatus struct {
 	Changed []string
 }
 
-// Current reports whether the deployment is running the shipped content this build carries.
+// Current reports whether the deployment is running the built-in content this build carries.
 func (p PackStatus) Current() bool { return p.Installed == p.Available }
 
 // PackRollback is what rolling back did.
@@ -103,7 +103,7 @@ type PackRollback struct {
 	// Version is the corpus version after the rollback.
 	Version int64
 	// Withheld names retained documents NOT restored because the operator has taken over that rule since the upgrade. Their
-	// rule wins, as it does on the way in, and they are told which shipped rules the rollback therefore did not bring back.
+	// rule wins, as it does on the way in, and they are told which built-in rules the rollback therefore did not bring back.
 	Withheld []string
 }
 
@@ -117,7 +117,7 @@ type PackInstall struct {
 	Version int64
 	Skipped []string
 	// Declined reports that this build's pack was not installed because the operator rolled back from it. It is distinct from
-	// "nothing to do": the deployment is deliberately running older shipped content, which is a state worth surfacing rather
+	// "nothing to do": the deployment is deliberately running older built-in content, which is a state worth surfacing rather
 	// than one to infer from an absence.
 	Declined bool
 }
@@ -143,7 +143,7 @@ func (r RuleIdentity) Identify(path string) string {
 	return r(path)
 }
 
-// Source says where a rule document came from: shipped with the product, or written by an operator.
+// Source says where a rule document came from: built in to the product, or written by an operator.
 //
 // Recorded when the document is stored rather than derived from its path, which is the decision the rest of this rests on. A
 // rule's identity is its file STEM and not its path (#873), and the load walks the whole stored set precisely so authored content
@@ -153,7 +153,7 @@ func (r RuleIdentity) Identify(path string) string {
 type Source string
 
 const (
-	// SourceVendored marks content shipped with the product. It carries the upstream project's licence, and its attribution is
+	// SourceVendored marks content built in to the product. It carries the upstream project's licence, and its attribution is
 	// how that licence is honoured.
 	SourceVendored Source = "vendored"
 	// SourceAuthored marks content an operator wrote. It is theirs, carries no upstream licence, and must not be credited to an

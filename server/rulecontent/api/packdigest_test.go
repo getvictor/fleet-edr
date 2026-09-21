@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/the-identity-is-stable-for-unchanged-content
-// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/the-identity-changes-when-the-shipped-content-changes
+// spec:rule-content/the-corpus-identifies-which-built-in-pack-it-holds/the-identity-is-stable-for-unchanged-content
+// spec:rule-content/the-corpus-identifies-which-built-in-pack-it-holds/the-identity-changes-when-the-built-in-content-changes
 func TestPackDigest(t *testing.T) {
 	t.Parallel()
 	base := []Document{
@@ -89,7 +89,7 @@ func TestPackDigest(t *testing.T) {
 	})
 }
 
-// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/content-written-by-an-operator-does-not-change-the-pack-identity
+// spec:rule-content/the-corpus-identifies-which-built-in-pack-it-holds/content-written-by-an-operator-does-not-change-the-pack-identity
 //
 // TestVendoredDocuments_ExcludesAuthoredContent is what keeps an operator's own rules from making a deployment look out of date,
 // and keeps deleting one from making it look current.
@@ -116,7 +116,7 @@ func TestSource_ValidRejectsAnythingUnrecognised(t *testing.T) {
 	// rename would pass all of them, and the damage is not theoretical now that an unrecognised source is REFUSED on read:
 	// every row an earlier version wrote would stop being interpretable, so the whole corpus of every existing deployment would
 	// fail to load. Changing either string is a migration, and this is where that has to be noticed.
-	assert.Equal(t, "vendored", string(SourceVendored), "the stored value for content shipped with the product")
+	assert.Equal(t, "vendored", string(SourceVendored), "the stored value for content built in to the product")
 	assert.Equal(t, "authored", string(SourceAuthored), "the stored value for content an operator wrote")
 
 	cases := []struct {
@@ -124,7 +124,7 @@ func TestSource_ValidRejectsAnythingUnrecognised(t *testing.T) {
 		value Source
 		valid bool
 	}{
-		{"content shipped with the product", SourceVendored, true},
+		{"content built in to the product", SourceVendored, true},
 		{"content an operator wrote", SourceAuthored, true},
 		// Empty is what a caller supplies when it does not state a provenance. It is a supported INPUT, resolved to vendored
 		// before storage, but it is never a stored value, so reading one back means something is wrong.

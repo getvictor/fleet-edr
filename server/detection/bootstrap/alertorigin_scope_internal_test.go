@@ -51,7 +51,7 @@ func (r projectionRule) NonDetectionKind() rulesapi.NonDetectionKind {
 // Getting any of them wrong writes something irreversible into an operator's alert history. Crediting our own rules erases the
 // distinction migration 00012 preserves between an alert raised before attribution existed and one raised by us. Crediting a
 // projection claims this project wrote the operator's blocklist entry, which is the bug review caught in #824. Crediting a rule
-// the operator has since written themselves claims they wrote the shipped detection that used to hold that identifier, which is
+// the operator has since written themselves claims they wrote the built-in detection that used to hold that identifier, which is
 // #874's own failure pointed the other way and is the exclusion review caught on #878.
 func TestVendoredOrigins(t *testing.T) {
 	t.Parallel()
@@ -66,8 +66,8 @@ func TestVendoredOrigins(t *testing.T) {
 		// Vendored but declaring nothing, which OriginOf reports as unknown rather than as ours. Creditable, because the
 		// alternative is crediting this project for a rule that announced foreign provenance.
 		originRule{scopeRule{id: "imported_but_unnamed", origin: ""}},
-		// An operator's own rule that OVERWROTE a shipped one, so it keeps the shipped id (#873: the id is the file stem) while
-		// the live rule is theirs. The historical alerts under this id were raised by the shipped rule, so crediting them to
+		// An operator's own rule that OVERWROTE a built-in one, so it keeps the built-in id (#873: the id is the file stem) while
+		// the live rule is theirs. The historical alerts under this id were raised by the built-in rule, so crediting them to
 		// the operator would permanently claim they wrote a detection they did not.
 		originRule{scopeRule{id: "proc_creation_macos_base64_decode", origin: rulesapi.LocalOrigin}},
 	}
@@ -84,7 +84,7 @@ func TestVendoredOrigins(t *testing.T) {
 	assert.NotContains(t, got, "application_control_block",
 		"a projection must be excluded even when it declares an origin, since its rule id is the operator's own policy entry")
 	assert.NotContains(t, got, "proc_creation_macos_base64_decode",
-		"an operator's own rule must be excluded, or overwriting a shipped rule permanently credits them with the shipped "+
+		"an operator's own rule must be excluded, or overwriting a built-in rule permanently credits them with the shipped "+
 			"rule's historical alerts")
 }
 

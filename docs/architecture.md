@@ -177,7 +177,7 @@ type Rule interface {
 }
 ```
 
-`Evaluate` may walk the historical process graph through `gr` but must not mutate state. The shipped catalog (`suspicious_exec` through `dns_c2_beacon`) is documented in [`detection-rules.md`](detection-rules.md), generated from each rule's `Doc()` by `tools/gen-rule-docs`.
+`Evaluate` may walk the historical process graph through `gr` but must not mutate state. The built-in catalog (`suspicious_exec` through `dns_c2_beacon`) is documented in [`detection-rules.md`](detection-rules.md), generated from each rule's `Doc()` by `tools/gen-rule-docs`.
 
 ### Persistence (MySQL 8.4, ADR-0005)
 

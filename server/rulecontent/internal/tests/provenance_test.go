@@ -19,7 +19,7 @@ import (
 // spec:rule-content/a-rule-document-records-where-it-came-from/a-seeded-document-is-recorded-as-shipped-with-the-product
 //
 // TestSeed_RecordsDocumentsAsShippedWithTheProduct pins the provenance the whole of #874's fix rests on. The seed writes content
-// that came with the build, so the corpus has to say so: an operator's rule is told apart from a shipped one by this and nothing
+// that came with the build, so the corpus has to say so: an operator's rule is told apart from a built-in one by this and nothing
 // else, since #873 established that a rule's identity is its file stem rather than its path.
 func TestSeed_RecordsDocumentsAsShippedWithTheProduct(t *testing.T) {
 	t.Parallel()
@@ -66,7 +66,7 @@ func TestPutDocument_RecordsTheDocumentAsTheOperators(t *testing.T) {
 // spec:rule-content/a-rule-document-records-where-it-came-from/replacing-a-shipped-document-with-an-authored-one-changes-its-provenance
 //
 // TestPutDocument_OverwritingAShippedDocumentMakesItTheOperators pins that provenance follows the CONTENT rather than the path's
-// history. Once an operator has written over a shipped rule, the bytes are theirs, and crediting upstream for what they wrote is
+// history. Once an operator has written over a built-in rule, the bytes are theirs, and crediting upstream for what they wrote is
 // the same false claim in a subtler place.
 func TestPutDocument_OverwritingAShippedDocumentMakesItTheOperators(t *testing.T) {
 	t.Parallel()
@@ -112,7 +112,7 @@ func TestPackDigest_CoversOnlyShippedContent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, vendoredOnly)
 
-	// The same shipped content, now alongside a rule the operator wrote.
+	// The same built-in content, now alongside a rule the operator wrote.
 	mixed := append(append([]api.Document{}, vendored...),
 		api.Document{Path: "authored/mine.yml", Content: []byte("mine"), Source: api.SourceAuthored})
 	_, err = s.Replace(ctx, mixed)
@@ -121,7 +121,7 @@ func TestPackDigest_CoversOnlyShippedContent(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, vendoredOnly, withAuthored,
-		"the shipped content is unchanged, so the pack identity must be too")
+		"the built-in content is unchanged, so the pack identity must be too")
 
 	// And the corpus really did grow, so the fixture is not silently a no-op.
 	stored, err := s.Documents(ctx)
@@ -155,10 +155,10 @@ func TestPackDigest_MatchesTheDigestOfWhatWasStored(t *testing.T) {
 		"the recorded identity must be the digest of the vendored content actually stored")
 }
 
-// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/changing-a-shipped-rule-changes-the-pack-identity
+// spec:rule-content/the-corpus-identifies-which-built-in-pack-it-holds/changing-a-built-in-rule-changes-the-pack-identity
 //
 // TestPackDigest_FollowsASingleDocumentMutation is the half the whole-corpus tests cannot reach, and review found it missing.
-// Both single-document mutations can change the SHIPPED set without looking like they do: writing over a shipped document
+// Both single-document mutations can change the SHIPPED set without looking like they do: writing over a built-in document
 // reclassifies that row as the operator's, and deleting one removes it. A digest only the whole-corpus writers maintained would
 // keep asserting the deployment holds a pack it no longer holds, which is the single claim the digest exists to make.
 //
@@ -166,7 +166,7 @@ func TestPackDigest_MatchesTheDigestOfWhatWasStored(t *testing.T) {
 // is what makes the third case load-bearing rather than decorative: an operator's own rule must not move it.
 //
 // Every case also has to satisfy an invariant no per-case assertion states, and it is the stronger of the two claims: whatever
-// the mutation was, the recorded identity must equal the digest of the shipped content actually left behind. A digest that
+// the mutation was, the recorded identity must equal the digest of the built-in content actually left behind. A digest that
 // changed for the wrong reason would satisfy "it moved" and fail this.
 func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 	t.Parallel()
@@ -182,9 +182,9 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 		packMoved bool
 	}{
 		{
-			// The operator writes their own version of a shipped rule. It keeps the path, so the row becomes theirs and the
+			// The operator writes their own version of a built-in rule. It keeps the path, so the row becomes theirs and the
 			// pack is one rule smaller.
-			name: "overwriting a shipped document",
+			name: "overwriting a built-in document",
 			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
 				_, err := s.PutDocument(t.Context(),
 					api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version, api.AuditOutboxEntry{})
@@ -193,7 +193,7 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 			packMoved: true,
 		},
 		{
-			name: "deleting a shipped document",
+			name: "deleting a built-in document",
 			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
 				_, err := s.DeleteDocument(t.Context(), "imported/a.yml", version, api.AuditOutboxEntry{})
 				require.NoError(t, err)
@@ -230,15 +230,15 @@ func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 			after, err := s.PackDigest(ctx)
 			require.NoError(t, err)
 			if tc.packMoved {
-				assert.NotEqual(t, before, after, "the shipped content changed, so the pack identity must have moved")
+				assert.NotEqual(t, before, after, "the built-in content changed, so the pack identity must have moved")
 			} else {
-				assert.Equal(t, before, after, "the shipped content is unchanged, so the pack identity must be too")
+				assert.Equal(t, before, after, "the built-in content is unchanged, so the pack identity must be too")
 			}
 
 			stored, err := s.Documents(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, api.PackDigest(api.VendoredDocuments(stored)), after,
-				"the recorded identity must be the digest of the shipped content actually stored")
+				"the recorded identity must be the digest of the built-in content actually stored")
 		})
 	}
 }
@@ -296,13 +296,13 @@ func TestUnknownSource_IsRefused(t *testing.T) {
 	})
 }
 
-// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/a-corpus-stored-before-pack-identity-was-recorded-reports-none
+// spec:rule-content/the-corpus-identifies-which-built-in-pack-it-holds/a-corpus-stored-before-pack-identity-was-recorded-reports-none
 //
 // TestPackDigest_UnrecordedIsUnknownNotEmpty separates the two states that both look like "nothing" and mean opposite things.
 //
-// A corpus stored before this existed holds SOME generation of shipped content, and nothing wrote down which. Reporting a digest
+// A corpus stored before this existed holds SOME generation of built-in content, and nothing wrote down which. Reporting a digest
 // for it would be inventing one, and reporting the EMPTY pack's digest would be worse: that is a real identity, so the deployment
-// would claim to hold no shipped rules while running a full corpus. The upgrade path reads the absence as "unknown, therefore not
+// would claim to hold no built-in rules while running a full corpus. The upgrade path reads the absence as "unknown, therefore not
 // known to be current", and that only works if the two are distinguishable.
 func TestPackDigest_UnrecordedIsUnknownNotEmpty(t *testing.T) {
 	t.Parallel()
@@ -322,7 +322,7 @@ func TestPackDigest_UnrecordedIsUnknownNotEmpty(t *testing.T) {
 // existing content was asserted only by the dev-server QA and by nothing repeatable.
 //
 // The claim under test is the one the migration's own comment makes: documents stored before provenance existed survive, and are
-// recorded as having shipped with the product. That default is a statement of fact rather than a guess, since every document
+// recorded as having built in to the product. That default is a statement of fact rather than a guess, since every document
 // predating the migration was written by the seed, and it is the direction that fails safely: over-crediting upstream is visible,
 // where the reverse silently drops a licence obligation.
 //
@@ -380,7 +380,7 @@ func TestProvenanceMigration_LeavesExistingDocumentsIntact(t *testing.T) {
 	assert.Equal(t, "title: A\n", string(docs[0].Content), "content must survive the migration unchanged")
 
 	// The pack identity is deliberately NOT invented for a corpus that predates it: this deployment holds some generation of
-	// shipped content and nothing recorded which, so the upgrade path reads the absence as "unknown, therefore not current".
+	// built-in content and nothing recorded which, so the upgrade path reads the absence as "unknown, therefore not current".
 	digest, err := s.PackDigest(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, digest, "a migrated corpus must not claim a pack identity nobody recorded")

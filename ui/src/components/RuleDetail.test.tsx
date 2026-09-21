@@ -370,10 +370,10 @@ describe("RuleDetail rule document", () => {
     unmount();
 
     mockDocs([makeEntry({ origin: "SigmaHQ, by Someone" })]);
-    const shipped = renderWithPermissions(write);
+    const builtIn = renderWithPermissions(write);
     await screen.findByText("authored/suspicious_exec.yml");
     expect(screen.queryByRole("link", { name: "Edit" })).toBeNull();
-    shipped.unmount();
+    builtIn.unmount();
 
     mockDocs([makeEntry({ origin: "Locally authored" })]);
     renderWithPermissions([PermissionAction.AlertRead, PermissionAction.RuleContentRead]);
