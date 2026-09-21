@@ -30,9 +30,33 @@
   color: $ui-fleet-black-50;
 }
 
+// The identifier and its copy control on one line. max-width is what makes the text clip: a table cell sizes to its content, so
+// without a bound the column would simply grow to fit a 64-character hash and squeeze every other column instead of ellipsizing.
 .app-control__identifier {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: $xx-small;
+  max-width: 22rem;
+}
+
+// The copy control is pushed to the trailing edge rather than trailing the value, so it lands in the same place on every row and
+// reads as a column of its own. Against the values, which vary from ten characters to sixty-four, a button that follows the text
+// lands somewhere different on each line and has to be hunted for.
+.app-control__identifier-inner {
+  display: flex;
+  align-items: center;
+  gap: $pad-small;
+}
+
+.app-control__identifier-inner .copy-button {
+  margin-left: auto;
+}
+
+// The clipping itself. The element holds the WHOLE identifier and shows what fits, so selecting the cell copies the value rather
+// than the visible fragment, and a wider window reveals more of it without any change here.
+.app-control__identifier-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 // Rules-table filter bar. Flex row that wraps on narrow viewports so the four controls don't squeeze the search input. The

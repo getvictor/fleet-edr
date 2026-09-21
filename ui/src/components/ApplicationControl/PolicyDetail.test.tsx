@@ -57,6 +57,16 @@ const normalize = (text: string | null) => text?.replace(/\s+/g, " ").trim();
 // Routes so the :id parameter is bound. Wrapping the rendered
 // component this way keeps the test focused on the page output
 // rather than reproducing the App.tsx routing pyramid.
+// A row's actions live behind one "Actions" menu rather than as a run of inline links, so opening that menu is what puts Edit /
+// Disable / Delete in the document. Every row-level assertion goes through here. Returns false when the row offers no actions at
+// all, which is itself what a read-only operator should see.
+function openRowActions(): boolean {
+  const triggers = screen.queryAllByRole("button", { name: /^Actions for / });
+  if (triggers.length === 0) return false;
+  fireEvent.click(triggers[0]);
+  return true;
+}
+
 function renderPolicyDetailAt(path: string, permissions?: readonly string[]) {
   return render(
     <PermissionsContext.Provider value={permissions}>
@@ -88,7 +98,7 @@ afterEach(() => {
 });
 
 describe("PolicyDetail", () => {
-  it("renders the policy header + a rules table including the truncated identifier", async () => {
+  it("renders the policy header + a rules table carrying each rule's whole identifier", async () => {
     vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(
       makePolicy({ rules: [makeRule()] }),
     );
@@ -98,11 +108,14 @@ describe("PolicyDetail", () => {
     });
     expect(screen.getByText(/version 5/i)).toBeInTheDocument();
     expect(screen.getByText(/default app-control policy fixture/i)).toBeInTheDocument();
-    // Identifier is truncated to 16 chars + ellipsis in the table.
-    expect(screen.getByText("aaaaaaaaaaaaaaaa…")).toBeInTheDocument();
+    // The cell holds the WHOLE identifier and lets its box clip what does not fit, so selecting the cell copies the value rather
+    // than a fragment ending in an ellipsis, and the copy control has something to offer.
+    expect(screen.getByText("a".repeat(64))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Copy identifier ${"a".repeat(64)}` })).toBeVisible();
     expect(screen.getByText(/blocked by corp policy/i)).toBeInTheDocument();
     // Per-row Edit/Disable/Delete are wired and enabled (Phase A close-out PR-1d): each opens a modal that prompts for an audit
     // reason before firing the PATCH / DELETE endpoint.
+    openRowActions();
     const edit = screen.getByRole("button", { name: "Edit" });
     expect(edit).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "Disable" })).not.toBeDisabled();
@@ -145,7 +158,8 @@ describe("PolicyDetail", () => {
     const impactLink = await screen.findByRole("link", { name: "Would have blocked 12 runs on 3 hosts in 7 days" });
     expect(impactLink).toHaveAttribute("href", "/rules/app_control%3A7/monitor-records");
 
-    fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    openRowActions();
+    fireEvent.click(screen.getByRole("button", { name: "Promote to Protect" }));
     const dialog = await waitFor(() => openModal(/promote rule to protect/i));
     expect(dialog.textContent).toMatch(/protect makes this rule block the executables it matches for .*, instead of recording them/i);
     expect(dialog.textContent).toContain("Would have blocked 12 runs on 3 hosts in 7 days");
@@ -176,7 +190,9 @@ describe("PolicyDetail", () => {
     const updateSpy = vi.spyOn(api, "updateAppControlRule").mockResolvedValue(makeRule({ id: 9, enforcement: "DETECT" }));
 
     renderPolicyDetailAt("/app-control/policies/7");
-    fireEvent.click(await screen.findByRole("button", { name: "Move to Detect" }));
+    await screen.findByRole("button", { name: /^Actions for / });
+    openRowActions();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Detect" }));
     await waitFor(() => {
       expect(countsSpy).toHaveBeenCalled();
     });
@@ -199,7 +215,9 @@ describe("PolicyDetail", () => {
     vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
 
     renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION);
-    expect(await screen.findByRole("button", { name: "Promote" })).toBeInTheDocument();
+    await screen.findByRole("button", { name: /^Actions for / });
+    openRowActions();
+    expect(screen.getByRole("button", { name: "Promote to Protect" })).toBeInTheDocument();
     expect(countsSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(/would-block|would have blocked/i)).toBeNull();
   });
@@ -224,7 +242,8 @@ describe("PolicyDetail", () => {
     expect(await screen.findByRole("link", { name: /would have blocked 12 runs/i })).toBeVisible();
     rerender(tree(EVERY_RULE_ACTION));
     expect(screen.queryByRole("link", { name: /would have blocked/i })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    openRowActions();
+    fireEvent.click(screen.getByRole("button", { name: "Promote to Protect" }));
     const dialog = await waitFor(() => openModal(/promote rule to protect/i));
     expect(dialog.textContent).not.toMatch(/would have blocked/i);
   });
@@ -263,7 +282,9 @@ describe("PolicyDetail", () => {
     vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule({ id: 7, enforcement: "DETECT" })] }));
 
     renderPolicyDetailAt("/app-control/policies/7");
-    fireEvent.click(await screen.findByRole("button", { name: "Promote" }));
+    await screen.findByRole("button", { name: /^Actions for / });
+    openRowActions();
+    fireEvent.click(screen.getByRole("button", { name: "Promote to Protect" }));
     const dialog = await waitFor(() => openModal(/promote rule to protect/i));
     expect(countsSpy).toHaveBeenCalled();
     expect(dialog.textContent).not.toMatch(/would have blocked|would-block/i);
@@ -294,8 +315,9 @@ describe("PolicyDetail", () => {
 
     renderPolicyDetailAt("/app-control/policies/7");
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Actions for / })).toBeInTheDocument();
     });
+    openRowActions();
     fireEvent.click(screen.getByRole("button", { name: "Disable" }));
 
     // Confirm modal is now open; scope all the queries to that dialog so RTL doesn't pick up the Add/Edit modals' inputs.
@@ -325,8 +347,9 @@ describe("PolicyDetail", () => {
 
     renderPolicyDetailAt("/app-control/policies/7");
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Actions for / })).toBeInTheDocument();
     });
+    openRowActions();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     const dialog = await waitFor(() => openModal(/delete rule/i));
@@ -356,8 +379,9 @@ describe("PolicyDetail", () => {
 
     renderPolicyDetailAt("/app-control/policies/7");
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Actions for / })).toBeInTheDocument();
     });
+    openRowActions();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     const dialog = await waitFor(() => openModal(/edit rule/i));
@@ -433,8 +457,8 @@ describe("PolicyDetail", () => {
     const table = screen.getByRole("table");
     return within(table).getAllByRole("row").slice(1).map((row) => {
       const cells = within(row).getAllByRole("cell");
-      // Identifier is the second column; its full value is on the title attribute (the cell text is truncated).
-      return cells[1].getAttribute("title") ?? "";
+      // Identifier is the second column. Its text IS the full value now: the box clips what it shows, not what it holds.
+      return cells[1].textContent;
     });
   }
 
@@ -602,28 +626,35 @@ describe("PolicyDetail", () => {
   // is what the operator sees and what a future refactor would have to keep meaning the same thing.
   describe("gates each control on the permission its own call needs", () => {
     const CONTROLS = [
-      { name: "Paste many", needs: PermissionAction.AppControlRuleBulkUpsert },
-      { name: "Add rule", needs: PermissionAction.AppControlRuleCreate },
-      { name: "Move to Detect", needs: PermissionAction.AppControlRuleUpdate },
-      { name: "Edit", needs: PermissionAction.AppControlRuleUpdate },
-      { name: "Disable", needs: PermissionAction.AppControlRuleUpdate },
-      { name: "Delete", needs: PermissionAction.AppControlRuleDelete },
+      { name: "Paste many", needs: PermissionAction.AppControlRuleBulkUpsert, inRowMenu: false },
+      { name: "Add rule", needs: PermissionAction.AppControlRuleCreate, inRowMenu: false },
+      { name: "Move to Detect", needs: PermissionAction.AppControlRuleUpdate, inRowMenu: true },
+      { name: "Edit", needs: PermissionAction.AppControlRuleUpdate, inRowMenu: true },
+      { name: "Disable", needs: PermissionAction.AppControlRuleUpdate, inRowMenu: true },
+      { name: "Delete", needs: PermissionAction.AppControlRuleDelete, inRowMenu: true },
     ];
 
     // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-control-is-hidden-without-its-own-permission
-    it.each(CONTROLS)("hides $name from an operator without $needs", async ({ name, needs }) => {
+    it.each(CONTROLS)("hides $name from an operator without $needs", async ({ name, needs, inRowMenu }) => {
       vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
       renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION.filter((action) => action !== needs));
       await waitFor(() => {
         expect(screen.getByRole("heading", { name: "Default" })).toBeVisible();
       });
+      // A row action is only in the document while its menu is open, so the menu is opened before looking for its absence:
+      // querying a closed menu would report every row action as hidden and pass whatever the permissions said.
+      if (inRowMenu) openRowActions();
       expect(screen.queryByRole("button", { name })).toBeNull();
     });
 
     // spec:web-ui/application-control-rule-controls-follow-their-own-permission/a-control-is-shown-with-its-own-permission
-    it.each(CONTROLS)("shows $name to an operator who holds $needs", async ({ name }) => {
+    it.each(CONTROLS)("shows $name to an operator who holds $needs", async ({ name, inRowMenu }) => {
       vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
       renderPolicyDetailAt("/app-control/policies/7", EVERY_RULE_ACTION);
+      if (inRowMenu) {
+        await screen.findByRole("button", { name: /^Actions for / });
+        openRowActions();
+      }
       expect(await screen.findByRole("button", { name })).toBeVisible();
     });
 
@@ -631,11 +662,15 @@ describe("PolicyDetail", () => {
     it("leaves a read-only operator the rules themselves, with no Actions column over empty cells", async () => {
       vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
       renderPolicyDetailAt("/app-control/policies/7", [PermissionAction.AppControlRead]);
-      expect(await screen.findByText("aaaaaaaaaaaaaaaa…")).toBeVisible();
+      expect(await screen.findByText("a".repeat(64))).toBeVisible();
       expect(screen.getByText(/blocked by corp policy/i)).toBeVisible();
       expect(screen.queryByRole("columnheader", { name: "Actions" })).toBeNull();
+      expect(openRowActions()).toBe(false);
       const row = within(screen.getByRole("table")).getAllByRole("row")[1];
-      expect(within(row).queryAllByRole("button")).toEqual([]);
+      // The copy control is the one button a read-only operator keeps: reading an identifier is reading.
+      expect(within(row).queryAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+        `Copy identifier ${"a".repeat(64)}`,
+      ]);
     });
 
     // The empty state told the operator to click a button that is no longer there, which reads as a broken page rather than as
@@ -678,13 +713,16 @@ describe("PolicyDetail", () => {
       );
 
       const { rerender } = render(tree(EVERY_RULE_ACTION));
-      fireEvent.click(await screen.findByRole("button", { name }));
+      await screen.findByRole("button", { name: /^Actions for / });
+      openRowActions();
+      fireEvent.click(screen.getByRole("button", { name }));
       expect(await waitFor(() => openModal(dialog))).toBeTruthy();
 
       rerender(tree(EVERY_RULE_ACTION.filter((action) => action !== needs)));
       await waitFor(() => {
         expect(screen.queryByRole("dialog", { name: dialog })).toBeNull();
       });
+      openRowActions();
       expect(screen.queryByRole("button", { name })).toBeNull();
     });
 
@@ -693,6 +731,9 @@ describe("PolicyDetail", () => {
     it("still offers every control when the permission set is unknown", async () => {
       vi.spyOn(api, "getAppControlPolicy").mockResolvedValue(makePolicy({ rules: [makeRule()] }));
       renderPolicyDetailAt("/app-control/policies/7");
+      // Opened once, not per control: the trigger is a toggle, so opening it again for the second row action would close it.
+      await screen.findByRole("button", { name: /^Actions for / });
+      openRowActions();
       for (const { name } of CONTROLS) {
         expect(await screen.findByRole("button", { name })).toBeVisible();
       }

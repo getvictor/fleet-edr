@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   type Enforcement,
@@ -13,6 +13,9 @@ import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
+import { CopyButton } from "../ui/CopyButton";
+import { ActionsMenu, type ActionsMenuItem } from "../ui/ActionsMenu";
+import { useIsTruncated } from "../ui/useIsTruncated";
 import { severityBadgeVariant } from "../ui/severity";
 import { AddRuleModal } from "./AddRuleModal";
 import { EditRuleModal } from "./EditRuleModal";
@@ -61,16 +64,31 @@ function modalPermission(kind: ActiveModal["kind"]): string | null {
   }
 }
 
-// truncateIdentifier renders the leading 16 chars of a SHA-256
-// identifier so the rules table stays scannable without dropping the
-// disambiguating prefix. Full value is in the row's title attribute
-// for inspection. Identifiers shorter than the cap render verbatim:
-// TEAMID / SIGNINGID rules (post-demo) would otherwise come back
-// cropped.
-const IDENTIFIER_DISPLAY_CHARS = 16;
-function truncateIdentifier(value: string): string {
-  if (value.length <= IDENTIFIER_DISPLAY_CHARS) return value;
-  return value.slice(0, IDENTIFIER_DISPLAY_CHARS) + "…";
+// IdentifierCell shows a rule's identifier, clipped to the column rather than to a character count, and offers the whole value both
+// on hover and to the clipboard.
+//
+// Clipping used to be done by slicing the string at 16 characters, which had three costs. The column is around 200px and a 16-char
+// slice used about half of it, so the table threw away space it had. The sliced string was what the cell CONTAINED, so selecting the
+// cell and copying it yielded "/Applications/Co…", ellipsis included, rather than the identifier. And for a path the leading 16
+// characters are the least identifying part: "/Applications/Co…" says nothing, while the binary's own name at the other end says
+// everything. Letting the box do the clipping keeps the full value in the cell for selection and for the copy control, and lets a
+// wider window show more of it.
+//
+// The hover reveal is offered only when the value is actually clipped, so the cells already showing everything do not carry a
+// tooltip repeating what is on screen.
+function IdentifierCell({ value }: { readonly value: string }) {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const truncated = useIsTruncated(textRef);
+  return (
+    <td className="app-control__identifier">
+      <div className="app-control__identifier-inner">
+        <span ref={textRef} className="app-control__identifier-text" title={truncated ? value : undefined}>
+          {value}
+        </span>
+        <CopyButton value={value} label={`Copy identifier ${value}`} size="small" />
+      </div>
+    </td>
+  );
 }
 
 // PolicyDetail is the policy-rules surface: one policy's rules, the controls that change them, and the filter bar over them.
@@ -484,7 +502,46 @@ interface RulesTableProps {
   readonly onDelete: (rule: ApplicationControlRule) => void;
 }
 
+// RuleHandlers is the set of things a row can do, bundled so rowActions takes one argument for them rather than four.
+interface RuleHandlers {
+  readonly onEnforcement: (rule: ApplicationControlRule) => void;
+  readonly onEdit: (rule: ApplicationControlRule) => void;
+  readonly onToggle: (rule: ApplicationControlRule) => void;
+  readonly onDelete: (rule: ApplicationControlRule) => void;
+}
+
+// rowActions is one rule's menu, in the order an operator meets them: the enforcement change first, because promoting a Detect rule
+// is what this page exists for, then the edits, then the removal.
+//
+// Delete comes last and behind a divider. It is NOT coloured here: the warning belongs on the confirmation that follows, which is
+// read before anything happens, rather than on an entry passed over on the way to Edit. Each of these opens a modal that asks for an
+// audit reason before it calls the server.
+function rowActions(
+  rule: ApplicationControlRule, canUpdate: boolean, canDelete: boolean, handlers: RuleHandlers,
+): ActionsMenuItem[] {
+  const items: ActionsMenuItem[] = [];
+  if (canUpdate) {
+    items.push(
+      {
+        label: isDetect(rule) ? "Promote to Protect" : "Move to Detect",
+        onSelect: () => { handlers.onEnforcement(rule); },
+      },
+      { label: "Edit", onSelect: () => { handlers.onEdit(rule); } },
+      {
+        label: rule.enabled ? "Disable" : "Enable",
+        title: rule.enabled ? "Pause enforcement for this rule" : "Resume enforcement for this rule",
+        onSelect: () => { handlers.onToggle(rule); },
+      },
+    );
+  }
+  if (canDelete) {
+    items.push({ label: "Delete", dividerBefore: items.length > 0, onSelect: () => { handlers.onDelete(rule); } });
+  }
+  return items;
+}
+
 function RulesTable({ rules, impact, canUpdate, canDelete, onEnforcement, onEdit, onToggle, onDelete }: RulesTableProps) {
+  const handlers: RuleHandlers = { onEnforcement, onEdit, onToggle, onDelete };
   // An operator who may change nothing gets no Actions column at all, rather than a header over four empty cells.
   const anyAction = canUpdate || canDelete;
   return (
@@ -506,9 +563,7 @@ function RulesTable({ rules, impact, canUpdate, canDelete, onEnforcement, onEdit
             <td>
               <Badge variant="neutral">{rule.rule_type}</Badge>
             </td>
-            <td title={rule.identifier} className="app-control__identifier">
-              {truncateIdentifier(rule.identifier)}
-            </td>
+            <IdentifierCell value={rule.identifier} />
             <td>
               {/* Detect reads differently from Protect at a glance: a Detect rule blocks nothing, which is the one fact an operator
                   scanning the list most needs before assuming a binary is stopped. */}
@@ -532,43 +587,7 @@ function RulesTable({ rules, impact, canUpdate, canDelete, onEnforcement, onEdit
             <td>{new Date(rule.updated_at).toLocaleString()}</td>
             {anyAction && (
               <td className="app-control__row-actions">
-                {/* Edit / Disable / Delete each open a modal that prompts for an audit reason before firing the PATCH / DELETE
-                    endpoint server-side. The handlers live on PolicyDetail so refresh-on-success is wired in one place. */}
-                {canUpdate && (
-                  <>
-                    <Button
-                      variant="text-link"
-                      size="small"
-                      onClick={() => { onEnforcement(rule); }}
-                    >
-                      {isDetect(rule) ? "Promote" : "Move to Detect"}
-                    </Button>
-                    <Button
-                      variant="text-link"
-                      size="small"
-                      onClick={() => { onEdit(rule); }}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="text-link"
-                      size="small"
-                      onClick={() => { onToggle(rule); }}
-                      title={rule.enabled ? "Pause enforcement for this rule" : "Resume enforcement for this rule"}
-                    >
-                      {rule.enabled ? "Disable" : "Enable"}
-                    </Button>
-                  </>
-                )}
-                {canDelete && (
-                  <Button
-                    variant="text-link"
-                    size="small"
-                    onClick={() => { onDelete(rule); }}
-                  >
-                    Delete
-                  </Button>
-                )}
+                <ActionsMenu label={`Actions for ${rule.identifier}`} items={rowActions(rule, canUpdate, canDelete, handlers)} />
               </td>
             )}
           </tr>

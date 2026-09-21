@@ -4,17 +4,26 @@ import "./CopyButton.scss";
 // COPIED_FEEDBACK_MS is how long the button shows the "Copied" check before reverting to the clipboard icon.
 const COPIED_FEEDBACK_MS = 1500;
 
+// Icon edge in pixels. The glyph scales with the button, so a small button does not carry a full-size icon in a smaller box.
+const ICON_PX_DEFAULT = 16;
+const ICON_PX_SMALL = 12;
+
 interface CopyButtonProps {
   readonly value: string;
   // label is the accessible name, e.g. "Copy client secret"; the visible affordance is an icon only.
   readonly label: string;
+  // size picks the button's footprint. The default matches a settings-form input, which it usually sits beside. "small" is for a
+  // table cell, where the default is twice the height of the line of text it belongs to and reads as the cell's main feature
+  // rather than as an aid to the value it copies.
+  readonly size?: "default" | "small";
 }
 
 // CopyButton is the standard copy-to-clipboard affordance: an icon button (clipboard, swapping to a check on success) with an
 // accessible label. navigator.clipboard is undefined in insecure contexts / older browsers (the lib type claims otherwise, hence the
 // cast); the adjacent field stays selectable as a fallback.
-export function CopyButton({ value, label }: CopyButtonProps) {
+export function CopyButton({ value, label, size = "default" }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
+  const iconPx = size === "small" ? ICON_PX_SMALL : ICON_PX_DEFAULT;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
@@ -36,21 +45,21 @@ export function CopyButton({ value, label }: CopyButtonProps) {
     <>
       <button
         type="button"
-        className="copy-button"
+        className={`copy-button${size === "small" ? " copy-button--small" : ""}`}
         aria-label={label}
         title={copied ? "Copied" : "Copy"}
         onClick={() => { void handleCopy(); }}
       >
         {copied ? (
           <svg
-            className="copy-button__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+            className="copy-button__icon" viewBox="0 0 16 16" width={iconPx} height={iconPx} aria-hidden="true"
             fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
           >
             <path d="M13 4.5 6.5 11 3 7.5" />
           </svg>
         ) : (
           <svg
-            className="copy-button__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+            className="copy-button__icon" viewBox="0 0 16 16" width={iconPx} height={iconPx} aria-hidden="true"
             fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
           >
             <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
