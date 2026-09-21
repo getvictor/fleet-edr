@@ -72,8 +72,7 @@ func (q *Query) BuildChainTree(
 func (q *Query) chainDescendants(
 	ctx context.Context, hostID string, root api.Process, tr api.TimeRange, resolved map[int64]int64,
 ) ([]api.Process, bool, error) {
-	var out []api.Process
-	seen := map[int64]struct{}{root.ID: {}}
+	walk := chainWalk{seen: map[int64]struct{}{root.ID: {}}, resolved: resolved}
 	frontier := []api.Process{root}
 
 	for len(frontier) > 0 {
@@ -83,22 +82,42 @@ func (q *Query) chainDescendants(
 			if err != nil {
 				return nil, false, err
 			}
-			for _, child := range children {
-				if _, dup := seen[child.ID]; dup {
-					continue
-				}
-				seen[child.ID] = struct{}{}
-				if len(out) >= maxChainDescendants {
-					return out, true, nil
-				}
-				resolved[child.ID] = parent.ID
-				out = append(out, child)
-				next = append(next, child)
+			added, capped := walk.absorb(parent, children)
+			if capped {
+				return walk.out, true, nil
 			}
+			next = append(next, added...)
 		}
 		frontier = next
 	}
-	return out, false, nil
+	return walk.out, false, nil
+}
+
+// chainWalk is the state one descendant walk carries: the rows collected, the rows already visited, and the parent edges the walk
+// proved. Keeping it beside the traversal leaves the traversal itself readable as "take a generation, absorb it, repeat".
+type chainWalk struct {
+	out      []api.Process
+	seen     map[int64]struct{}
+	resolved map[int64]int64
+}
+
+// absorb takes one process's children into the walk, skipping any it has already visited, and reports whether the cap stopped it.
+// The rows it returns are the next generation to descend into: a row already visited is not one, or a walk over data that loops
+// would never end.
+func (w *chainWalk) absorb(parent api.Process, children []api.Process) (added []api.Process, capped bool) {
+	for _, child := range children {
+		if _, dup := w.seen[child.ID]; dup {
+			continue
+		}
+		w.seen[child.ID] = struct{}{}
+		if len(w.out) >= maxChainDescendants {
+			return added, true
+		}
+		w.resolved[child.ID] = parent.ID
+		w.out = append(w.out, child)
+		added = append(added, child)
+	}
+	return added, false
 }
 
 // childrenOf returns the processes forked by one process during ITS lifetime.
