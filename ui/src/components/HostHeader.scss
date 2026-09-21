@@ -23,22 +23,45 @@
   display: inline-flex;
 }
 
+// No border and no fill, because this opens a panel rather than doing anything. Bordered, it read as a peer of Release host beside
+// it, which is a control that cuts a Mac off the network: two things that look alike where only one of them acts. The caret is what
+// carries the affordance instead, and it turns to point at the panel it opened.
 .host-header__details-trigger {
   appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.25rem;
   background: transparent;
-  border: 1px solid var(--color-border, #d4d6dd);
+  border: 0;
   border-radius: 0.25rem;
   color: var(--color-text-secondary, #6b7280);
   cursor: pointer;
   font: inherit;
   font-size: 0.8rem;
-  padding: 0.1rem 0.5rem;
+  font-weight: 500;
+  padding: 0.1rem 0.15rem;
 
   &:hover {
     color: var(--color-text-primary, #192147);
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus, #6a67fe);
+    outline-offset: 2px;
+  }
+}
+
+// Rotates to point down while the panel is open. Transform rather than swapping the glyph, so there is one character to position and
+// the turn is animated. Hidden from assistive tech: aria-expanded on the trigger already says which way this is pointing.
+.host-header__details-caret {
+  display: inline-block;
+  font-size: 0.65em;
+  line-height: 1;
+  transition: transform 120ms ease-in-out;
+
+  &--open {
+    transform: rotate(90deg);
   }
 }
 

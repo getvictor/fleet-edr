@@ -7,6 +7,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Fixed
 
 - **An alert's process graph shows the alert's own chain.** The graph asked for every process on the host over a 24-hour window and narrowed to the alert in the browser, so on a busy host it was slow to open, it warned that most of the day had been left out, and the alerted process was often missing from it entirely: the page fell back to showing unrelated activity. It now reads that alert's chain directly, and the whole-host view keeps the alerted process and its parents in the page.
+- **Release host no longer looks like the button beside it that only opens a panel.** On a host page, Details and Release host were near-identical bordered buttons, so the control that cuts a Mac off the network was hard to tell from the one that shows its agent version. Details is now plain text with a caret, leaving the containment action the only button in the row, and the containment badge is sized and aligned to the online pill next to it.
 
 ## [0.6.0] (2026-09-20)
 
