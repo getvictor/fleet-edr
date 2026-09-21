@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **An alert's process graph now contains the alert.** The graph read returns the newest processes in its window, so on a busy host everything that ran after an alert filled the page and the alerted process was left out of it: the page fell back to showing the whole host, and the analyst was looking at unrelated activity. The alerted process and its parent chain are now always in the graph, whatever else the window held.
+
 ## [0.6.0] (2026-09-20)
 
 ### Upgrade notes (action required)

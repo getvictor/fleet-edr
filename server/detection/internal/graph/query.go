@@ -79,6 +79,20 @@ func (q *Query) BuildTree(
 		res.TotalMatched, res.TotalMatchedCapped = resolveTotalMatched(res.Returned, total, capped)
 	}
 
+	// Put the pinned process and its ancestors in the result whatever the row limit admitted. Without this the page the alert view
+	// asks for could not contain the alert it was opened for: the read is ORDER BY fork_time_ns DESC LIMIT, so it returns the NEWEST
+	// rows in the window, and on a busy host everything newer than the alert fills the page. Measured on one host, 10,321 processes
+	// forked after the alert inside the alert's own 24h window, which put the alerted process about 10,000 rows past the limit. The
+	// page then showed the whole host and the analyst was looking at unrelated activity (issue #1138).
+	//
+	// The ancestors come too, not just the pinned row. buildForest links ppid to pid within the fetched rows ONLY, so a process
+	// whose parent missed the cut becomes a root; pinning the row alone would place the alerted process in the tree as an orphan,
+	// which is a different wrong answer rather than the right one.
+	procs, err = q.withPinnedChain(ctx, hostID, procs, pinnedID)
+	if err != nil {
+		return api.ProcessTreeResult{}, err
+	}
+
 	forest := buildForest(procs)
 	if flatten {
 		res.Roots = forest
@@ -86,6 +100,74 @@ func (q *Query) BuildTree(
 	}
 	res.Roots = aggregateSiblingsPinned(forest, pinnedID)
 	return res, nil
+}
+
+// maxPinnedChainDepth bounds the ancestor walk. A real process tree is a handful of levels deep; this is the same order as
+// GetExecChain's own cap and exists so a cycle in ppid, which the data should not contain and has no defence against, cannot spin.
+const maxPinnedChainDepth = 64
+
+// withPinnedChain returns procs with the pinned process and its ancestors added, and procs unchanged when nothing is pinned.
+//
+// Each parent is resolved with q.store.GetProcessByPID, which is the ONE lookup in this codebase that answers "which generation of
+// this pid was running at that instant". Its ordering is the product of issues #714, #723, #724 and #799, and its own comment warns
+// that a second copy of it would drift; this walk therefore asks it rather than joining on ppid itself. The cost is one query per
+// level, which is bounded by the depth of a process tree rather than by how busy the host is.
+//
+// Rows already read are kept and never re-fetched, but the walk does NOT stop when it meets one: the page is bounded by time, not by
+// tree shape, so a parent being present says nothing about whether ITS parent is.
+func (q *Query) withPinnedChain(
+	ctx context.Context, hostID string, procs []api.Process, pinnedID int64,
+) ([]api.Process, error) {
+	if pinnedID == 0 {
+		return procs, nil
+	}
+	have := make(map[int64]struct{}, len(procs)+maxPinnedChainDepth)
+	for i := range procs {
+		have[procs[i].ID] = struct{}{}
+	}
+
+	cur, err := q.pinnedProcess(ctx, hostID, procs, pinnedID)
+	if err != nil || cur == nil {
+		// A pinned id that names no row is not an error to fail the whole tree on: the process may have been pruned by retention
+		// since the alert was raised, and the host's tree is still worth rendering.
+		return procs, err
+	}
+	if _, ok := have[cur.ID]; !ok {
+		procs = append(procs, *cur)
+		have[cur.ID] = struct{}{}
+	}
+
+	for range maxPinnedChainDepth {
+		if cur.PPID == 0 {
+			return procs, nil
+		}
+		parent, perr := q.store.GetProcessByPID(ctx, hostID, cur.PPID, cur.ForkTimeNs)
+		if perr != nil {
+			return nil, perr
+		}
+		if parent == nil || parent.ID == cur.ID {
+			return procs, nil
+		}
+		if _, seen := have[parent.ID]; !seen {
+			procs = append(procs, *parent)
+			have[parent.ID] = struct{}{}
+		}
+		cur = parent
+	}
+	return procs, nil
+}
+
+// pinnedProcess finds the pinned row among those already read, and reads it by id only when it is not there. The common case, an
+// alert whose process the window read already covered, therefore costs nothing.
+func (q *Query) pinnedProcess(
+	ctx context.Context, hostID string, procs []api.Process, pinnedID int64,
+) (*api.Process, error) {
+	for i := range procs {
+		if procs[i].ID == pinnedID {
+			return &procs[i], nil
+		}
+	}
+	return q.store.GetProcessByID(ctx, hostID, pinnedID)
 }
 
 // resolveTotalMatched composes what the count established with what the read already proved, for a page the lookahead showed was
