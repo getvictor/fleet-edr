@@ -27,8 +27,8 @@ const deleteDescription =
 // from that corpus, and says so rather than showing an empty panel.
 //
 // The owning page renders this only for an operator with rule_content.read, since both reads here are gated on it. `editable` adds Edit
-// and Delete, which the owning page grants only for a rule this deployment wrote and an operator with rule_content.write: shipped rules
-// are tuned in Detection tuning rather than rewritten here, where the next install of shipped content would meet the edit.
+// and Delete, which the owning page grants only for a rule this deployment wrote and an operator with rule_content.write: built-in
+// rules are tuned in Detection tuning rather than rewritten here, where the next install of built-in content would meet the edit.
 export function RuleSource({ ruleId, editable = false }: { readonly ruleId: string; readonly editable?: boolean }) {
   const [state, setState] = useState<SourceState>({ kind: "loading" });
   const [deleteOpen, setDeleteOpen] = useState(false);

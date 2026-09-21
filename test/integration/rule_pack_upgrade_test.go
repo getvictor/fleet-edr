@@ -27,7 +27,7 @@ func packRule(id, title, marker string) string {
 		"level: medium\n"
 }
 
-// spec:rule-content/a-build-installs-its-shipped-rule-content/an-operator-s-tuning-survives
+// spec:rule-content/a-build-installs-its-built-in-rule-content/an-operator-s-tuning-survives
 //
 // TestRulePackUpgrade_PreservesTuning is the second acceptance criterion of issue #768, and it spans two contexts on purpose: the
 // pack is rule CONTENT and the tuning is detection CONFIG, so the claim that one survives the other cannot be verified from either

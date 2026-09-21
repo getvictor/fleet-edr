@@ -128,15 +128,15 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	})
 }
 
-// UpgradePackFrom installs the shipped rule content in this build over the shipped content the corpus holds, and reports whether
+// UpgradePackFrom installs the built-in rule content in this build over the built-in content the corpus holds, and reports whether
 // anything changed.
 //
 // The counterpart to SeedFrom, which acts only on an EMPTY corpus. Once a deployment has seeded, the seed can never run again, so
-// without this a corpus keeps its first generation of shipped rules forever: an operator upgrading the product to get new
+// without this a corpus keeps its first generation of built-in rules forever: an operator upgrading the product to get new
 // detections would not get them, and nothing would say so. That is a security regression rather than an inconvenience, which is
 // why this runs on its own rather than waiting to be asked.
 //
-// It replaces only the SHIPPED half. An operator's own rules survive an upgrade, including one written over a shipped rule's path,
+// It replaces only the SHIPPED half. An operator's own rules survive an upgrade, including one written over a built-in rule's path,
 // and their tuning survives because per-rule mode, severity overrides and exclusions live in detection_rule_settings keyed by rule
 // id rather than in these files. That separation is what makes upgrading safe, and it is the reason issue #768 states the two
 // acceptance criteria it does.
@@ -155,7 +155,7 @@ func (r *RuleContent) UpgradePackFrom(
 		return false, err
 	}
 	if len(docs) == 0 {
-		// A build shipping no rules must not be read as "delete every shipped rule you have". Seeding treats this as a legitimate
+		// A build shipping no rules must not be read as "delete every built-in rule you have". Seeding treats this as a legitimate
 		// empty corpus because there is nothing to lose; here there is, so the only safe reading is that something is wrong with
 		// this build's embedded content rather than that the pack is deliberately empty.
 		r.logger.WarnContext(ctx, "rulecontent: this build ships no rule documents; leaving the stored pack alone", "root", root)
@@ -183,7 +183,7 @@ func (r *RuleContent) UpgradePackFrom(
 
 // Packs returns the pack lifecycle bound to the build's own pack, satisfying api.PackLifecycle.
 //
-// The binding is the point. Status and rollback both need to know what shipped content this build carries, and the caller in the
+// The binding is the point. Status and rollback both need to know what built-in content this build carries, and the caller in the
 // rules context has no business reading it: that is what made the port's two methods take no arguments. Closing over the FS here
 // is what lets them.
 //
@@ -210,7 +210,7 @@ func (b boundPacks) Rollback(ctx context.Context, mkAudit api.PackAuditEntryFunc
 	return b.rc.RollbackPackTo(ctx, b.identity, mkAudit)
 }
 
-// RollbackPackTo restores the shipped content the last upgrade replaced, and records that the pack this build carries was
+// RollbackPackTo restores the built-in content the last upgrade replaced, and records that the pack this build carries was
 // declined so a restart does not reinstall it.
 //
 // The pack being declined is read from what the UPGRADE recorded rather than from the build this process is running, which review
@@ -235,7 +235,7 @@ func (r *RuleContent) RollbackPackTo(
 	return rolled, nil
 }
 
-// PackStatusFrom reports what shipped content this deployment runs and how it differs from the pack in this build.
+// PackStatusFrom reports what built-in content this deployment runs and how it differs from the pack in this build.
 func (r *RuleContent) PackStatusFrom(
 	ctx context.Context, fsys fs.FS, root string, include func(path string) bool, identity api.RuleIdentity,
 ) (api.PackStatus, error) {

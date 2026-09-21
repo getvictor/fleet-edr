@@ -30,7 +30,7 @@ func TestOpenRuleContent_InstallsThisBuildsPack(t *testing.T) {
 	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: logger})
 	require.NoError(t, err)
 
-	// A deployment already carrying some older generation of shipped content.
+	// A deployment already carrying some older generation of built-in content.
 	_, err = rc.Replace(ctx, []rulecontentapi.Document{{
 		Path:    "imported/stale.yml",
 		Content: []byte("a pack this build does not ship"),

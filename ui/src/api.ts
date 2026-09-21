@@ -739,7 +739,7 @@ export async function getRulePackStatus(): Promise<RulePackStatus> {
 export interface RulePackRollbackResult {
   restored: string;
   version: number;
-  // Shipped rules the rollback did not restore, because a rule this deployment wrote now holds their identity.
+  // Built-in rules the rollback did not restore, because a rule this deployment wrote now holds their identity.
   withheld: string[];
 }
 

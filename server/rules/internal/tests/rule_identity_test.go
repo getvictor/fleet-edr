@@ -45,5 +45,5 @@ func TestRuleIdentityForPath_IsTheKeyTheLoaderCompares(t *testing.T) {
 	// collide under this key, or the pack installs alongside and the corpus stops loading.
 	assert.Equal(t, rulesbootstrap.RuleIdentityForPath("authored/Foo.yml"),
 		rulesbootstrap.RuleIdentityForPath("imported/foo.yml"),
-		"an operator's rule and a shipped rule differing only in path and case are one rule, and must compare equal")
+		"an operator's rule and a built-in rule differing only in path and case are one rule, and must compare equal")
 }

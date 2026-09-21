@@ -73,7 +73,7 @@ func (r *DyldInsert) Doc() api.Documentation {
 // binaries anyway); we leave them out for MVP and revisit if pilot customers surface real evasion.
 // dyldPrefixes names the variable a finding reports. It no longer decides whether the rule fires: the detection block does, and
 // this list exists only so the alert can say WHICH assignment matched, since the evaluator reports only that one did (issue #796).
-// TestLiveSymbolsStillAgreeWithTheShippedDetections keeps the two in step.
+// TestLiveSymbolsStillAgreeWithTheBuiltInDetections keeps the two in step.
 var dyldPrefixes = []string{
 	"DYLD_INSERT_LIBRARIES=",
 	"DYLD_LIBRARY_PATH=",

@@ -98,7 +98,7 @@ type Deps struct {
 	// CorpusValidator, and rulecontent must not import it (ADR-0021). cmd/main closes that loop by constructing the lifecycle
 	// with the validator and passing the result back.
 	RuleAuthor rulecontentapi.Author
-	// RulePacks is rulecontent's pack lifecycle, which backs the operator surface for reading which generation of shipped rules
+	// RulePacks is rulecontent's pack lifecycle, which backs the operator surface for reading which generation of built-in rules
 	// a deployment runs and restoring the one before it (issue #768). Optional on the same terms as RuleAuthor: nil leaves that
 	// surface unmounted, which is right for a tool that has no business changing rule content.
 	RulePacks rulecontentapi.PackLifecycle

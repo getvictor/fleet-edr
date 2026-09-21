@@ -75,7 +75,7 @@ func TestAll_DeclareValidPlatforms(t *testing.T) {
 	}
 }
 
-// TestAll_DocStructIsPopulated walks every shipped rule's Doc() and locks in the operator-facing invariants. Drives coverage of each
+// TestAll_DocStructIsPopulated walks every built-in rule's Doc() and locks in the operator-facing invariants. Drives coverage of each
 // rule's Doc() body from the rules package itself so SonarCloud's Go coverage profile attributes the lines correctly (cross-package
 // coverage isn't aggregated under the project's current `-coverprofile` setup). Same checks as the gate in tools/gen-rule-docs,
 // repeated here so a future tool can be deleted without losing the contract.
@@ -130,7 +130,7 @@ func authored(r api.Rule) bool {
 // spec:server-detection-rules-engine/canonical-rule-naming/a-rule-names-itself-the-same-way-everywhere
 //
 // TestAll_CanonicalDisplayName is the structural guard against the three-names-for-one-detection drift issue #519 fixed. It pins the
-// single-source-of-truth invariant for every shipped rule: Doc().Title (docs, /api/rules, UI) MUST equal DisplayName(), so the doc
+// single-source-of-truth invariant for every built-in rule: Doc().Title (docs, /api/rules, UI) MUST equal DisplayName(), so the doc
 // surface can never silently diverge from the canonical name again. It also enforces that the canonical name is a clean human-readable
 // label, not the old "<name> (parenthetical implementation detail)" form whose detail belongs in Summary. The finding-title half of the
 // invariant (Finding.Title == DisplayName) is enforced for fixture-replayed rules by server/detection/testkit Replay and by each

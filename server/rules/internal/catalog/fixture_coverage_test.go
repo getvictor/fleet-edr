@@ -27,7 +27,7 @@ import (
 //   - TestCatalogFixturesStillFire is the REGRESSION gate. It answers "does every fixture still produce what it claims".
 //   - TestNoOrphanFixtureDirectories is the HYGIENE gate. It answers "does every fixture directory still name a rule".
 //
-// Folding them together would report a brand-new rule with no fixture and a shipped rule that broke as the same failure.
+// Folding them together would report a brand-new rule with no fixture and a built-in rule that broke as the same failure.
 
 // fixtureResolver is the exclusion resolver every rule is built with here.
 //

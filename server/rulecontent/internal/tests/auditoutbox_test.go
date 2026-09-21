@@ -70,7 +70,7 @@ func TestAuditOutbox_ARefusedChangeLeavesNoEntry(t *testing.T) {
 }
 
 // TestAuditOutbox_DeleteAndRollbackCommitTheirEntriesToo covers the other two mutating paths. The rollback is the one review
-// objected to losing an audit row for, because it replaces every shipped rule at once.
+// objected to losing an audit row for, because it replaces every built-in rule at once.
 func TestAuditOutbox_DeleteAndRollbackCommitTheirEntriesToo(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)

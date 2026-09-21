@@ -422,7 +422,7 @@ func rcServerWithPacks(t *testing.T, packs rulePackService) *httptest.Server {
 	return srv
 }
 
-// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/an-operator-reads-which-shipped-rules-are-installed
+// spec:rule-content/an-operator-can-see-and-restore-the-built-in-rule-content/an-operator-reads-which-built-in-rules-are-installed
 //
 // TestPackStatus_ReportsTheDifferenceAndWhetherRollbackIsPossible pins the wire shape an operator screen reads.
 //
@@ -457,10 +457,10 @@ func TestPackStatus_ReportsTheDifferenceAndWhetherRollbackIsPossible(t *testing.
 	assert.Equal(t, []string{"edited_rule"}, got.Changed)
 }
 
-// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-restore-without-a-reason-is-refused
+// spec:rule-content/an-operator-can-see-and-restore-the-built-in-rule-content/a-restore-without-a-reason-is-refused
 //
 // TestPackRollback_RequiresAReason keeps the rollback on the same footing as every other change to rule content. This one is the
-// strongest case for it: the change swaps out every shipped detection a deployment runs.
+// strongest case for it: the change swaps out every built-in detection a deployment runs.
 func TestPackRollback_RequiresAReason(t *testing.T) {
 	t.Parallel()
 	packs := &fakeRCPacks{rollErr: ruleauthoring.ErrReasonRequired}
@@ -471,7 +471,7 @@ func TestPackRollback_RequiresAReason(t *testing.T) {
 	assert.Contains(t, body, "reason is required")
 }
 
-// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-restore-with-nothing-retained-is-refused-as-a-conflict
+// spec:rule-content/an-operator-can-see-and-restore-the-built-in-rule-content/a-restore-with-nothing-retained-is-refused-as-a-conflict
 //
 // TestPackRollback_WithNothingRetainedIsAConflict distinguishes "you asked for something that does not exist yet" from "something
 // went wrong". A corpus that has never had a newer pack installed has nothing behind it, and a 500 would send an operator looking
@@ -485,10 +485,10 @@ func TestPackRollback_WithNothingRetainedIsAConflict(t *testing.T) {
 	assert.Contains(t, body, "nothing to roll back to")
 }
 
-// spec:rule-content/an-operator-can-see-and-restore-the-shipped-rule-content/a-restore-reports-what-it-withheld
+// spec:rule-content/an-operator-can-see-and-restore-the-built-in-rule-content/a-restore-reports-what-it-withheld
 //
 // TestPackRollback_ReportsWhatItRestoredAndWithheld carries both halves back to the operator. The withheld list matters: the
-// deployment is deliberately not running shipped rules it was offered, their own rule is why, and nothing else would say so.
+// deployment is deliberately not running built-in rules it was offered, their own rule is why, and nothing else would say so.
 func TestPackRollback_ReportsWhatItRestoredAndWithheld(t *testing.T) {
 	t.Parallel()
 	packs := &fakeRCPacks{rolled: rulecontentapi.PackRollback{
@@ -598,7 +598,7 @@ func TestPackStatus_RoundTripsAnyDifferenceLists(t *testing.T) {
 //
 // The reason is the interesting input: it is operator-supplied free text that goes into a JSON request AND into an audit payload,
 // so quotes, newlines and non-ASCII all have to survive the trip intact. A reason mangled in transit would be recorded wrongly in
-// the one place someone later asks why every shipped rule changed.
+// the one place someone later asks why every built-in rule changed.
 func TestPackRollback_RoundTripsAnyReasonAndWithheldList(t *testing.T) {
 	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {

@@ -14,15 +14,15 @@ import (
 
 // spec:server-detection-rules-engine/a-rule-whose-identifier-cannot-be-persisted-is-refused-at-load/every-shipped-rule-identifier-is-storable
 //
-// TestEveryShippedRuleIDIsStorable is the gate that would have caught issue #832 in CI instead of on a dev server.
+// TestEveryBuiltInRuleIDIsStorable is the gate that would have caught issue #832 in CI instead of on a dev server.
 //
 // It measures the REAL catalog, which is the only thing that catches this class: every unit test around rule identifiers uses
 // short hand-written ones, and the defect arrived with an imported corpus whose identifiers come from upstream filenames. One of
-// the 79 shipped rules is 70 characters, and every rule_id column was VARCHAR(64), so the identifier was storable nowhere and
+// the 79 built-in rules is 70 characters, and every rule_id column was VARCHAR(64), so the identifier was storable nowhere and
 // refused nowhere.
 //
 // Asserted per rule rather than on the maximum, so a failure names the offending rule instead of a number.
-func TestEveryShippedRuleIDIsStorable(t *testing.T) {
+func TestEveryBuiltInRuleIDIsStorable(t *testing.T) {
 	t.Parallel()
 
 	rules := New(nil)
@@ -30,9 +30,9 @@ func TestEveryShippedRuleIDIsStorable(t *testing.T) {
 
 	for _, r := range rules {
 		id := r.ID()
-		// Runes, matching the validator and the column. Counting bytes here would fail a shipped identifier of at most 255
+		// Runes, matching the validator and the column. Counting bytes here would fail a built-in identifier of at most 255
 		// multibyte characters that the loaders accept and every column stores, which is the same confusion the validator had
-		// (issue #835 review). Every shipped id is ASCII today, so this is agreement rather than a live difference, and a gate
+		// (issue #835 review). Every built-in id is ASCII today, so this is agreement rather than a live difference, and a gate
 		// that measures something other than what it guards stops being a gate the moment that changes.
 		assert.LessOrEqualf(t, utf8.RuneCountInString(id), api.MaxRuleIDLen,
 			"rule %q has a %d-character identifier, over the %d-character limit: it cannot be stored, and a rule whose alerts "+
@@ -171,7 +171,7 @@ func TestValidateRuleID(t *testing.T) {
 		wantErr string
 	}{
 		{name: "ordinary identifier", id: "suspicious_exec"},
-		{name: "the longest shipped identifier", id: "proc_creation_macos_remote_access_tools_teamviewer_incoming_connection"},
+		{name: "the longest built-in identifier", id: "proc_creation_macos_remote_access_tools_teamviewer_incoming_connection"},
 		{name: "exactly at the limit", id: strings.Repeat("a", api.MaxRuleIDLen)},
 		{name: "one over the limit", id: strings.Repeat("a", api.MaxRuleIDLen+1), wantErr: "over the"},
 		{name: "empty", id: "", wantErr: "is empty"},

@@ -62,7 +62,7 @@ func newPackService(t *testing.T, packs *fakePacks, audit *recordingAudit) *Pack
 }
 
 // TestNewPackService_RequiresItsCollaborators keeps a half-built service from existing. The drain is required for the reason the
-// lifecycle is: a rollback that replaced every shipped rule without leaving an audit row is the change here least acceptable to
+// lifecycle is: a rollback that replaced every built-in rule without leaving an audit row is the change here least acceptable to
 // lose, so a deployment that wired it wrong should fail to start rather than discover it later. What the drain itself requires,
 // an outbox and a recorder, is for its own constructor to refuse, and TestDrain_RequiresItsCollaborators covers it.
 func TestNewPackService_RequiresItsCollaborators(t *testing.T) {
@@ -122,7 +122,7 @@ func TestPackService_RollbackRequiresAReason(t *testing.T) {
 
 // TestPackService_RollbackRecordsWhoAndWhy is the claim the audit trail rests on, and it checks the payload rather than the row's
 // existence: an entry saying only that a rollback happened would be the least useful of the set, given the change replaces every
-// shipped detection at once.
+// built-in detection at once.
 func TestPackService_RollbackRecordsWhoAndWhy(t *testing.T) {
 	t.Parallel()
 	audit := &recordingAudit{}
@@ -137,7 +137,7 @@ func TestPackService_RollbackRecordsWhoAndWhy(t *testing.T) {
 
 	e := audit.rows(t, 1)[0]
 	assert.Equal(t, identityapi.AuditRuleContentPackRollback, e.Action,
-		"its own action, because calling this a document change would understate replacing every shipped rule")
+		"its own action, because calling this a document change would understate replacing every built-in rule")
 	assert.Equal(t, "rule_content_pack", e.TargetType)
 	assert.Equal(t, "restored-digest", e.TargetID)
 	assert.Equal(t, "rule X fires on everything", e.Payload["reason"])
@@ -147,7 +147,7 @@ func TestPackService_RollbackRecordsWhoAndWhy(t *testing.T) {
 	// []string becomes []any across the JSON round-trip, so the elements are compared rather than the slice type.
 	require.Len(t, e.Payload["withheld"], 1)
 	assert.Equal(t, "imported/mine.yml", e.Payload["withheld"].([]any)[0],
-		"the deployment is deliberately not running a shipped rule, and a later reviewer needs that visible")
+		"the deployment is deliberately not running a built-in rule, and a later reviewer needs that visible")
 }
 
 // TestPackService_RollbackOmitsWithheldWhenThereIsNone keeps the payload honest: an empty list would read as a decision that was

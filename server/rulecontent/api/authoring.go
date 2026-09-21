@@ -22,7 +22,7 @@ var ErrDocumentNotFound = errors.New("rule content: document not found")
 // re-phrasing it here would make this package a second, drifting account of why the loader refuses things.
 var ErrRefused = errors.New("rule content: change refused")
 
-// PackLifecycle is the pack half of rule content: which generation of shipped rules a deployment runs, and restoring the one
+// PackLifecycle is the pack half of rule content: which generation of built-in rules a deployment runs, and restoring the one
 // before it.
 //
 // Declared here and implemented by rulecontent's bootstrap, for the reason Author is: the operator surface lives in the rules
@@ -102,7 +102,7 @@ type AuditOutbox interface {
 	DeleteAuditEntries(ctx context.Context, ids []int64) error
 }
 
-// ErrNoPreviousPack reports that no earlier generation of shipped content is retained, so there is nothing to roll back to.
+// ErrNoPreviousPack reports that no earlier generation of built-in content is retained, so there is nothing to roll back to.
 //
 // The ordinary state of a deployment that has never upgraded: it seeded once and is still running what it seeded. Reported rather
 // than treated as an empty restore, which would leave the deployment detecting nothing.

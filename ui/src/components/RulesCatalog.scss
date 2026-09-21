@@ -8,6 +8,14 @@
   align-items: center;
 }
 
+// The placeholder is the only thing naming this box now that the label is gone, so it has to be readable in full: measured, the
+// text wants 162px and the default box leaves 156px for it. A min-width rather than flex-grow, which took enough room from the
+// row to wrap the New rule button beside it onto two lines.
+.rules-catalog__filters .field:has(#rules-catalog-search) {
+  min-width: 200px;
+}
+
+
 .rules-catalog__summary {
   margin: 0 0 $pad-medium;
   font-size: $x-small;
@@ -19,7 +27,7 @@
   color: $ui-fleet-black-50;
 }
 
-.rules-catalog__shipped {
+.rules-catalog__built-in {
   font-size: $x-small;
 }
 

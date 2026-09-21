@@ -39,7 +39,7 @@ func newRuleContentWithDB(t *testing.T) (*rulecontentbootstrap.RuleContent, *sql
 	return rc, db
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/the-previous-generation-is-restored
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/the-previous-generation-is-restored
 //
 // TestRollback_RestoresTheGenerationAnUpgradeReplaced is the acceptance criterion #768 states for recovery: a bad pack has to be
 // survivable without restoring a database backup.
@@ -76,7 +76,7 @@ func TestRollback_RestoresTheGenerationAnUpgradeReplaced(t *testing.T) {
 	assert.NotContains(t, got, "imported/new-in-v2.yml", "a rule the bad pack added is gone")
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rollback-is-not-undone-by-the-next-restart
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-rollback-is-not-undone-by-the-next-restart
 //
 // TestRollback_SurvivesARestart is what makes rollback more than theatre, and the case is easy to miss because it only shows up
 // on the NEXT start.
@@ -110,7 +110,7 @@ func TestRollback_SurvivesARestart(t *testing.T) {
 	assert.Equal(t, "a v1", string(docs[0].Content), "the deployment is still on the generation the operator rolled back to")
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-later-pack-still-installs-after-a-rollback
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-later-pack-still-installs-after-a-rollback
 //
 // TestRollback_DoesNotLatchOffFutureUpgrades pins that declining is about ONE pack rather than about upgrades in general.
 //
@@ -140,9 +140,9 @@ func TestRollback_DoesNotLatchOffFutureUpgrades(t *testing.T) {
 	assert.Equal(t, "a v3 with the fix", string(docs[0].Content))
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/an-operator-s-own-rules-survive-a-rollback
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/an-operator-s-own-rules-survive-a-rollback
 //
-// TestRollback_LeavesTheOperatorsOwnRulesAlone states what rolling back a PACK means. It restores the shipped generation; it is
+// TestRollback_LeavesTheOperatorsOwnRulesAlone states what rolling back a PACK means. It restores the built-in generation; it is
 // not an undo of the operator's own edits, which an upgrade never touched in the first place.
 func TestRollback_LeavesTheOperatorsOwnRulesAlone(t *testing.T) {
 	t.Parallel()
@@ -178,7 +178,7 @@ func TestRollback_LeavesTheOperatorsOwnRulesAlone(t *testing.T) {
 	assert.Equal(t, api.SourceAuthored, got["authored/mine.yml"])
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/rolling-back-with-nothing-retained-is-reported
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/rolling-back-with-nothing-retained-is-reported
 //
 // TestRollback_WithNothingRetainedIsReported covers the ordinary state of a deployment that has never upgraded: it seeded once and
 // is still running what it seeded, so there is no earlier generation.
@@ -201,7 +201,7 @@ func TestRollback_WithNothingRetainedIsReported(t *testing.T) {
 	assert.Len(t, docs, 1, "a refused rollback must leave the corpus alone")
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-second-rollback-is-refused
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-second-rollback-is-refused
 //
 // TestRollback_CannotBeRepeatedPastTheRetainedGeneration pins that only one generation is retained. A second rollback has nothing
 // behind the first, and saying so is better than reporting success having restored the content already installed.
@@ -222,7 +222,7 @@ func TestRollback_CannotBeRepeatedPastTheRetainedGeneration(t *testing.T) {
 	require.ErrorIs(t, err, api.ErrNoPreviousPack)
 }
 
-// spec:rule-content/a-deployment-reports-which-shipped-rule-content-it-is-running/the-rules-that-differ-are-named
+// spec:rule-content/a-deployment-reports-which-built-in-content-it-runs/the-rules-that-differ-are-named
 //
 // TestPackStatus_ReportsWhatDiffersByRule is the "installed versus available" half of #768.
 //
@@ -256,7 +256,7 @@ func TestPackStatus_ReportsWhatDiffersByRule(t *testing.T) {
 	assert.NotContains(t, status.Changed, "unchanged")
 }
 
-// spec:rule-content/a-deployment-reports-which-shipped-rule-content-it-is-running/a-current-deployment-reports-no-difference
+// spec:rule-content/a-deployment-reports-which-built-in-content-it-runs/a-current-deployment-reports-no-difference
 //
 // TestPackStatus_OnACurrentDeploymentReportsNoDifference is the state most deployments are in, and it has to be reported as
 // current rather than as an empty diff that a reader has to interpret.
@@ -277,7 +277,7 @@ func TestPackStatus_OnACurrentDeploymentReportsNoDifference(t *testing.T) {
 	assert.Empty(t, status.Changed)
 }
 
-// spec:rule-content/a-deployment-reports-which-shipped-rule-content-it-is-running/their-own-rules-do-not-make-a-deployment-look-out-of-date
+// spec:rule-content/a-deployment-reports-which-built-in-content-it-runs/their-own-rules-do-not-make-a-deployment-look-out-of-date
 //
 // TestPackStatus_IgnoresTheOperatorsOwnRules keeps their rules out of the comparison. Adding one must not make a deployment look
 // out of date, which is the same property the pack digest carries and for the same reason.
@@ -301,11 +301,11 @@ func TestPackStatus_IgnoresTheOperatorsOwnRules(t *testing.T) {
 	assert.True(t, status.Current(), "writing their own rule must not make the deployment look out of date")
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rule-the-operator-took-over-is-not-taken-back
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-rule-the-operator-took-over-is-not-taken-back
 //
 // TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns is the failure review caught, and it has two shapes with the same cause.
 //
-// A rollback restores the retained shipped documents. If the operator has taken over one of those rules SINCE the upgrade, then
+// A rollback restores the retained built-in documents. If the operator has taken over one of those rules SINCE the upgrade, then
 // at the same path the insert is a duplicate-key failure that aborts the whole rollback, and at a different path with the same
 // identity it stores two documents for one rule, which makes the corpus refuse to load and takes every rule on the deployment
 // down. It is the hazard the install path already filters for, arriving from the other direction.
@@ -339,7 +339,7 @@ func TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns(t *testing.T) {
 		require.Len(t, docs, 1)
 		assert.Equal(t, "my version", string(docs[0].Content), "their rule wins, as it does on the way in")
 		assert.Equal(t, api.SourceAuthored, docs[0].Source)
-		assert.Contains(t, rolled.Withheld, "imported/a.yml", "they are told which shipped rule was not restored")
+		assert.Contains(t, rolled.Withheld, "imported/a.yml", "they are told which built-in rule was not restored")
 	})
 
 	t.Run("at a different path with the same identity", func(t *testing.T) {
@@ -377,7 +377,7 @@ func TestRollback_DoesNotTakeBackARuleTheOperatorNowOwns(t *testing.T) {
 	})
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-corpus-predating-pack-identity-offers-a-rollback
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-corpus-predating-pack-identity-offers-a-rollback
 //
 // TestRollback_IsOfferedOnACorpusThatPredatesPackIdentity is the inconsistency review found between the two halves of this
 // feature, and mutation testing then showed the fix was unpinned.
@@ -462,11 +462,11 @@ func TestPackStatusFrom_ARootThatDoesNotExistIsAnError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-generation-with-no-shipped-rules-is-still-restorable
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-generation-with-no-built-in-rules-is-still-restorable
 //
 // TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus covers the case counting rows gets wrong.
 //
-// A corpus holding only the operator's rules retains a generation with ZERO shipped documents when a pack is first installed onto
+// A corpus holding only the operator's rules retains a generation with ZERO built-in documents when a pack is first installed onto
 // it. That generation exists and has an identity (the digest of nothing, which is a real value rather than empty), so counting
 // retained rows reports it as "never upgraded" and refuses the one rollback that would undo the upgrade. The recorded digest is
 // what distinguishes the two, which is what the column is for.
@@ -475,7 +475,7 @@ func TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus(t *testing.T) {
 	rc := newRuleContent(t)
 	ctx := t.Context()
 
-	// An authored-only corpus: their rules, no shipped content at all.
+	// An authored-only corpus: their rules, no built-in content at all.
 	_, err := rc.Replace(ctx, []api.Document{
 		{Path: "authored/mine.yml", Content: []byte("mine"), Source: api.SourceAuthored},
 	})
@@ -483,7 +483,7 @@ func TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus(t *testing.T) {
 
 	installed, err := rc.UpgradePackFrom(ctx, packFS(map[string]string{"imported/a.yml": "a"}), ".", nil, stemIdentity)
 	require.NoError(t, err)
-	require.True(t, installed, "the pack must install onto a corpus that held no shipped content")
+	require.True(t, installed, "the pack must install onto a corpus that held no built-in content")
 
 	rolled, err := rc.RollbackPackTo(ctx, stemIdentity, nil)
 	require.NoError(t, err, "the generation retained was empty, not absent, so this rollback must be possible")
@@ -491,11 +491,11 @@ func TestRollback_CanUndoAnUpgradeOntoAnAuthoredOnlyCorpus(t *testing.T) {
 
 	docs, err := rc.Corpus().Documents(ctx)
 	require.NoError(t, err)
-	require.Len(t, docs, 1, "the shipped rule the upgrade added is gone again")
+	require.Len(t, docs, 1, "the built-in rule the upgrade added is gone again")
 	assert.Equal(t, "authored/mine.yml", docs[0].Path, "and their own rule is what remains")
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rollback-holds-against-a-build-differing-in-an-override
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-rollback-holds-against-a-build-differing-in-an-override
 //
 // TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule is the way a restart could undo a rollback, which review found.
 //
@@ -540,7 +540,7 @@ func TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule(t *testing.T)
 	}
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/a-rollback-holds-after-the-operator-edits-shipped-content
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/a-rollback-holds-after-the-operator-edits-built-in-content
 //
 // TestRollback_HoldsAfterTheOperatorEditsShippedContent is the third way a restart could undo a rollback, and the last of a set
 // worth stating together because each looked like the obvious answer and each was reachable.
@@ -548,7 +548,7 @@ func TestRollback_HoldsAgainstAPackDifferingOnlyInAnOverriddenRule(t *testing.T)
 // The decline has to name the generation the UPGRADE installed. Three narrower answers each fail: the pack a build carries
 // differs from what gets stored on a deployment holding an override; the running process's own pack is wrong when a rollback is
 // served by an older replica mid-deployment; and the corpus's current digest is recomputed by operator edits, so deleting a
-// shipped rule between the upgrade and the rollback records a decline describing content no build ever shipped. This covers the
+// built-in rule between the upgrade and the rollback records a decline describing content no build ever shipped. This covers the
 // third: the deletion must not let the rejected generation come back.
 func TestRollback_HoldsAfterTheOperatorEditsShippedContent(t *testing.T) {
 	t.Parallel()
@@ -562,7 +562,7 @@ func TestRollback_HoldsAfterTheOperatorEditsShippedContent(t *testing.T) {
 	_, err = rc.UpgradePackFrom(ctx, v2, ".", nil, stemIdentity)
 	require.NoError(t, err)
 
-	// The operator deletes one of the shipped rules the bad pack brought, which recomputes the corpus digest.
+	// The operator deletes one of the built-in rules the bad pack brought, which recomputes the corpus digest.
 	_, err = rc.Replace(ctx, []api.Document{
 		{Path: "imported/a.yml", Content: []byte("a v2"), Source: api.SourceVendored},
 	})
@@ -583,7 +583,7 @@ func TestRollback_HoldsAfterTheOperatorEditsShippedContent(t *testing.T) {
 	}
 }
 
-// spec:rule-content/a-replaced-generation-of-shipped-rule-content-can-be-restored/an-unrecorded-generation-is-recorded-on-start
+// spec:rule-content/a-replaced-generation-of-built-in-content-can-be-restored/an-unrecorded-generation-is-recorded-on-start
 //
 // TestUpgradePack_RecordsTheInstalledGenerationOnANoOpStart covers the deployment that upgraded before its installed generation
 // was recorded at all, and mutation testing is what surfaced it: the conditional write on the no-op path looked like an

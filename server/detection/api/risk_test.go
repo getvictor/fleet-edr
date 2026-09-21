@@ -42,7 +42,7 @@ func TestApplyModifiers_OrderingSurvivesEveryOverride(t *testing.T) {
 	}
 }
 
-// TestApplyModifiers_UntunedRuleIsUnchanged pins the values the shipped rule reports today, which is the regression half: the
+// TestApplyModifiers_UntunedRuleIsUnchanged pins the values the built-in rule reports today, which is the regression half: the
 // composition is a change to how a severity is REACHED and must not be a change to what an untouched deployment sees.
 func TestApplyModifiers_UntunedRuleIsUnchanged(t *testing.T) {
 	t.Parallel()

@@ -15,7 +15,7 @@ const (
 	navigatorLayerName = "Fleet EDR coverage"
 	// navigatorLayerDescription is the layer's human-readable subtitle.
 	navigatorLayerDescription = "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. " +
-		"Amber techniques are covered only by rules that raise no alert as shipped, whether because they record " +
+		"Amber techniques are covered only by rules that raise no alert as built in, whether because they record " +
 		"without alerting or are off by default."
 	// navigatorDomain pins the layer to the enterprise matrix; combined with the macOS platform filter this renders only the
 	// macOS columns Fleet EDR actually covers.
@@ -26,7 +26,7 @@ const (
 	// navigatorCoveredColor is the swatch the Navigator paints a covered technique. A mid green that reads as "we have this" on the
 	// matrix without being garish.
 	navigatorCoveredColor = "#31a354"
-	// navigatorNotAlertingScore and navigatorNotAlertingColor mark a technique covered only by rules that do not alert as shipped
+	// navigatorNotAlertingScore and navigatorNotAlertingColor mark a technique covered only by rules that do not alert as built in
 	// (issue #764). A distinct score keeps the two apart when the layer is read as data, and the amber keeps them apart when it is
 	// read as a picture, which is how a coverage heatmap is usually read. Painting these the same green as an alerting rule would
 	// make the product look like it raises something it does not.
@@ -86,7 +86,7 @@ func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
 	// The distinction is why this document can be shown to someone evaluating the product. A rule whose default mode is monitor
 	// evaluates and records what it would have fired on, but persists no alert until an operator promotes it, so a technique
 	// covered only by such rules is not covered in the sense a reader of a coverage heatmap assumes. Scoring both the same would
-	// inflate the figure with sixty-six rules that, as shipped, raise nothing (issue #764).
+	// inflate the figure with sixty-six rules that, as built in, raise nothing (issue #764).
 	coverage := make(map[string][]string)
 	alerting := make(map[string]bool)
 	for _, rule := range rules {
@@ -114,9 +114,9 @@ func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
 		if !alerting[tid] {
 			// Deliberately not "monitor only": a rule can default to disabled as well, and calling that monitor would be wrong
 			// twice over, since a disabled rule records nothing and is not waiting to be promoted. What the two share, and what
-			// this document has to say, is that no rule covering this technique raises an alert as shipped.
+			// this document has to say, is that no rule covering this technique raises an alert as built in.
 			score, color = navigatorNotAlertingScore, navigatorNotAlertingColor
-			prefix = "No rule covering this raises an alert as shipped. Covered by: "
+			prefix = "No rule covering this raises an alert as built in. Covered by: "
 		}
 		techniques = append(techniques, NavigatorTechnique{
 			TechniqueID: tid,

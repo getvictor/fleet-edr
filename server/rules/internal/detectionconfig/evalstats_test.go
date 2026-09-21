@@ -130,17 +130,17 @@ func TestRuleEvalStatsOrdersByTotalNotMean(t *testing.T) {
 	assert.Greater(t, rows[1].MeanEvalNs, rows[0].MeanEvalNs, "and the pair really does disagree on the mean")
 }
 
-// TestRuleEvalStatsAcceptsTheLongestShippedRuleID is the regression for what live QA caught and every unit test above missed.
+// TestRuleEvalStatsAcceptsTheLongestBuiltInRuleID is the regression for what live QA caught and every unit test above missed.
 //
 // The tests here name rules "cheap" and "real" because a test author picks short names, and that is exactly why none of them
 // caught it: the imported SigmaHQ rules derive their ids from upstream filenames and the longest shipped one is 70 characters,
 // while every rule_id column in the repo is VARCHAR(64). The first real write on the dev server failed with "Data too long for
 // column 'rule_id'" for all 73 dispatched rules at once.
 //
-// Pinned with the actual shipped id rather than strings.Repeat("x", 70), so the test states the fact that makes the column width
+// Pinned with the actual built-in id rather than strings.Repeat("x", 70), so the test states the fact that makes the column width
 // necessary. If that rule is ever renamed this test still guards the width; if a LONGER rule arrives, this is the test to update,
 // which is the right place for that decision to surface.
-func TestRuleEvalStatsAcceptsTheLongestShippedRuleID(t *testing.T) {
+func TestRuleEvalStatsAcceptsTheLongestBuiltInRuleID(t *testing.T) {
 	t.Parallel()
 	store, _ := openStore(t)
 	ctx := t.Context()

@@ -112,7 +112,7 @@ func TestRecordMonitorMatches(t *testing.T) {
 
 // spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/counts-older-than-the-retention-window-are-pruned
 //
-// TestRecordMonitorMatchesAcceptsTheLongestShippedRuleID is the regression for the half of issue #832 that was already losing
+// TestRecordMonitorMatchesAcceptsTheLongestBuiltInRuleID is the regression for the half of issue #832 that was already losing
 // data, rather than the half that was waiting for someone to promote a rule.
 //
 // A monitor-mode match writes this table, and the recorder logs and drops a failure by design so the batch is unaffected. So with
@@ -122,7 +122,7 @@ func TestRecordMonitorMatches(t *testing.T) {
 // Every other test here uses short identifiers, and the end-to-end test promotes the rule so it never writes this table at all.
 // Removing the ALTER for this column therefore left the entire suite green while monitor evidence was still dropped (issue #835
 // review).
-func TestRecordMonitorMatchesAcceptsTheLongestShippedRuleID(t *testing.T) {
+func TestRecordMonitorMatchesAcceptsTheLongestBuiltInRuleID(t *testing.T) {
 	t.Parallel()
 	store, _ := openStore(t)
 	ctx := t.Context()

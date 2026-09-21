@@ -72,7 +72,7 @@ func TestMarshalNavigatorLayerIndented(t *testing.T) {
     "navigator": "5.2.0"
   },
   "domain": "enterprise-attack",
-  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that raise no alert as shipped, whether because they record without alerting or are off by default.",
+  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that raise no alert as built in, whether because they record without alerting or are off by default.",
   "filters": {
     "platforms": [
       "macOS"
@@ -99,7 +99,7 @@ func TestMarshalNavigatorLayerIndented(t *testing.T) {
 // This document is read by people evaluating the product, and the codebase already flags that an inflated coverage figure is the
 // specific harm to avoid. Registering the vendored corpus (issue #764) took the layer from 13 techniques to 64, and 51 of those are
 // covered only by rules that ship in monitor mode and raise nothing until an operator promotes them. Scoring all 64 alike would
-// quintuple the claim on the strength of rules that, as shipped, do not alert.
+// quintuple the claim on the strength of rules that, as built in, do not alert.
 //
 // A technique covered by BOTH kinds scores as covered: one alerting rule is enough for the claim to be true.
 func TestBuildNavigatorLayer_MonitorOnlyCoverageIsMarkedApart(t *testing.T) {
@@ -120,14 +120,14 @@ func TestBuildNavigatorLayer_MonitorOnlyCoverageIsMarkedApart(t *testing.T) {
 	require.Len(t, byID, 4)
 
 	assert.InDelta(t, 1.0, byID["T1000"].Score, 0, "an alerting rule is real coverage")
-	assert.NotContains(t, byID["T1000"].Comment, "raises an alert as shipped")
+	assert.NotContains(t, byID["T1000"].Comment, "raises an alert as built in")
 
 	for _, tid := range []string{"T2000", "T3000"} {
 		assert.InDelta(t, 0.5, byID[tid].Score, 0, "%s is covered only by a rule that raises nothing", tid)
 		assert.NotEqual(t, byID["T1000"].Color, byID[tid].Color, "%s must not be painted as covered", tid)
 		// Not "monitor only": T3000 is covered by a rule that defaults to DISABLED, which records nothing and is not waiting to be
 		// promoted, so that wording would be wrong twice over. What both cases share is that nothing covering the technique alerts.
-		assert.Contains(t, byID[tid].Comment, "No rule covering this raises an alert as shipped",
+		assert.Contains(t, byID[tid].Comment, "No rule covering this raises an alert as built in",
 			"%s says so in words as well as colour", tid)
 	}
 

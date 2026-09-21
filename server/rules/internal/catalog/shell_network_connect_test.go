@@ -978,7 +978,7 @@ func TestSplitRulesDeclareOneEventTypeEach(t *testing.T) {
 
 	// The requirement is about independently tunable SHAPES, not about a one-type-per-rule cap. dns_c2_beacon correlates a single
 	// chain across three kinds of event and is correct to declare all three; a requirement phrased as "one event type per rule"
-	// would have made a shipped rule noncompliant, which is what an earlier draft of the delta did.
+	// would have made a built-in rule noncompliant, which is what an earlier draft of the delta did.
 	var beacon api.Rule
 	for _, r := range New(nil) {
 		if r.ID() == "dns_c2_beacon" {

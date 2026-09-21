@@ -47,7 +47,7 @@ type LoadState =
   | { kind: "loading" }
   | { kind: "ready"; path: string }
   | { kind: "missing" }
-  | { kind: "shipped" }
+  | { kind: "built-in" }
   | { kind: "error"; message: string };
 
 // RuleEditor creates or edits one rule document (issue #1001). The API behind it is built, permissioned, and audited; this is the page
@@ -55,7 +55,7 @@ type LoadState =
 //
 // Check before save is the loop the page is built around: the server's dry run answers with the loader's own verdict on the document,
 // with no second rule engine in the browser to disagree with it. The dry run judges the document alone. Whether it fits beside the
-// deployment's other rules, an identifier a shipped rule already uses for instance, is decided when it is saved, and a refusal then is
+// deployment's other rules, an identifier a built-in rule already uses for instance, is decided when it is saved, and a refusal then is
 // shown in the loader's words too.
 export function RuleEditor() {
   const { ruleId } = useParams<{ ruleId: string }>();
@@ -85,8 +85,8 @@ function RuleEditorPage({ ruleId }: { readonly ruleId: string | undefined }) {
     let cancelled = false;
     (async () => {
       const [rules, documents] = await Promise.all([fetchRuleDocs(), listRuleContentDocuments()]);
-      // Origin first: a shipped rule built into the server has no stored document, and is still one to tune rather than edit.
-      if (isShipped(rules.find((r) => r.id === ruleId)?.origin)) return { kind: "shipped" } as const;
+      // Origin first: a built-in rule that came with the product has no stored document, and is still one to tune rather than edit.
+      if (isBuiltIn(rules.find((r) => r.id === ruleId)?.origin)) return { kind: "built-in" } as const;
       const match = documents.find((d) => ruleDocumentStem(d.path) === ruleId);
       if (match === undefined) return { kind: "missing" } as const;
       const text = await getRuleContentDocument(match.path);
@@ -156,10 +156,10 @@ function RuleEditorPage({ ruleId }: { readonly ruleId: string | undefined }) {
 
   if (load.kind === "loading") return <EmptyState>Loading the rule document...</EmptyState>;
   if (load.kind === "error") return <EmptyState>The rule document could not be loaded: {load.message}</EmptyState>;
-  if (load.kind === "shipped") {
+  if (load.kind === "built-in") {
     return (
       <EmptyState>
-        <code>{ruleId}</code> ships with the product, so it is tuned in <Link to="/detection-config">Detection tuning</Link> rather than
+        <code>{ruleId}</code> is built in, so it is tuned in <Link to="/detection-config">Detection tuning</Link> rather than
         edited here. <Link to={leaveTo}>Back to the rule</Link>.
       </EmptyState>
     );
@@ -254,14 +254,14 @@ function RuleEditorPage({ ruleId }: { readonly ruleId: string | undefined }) {
 // conflictCode is the API's error code for a write that lost a race with another change to the rules.
 const conflictCode = "rule_content.conflict";
 
-// isShipped reports whether the server credits a rule to someone other than this deployment. Such a rule is tuned in Detection tuning
-// rather than edited here, since the next install of shipped content would meet an edit made to it. The Edit link already follows
+// isBuiltIn reports whether the server credits a rule to someone other than this deployment. Such a rule is tuned in Detection tuning
+// rather than edited here, since the next install of built-in content would meet an edit made to it. The Edit link already follows
 // that, and this holds it for an address typed directly.
 //
 // Only a known origin says so. A rule the server does not report (one the loader refused, or one written moments ago and not yet
 // loaded) or reports without an origin (an older replica) is left editable: the permission to write its document is the same either
 // way, and the server is the authority on what it accepts.
-function isShipped(origin: string | undefined): boolean {
+function isBuiltIn(origin: string | undefined): boolean {
   return origin !== undefined && !isLocallyAuthored(origin);
 }
 

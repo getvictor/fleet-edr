@@ -293,7 +293,7 @@ func TestOperator_GetRules(t *testing.T) {
 // GET /api/attack-coverage MUST return a Navigator-layer JSON document whose top-level shape matches
 // the upstream MITRE format (domain="enterprise-attack"); the test seeds the default rule catalog so
 // the "techniques array contains an entry for every covered technique" clause is satisfied by the
-// presence of a non-empty techniques array (every shipped catalog rule declares at least one technique).
+// presence of a non-empty techniques array (every built-in catalog rule declares at least one technique).
 // The document MUST also scope the matrix to the macOS platform via filters.platforms, since Fleet EDR
 // is macOS-only. The byte-identical-across-requests assertion is a stronger invariant than the spec
 // requires but it catches any non-deterministic ordering that would break snapshot-based dashboards.

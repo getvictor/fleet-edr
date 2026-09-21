@@ -486,7 +486,7 @@ func TestHandler_ExportRule_OverwrittenRuleServesTheOperatorsBytes(t *testing.T)
 	got, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, string(operatorDoc), string(got), "an operator exporting their own rule gets what they wrote")
-	assert.NotContains(t, string(got), "xattr", "and not the shipped document the build still carries under that stem")
+	assert.NotContains(t, string(got), "xattr", "and not the built-in document the build still carries under that stem")
 }
 
 // driftingService answers List and Exportable from DIFFERENT generations of the rule set, which is what a rule content reload
@@ -649,12 +649,12 @@ func TestHandler_ExportRule_AuthorizesOperatorContentSeparately(t *testing.T) {
 			"their own rule content is denied to these roles on the route built for it, so this route must not hand it over")
 	})
 
-	t.Run("a shipped rule is still served, since it is not the operator's content", func(t *testing.T) {
+	t.Run("a built-in rule is still served, since it is not the operator's content", func(t *testing.T) {
 		t.Parallel()
 		resp := export(t, service.New(catalog.New(nil), nil, slog.Default()))
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode,
-			"these roles read the shipped rules on the catalog already, so gating every rule would be a regression")
+			"these roles read the built-in rules on the catalog already, so gating every rule would be a regression")
 
 		got, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)

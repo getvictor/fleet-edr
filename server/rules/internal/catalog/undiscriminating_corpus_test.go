@@ -32,7 +32,7 @@ func TestVendoredCorpus_NoRuleDiscriminatesNothing(t *testing.T) {
 		}
 		inspected++
 		assert.Empty(t, imported.detection.UndiscriminatingSearches(),
-			"vendored rule %s has a search that matches everything, so the warning would fire on shipped content", imported.id)
+			"vendored rule %s has a search that matches everything, so the warning would fire on built-in content", imported.id)
 	}
 	require.NotZero(t, inspected, "no rule was actually inspected, so this test proved nothing")
 }

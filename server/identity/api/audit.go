@@ -118,8 +118,8 @@ const (
 	// authorization denial is already recorded by the chokepoint.
 	AuditRuleContentDocumentPut    AuditAction = "rule_content.document_put"
 	AuditRuleContentDocumentDelete AuditAction = "rule_content.document_delete"
-	// AuditRuleContentPackRollback records restoring the previous generation of shipped rules. It is its own action rather than
-	// a document delete because it replaces every shipped rule at once: the blast radius is the whole detection set, and an
+	// AuditRuleContentPackRollback records restoring the previous generation of built-in rules. It is its own action rather than
+	// a document delete because it replaces every built-in rule at once: the blast radius is the whole detection set, and an
 	// audit trail that logged it as a document change would understate what happened.
 	AuditRuleContentPackRollback AuditAction = "rule_content.pack_rollback"
 )
