@@ -163,3 +163,53 @@ func TestBuildTree_aPinnedIDThatNamesNoRowIsNotAnError(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, tree.Roots, "the host's tree is still worth rendering")
 }
+
+// Malformed ancestry does not lose the pinned process. Two rows each naming the other's process number as their parent give the
+// forest no root to emit them from, so both vanish: the read succeeds and the alert's own process is simply not in it. The walk
+// stops when it meets a process it has already walked and reports that one as the top of the chain, which is what keeps the pair
+// reachable. Found by review on #1138.
+//
+// The rows are written directly because the ingest path cannot produce this: ppid comes from agent fork events, and the pipeline
+// will not emit a cycle. A defence against data the product does not generate can only be exercised against data written as if it
+// had been.
+//
+// spec:server-rest-api/a-pinned-process-is-in-the-page-with-its-ancestors/the-pinned-process-survives-a-page-of-newer-activity
+func TestBuildTree_aLoopingAncestryStillReturnsThePinnedProcess(t *testing.T) {
+	t.Parallel()
+	d, _, db := newDetectionWithDB(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	now := time.Now().UnixNano()
+
+	// pid 700 claims 800 as its parent and pid 800 claims 700: a cycle by process number.
+	ids := make([]int64, 0, 2)
+	for _, row := range []struct {
+		pid, ppid int
+		path      string
+		forkNs    int64
+	}{
+		// The SAME fork instant, which is what makes the cycle reachable at all. A parent must have forked no later than its child,
+		// so with distinct fork times one of the two directions is refused on that constraint alone and the walk stops at "no
+		// parent" rather than at the loop. Equal times let each stand as the other's parent, which is the state the guard is for.
+		{pid: 700, ppid: 800, path: "/loop/a", forkNs: now},
+		{pid: 800, ppid: 700, path: "/loop/b", forkNs: now},
+	} {
+		res, err := db.ExecContext(ctx, `
+			INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns)
+			VALUES ('loop-host', ?, ?, ?, ?)`, row.pid, row.ppid, row.path, row.forkNs)
+		require.NoError(t, err)
+		id, err := res.LastInsertId()
+		require.NoError(t, err)
+		ids = append(ids, id)
+	}
+
+	window := api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}
+
+	// Unpinned, the cycle swallows both rows. This is the control: it is what makes the pinned assertion evidence.
+	unpinned, err := d.Service().BuildTree(ctx, "loop-host", window, 100, true, 0)
+	require.NoError(t, err)
+	assert.Empty(t, flattenPaths(unpinned.Roots), "a cycle leaves the forest with no root to emit from")
+
+	pinned, err := d.Service().BuildTree(ctx, "loop-host", window, 100, true, ids[0])
+	require.NoError(t, err)
+	assert.Contains(t, flattenPaths(pinned.Roots), "/loop/a", "the pinned process must survive its own malformed ancestry")
+}
