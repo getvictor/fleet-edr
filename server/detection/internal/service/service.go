@@ -66,6 +66,13 @@ func (s *Service) BuildTree(
 	return s.query.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 }
 
+// BuildChainTree returns the pinned process with its ancestors and descendants, and nothing else.
+func (s *Service) BuildChainTree(
+	ctx context.Context, hostID string, tr api.TimeRange, pinnedID int64, flatten bool,
+) (api.ProcessTreeResult, error) {
+	return s.query.BuildChainTree(ctx, hostID, tr, pinnedID, flatten)
+}
+
 // GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. pidVersion is optional and names
 // one generation of pid; nil keeps the as-of resolution.
 func (s *Service) GetProcessDetail(

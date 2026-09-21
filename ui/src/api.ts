@@ -339,11 +339,16 @@ export async function getProcessTree(
   limit = 2000,
   // pinnedProcessId keeps that process a first-class node server-side (never folded into a sibling "×N" aggregate, issue #416), so an
   // alert's process is always present for the chain view even when it has identical siblings. Omit for the plain host view.
-  pinnedProcessId?: number
+  pinnedProcessId?: number,
+  // chainOnly reads the pinned process with its ancestors and descendants instead of the host's window. It is what the alert view
+  // wants while focused on a chain: the window read returns the newest rows, so on a busy host the alerted process is not in its own
+  // page and the graph falls back to unrelated host activity (issue #1138). Needs a pinned process to name the chain.
+  chainOnly = false
 ): Promise<TreeResponse> {
   const pinParam = pinnedProcessId ? `&pin=${String(pinnedProcessId)}` : "";
+  const scopeParam = chainOnly && pinnedProcessId ? "&scope=chain" : "";
   return fetchJSON<TreeResponse>(
-    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}${pinParam}`
+    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}${pinParam}${scopeParam}`
   );
 }
 

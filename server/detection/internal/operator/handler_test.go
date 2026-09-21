@@ -24,6 +24,7 @@ import (
 // of server/response/internal/operator/handler_test.go's fakeService for cross-package consistency.
 type fakeService struct {
 	listHosts         func(ctx context.Context) ([]api.HostSummary, error)
+	buildChainTree    func(ctx context.Context, hostID string, tr api.TimeRange, pinnedID int64, flatten bool) (api.ProcessTreeResult, error)
 	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) (api.ProcessTreeResult, error)
 	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64, pidVersion *uint32) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
@@ -52,6 +53,15 @@ func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRa
 		panic("fakeService.BuildTree not set")
 	}
 	return f.buildTree(ctx, hostID, tr, limit, flatten, pinnedID)
+}
+
+func (f fakeService) BuildChainTree(
+	ctx context.Context, hostID string, tr api.TimeRange, pinnedID int64, flatten bool,
+) (api.ProcessTreeResult, error) {
+	if f.buildChainTree == nil {
+		panic("fakeService.BuildChainTree not set")
+	}
+	return f.buildChainTree(ctx, hostID, tr, pinnedID, flatten)
 }
 
 func (f fakeService) GetProcessDetail(

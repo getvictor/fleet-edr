@@ -123,8 +123,11 @@ const maxPinnedChainDepth = 64
 func (q *Query) withPinnedChain(
 	ctx context.Context, hostID string, procs []api.Process, pinnedID int64,
 ) ([]api.Process, map[int64]int64, error) {
+	// The edge map is allocated up front so that EVERY path returns one. A caller that goes on to record edges of its own would
+	// otherwise be writing into a nil map on the paths that found no chain to walk, which panics rather than degrading.
+	resolved := make(map[int64]int64, maxPinnedChainDepth)
 	if pinnedID == 0 {
-		return procs, nil, nil
+		return procs, resolved, nil
 	}
 	have := make(map[int64]struct{}, len(procs)+maxPinnedChainDepth)
 	for i := range procs {
@@ -135,7 +138,7 @@ func (q *Query) withPinnedChain(
 	if err != nil || cur == nil {
 		// A pinned id that names no row is not an error to fail the whole tree on: the process may have been pruned by retention
 		// since the alert was raised, and the host's tree is still worth rendering.
-		return procs, nil, err
+		return procs, resolved, err
 	}
 	if _, ok := have[cur.ID]; !ok {
 		procs = append(procs, *cur)
@@ -147,7 +150,6 @@ func (q *Query) withPinnedChain(
 	// first ancestor the page happened to contain. Tracking the path separately also bounds a genuine cycle at its own length rather
 	// than at the depth cap, and, more importantly, stops the closing edge being recorded: a cycle of edges gives the forest no root
 	// to emit the chain from, so the pinned process would vanish from a read that completed successfully (issue #1138 review).
-	resolved := make(map[int64]int64, maxPinnedChainDepth)
 	walked := map[int64]struct{}{cur.ID: {}}
 
 	for range maxPinnedChainDepth {
@@ -157,7 +159,7 @@ func (q *Query) withPinnedChain(
 		}
 		parent, perr := q.store.GetProcessByPID(ctx, hostID, cur.PPID, cur.ForkTimeNs)
 		if perr != nil {
-			return nil, nil, perr
+			return nil, resolved, perr
 		}
 		if parent == nil || parent.ID == cur.ID {
 			resolved[cur.ID] = 0
