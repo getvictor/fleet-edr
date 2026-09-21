@@ -222,9 +222,13 @@ func TestBuildChainTree_capsDescendantsAndSaysSo(t *testing.T) {
 	ctx := t.Context()
 	now := time.Now().UnixNano()
 
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns)
+		VALUES ('cap-host', 50, 1, '/cap/parent', ?)`, now)
+	require.NoError(t, err)
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns)
-		VALUES ('cap-host', 100, 1, '/cap/prolific', ?)`, now)
+		VALUES ('cap-host', 100, 50, '/cap/prolific', ?)`, now)
 	require.NoError(t, err)
 	pinned, err := res.LastInsertId()
 	require.NoError(t, err)
@@ -245,8 +249,13 @@ func TestBuildChainTree_capsDescendantsAndSaysSo(t *testing.T) {
 	tree, err := d.Service().BuildChainTree(ctx, "cap-host", window, pinned, true)
 	require.NoError(t, err)
 
+	paths := flattenPaths(tree.Roots)
 	assert.True(t, tree.Truncated, "the walk stopped at the cap, which is the one thing this read truncates")
-	assert.Less(t, len(flattenPaths(tree.Roots)), spawned, "and it did not return everything the process spawned")
+	// The cap bounds DESCENDANTS, not the result. Ancestors are bounded already by the depth of a process tree, so dropping them to
+	// keep a total under the cap would trade the part of the chain that cannot run away for the part that can (#1140 review).
+	assert.Contains(t, paths, "/cap/parent", "the ancestor is not what the cap is for")
+	assert.Contains(t, paths, "/cap/prolific")
+	assert.Less(t, len(paths)-2, spawned, "and the descendants stopped short of everything it spawned")
 }
 
 // A process forked after the end of the window has no children to look for inside it. The pinned process is returned whatever the

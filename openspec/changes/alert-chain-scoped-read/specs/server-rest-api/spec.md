@@ -32,7 +32,8 @@ A chain read naming a process that is not stored SHALL return an empty chain rat
 
 - **GIVEN** a process that spawned more descendants than the cap admits
 - **WHEN** its chain is read
-- **THEN** the result holds no more than the cap
+- **THEN** no more descendants than the cap are returned
+- **AND** the process and its ancestors are still returned, because the cap bounds the one direction that has no bound of its own
 - **AND** the read reports itself as truncated
 
 #### Scenario: A chain read for a missing process is empty
