@@ -6,6 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
+- **An application-control rule's identifier is readable, and its actions are separable.** The identifier was cut to 16 characters whatever the column's width, so a path showed as `/Applications/Co…` with half the column empty, and copying the cell gave that fragment rather than the value. It now fills the column, keeps the whole value for copying, and offers a copy button and a hover reveal when it still does not fit. A rule's four actions were link-styled words a few pixels apart that read as one run of text; they are now one **Actions** menu per row, with Delete set apart at the foot.
 - **An alert's process graph shows the alert's own chain.** The graph asked for every process on the host over a 24-hour window and narrowed to the alert in the browser, so on a busy host it was slow to open, it warned that most of the day had been left out, and the alerted process was often missing from it entirely: the page fell back to showing unrelated activity. It now reads that alert's chain directly, and the whole-host view keeps the alerted process and its parents in the page.
 
 ## [0.6.0] (2026-09-20)

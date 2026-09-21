@@ -1,0 +1,93 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+
+// Row-action menu. Deliberately close to AccountMenu's dropdown, which is the disclosure already established here; what differs is
+// that this one sits in a table cell, so the trigger is bordered rather than bare and the panel is right-aligned to stay in the row.
+.actions-menu {
+  position: relative;
+  display: inline-flex;
+
+  &__trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: $pad-xsmall;
+    height: 28px;
+    padding: 0 $pad-small;
+    background: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-10;
+    border-radius: 4px;
+    color: $core-fleet-black;
+    font: inherit;
+    font-size: $xx-small;
+    font-weight: $bold;
+    cursor: pointer;
+
+    &:hover {
+      background: $ui-fleet-black-5;
+    }
+
+    &:focus-visible {
+      outline: 2px solid $core-focused-outline;
+      outline-offset: 2px;
+    }
+  }
+
+  // Turns to point at the panel it opens, the same way the host header's Details caret does.
+  &__chevron {
+    display: inline-block;
+    font-size: 0.65em;
+    line-height: 1;
+    transition: transform 120ms ease-in-out;
+
+    &--open {
+      transform: rotate(90deg);
+    }
+  }
+
+  &__dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 176px;
+    background: $core-fleet-white;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(25, 33, 71, 0.16);
+    padding: $pad-small;
+    z-index: 100;
+  }
+
+  &__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: $pad-small $pad-smedium;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    color: $ui-fleet-black-75;
+    font: inherit;
+    font-size: $x-small;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover {
+      background: $ui-fleet-black-5;
+    }
+
+    &:focus-visible {
+      outline: 2px solid $core-focused-outline;
+      outline-offset: -2px;
+    }
+
+    // A rule and a gap above the item, so the destructive action at the foot of the menu cannot be taken by a click aimed at the one
+    // above it. The item is not coloured: the warning belongs on the confirmation that follows, where it is read before anything
+    // happens, rather than on a menu entry an operator passes over on the way to Edit.
+    &--divided {
+      margin-top: $pad-xsmall;
+      padding-top: $pad-smedium;
+      border-top: 1px solid $ui-fleet-black-10;
+      border-radius: 0 0 4px 4px;
+    }
+  }
+}
