@@ -149,6 +149,10 @@ The UI SHALL provide an alert list page that defaults to open alerts, supports f
 
 The UI SHALL provide a control on each alert in the list that pivots into the alerted host's process tree page anchored at the moment the alert fired. The receiving page MUST present the alert's metadata (severity, title, time) as a breadcrumb and MUST default the time window to one wide enough to display historical alerts. The receiving page MUST also render the finding's description and MITRE technique tags, each technique tag linking to the rule's documentation page, so the analyst sees what fired and why independent of the graph state.
 
+The breadcrumb's title MUST route the analyst to what raised the alert, and which route depends on what raised it. A detection rule the catalog documents MUST link to that rule's documentation page. An application-control alert, whose rule identifier names a policy rule rather than a catalog rule, MUST link to the policy that owns the matched rule. An alert whose rule is neither, such as a registered non-detection absent from the catalog, MUST render as plain text rather than linking to a page that will report the rule as unknown. Linking an identifier the destination cannot resolve is worse than not linking it, which is why the fallback is a deliberate branch rather than an omission.
+
+The breadcrumb MUST describe the alert the page is currently addressing, not whichever alert's detail happens to be loaded. Moving between two alerts without leaving the page replaces the address before the new detail arrives, so during that window the page MUST render no breadcrumb rather than the previous alert's. A breadcrumb left behind is not merely stale text: its title links to what raised the PREVIOUS alert, and its lifecycle controls act on the previous alert's id, so acknowledging what appears on screen would triage an alert the analyst has already left.
+
 The receiving page's alert detail surface MUST show the alert's current status and expose its lifecycle controls (acknowledge, resolve, reopen), and the status MUST update on success. This is the single triage surface for the alert: the process detail panel MUST NOT restate the alert or duplicate its lifecycle controls, and instead references the process's alerts as links to their alert page.
 
 When the alert is not attributed to a single process (a process-optional finding, where the attacker has no live process and the alert keys on an artifact such as a LaunchDaemon registration), the page MUST NOT render a silent blank canvas. It MUST instead present an explicit explanation that the detection is not tied to a running process, alongside an opt-in control that widens the view to the surrounding host activity. The page MUST NOT auto-expand to the full host tree. The explanation MUST survive a page reload of the alert link rather than depending on a non-persisted view toggle. Because triage lives on the alert detail surface rather than on a process node, a process-optional alert (which has no process node to select) MUST still be triageable from this page.
@@ -180,6 +184,27 @@ When the alert is not attributed to a single process (a process-optional finding
 - **GIVEN** a process-optional alert (its process id is zero, so there is no process node to select) is open on its page
 - **WHEN** the operator acknowledges it from the alert detail surface
 - **THEN** the alert's status transitions to acknowledged even though no process node was selected
+
+#### Scenario: Alert title routes to whatever raised the alert
+
+- **GIVEN** an alert raised by a detection rule the catalog documents
+- **WHEN** the analyst opens the alert
+- **THEN** the title links to that rule's documentation page
+
+- **GIVEN** an application-control alert, whose rule identifier names a policy rule
+- **WHEN** the analyst opens the alert
+- **THEN** the title links to the policy that owns the matched rule
+
+- **GIVEN** an alert whose rule is neither documented nor an application-control rule
+- **WHEN** the analyst opens the alert
+- **THEN** the title renders as plain text and links nowhere
+
+#### Scenario: The breadcrumb never outlives the alert it describes
+
+- **GIVEN** the analyst is on one alert's page and moves to another alert without leaving the page
+- **WHEN** the second alert's detail has not arrived yet
+- **THEN** the page renders no breadcrumb, rather than the first alert's title, link, and lifecycle controls
+- **AND** once a policy lookup fails for the alert on screen, the title renders as plain text even if that same rule resolved earlier in the session
 
 ### Requirement: ATT&CK coverage page
 
@@ -442,6 +467,10 @@ The web UI SHALL surface the host's agent-health rollup and per-component condit
 
 Every component SHALL be laid out the same way as every other component in the same popover. The panel is read by scanning it for the provider that is broken, and a layout that depends on how long a provider's name happens to be gives that scan a shape change carrying no information: presented as one wrapping line, a short name such as "DNS proxy" leaves room for its message beside it while longer names push theirs onto the next line, so components in one popover render in two shapes at one width. A component with no message or no recorded transition SHALL NOT leave an empty line where they would have been.
 
+The popover SHALL also list the host's recorded sensor faults, beneath the component conditions and only when there are any, so a host with none shows no extra chrome. Each fault SHALL show the part at fault and, where the fault says why its repair gave up, that reason in words rather than as a wire value. An open fault SHALL show how long ago it began. A resolved fault SHALL show how long it LASTED and when it ended, because how long the host went uncaptured is the number the record exists to give. Open faults SHALL be listed before resolved ones. A resolved fault SHALL still be listed after its component has recovered, and SHALL NOT raise the Details trigger's attention marker, which answers whether the host needs someone now.
+
+The change from the prior requirement is the list of recorded sensor faults in the popover.
+
 #### Scenario: The detail lists a component with its message and age
 
 - **GIVEN** a host whose security extension is unhealthy with a not-activated message
@@ -462,6 +491,20 @@ Every component SHALL be laid out the same way as every other component in the s
 - **WHEN** an operator opens the host header's Details popover
 - **THEN** each component's message begins on its own line rather than beside the component's name
 - **AND** every component's message begins at the same horizontal position
+
+#### Scenario: The detail lists recorded sensor faults
+
+- **GIVEN** a host with an open sensor fault and a resolved one
+- **WHEN** an operator opens the host header's Details popover
+- **THEN** the popover lists both, the open one first, each with the part at fault and why its repair gave up
+- **AND** the open fault shows how long ago it began and the resolved fault shows how long it lasted
+
+#### Scenario: A recovered host keeps its fault history without an attention marker
+
+- **GIVEN** a host that is healthy now and has a resolved sensor fault
+- **WHEN** the operator views the host header and opens the Details popover
+- **THEN** the Details trigger shows no attention marker
+- **AND** the popover still lists the resolved fault with how long it lasted
 
 ### Requirement: Alert list is the home view
 
@@ -1001,3 +1044,383 @@ Being mounted is not the same question as being current, so a guard that only as
 - **WHEN** the earlier load completes after the later one has already been presented
 - **THEN** the view still presents the later load's data
 - **AND** the earlier load's data is not presented
+
+### Requirement: The account menu names the session's role and sign-in method
+
+The account menu dropdown SHALL name the roles the session carries, under the signed-in email, using the same label for a role that every other surface uses, and SHALL say when the session carries none. It SHALL name how the session was signed in: `SSO` for a session minted by any OIDC provider, and `break-glass` for a break-glass session. Neither SHALL appear on the always-visible trigger, which continues to conceal the signed-in identity until the menu is opened. When the session probe does not report the roles (a server that predates the field), the menu SHALL name no role rather than say the session carries none. When a denied request refetches the session, the menu SHALL name the roles that refetch returns.
+
+#### Scenario: An SSO operator sees their role and sign-in method
+
+- **GIVEN** an operator signed in through SSO with the senior analyst and auditor roles
+- **WHEN** they open the account menu
+- **THEN** it names both roles and says the session was signed in with SSO
+- **AND** before it is opened, neither is shown
+
+#### Scenario: A break-glass operator sees their role and sign-in method
+
+- **GIVEN** an operator signed in through break-glass with the super admin role
+- **WHEN** they open the account menu
+- **THEN** it names the super admin role and says the session was signed in with break-glass
+
+#### Scenario: A session whose roles are not reported names no role
+
+- **GIVEN** a session probe that carries no roles field
+- **WHEN** the operator opens the account menu
+- **THEN** it names no role, and does not say the session carries none
+
+#### Scenario: The named role follows a refetched session
+
+- **GIVEN** an operator whose account menu names the senior analyst role
+- **WHEN** a denied request refetches the session and the refetch reports the analyst role
+- **THEN** the account menu names the analyst role
+
+### Requirement: Application control rule controls follow their own permission
+
+The application-control policy view SHALL hide a rule control from an operator whose permission set does not contain the action that control performs. Reading the page and changing a rule are separate permissions, so an operator who holds only the read action SHALL be offered no rule changes at all. Offering them is not a security hole, because the server refuses the call, but it costs the operator a dialog and an audit reason to be told what the page already knew.
+
+Each control SHALL be gated on its own action rather than on a single writer permission. Promoting a rule to Protect, moving it back to Detect, editing it, and disabling or enabling it all change the rule through the same call, so one action gates them together; deleting a rule, adding one, and pasting many each have their own.
+
+An operator offered no rule controls SHALL still see the rules. The view SHALL NOT present an actions column with nothing in it, and SHALL NOT instruct such an operator to use a control they cannot see.
+
+Gating SHALL follow the permission set the server computed, and an absent permission set SHALL continue to render every control optimistically, because only the server can deny.
+
+A permission that goes away while its dialog is open SHALL close that dialog. The refresh that hides a control has to reach the whole page: a dialog left open over a page that no longer offers it leaves the operator a submit button whose only remaining outcome is another denial.
+
+#### Scenario: A control is hidden without its own permission
+
+- **GIVEN** an operator whose permission set contains the application-control read action but not the action a given rule control performs
+- **WHEN** the operator opens a policy that holds a rule
+- **THEN** that control is not rendered
+
+#### Scenario: A control is shown with its own permission
+
+- **GIVEN** an operator whose permission set contains the action a given rule control performs
+- **WHEN** the operator opens a policy that holds a rule
+- **THEN** that control is rendered
+
+#### Scenario: A read-only operator still sees the rules
+
+- **GIVEN** an operator whose permission set contains only the application-control read action
+- **WHEN** the operator opens a policy
+- **THEN** the rules and their details are shown
+- **AND** no actions column is rendered
+- **AND** an empty policy does not tell the operator to add the first rule
+
+#### Scenario: A dialog closes when its permission is revoked
+
+- **GIVEN** an operator with a rule dialog open
+- **WHEN** the permission that dialog's submit needs is revoked and the permission set refreshes
+- **THEN** the dialog is closed
+- **AND** the control that opened it is no longer shown
+
+### Requirement: Rule forms require an enforcement choice
+
+The application-control Add rule and Paste many dialogs SHALL ask for the rule's enforcement, Detect or Protect, and SHALL describe what each does: Detect blocks nothing and records the matches that run, noting that a Protect rule that also matches still blocks, and Protect blocks. Neither SHALL be preselected, and saving SHALL stay disabled until one is chosen, because the server requires it and either choice made by default is wrong for someone. Reopening a dialog SHALL clear the choice. A saved rule SHALL carry the enforcement chosen, applied to every row of a paste.
+
+#### Scenario: Neither enforcement is preselected
+
+- **GIVEN** an operator opening the Add rule dialog with a valid identifier and a reason entered
+- **WHEN** no enforcement has been chosen
+- **THEN** neither Detect nor Protect is selected and saving is disabled
+- **AND** choosing one enables saving and the saved rule carries it
+- **AND** reopening the dialog clears the choice
+
+#### Scenario: A paste applies the chosen enforcement to every row
+
+- **GIVEN** an operator previewing a paste of several identifiers with a reason entered
+- **WHEN** they choose Detect and save
+- **THEN** every rule in the bulk upsert carries `enforcement=DETECT`
+
+### Requirement: The policy rules table shows each rule's enforcement
+
+The application-control policy page SHALL show each rule's enforcement in its rules table, as Detect or Protect, so an operator reading the list can tell which rules block and which only record.
+
+#### Scenario: A rule's enforcement is visible in the list
+
+- **GIVEN** a policy with a Detect rule and a Protect rule
+- **WHEN** an operator opens the policy page
+- **THEN** each rule's row shows its enforcement
+
+### Requirement: A Detect rule can be promoted with its impact in view
+
+The policy page SHALL let an operator promote a Detect rule to Protect, and move a Protect rule back to Detect, from the rule's row. Either change SHALL ask for a reason before it is saved. For an operator who may read detection tuning, where the match counts are served, each Detect rule's row and its promote dialog SHALL state what the rule would have blocked in the counted window, as runs and hosts, or as nothing recorded rather than as zero, and SHALL link to the rule's monitor records. For an operator who may not, the figure SHALL be left out rather than shown as zero. The monitor-records page for an application-control rule SHALL explain its records as executables that ran while the rule was in Detect mode, which it would have blocked.
+
+#### Scenario: Promoting shows what the rule would have blocked
+
+- **GIVEN** a Detect rule with counted would-block matches, and an operator who may read detection tuning
+- **WHEN** the operator opens the policy page and promotes the rule
+- **THEN** the row and the dialog state how many runs on how many hosts the rule would have blocked, linking to its records
+- **AND** saving with a reason changes the rule's enforcement to Protect
+
+#### Scenario: Without access to match counts the figure is left out
+
+- **GIVEN** an operator who may not read detection tuning
+- **WHEN** they open a policy page with a Detect rule
+- **THEN** the rule can still be promoted and no would-block figure is shown
+
+#### Scenario: App-control records read as would-block runs
+
+- **GIVEN** the monitor-records page for an application-control rule
+- **WHEN** it loads
+- **THEN** it explains the records as executables the rule would have blocked in Detect mode
+
+### Requirement: Reachable destinations are edited in containment settings
+
+Admin settings SHALL include a Containment section that shows the reachable-address set a contained host may still reach on top of containment's own lifeline, the number of destinations used out of the allowed number, and when and by whom the set was last saved, naming the person or service account rather than a principal id. It SHALL also report how many hosts are contained or being contained, so an operator sees what a change reaches; when that count cannot be read, the section SHALL say so rather than report a count it does not have. An operator with `containment_config.write` SHALL be able to edit a draft of the whole set, and saving it SHALL require a reason and SHALL replace the set through `PUT /api/v1/containment/reachable-addresses`. Because the write is gated on a recent authentication, a save SHALL prompt for reauthentication and retry on success. The server SHALL remain the only validator of a destination: when it refuses the set, the section SHALL show the server's message and keep the draft. A save SHALL name the version the draft started from, and when the server refuses it because the set has changed since, the section SHALL say so, keep the draft, and offer to load the latest set. A contained host's page SHALL say how many destinations it can still reach when the set holds any, alongside rather than instead of any caveat about name filtering, and SHALL say nothing when the set is empty, the host is not contained, or the set cannot be read.
+
+#### Scenario: The console shows the destinations and who they reach
+
+- **GIVEN** a stored set with two destinations, and hosts that are contained
+- **WHEN** an operator opens Containment settings
+- **THEN** the section lists each destination with the port and transport it allows and the name the operator gave it
+- **AND** it reports the destinations used out of the allowed number, how many hosts are contained or being contained, and when the set was last saved and by whom, named rather than given as a principal id
+- **AND** when that name cannot be resolved, because the account was deleted, it shows the principal id rather than nothing
+
+#### Scenario: A count that cannot be read is not reported as a number
+
+- **GIVEN** a stored set, and a containment list the server will not serve
+- **WHEN** an operator opens Containment settings
+- **THEN** the section says how many hosts the set reaches could not be read
+- **AND** the set is still listed and still editable
+
+#### Scenario: A reader cannot change the destinations
+
+- **GIVEN** an operator with `containment_config.read` and without `containment_config.write`
+- **WHEN** they open Containment settings
+- **THEN** the section lists the destinations with no remove, add, discard or save controls
+- **AND** they can reach it through the console's own navigation, which offers the settings area to an operator who can open any section of it rather than only to one who can manage single sign-on
+
+#### Scenario: An operator saves changed destinations with a reason
+
+- **GIVEN** an operator with `containment_config.write` who removes one destination and adds another
+- **WHEN** they save and give a reason
+- **THEN** the whole edited set, the reason and the version the draft started from are sent in one replace request, and nothing is sent before the reason is given
+- **AND** the section reports the version saved, and that a host contained from now on gets it with its containment while a host already contained gets it within minutes
+
+#### Scenario: A refused destination is shown and the draft kept
+
+- **GIVEN** a draft holding a destination the server refuses as too broad
+- **WHEN** the operator saves it
+- **THEN** the section shows the server's refusal, naming which rule was broken and which entry broke it
+- **AND** the reason prompt is dismissed, because the refusal and the entry to fix are both on the page behind it
+- **AND** the draft is kept for the operator to fix, and editing it clears the message
+
+#### Scenario: A contained host says what it can still reach
+
+- **GIVEN** a contained host, and a reachable set holding at least one destination
+- **WHEN** an operator holding `containment_config.read` opens the host's page
+- **THEN** the host says how many destinations it can still reach on top of its connection to the EDR server, and where to change them
+- **AND** it says this alongside any caveat about name filtering rather than instead of it, because both are reasons the host is not fully cut off
+- **AND** it says nothing when the set is empty, when the host is not contained yet, or when the set cannot be read, so a host that reads as fully cut off is one that is
+
+#### Scenario: A save of an outdated set is refused
+
+- **GIVEN** an operator editing the set loaded at one version, and another operator who has since saved a change
+- **WHEN** the first operator saves
+- **THEN** the server refuses it and the section says someone changed the destinations after the page loaded them
+- **AND** the draft is kept, and loading the latest destinations on request replaces the draft with the other operator's set
+
+### Requirement: Long exclusion values wrap within a capped Value column
+
+The detection tuning view's exclusion table SHALL cap the width at which an exclusion value is laid out, and a value longer than the cap SHALL wrap onto further lines inside the Value column rather than widen the table. The column is that cap plus the table's ordinary cell padding. An exclusion value is commonly a path or glob with no spaces, so without a cap a single long value sets the table's width and pushes the Reason, Expires and Created by columns out of view.
+
+A value SHALL be laid out as wide as it is up to the cap, so a long value wraps at the cap rather than well short of it. A value is not truncated: every character stays visible, because the end of a glob is the part that names what is trusted.
+
+#### Scenario: A long value wraps at the cap
+
+- **GIVEN** an exclusion whose value is a path glob with no spaces, longer than the cap
+- **WHEN** the detection tuning view renders the exclusion table at a 1280px-wide viewport
+- **THEN** the value is laid out at the cap width and spans more than one line
+- **AND** the table does not scroll horizontally
+
+### Requirement: Monitor records are reachable from the Observed count
+
+The detection-tuning view SHALL offer, beside each rule's Observed count, a way to open that rule's monitor records. The count tells an operator how often a rule matched, and the records show what it matched, which is what promoting a rule turns on. A rule with no recorded matches, or whose counts could not be read, SHALL NOT offer the link, because it would open onto records the count gives no reason to expect.
+
+The records view SHALL list the rule's monitor records newest first, each opening the same investigation surface an alert opens. It SHALL state that monitor records are not alerts, and SHALL explain that records collapse repeat matches on the same process and are kept on their own retention window, so there can be fewer records than the Observed count. Where the two numbers meet, an unexplained difference reads as lost data.
+
+A monitor record's investigation surface SHALL NOT offer triage controls, because a monitor record has no lifecycle and the server refuses a status change on one. It SHALL say that it is a monitor record where those controls would be, and its way back SHALL lead to the rule's monitor records rather than to the alert queue, which does not list it.
+
+#### Scenario: An operator opens the records behind a count
+
+- **GIVEN** a rule with an Observed count on the detection-tuning view
+- **WHEN** the operator follows its records link
+- **THEN** the view lists that rule's monitor records, newest first, each linking to its investigation surface
+- **AND** a rule that has no count, or whose counts could not be read, offers no records link
+
+#### Scenario: The records view explains why it can show fewer than the count
+
+- **GIVEN** the monitor records view for a rule
+- **WHEN** it renders
+- **THEN** it states that the records are not alerts, and that repeat matches on one process collapse and records are kept on their own retention window, so there can be fewer records than the count
+
+#### Scenario: A monitor record offers no triage
+
+- **GIVEN** a monitor record opened on its investigation surface
+- **WHEN** the surface renders
+- **THEN** no acknowledge, resolve, or reopen control is offered, and the record is labelled as a monitor record
+- **AND** its way back leads to its rule's monitor records
+
+### Requirement: Host network containment in the console
+
+The host page header SHALL show where the host's network containment stands: Containing while a containment has not been confirmed by the host, Contained once it has, Containment failed when the host reported it could not apply it, Releasing and Release failed likewise for a release, and nothing for a host that is not contained. While a containment or release is on its way the page SHALL re-read the state until the host confirms or fails it, and SHALL NOT poll otherwise. An operator holding `host.isolate` SHALL be offered Contain host on a host that is not contained and Release host on a contained one; the action SHALL ask for a reason (required, at most 1024 characters) in a confirmation that says what containment does before it is sent, and SHALL go through the reauthentication prompt when the session needs a recent authentication. An operator without `host.isolate` SHALL see the state without the action. The host list SHALL show the same badge on each host that has one. For a contained host whose live health says its DNS proxy may not be restricting names, the header SHALL say so, and SHALL make the explanation reachable by keyboard rather than on hover alone. It SHALL say only as much as its evidence supports: a host reporting the proxy switched off is stated as such, while the server having seen no DNS capture arrive during otherwise ordinary reporting SHALL be put as what it is, evidence that names may not be restricted, since the server grades that inference degraded rather than a fault because a skewed clock or an ingest backlog explain silence too. Where both are present the host's own report SHALL be preferred, being the definite one. It SHALL be read from the host's health rather than from the containment command's result, which is fixed once that command completes and so cannot reflect a proxy that stopped afterwards. A host whose health has not been read SHALL NOT be shown as unfiltered, and neither SHALL a host whose containment is still on its way, which is not yet contained. A proxy reported stopped by a fault SHALL NOT be repeated here, since the health section reports it as the fault it is.
+
+#### Scenario: A contained host whose names are not filtered says so
+
+- **GIVEN** a contained host whose health says its DNS proxy is disabled
+- **WHEN** an operator opens its page
+- **THEN** the header says its DNS is restricted by destination only, and the explanation can be reached with a keyboard
+- **AND** a host whose only evidence is the server having seen no DNS capture is told that instead, as something that may be so rather than as a finding
+- **AND** a host whose proxy is capturing, whose health is unread, or whose containment is still on its way says nothing of the kind
+
+#### Scenario: An operator contains a host from its page
+
+- **GIVEN** an operator holding `host.isolate` on the page of a host that is not contained
+- **WHEN** they choose Contain host, give a reason and confirm
+- **THEN** the containment is requested with that reason, the header shows Containing, and it shows Contained once the host confirms it
+
+#### Scenario: A contained host can be released
+
+- **GIVEN** an operator holding `host.isolate` on the page of a contained host
+- **WHEN** they choose Release host, give a reason and confirm
+- **THEN** the release is requested with that reason and the header shows Releasing
+
+#### Scenario: Without host.isolate the state is shown and the action is not
+
+- **GIVEN** an operator without `host.isolate` on the page of a contained host
+- **WHEN** the page loads
+- **THEN** the header shows Contained and offers neither Contain host nor Release host
+
+#### Scenario: The host list marks hosts under containment
+
+- **GIVEN** a contained host, a host whose containment is on its way, and a released host
+- **WHEN** the operator opens the hosts page
+- **THEN** the first shows Contained, the second Containing, and the released host shows no containment badge
+
+### Requirement: Rules can be written in the console
+
+An operator with `rule_content.write` SHALL be able to create a rule, edit and delete a rule the deployment wrote, and roll back the shipped rules, without leaving the web UI. An operator without `rule_content.write` SHALL NOT be offered any of these. A rule the server reports as shipped SHALL NOT be opened for editing, however its editor is reached, since shipped rules are tuned rather than rewritten.
+
+Before a rule is saved, the UI SHALL show whether its document is valid, as answered by the server's dry run, and SHALL present a refusal as the rule's problem in the loader's own words. The dry run judges the document alone, so the UI SHALL NOT claim a passing check means the deployment will load the rule: a conflict with the deployment's other rules is decided on save, and a refusal then SHALL also be shown in the loader's words. Saving SHALL require a passing check of the content being saved, so an edit made after a check SHALL require a new check before it can be saved, a check that answers after such an edit SHALL NOT count, and a save refused because the rules changed meanwhile SHALL require a new check too.
+
+Every change SHALL require a reason, recorded with the change. A newly created rule SHALL be marked, at the point of creation, as raising no alert until it is promoted, with the way to promote it. Because the server applies stored rules only when it next reloads them, the UI SHALL say so after a change, and the page a create opens SHALL wait for the new rule to be loaded rather than report it as unknown.
+
+The UI SHALL report whether the deployment runs the shipped rules the running build carries, and which rules differ when it does not. A rollback SHALL name any shipped rule it did not restore.
+
+#### Scenario: An operator creates a rule with a reason
+
+- **GIVEN** an operator with `rule_content.write` on the new rule page
+- **WHEN** they enter an identifier and a document that passes the check, save it, and give a reason
+- **THEN** the document is stored under that identifier with that reason, and the rule's page opens
+
+#### Scenario: A new rule's page waits for the server to load it
+
+- **GIVEN** an operator who has just created a rule the server has not yet reloaded
+- **WHEN** the rule's page opens
+- **THEN** it says it is waiting for the server to load the rule, and shows the rule once the server serves it
+- **AND** it calls the rule unknown only after a reload should have happened
+
+#### Scenario: An invalid rule is explained before anything is written
+
+- **GIVEN** a document the loader refuses
+- **WHEN** the operator checks it
+- **THEN** the loader's reason is shown as the rule's problem
+- **AND** the document cannot be saved
+
+#### Scenario: A shipped rule is not opened for editing
+
+- **GIVEN** an operator with `rule_content.write`
+- **WHEN** they open the editor of a rule the server reports as shipped, for example by typing its address
+- **THEN** the editor does not load the rule's document and says the rule is tuned in Detection tuning instead
+
+#### Scenario: A new rule says it will not alert until promoted
+
+- **GIVEN** an operator creating a rule
+- **WHEN** the new rule page renders
+- **THEN** it says the rule runs in monitor mode until promoted, and links to where rules are promoted
+
+#### Scenario: An operator deletes a rule with a reason
+
+- **GIVEN** an operator with `rule_content.write` on the page of a rule the deployment wrote
+- **WHEN** they delete it and give a reason
+- **THEN** the document is deleted with that reason
+- **AND** a shipped rule's page offers no edit or delete, and neither does any page for an operator without `rule_content.write`
+
+#### Scenario: An operator rolls back the shipped rules with a reason
+
+- **GIVEN** an operator with `rule_content.write` and a previous set of shipped rules to return to
+- **WHEN** they roll back and give a reason
+- **THEN** the previous set is restored with that reason, and any shipped rule not restored is named
+
+### Requirement: The rule catalogue is browsable
+
+The web UI SHALL offer a catalogue of every rule the deployment runs, reachable from the top navigation for an operator with `rule_content.read`. An operator cannot judge or change what a deployment detects without first being able to see it, and a rule page reachable only by deep link from an alert does not let them.
+
+Each catalogue entry SHALL show the rule's name, identifier, severity, and the mode it runs in, and SHALL say whether that mode was set by an operator. Each entry SHALL say whether the rule shipped with the product or was written on this deployment, and a shipped rule SHALL credit its author where the server reports one. That distinction SHALL come from the provenance the server reports, not from a document's path.
+
+A rule's page SHALL show the rule document it is loaded from, as written, to an operator with `rule_content.read`. A rule built into the server is not loaded from a stored rule document, and its page SHALL say so. An operator without `rule_content.read` SHALL NOT be offered the document.
+
+#### Scenario: An operator browses the rules the deployment runs
+
+- **GIVEN** an operator with `rule_content.read`
+- **WHEN** they open the rule catalogue from the top navigation
+- **THEN** every rule the deployment runs is listed with its name, identifier, severity, and mode in force, each linking to its rule page
+- **AND** a mode an operator set is marked as set
+
+#### Scenario: The catalogue distinguishes shipped rules from the deployment's own
+
+- **GIVEN** a deployment running shipped rules and rules written on it
+- **WHEN** the catalogue renders
+- **THEN** each rule is marked as shipped or as the deployment's own, with a shipped rule's author credited
+- **AND** the operator can narrow the list to either
+
+#### Scenario: An operator reads a rule as written
+
+- **GIVEN** an operator with `rule_content.read` on the page of a rule loaded from a rule document
+- **WHEN** the page renders
+- **THEN** it shows that document verbatim with its path
+- **AND** a built-in rule's page says it has no stored document, and an operator without `rule_content.read` is offered none
+
+### Requirement: Watched file paths are edited in detection tuning
+
+The Detection tuning page SHALL include a Watched file paths section that shows the stored watched-path set, the paths every host always watches, how many of the allowed paths the set uses, and when and by whom it was last saved. An operator with `detection_config.write` SHALL be able to edit a draft of the whole set, and saving it SHALL require a reason and SHALL replace the set through `PUT /api/v1/detection-config/watched-paths`. After a save the section SHALL report how many enrolled hosts the set was queued for. The server SHALL remain the only validator of a path: when it refuses the set, the section SHALL show the server's message and keep the draft. A save SHALL name the version the draft started from, and when the server refuses it because the set has changed since, the section SHALL say so, keep the draft, and offer to load the latest set.
+
+#### Scenario: The console shows the set and what is always watched
+
+- **GIVEN** a stored set with two paths, saved by an operator
+- **WHEN** an operator opens Detection tuning
+- **THEN** the Watched file paths section lists both paths with whether each covers one file or everything under it
+- **AND** it names the paths every host always watches, the number of paths used out of the allowed number, and when and by whom the set was last saved
+
+#### Scenario: A reader cannot change the set
+
+- **GIVEN** an operator with `detection_config.read` and without `detection_config.write`
+- **WHEN** they open Detection tuning
+- **THEN** the section lists the set with no remove, add, discard or save controls
+
+#### Scenario: An operator saves a changed set with a reason
+
+- **GIVEN** an operator with `detection_config.write` who removes one path and adds another
+- **WHEN** they save and give a reason
+- **THEN** the whole edited set and the reason are sent in one replace request, and nothing is sent before the reason is given
+- **AND** the section reports the saved version and how many of the enrolled hosts the set was queued for, saying the rest receive it within minutes when some could not be queued
+
+#### Scenario: A push that reached no host is called out
+
+- **GIVEN** a save the server stored but could not push because it could not list the enrolled hosts
+- **WHEN** the save completes
+- **THEN** the section warns that the set was saved but not sent, rather than reporting it as queued for no hosts
+
+#### Scenario: A refused set is shown and the draft kept
+
+- **GIVEN** a draft holding a path the server refuses
+- **WHEN** the operator saves it
+- **THEN** the section shows the server's refusal message as written
+- **AND** the draft is kept for the operator to fix, and editing it clears the message
+
+#### Scenario: A save of an outdated set is refused
+
+- **GIVEN** an operator editing the set loaded at one version, and another operator who has since saved a change
+- **WHEN** the first operator saves
+- **THEN** the save names the version the draft started from, the server refuses it, and the section says someone changed the watched paths after the page loaded them
+- **AND** the draft is kept, and loading the latest set on request replaces the draft with the other operator's set

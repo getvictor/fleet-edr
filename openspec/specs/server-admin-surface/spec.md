@@ -191,3 +191,167 @@ Operator mutation endpoints that read a JSON request body MUST bound the read at
 - **WHEN** the server reads the request body
 - **THEN** the server returns `413` with `{"error": "detection_config.body_too_large"}`
 - **AND** the detection-config state is not modified
+
+### Requirement: Operator actions commit their audit entry
+
+The audit entry for an operator issuing a command or withdrawing one SHALL be committed in the same transaction as the command row it records, so an audit reader can never find a command issued to a host without an entry naming who issued it. Because the audit store belongs to another bounded context and cannot join that transaction, the entry SHALL be committed to an outbox and delivered to the audit store afterwards. Delivery MAY lag the action, SHALL be retried until it succeeds, and SHALL NOT drop an entry. Delivery SHALL NOT be carried out by the action's own request: the request SHALL commit its entry, ask for delivery, and answer, so that an audit store that is slow or unavailable delays the row rather than the response to an action that has already been carried out. An operator whose request for a destructive action times out cannot tell it from one that failed, and a retry issues it twice. Delivery SHALL also be attempted periodically and independently of any request, so that an entry whose request ended before it was delivered, or one written by another replica, is still delivered. An action that is refused or rolled back SHALL leave no entry. The delivered row SHALL carry the acting principal, the address the request came from, the affected host, the command's type and id, and the trace of the request that made it. The address MAY be absent from a row delivered by a replica running a version that predates the field, since such a replica reads the entry without it; the row itself SHALL still be delivered.
+
+Issuing a command and withdrawing one SHALL be recorded as distinct actions, `command.issue` and `command.cancel`, because the two rows otherwise name the same host, command type and command id and nothing would distinguish a command that was sent from one that was taken back.
+
+One operator action SHALL name one host throughout. The host a command is authorized against, the host it is stored against, and the host its audit entry names SHALL be the same identifier, so the authorization decision and the action it permitted can be correlated. The system SHALL therefore resolve the identifier at the request boundary, before authorizing, rather than letting each step normalize its own copy.
+
+#### Scenario: An issued command commits its audit entry
+
+- **GIVEN** an operator issuing a command to a host
+- **WHEN** the command is queued
+- **THEN** a `command.issue` entry has committed with it, naming the actor, the address they acted from, the host, and the command's type and id
+
+#### Scenario: A withdrawn command is audited as a withdrawal
+
+- **GIVEN** an operator withdrawing a command no agent has picked up
+- **WHEN** the withdrawal commits
+- **THEN** a `command.cancel` entry has committed with it, naming the same host, command type and command id as the issuance did
+
+#### Scenario: One action names one host
+
+- **GIVEN** a request issuing a command whose host id carries surrounding whitespace
+- **WHEN** the command is queued
+- **THEN** the authorization decision, the stored command and the committed audit entry all name the same host
+
+#### Scenario: A refused action commits no audit entry
+
+- **GIVEN** an issuance the service refuses, or a withdrawal of a command an agent has already acknowledged
+- **WHEN** the action is refused
+- **THEN** no audit entry is left in the outbox and no command row changed
+
+#### Scenario: A slow audit store does not delay the action
+
+- **GIVEN** an audit store that has not answered a delivery already in progress
+- **WHEN** an operator issues a command
+- **THEN** the command is queued, its entry is committed, and the request answers without waiting for the store
+- **AND** the entry is delivered once the store answers
+
+#### Scenario: An entry no request asked about is still delivered
+
+- **GIVEN** an entry committed by a request that ended before it was delivered, or by another replica
+- **WHEN** no request asks for a delivery
+- **THEN** the periodic delivery records the row and clears the entry
+
+#### Scenario: A delivery failure delays the audit row
+
+- **GIVEN** an audit store that is unavailable when a command is issued
+- **WHEN** the command is issued
+- **THEN** the command is queued and its entry stays in the outbox
+- **AND** a later delivery, once the store is available, records the row and clears the entry
+
+### Requirement: Watched-path replacements guard against lost updates
+
+`PUT /api/v1/detection-config/watched-paths` SHALL accept an optional `expected_version`, the version the caller's edit started from. When it is present and the stored set is at any other version, the server SHALL refuse the replacement with status 409 and the error code `detection_config.conflict`, naming the current version, and SHALL store nothing, queue nothing, and audit nothing. The comparison SHALL be made under the same lock as the replacement, so two replacements naming the same version cannot both succeed. A request without `expected_version` SHALL replace whatever is stored.
+
+#### Scenario: A replacement based on an outdated set is refused
+
+- **GIVEN** a stored set at version 1
+- **WHEN** a caller permitted `detection_config.write` submits a replacement naming `expected_version` 0
+- **THEN** it is refused with 409 and `detection_config.conflict`, and the message names version 1
+- **AND** the stored set is unchanged, and no command is queued and no change audited
+- **AND** of two replacements submitted together naming `expected_version` 1, exactly one is stored
+
+### Requirement: The watched-path set names who last changed it
+
+The watched-path GET and PUT responses SHALL carry `updated_by_label`, the display label resolved from `updated_by` when the response is written (a user's email, a service account's name, or `system`). It SHALL be absent for the set no one has changed and when the principal cannot be resolved, in which case clients fall back to `updated_by`.
+
+#### Scenario: The set names its last changer by label
+
+- **GIVEN** a set last changed by a user, and a set last changed by a principal that has since been deleted
+- **WHEN** a caller reads each set, and when a user replaces a set
+- **THEN** the response names the user by email for the first read and for the replacement
+- **AND** carries no label for the deleted principal or for the set no one has changed
+
+### Requirement: Hosts that miss the watched-path push get the set
+
+The server SHALL periodically queue the current watched-path set, as a `set_watched_paths` command carrying the same `{version, epoch, paths}` the push sends, for every host with an active enrollment whose latest `set_watched_paths` command does not already carry it. A host SHALL be sent the set when it has no such command, when that command carried a different version or epoch than the current set, when it was queued no later than the host's latest enrollment (both times read from the database clock, so skew between the server and the database cannot reorder them), when it expired or was cancelled, or when it failed at least six hours ago.
+
+A pending, acknowledged, or completed command at the current version, queued since the host's latest enrollment, SHALL count as delivered, so a host that is offline is not sent a new copy every time the server checks. A failed command SHALL count as delivered for six hours before the set is queued again, so a host whose agent cannot run the command does not accumulate a failed command every check. A failed command with no recorded completion time SHALL count as delivered rather than being queued again immediately, since nothing says how long ago it failed and retrying on every check is what the six-hour wait exists to prevent.
+
+While the set has never been changed, the server SHALL queue nothing.
+
+#### Scenario: A failure with no completion time is not retried at once
+
+- **GIVEN** a host whose latest command for the current set failed with no recorded completion time
+- **WHEN** the server checks
+- **THEN** the set is not queued for it again
+
+#### Scenario: A host enrolled after a change gets the set
+
+- **GIVEN** a watched-path set was changed while a host was not yet enrolled
+- **WHEN** the host has enrolled and the server next checks
+- **THEN** the current set is queued for that host, carrying the same version and epoch the push carried
+- **AND** it is not queued again while that command is pending
+
+#### Scenario: An expired or reinstalled host gets the set again
+
+- **GIVEN** a host whose command for the current set expired undelivered, and a host that took the set and then enrolled again after a reinstall
+- **WHEN** the server next checks
+- **THEN** the current set is queued for both hosts
+
+### Requirement: Watched file paths are configured over the API
+
+The server SHALL hold one watched-path set: a version and a list of entries, each an absolute `path` and a `match` of `literal` or `prefix`, which every host's file-tamper client watches on top of its built-in paths. Version 0 SHALL be the empty set.
+
+`GET /api/v1/detection-config/watched-paths` SHALL return the set, the built-in paths every host watches regardless of it, and the maximum number of entries, to a caller permitted `detection_config.read`.
+
+`PUT /api/v1/detection-config/watched-paths` SHALL replace the set, for a caller permitted `detection_config.write`, only when the request carries a `paths` list (an empty list clears the set; a request without one is refused, so a misspelled field cannot remove every path), a non-blank reason, and a valid set. A replacement SHALL be stored as the next version, SHALL queue a `set_watched_paths` command carrying `{version, epoch, paths}` for every host with an active enrollment, and SHALL be audited with the reason, the set it replaced, the new set, and the number of hosts the command was queued for and missed. The counts are added after the replacement commits, so a push that outlasts its audit entry's bounded hold, or a server that stops before adding them, leaves the row without them, as the detection-config audit outbox requirement states. The audit entry SHALL be committed with the replacement, as for every detection-config change. A command that could not be queued for some hosts SHALL NOT fail the replacement, which is already stored; the response SHALL report both counts, and when the enrolled hosts could not be listed at all it SHALL say so rather than report an empty fleet.
+
+`epoch` is the set's update time in Unix microseconds. Hosts order sets by epoch and then version, so each replacement SHALL receive both a version and an epoch later than the set it replaced, and concurrent replacements SHALL each audit the set they actually replaced.
+
+The server is the only place the set is validated, so it SHALL refuse a proposed set, storing nothing and queueing nothing, when it has more than 32 entries, encodes to more than 8 KiB as the server writes it into the command (the fan-out repeats that payload on each row of a batched insert, which must stay inside a 4 MiB `max_allowed_packet`), or has any entry whose path is not absolute, has an empty, `.` or `..` segment, is longer than 1023 bytes in its `/private` spelling (the one the extension mutes for `/etc`, `/tmp` and `/var`; `PATH_MAX` less the C string's terminating NUL), or contains an ASCII control character (NUL included), whose `match` is neither `literal` nor `prefix`, that is a `literal` ending in `/`, that is a `prefix` not ending in `/`, that is a `prefix` naming a top-level directory, or that repeats another entry. A path under `/private/etc`, `/private/tmp`, or `/private/var` SHALL be judged by its root-linked form, both for the top-level rule and for repetition. The refusal SHALL name the entry and the reason.
+
+A top-level prefix is refused because its cost is not bounded by the set's size: every write under a tree such as `/Users/` would reach the wire.
+
+#### Scenario: An operator reads the watched-path set
+
+- **GIVEN** a caller permitted `detection_config.read`
+- **WHEN** they request the watched-path set
+- **THEN** the response carries the version, the entries, the built-in paths, and the maximum number of entries
+
+#### Scenario: An operator replaces the watched-path set with a reason
+
+- **GIVEN** a caller permitted `detection_config.write` and three enrolled hosts
+- **WHEN** they replace the set with a valid list of entries and a reason
+- **THEN** the set is stored as the next version with those entries
+- **AND** a `set_watched_paths` command carrying that version, the set's update time as its epoch, and those entries is queued for each of the three hosts
+- **AND** the version and the epoch are both later than those of the set it replaced
+- **AND** the change is audited with the reason, the previous and new sets, and the host counts
+
+#### Scenario: A set the server would not watch is refused
+
+- **GIVEN** a proposed set with an entry the rules above refuse
+- **WHEN** a caller permitted `detection_config.write` submits it with a reason
+- **THEN** the request is refused with a message naming the entry and why
+- **AND** the stored set is unchanged and no command is queued
+
+#### Scenario: A change without a list is refused
+
+- **GIVEN** a stored set with entries
+- **WHEN** a caller permitted `detection_config.write` submits a replacement with a reason but no `paths` list
+- **THEN** the request is refused, the stored set is unchanged, and no command is queued
+
+#### Scenario: A change without a reason is refused
+
+- **GIVEN** a caller permitted `detection_config.write`
+- **WHEN** they submit a valid set with a blank reason
+- **THEN** the request is refused, the stored set is unchanged, and no command is queued
+
+#### Scenario: Reading and changing the set need their permissions
+
+- **GIVEN** a caller not permitted `detection_config.read`, and one permitted to read but not `detection_config.write`
+- **WHEN** the first requests the set and the second submits a replacement
+- **THEN** both are refused as forbidden, and the stored set is unchanged
+
+#### Scenario: A push that misses hosts does not undo the change
+
+- **GIVEN** a valid replacement whose commands cannot be queued for the enrolled hosts
+- **WHEN** a caller permitted `detection_config.write` submits it with a reason
+- **THEN** the set is stored as the next version
+- **AND** the response and the audit row report how many hosts the command was not queued for
+- **AND** when the enrolled hosts could not be listed, they say the push was skipped for that reason rather than reporting no hosts

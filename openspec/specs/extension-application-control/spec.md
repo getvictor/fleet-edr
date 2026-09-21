@@ -12,14 +12,16 @@ The only enforced action is `BLOCK` under `enforcement=PROTECT`. The engine reco
 
 The extension SHALL keep an in-memory snapshot of the active policy, indexed for constant-time lookup by `(rule_type, identifier)`. The snapshot SHALL also be persisted to a file under `/var/db/com.fleetdm.edr/application-control.json` so that the policy survives extension restarts. The in-memory and on-disk forms MUST be kept consistent: applying a new snapshot SHALL atomically update the in-memory copy and SHALL write the on-disk copy with a write-to-temporary-file-then-rename sequence so a crash mid-write cannot leave the file partially written.
 
-Each snapshot carries two recency markers for the same `policy_id`: a `policy_version` that the server increments on every policy mutation (monotonic within a single server database lifetime) and a `policy_epoch`, the policy's server-assigned `updated_at` timestamp in Unix microseconds. The epoch SHALL survive a server database restore-from-backup or reset that regresses `policy_version`, because the operator's next mutation post-restore stamps the current wall-clock, which is strictly greater than any pre-restore epoch a host persisted.
+Each snapshot carries two recency markers for the same `policy_id`: a `policy_version` that the server increments on every policy mutation (monotonic within a single server database lifetime) and a `policy_epoch`, the policy's server-assigned `updated_at` timestamp in Unix microseconds. The server forces the epoch past its previous value on every mutation, so it orders every snapshot the server issues across a step back in the database clock, and it survives a server database restore-from-backup or reset that regresses `policy_version`, because the operator's next mutation post-restore stamps a time later than any pre-restore epoch a host persisted, provided the database clock is past those epochs. A restore whose clock is still behind them delays new snapshots until it passes them; an epoch high-water mark that survived the restore would have to live outside the restored database.
 
-The extension SHALL accept an incoming snapshot for the same `policy_id` when its `policy_version` is greater than the active snapshot's OR its `policy_epoch` is greater than the active snapshot's, and SHALL reject it (keep the active snapshot, perform no disk write) only when both are less than or equal to the active snapshot's. A snapshot whose `policy_epoch` is absent SHALL be treated as epoch `0`, so a server that does not yet emit the field falls back to version-only gating. Accepting on the epoch axis is what re-syncs a host after a server-side regression; rejecting when both axes are older is what preserves protection against duplicate and out-of-order replays.
+The extension SHALL accept an incoming snapshot for the same `policy_id` only when it is ahead of the active snapshot, ordered by `policy_epoch` and then by `policy_version`, and SHALL otherwise reject it (keep the active snapshot, perform no disk write). A snapshot whose `policy_epoch` is absent SHALL be treated as epoch `0`: snapshots from a server that never emits the field are ordered by version alone, and one without the field that reaches a host already holding an epoch is behind it. Every server that can push a snapshot to a host running this rule emits the epoch, so only a server rolled back past the field's introduction would send that. Ordering by epoch first is what re-syncs a host after a server-side regression, and it also refuses a snapshot issued before a restore that reaches the host after one saved since, whose version is higher and whose epoch is older. The watched-path set is ordered by the same rule.
+
+The change from the prior requirement is the ordering: a snapshot ahead on either axis was accepted, which applied that pre-restore snapshot and left it in force until the next mutation.
 
 #### Scenario: An incoming snapshot replaces the prior one atomically
 
-- **GIVEN** the extension is already running with an applied snapshot at version `V`
-- **WHEN** it receives a new snapshot at version `V+1`
+- **GIVEN** the extension is already running with an applied snapshot at version `V` and epoch `E`
+- **WHEN** it receives a new snapshot at version `V+1` with an epoch later than `E`
 - **THEN** the in-memory snapshot is the `V+1` snapshot immediately after acceptance
 - **AND** the on-disk file reflects the same version
 - **AND** no exec is evaluated against a partial snapshot during the swap
@@ -34,6 +36,12 @@ The extension SHALL accept an incoming snapshot for the same `policy_id` when it
 
 - **GIVEN** the extension's current snapshot is at version `V` and epoch `E`
 - **WHEN** a snapshot for the same policy is delivered whose version is `<= V` AND whose epoch is `<= E`
+- **THEN** the extension keeps its current snapshot and performs no disk write
+
+#### Scenario: A pre-restore snapshot is refused
+
+- **GIVEN** the extension's current snapshot was saved after a server database restore, at a version lower than before the restore
+- **WHEN** a snapshot issued before the restore is delivered for the same policy, with a higher version and an earlier epoch
 - **THEN** the extension keeps its current snapshot and performs no disk write
 
 #### Scenario: A version regression with a newer epoch re-syncs instead of freezing
@@ -105,7 +113,7 @@ The extension SHALL only consult `CDHASH` rules when the exec target's `cdhash` 
 
 ### Requirement: AUTH_EXEC denial on BLOCK match
 
-When the precedence walk returns a rule whose `action=BLOCK` and `enforcement=PROTECT`, the extension SHALL deny the AUTH_EXEC request so the new image does not run. When the walk returns no match, or returns a rule whose `enforcement` is anything other than `PROTECT`, the extension SHALL allow the AUTH_EXEC request to proceed. The decision SHALL be reached within the AUTH_EXEC deadline. The extension MAY block the AUTH callback on a synchronous BINARY-rule SHA-256 compute bounded by the deadline budget (see the deadline-guarded BINARY hash requirement). The extension MUST NOT block the AUTH callback on `leaf_cert_sha256` fetches; those remain a lazy cache fill.
+When the precedence walk returns a rule whose `action=BLOCK` and `enforcement=PROTECT`, the extension SHALL deny the AUTH_EXEC request so the new image does not run. A `BLOCK` rule whose `enforcement=DETECT` SHALL NOT end the walk (see the Detect-mode requirement). When the walk matches no `PROTECT` rule, or ends on a rule whose `action` or `enforcement` is a value the server does not create, the extension SHALL allow the AUTH_EXEC request to proceed, subject to the deadline fallback posture. The decision SHALL be reached within the AUTH_EXEC deadline. The extension MAY block the AUTH callback on a synchronous BINARY-rule SHA-256 compute bounded by the deadline budget (see the deadline-guarded BINARY hash requirement). The extension MUST NOT block the AUTH callback on `leaf_cert_sha256` fetches; those remain a lazy cache fill.
 
 #### Scenario: A BLOCK rule denies the exec
 
@@ -294,7 +302,7 @@ When the extension accepts a snapshot for an already-applied `policy_id` whose `
 
 ### Requirement: Decided ALLOW is cached and flushed on snapshot replacement
 
-The extension SHALL respond to a FULLY RESOLVED decided ALLOW and to the self-allow failsafe with `es_respond_auth_result(..., cache: true)`, pinning the result into the kernel's per-`(dev, inode, mtime)` AUTH cache so subsequent execs of the same binary do not re-enter the handler. An allow is fully resolved only when every lazily-resolved identity component the active snapshot could consult was available at decision time: the BINARY hash was computed (or not needed because the snapshot has no BINARY rules), AND either the snapshot has no CERTIFICATE rules or the leaf certificate was resolved. The extension SHALL respond with `cache: false` to a cold-miss ALLOW (a BINARY hash that timed out or could not be read under a fail-open posture, or a CERTIFICATE rule that silently missed a not-yet-cached leaf certificate), to an undecided ALLOW, and to every DENY: a cold-miss ALLOW must let the next exec re-evaluate once the hash or certificate warms so a block rule can still fire, an undecided ALLOW does not yet know the identity, and a cached DENY would survive a block-rule removal. Whenever the active application-control snapshot is replaced (any accepted apply: a version advance, an epoch-axis re-sync, or a policy retarget), the extension SHALL flush the kernel AUTH cache via `es_clear_cache` so a cached ALLOW cannot outlive a rule change; a snapshot apply rejected by the recency gate SHALL NOT trigger a flush.
+The extension SHALL respond to a FULLY RESOLVED decided ALLOW and to the self-allow failsafe with `es_respond_auth_result(..., cache: true)`, pinning the result into the kernel's per-`(dev, inode, mtime)` AUTH cache so subsequent execs of the same binary do not re-enter the handler. An allow is fully resolved only when every lazily-resolved identity component the active snapshot could consult was available at decision time: the BINARY hash was computed (or not needed because the snapshot has no BINARY rules), AND either the snapshot has no CERTIFICATE rules or the leaf certificate was resolved. The extension SHALL respond with `cache: false` to a cold-miss ALLOW (a BINARY hash that timed out or could not be read under a fail-open posture, or a CERTIFICATE rule that silently missed a not-yet-cached leaf certificate), to an undecided ALLOW, to an ALLOW that matched a `DETECT` rule, and to every DENY: a cold-miss ALLOW must let the next exec re-evaluate once the hash or certificate warms so a block rule can still fire, an undecided ALLOW does not yet know the identity, a cached ALLOW that matched a `DETECT` rule would leave every later exec of the binary unreported, and a cached DENY would survive a block-rule removal. Whenever the active application-control snapshot is replaced (any accepted apply: a version advance, an epoch-axis re-sync, or a policy retarget), the extension SHALL flush the kernel AUTH cache via `es_clear_cache` so a cached ALLOW cannot outlive a rule change; a snapshot apply rejected by the recency gate SHALL NOT trigger a flush.
 
 #### Scenario: A decided allow is cached at the kernel
 
@@ -314,6 +322,12 @@ The extension SHALL respond to a FULLY RESOLVED decided ALLOW and to the self-al
 - **WHEN** the extension forms the AUTH_EXEC response
 - **THEN** the cacheable flag for that response is false
 
+#### Scenario: A detect-match allow is not cached
+
+- **GIVEN** a fully resolved allow that matched a `DETECT` rule
+- **WHEN** the extension forms the AUTH_EXEC response
+- **THEN** the cacheable flag for that response is false, so the next exec of the binary is reported too
+
 #### Scenario: A denial is not cached
 
 - **GIVEN** the decision is a denial (a matched block rule or an undecided deny under fail-closed posture)
@@ -326,3 +340,52 @@ The extension SHALL respond to a FULLY RESOLVED decided ALLOW and to the self-al
 - **WHEN** a newer snapshot is accepted by the recency gate (version advance, epoch re-sync, or policy retarget)
 - **THEN** the kernel AUTH cache flush fires once per accepted swap
 - **AND** a stale snapshot rejected by the recency gate does not fire the flush
+
+### Requirement: Detect-mode rules report would-block matches
+
+When the precedence walk for an AUTH_EXEC matches a `BLOCK` rule whose `enforcement` is `DETECT`, the extension SHALL continue the walk rather than end it, and SHALL record the first such match in precedence order. A `DETECT` rule SHALL NOT change the verdict: the verdict for any exec SHALL be the verdict the same snapshot reaches with its `DETECT` rules removed, so a `PROTECT` rule at any precedence still denies and the deadline fallback posture still governs an unresolved BINARY hash. The posture SHALL apply only when the snapshot has a BINARY rule that is not `DETECT`: a snapshot without its `DETECT` rules would compute no hash when those were its only BINARY rules, so it has no unresolved hash for a posture to govern.
+
+When the verdict allows the exec and a `DETECT` rule was matched, the extension SHALL emit an `application_control_would_block` event for that match. The event SHALL carry the fields of `application_control_block`: `policy_id`, `policy_version`, `rule_id`, `rule_type`, `identifier`, `severity`, `pid`, and `path`, plus `custom_msg` and `custom_url` when the matched rule sets them. The `identifier` SHALL be the value from the target tuple that matched the `DETECT` rule. The extension SHALL NOT present the desktop block notification for a would-block match, and SHALL NOT emit a would-block event for an exec it denies.
+
+#### Scenario: A DETECT rule allows and reports the exec
+
+- **GIVEN** the only rule an exec matches is a `BLOCK` / `DETECT` rule
+- **WHEN** the extension responds to AUTH_EXEC
+- **THEN** the response is allow
+- **AND** an `application_control_would_block` event names the rule
+- **AND** no desktop notification is presented
+
+#### Scenario: A would-block match names the matched identifier
+
+- **GIVEN** a `TEAMID` rule with `enforcement=DETECT` for `EQHXZ8M8AV` matches an exec
+- **WHEN** the extension evaluates the exec
+- **THEN** the reported match's `rule_type` is `TEAMID`
+- **AND** its `identifier` is `EQHXZ8M8AV`
+
+#### Scenario: A DETECT rule does not weaken a PROTECT rule
+
+- **GIVEN** an exec matches a `DETECT` rule and a lower-precedence `PROTECT` rule
+- **WHEN** the extension responds to AUTH_EXEC
+- **THEN** the response is deny, naming the `PROTECT` rule
+- **AND** no would-block match is reported
+
+#### Scenario: The highest-precedence DETECT match is reported
+
+- **GIVEN** an exec matches a `SIGNINGID` rule and a `TEAMID` rule, both with `enforcement=DETECT`
+- **WHEN** the extension evaluates the exec
+- **THEN** the reported match is the `SIGNINGID` rule
+
+#### Scenario: A DETECT-only BINARY rule never fails closed
+
+- **GIVEN** a snapshot under `fail-closed` whose only BINARY rules are `DETECT`
+- **WHEN** an exec's hash cannot be computed before the deadline, or cannot be read
+- **THEN** the exec is allowed
+- **AND** no undecided event is emitted
+
+#### Scenario: The fallback posture still applies
+
+- **GIVEN** the snapshot has BINARY rules, the exec's hash could not be computed before the deadline, and the exec matches a lower-precedence `DETECT` rule
+- **WHEN** the extension evaluates the exec
+- **THEN** under `fail-closed` the exec is denied as undecided and no would-block match is reported
+- **AND** under `fail-open` the exec is allowed and the would-block match is reported
+- **AND** under `audit-only` the exec is allowed, the undecided event is emitted, and the would-block match is reported

@@ -84,12 +84,6 @@
     annotation "(scope narrowed to leaf_cert only)", and the archive matches by heading, so the annotated name looks like a
     requirement canonical never had. The text is byte-identical to what canonical holds under the unannotated name.
 
-- requirement: extension-application-control/auth-exec-denial-on-block-match
-  covered_by: extension-application-control/auth-exec-denial-on-block-match
-  reason: >-
-    Intact and richer than any of the three restatements in its batch, which is why every one of them reads as having retired
-    text canonical still holds.
-
 - requirement: extension-application-control/target-identifier-tuple-for-every-exec
   covered_by: extension-application-control/target-identifier-tuple-for-every-exec
   reason: >-
@@ -346,22 +340,6 @@
 # Requirements the canonical tree has since strengthened or reformatted. In each case canonical says MORE than the archived
 # restatement, so the finding is the archive noticing that its frozen copy is the poorer one.
 # ---------------------------------------------------------------------------------------------------------------------------
-
-- requirement: server-application-control/rest-surface-for-policies-rules-groups-and-assignments
-  covered_by: server-application-control/rest-surface-for-policies-rules-groups-and-assignments
-  reason: >-
-    Intact, and its body matches the archived restatement exactly. The findings are all on one scenario, "A bulk upsert is
-    idempotent on the unique key", which canonical has strengthened: the archived version sends the same rule twice in ONE
-    request and checks the policy ends with one rule, while canonical re-issues an identical payload against rules a prior
-    upsert created and requires the second run to insert zero rows and update in place, naming the unique key that makes it
-    idempotent. That is the property worth having. A later change also added the attribution columns and their
-    service-account semantics, which the archived copy predates.
-
-- requirement: server-application-control/rule-identifies-one-binary-signing-identity-or-path
-  covered_by: server-application-control/rule-identifies-one-binary-signing-identity-or-path
-  reason: >-
-    Intact; the body matches the archived restatement exactly and canonical carries additional text a later change added, so
-    the only finding is text canonical has and the restatement does not.
 
 - requirement: server-identity-authentication/break-glass-authentication-is-rate-limited-and-audited-at-warn
   covered_by: server-identity-authentication/break-glass-authentication-is-rate-limited-and-audited-at-warn

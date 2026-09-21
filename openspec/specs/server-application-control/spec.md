@@ -31,7 +31,9 @@ The system SHALL represent application control as a collection of named policies
 
 ### Requirement: Rule identifies one binary, signing identity, or path
 
-The system SHALL represent every rule as a row owned by exactly one policy and carrying: a `rule_type` from the set `{CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH}`; an `identifier` string whose format is determined by `rule_type`; an `action` constrained in this phase to `BLOCK`; an `enforcement` from `{PROTECT, DETECT}` defaulting to `PROTECT`; an `enabled` flag; a `severity` from `{low, medium, high, critical}` defaulting to `medium`; a `source` from `{admin, imported, intel}` defaulting to `admin`; an optional `source_ref`; an optional `custom_msg`; an optional `custom_url`; an optional `comment`; an optional `expires_at`; and timestamps and actor identity. The triple `(policy_id, rule_type, identifier)` SHALL be unique.
+The system SHALL represent every rule as a row owned by exactly one policy and carrying: a `rule_type` from the set `{CDHASH, BINARY, SIGNINGID, CERTIFICATE, TEAMID, PATH}`; an `identifier` string whose format is determined by `rule_type`; an `action` constrained in this phase to `BLOCK`; an `enforcement` from `{PROTECT, DETECT}`, with no default; an `enabled` flag; a `severity` from `{low, medium, high, critical}` defaulting to `medium`; a `source` from `{admin, imported, intel}` defaulting to `admin`; an optional `source_ref`; an optional `custom_msg`; an optional `custom_url`; an optional `comment`; an optional `expires_at`; and timestamps and actor identity. The triple `(policy_id, rule_type, identifier)` SHALL be unique.
+
+A `PROTECT` rule denies an exec it matches. A `DETECT` rule blocks nothing: when the policy allows an exec it matches, the host reports the match so it is kept as a monitor record, and a `DETECT` rule never changes the verdict another rule reaches. The changes from the prior requirement are that `DETECT` has a meaning, where before it was stored and no rule could be created with it, and that enforcement no longer defaults to `PROTECT`.
 
 #### Scenario: Two rules in the same policy can target the same identifier under different types
 
@@ -91,9 +93,11 @@ The system SHALL expose the application control subsystem under `/api/v1/app-con
 - `GET /api/v1/app-control/policies` and `POST /api/v1/app-control/policies`
 - `GET /api/v1/app-control/policies/{id}`, `PATCH /api/v1/app-control/policies/{id}`, `DELETE /api/v1/app-control/policies/{id}`
 - `POST /api/v1/app-control/policies/{id}/rules` and `POST /api/v1/app-control/policies/{id}/rules:bulkUpsert`
-- `PATCH /api/v1/app-control/rules/{id}`, `DELETE /api/v1/app-control/rules/{id}`, `GET /api/v1/app-control/rules`
+- `GET /api/v1/app-control/rules/{id}`, `PATCH /api/v1/app-control/rules/{id}`, `DELETE /api/v1/app-control/rules/{id}`, `GET /api/v1/app-control/rules`
 - `GET /api/v1/app-control/host-groups`, `POST /api/v1/app-control/host-groups`, `PATCH /api/v1/app-control/host-groups/{id}`, `DELETE /api/v1/app-control/host-groups/{id}`
 - `POST /api/v1/app-control/policies/{id}/assignments`
+
+A single rule SHALL be readable by its own id, returning the rule including the identifier of the policy that owns it. That ownership is not otherwise derivable by a client: an application-control alert records the rule it matched, not the policy, so without this read an operator holding an alert cannot reach the policy that blocked.
 
 Successful responses SHALL be JSON. Errors SHALL follow the API capability's `ErrorResponse` shape. Each state-changing endpoint SHALL require a non-empty `actor` and `reason` field in the request body for audit.
 
@@ -110,9 +114,19 @@ Successful responses SHALL be JSON. Errors SHALL follow the API capability's `Er
 - **THEN** the second run inserts zero new rules and updates the matching ones in place, because the `(rule_type, identifier)` unique key makes the upsert idempotent
 - **AND** the policy ends with the same rule set
 
+#### Scenario: A single rule is readable by its id
+
+- **GIVEN** an operator with application-control read permission and a rule that exists
+- **WHEN** the client calls `GET /api/v1/app-control/rules/{id}` for that rule
+- **THEN** the response carries the rule, including the id of the policy that owns it
+- **AND** a rule id that names no rule responds 404 with the standard error shape
+- **AND** a caller without application-control read permission is refused, whatever the rule id
+
 ### Requirement: Rule lifecycle audit events
 
-The system SHALL emit an audit event for every create, update, or delete of a policy or a rule. The event SHALL include the acting principal (its principal id and a resolvable label, for a human user or a service account alike), the reason supplied with the request, the policy and (for rule events) rule identifier, and a structured diff of the change. The per-row attribution columns (`created_by` / `updated_by`) SHALL store the acting principal id, not a human-only identifier, and a system-originated write SHALL record the system principal (principal id `sys`, type `system`) rather than a free-form literal such as `"system"`. A `bulkUpsert` SHALL emit exactly one audit event covering the logical operation rather than one event per touched rule. A service-account write MUST NOT be rejected at the persistence layer for lacking a human user id.
+The system SHALL emit an audit event for every create, update, or delete of a policy or a rule. A rule update that changes nothing is not an update for this purpose and SHALL NOT emit one (see "An unchanged rule update is not a mutation"). The event SHALL include the acting principal (its principal id and a resolvable label, for a human user or a service account alike), the reason supplied with the request, the policy and (for rule events) rule identifier, and a structured diff of the change. The per-row attribution columns (`created_by` / `updated_by`) SHALL store the acting principal id, not a human-only identifier, and a system-originated write SHALL record the system principal (principal id `sys`, type `system`) rather than a free-form literal such as `"system"`. A `bulkUpsert` SHALL emit exactly one audit event covering the logical operation rather than one event per touched rule. A service-account write MUST NOT be rejected at the persistence layer for lacking a human user id.
+
+The change from the prior requirement is the exception for a rule update that changes nothing, which previously fell under "every update".
 
 #### Scenario: Creating a rule records the acting principal
 
@@ -136,9 +150,11 @@ The system SHALL emit an audit event for every create, update, or delete of a po
 
 ### Requirement: Command fan-out on policy mutation
 
-The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate commands. The command payload SHALL carry `{policy_id, policy_version, policy_epoch, rules: [...]}` where each rule entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. `policy_epoch` SHALL be the policy's server-assigned `updated_at` timestamp expressed in Unix microseconds (or `0` when the policy carries no timestamp), composed from the same post-mutation policy read that supplies `policy_version`; it is the restore-surviving recency marker the extension uses to re-sync after a database restore regresses `policy_version`. Disabled rules and expired rules SHALL be omitted from the payload.
+The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate commands. The command payload SHALL carry `{policy_id, policy_version, policy_epoch, rules: [...]}` where each rule entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. `policy_epoch` SHALL be the policy's server-assigned `updated_at` timestamp expressed in Unix microseconds (or `0` when the policy carries no timestamp), composed from the same post-mutation policy read that supplies `policy_version`; it is the recency marker the extension orders snapshots by first, and the one that re-syncs a host after a database restore regresses `policy_version`, once the database clock is past any epoch the restore lost. Every mutation of a policy SHALL set its `updated_at` to a time strictly later than the previous value, even when the database clock has stepped back, because a host refuses a snapshot whose epoch is not ahead of the one it holds. Disabled rules and expired rules SHALL be omitted from the payload.
 
 The enqueue SHALL be performed in bulk, as a bounded-size multi-row insert rather than one database round trip per host, so that fan-out to the full enrolled fleet completes within a single synchronous operator request even at the deployment's host-count ceiling. The system SHALL record on the mutation's audit event the total count of unique hosts the command was enqueued for (`fanout_hosts`) and the count of those unique hosts whose command did not land (`fanout_failed`). Because a multi-row insert is atomic per statement, when a bulk insert of a set of hosts fails, every unique host in that set SHALL be counted in `fanout_failed`. A fan-out failure SHALL NOT fail the operator's mutation: the policy row is authoritative and any host whose command did not land re-syncs on its next poll.
+
+The change from the prior requirement is that the epoch is forced forward on every mutation rather than left to the column's own update timestamp.
 
 #### Scenario: A new rule fans out only to assigned hosts
 
@@ -165,7 +181,13 @@ The enqueue SHALL be performed in bulk, as a bounded-size multi-row insert rathe
 - **GIVEN** a policy whose `updated_at` advances on every mutation
 - **WHEN** the system composes the `set_application_control` payload after a mutation
 - **THEN** the payload's `policy_epoch` equals the policy's post-mutation `updated_at` in Unix microseconds
-- **AND** a later mutation produces a payload whose `policy_epoch` is greater, even across a database restore that regressed `policy_version`
+- **AND** a later mutation produces a payload whose `policy_epoch` is greater, including after a database restore that regressed `policy_version` once the database clock is past the epochs the restore lost
+
+#### Scenario: The policy epoch advances when the database clock steps back
+
+- **GIVEN** a policy whose `updated_at` is later than the database clock's current time
+- **WHEN** the operator creates, updates or deletes a rule, bulk-upserts rules, or updates the policy
+- **THEN** the policy's `updated_at` after the mutation is later than it was before
 
 #### Scenario: A failed enqueue batch counts every host in it as failed
 
@@ -209,3 +231,100 @@ The system SHALL ensure that, on first server boot, the application control boot
 - **GIVEN** a database that has already been bootstrapped
 - **WHEN** the server starts again
 - **THEN** the host group, policy, and assignment counts remain at one each
+
+### Requirement: An unchanged rule update is not a mutation
+
+A `PATCH /api/v1/app-control/rules/{id}` for an existing rule whose supplied fields all equal the rule's current values SHALL succeed and return the rule. Because nothing changed, it SHALL NOT increment the policy version, enqueue `set_application_control` commands, or emit an audit event. A `PATCH` that changes at least one field SHALL remain a mutation, whatever the other fields it supplies. A `PATCH` for a rule that does not exist, including one deleted while the request was in flight, SHALL fail with `application_control.rule_not_found`.
+
+#### Scenario: An unchanged update returns the rule
+
+- **GIVEN** a rule with enforcement `PROTECT` and severity `medium`, in a policy at version `N`
+- **WHEN** an operator sends a `PATCH` setting enforcement to `PROTECT` and severity to `medium`
+- **THEN** the response is 200 with the rule
+- **AND** the policy is still at version `N`, no `set_application_control` command is enqueued, and no audit event is recorded
+
+#### Scenario: Changing one field is a mutation
+
+- **GIVEN** a rule with enforcement `PROTECT` and severity `medium`
+- **WHEN** an operator sends a `PATCH` setting enforcement to `PROTECT` and severity to `high`
+- **THEN** the rule's severity is `high`, the policy version increments, the snapshot fans out, and an audit event is recorded
+
+### Requirement: Rule enforcement is required and changeable
+
+The rule-create endpoint SHALL require an `enforcement` of `PROTECT` or `DETECT`, and so SHALL every item of a bulk upsert. A rule SHALL NOT take an enforcement by default: `PROTECT` blocks and `DETECT` only records, and either one chosen silently is wrong for the caller who meant the other. A request that omits it SHALL be rejected with a validation error naming the missing field. A bulk upsert that updates an existing rule SHALL set that rule's enforcement to the one the item names. The rule-update endpoint SHALL accept `enforcement` as a mutable field, which is how an operator promotes a `DETECT` rule to `PROTECT` or moves it back. Every endpoint SHALL reject any other value with a validation error and SHALL change nothing. A change of enforcement SHALL bump the policy version and push the new snapshot to the policy's hosts like any other rule mutation, and the create and update audit events SHALL record the rule's enforcement.
+
+#### Scenario: A rule created in DETECT reaches hosts in DETECT
+
+- **GIVEN** an operator creating a rule with `enforcement=DETECT`
+- **WHEN** the request succeeds
+- **THEN** the stored rule's enforcement is `DETECT`
+- **AND** the snapshot pushed to the policy's hosts carries the rule with `enforcement=DETECT`
+- **AND** the audit event records `DETECT`
+
+#### Scenario: A rule created without an enforcement is rejected
+
+- **GIVEN** an operator creating a rule without an `enforcement` field
+- **WHEN** the request is handled
+- **THEN** the server responds with HTTP 400 saying enforcement is required
+- **AND** no rule is created
+
+#### Scenario: A bulk upsert names each rule's enforcement
+
+- **GIVEN** a bulk upsert with an item that has no `enforcement`
+- **WHEN** the request is handled
+- **THEN** the whole batch is rejected and nothing is stored
+- **AND** once every item names one, each rule is stored with its item's enforcement
+- **AND** re-upserting an existing rule with a different enforcement updates it
+
+#### Scenario: Promoting a rule pushes and audits the new enforcement
+
+- **GIVEN** a rule whose enforcement is `DETECT`
+- **WHEN** an operator updates it with `enforcement=PROTECT` and a reason
+- **THEN** the stored rule's enforcement is `PROTECT` and the policy version is bumped
+- **AND** the snapshot pushed to the policy's hosts carries `enforcement=PROTECT`
+- **AND** the update audit event records `PROTECT` and the reason
+
+#### Scenario: An unknown enforcement is rejected
+
+- **GIVEN** an operator creating or updating a rule with an `enforcement` other than `PROTECT` or `DETECT`
+- **WHEN** the request is handled
+- **THEN** the server responds with HTTP 400
+- **AND** no rule is created or changed
+
+### Requirement: Concurrent rule changes to one policy serialize
+
+Rule mutations that touch the same policy SHALL serialize against one another rather than fail. Each one changes two things, the rule and the policy version that makes the change visible to hosts, and the system SHALL acquire them in one order for every mutation. Approaching the same two rows from opposite ends leaves each writer holding what the other needs, and the database resolves that by aborting one of them, which reaches the operator as a failed request for a change that was valid.
+
+The order SHALL be the policy first. That is the row every rule mutation has in common, so locking it first is what makes the set of mutations a queue rather than a race; a create additionally takes a shared lock on that row as a consequence of the rule referencing it, and must therefore already hold the stronger one.
+
+Serializing per policy SHALL NOT extend to different policies, which have no row in common and no reason to wait for each other.
+
+A mutation naming a policy or a rule that does not exist SHALL be reported as not found, and SHALL be reported that way whether the absence is discovered while ordering the locks or afterwards. A database that cannot answer SHALL NOT be reported that way: an operator told their rule is gone believes someone else deleted it, which is a different event from a change that failed and can be retried.
+
+#### Scenario: Concurrent rule creates do not deadlock
+
+- **GIVEN** a policy
+- **WHEN** several operators create rules in it at the same time
+- **THEN** every create either succeeds or fails for its own reason
+- **AND** none fails because the database aborted it to resolve a deadlock
+
+#### Scenario: A single-rule change and a bulk upsert do not deadlock
+
+- **GIVEN** a policy holding rules
+- **WHEN** single-rule changes and a bulk upsert of the same policy run at the same time
+- **THEN** each completes or fails on its own merits
+- **AND** none fails because the database aborted it to resolve a deadlock
+
+#### Scenario: A rule change waits for whoever holds the policy
+
+- **GIVEN** a policy another writer is already holding
+- **WHEN** an operator changes a rule in that policy
+- **THEN** the change waits for the holder rather than proceeding beside it
+- **AND** a wait that runs out is reported as a failed change, not as a missing rule
+
+#### Scenario: A database that cannot answer is not a missing rule
+
+- **GIVEN** a rule whose policy cannot be read because the database fails
+- **WHEN** an operator changes that rule
+- **THEN** the failure is reported as a failure
+- **AND** not as the rule having been deleted

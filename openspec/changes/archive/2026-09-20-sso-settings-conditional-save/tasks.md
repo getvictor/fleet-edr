@@ -5,4 +5,4 @@
 - [x] Keep a save that names no version an overwrite, so automation need not read first.
 - [x] Give two racing first saves a defined winner, without depending on the isolation level.
 - [x] Refuse a version the server did not issue, rather than reading it as absent and overwriting.
-- [ ] The page sends what it read and reports a conflict. Separate change.
+- [x] The page sends what it read and reports a conflict. Landed separately, in `sso-settings-conflict-page`.
