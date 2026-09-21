@@ -37,9 +37,7 @@ func (q *Query) BuildChainTree(
 	// Ancestors first, which also gives the resolved parent edges: the forest must link these by identity, because matching on the
 	// process number picks the newest row holding it and a recycled number then attaches the chain to a stranger.
 	//
-	// The row just read is handed over rather than left to be fetched again. Besides saving the second query, it is what makes the
-	// walk's "pinned process is gone" path unreachable from here, and that path returns a nil edge map that the descendant walk
-	// below writes into.
+	// The row just read is handed over rather than left to be fetched again, which is the whole cost of the walk's own lookup.
 	procs, resolved, err := q.withPinnedChain(ctx, hostID, []api.Process{*pinned}, pinnedID)
 	if err != nil {
 		return api.ProcessTreeResult{}, err
