@@ -110,6 +110,43 @@ describe("HostHeader", () => {
     expect(screen.queryByText("Enrolled")).not.toBeInTheDocument();
   });
 
+  // Details opens a panel; Release host cuts a Mac off the network. They sat side by side as matching bordered boxes, so the one
+  // that acts looked like the one that only discloses. The trigger now carries a caret instead of a border, and the caret turns to
+  // point at the panel it opened.
+  it("marks the Details disclosure with a caret that turns when it opens", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    renderHeader(detail.host_id);
+
+    const trigger = await screen.findByRole("button", { name: /Details/ });
+    const caret = trigger.querySelector(".host-header__details-caret");
+    expect(caret).not.toBeNull();
+    expect(caret?.className).not.toContain("host-header__details-caret--open");
+
+    fireEvent.click(trigger);
+    expect(trigger.querySelector(".host-header__details-caret")?.className).toContain("host-header__details-caret--open");
+
+    fireEvent.click(trigger);
+    expect(trigger.querySelector(".host-header__details-caret")?.className).not.toContain("host-header__details-caret--open");
+  });
+
+  // The row is two clusters: what the host is, then what its containment is. Details holds the host's id, agent, address and health,
+  // so it sits with the name and the liveness pill; after the containment action it would read as details of the release.
+  it("keeps Details with the host identity, ahead of the containment cluster", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    renderHeader(detail.host_id);
+
+    const pill = await screen.findByText("online");
+    const trigger = screen.getByRole("button", { name: /Details/ });
+    const containment = document.querySelector(".host-containment");
+    expect(containment).not.toBeNull();
+
+    // Node.compareDocumentPosition: FOLLOWING means the argument comes after the receiver in document order.
+    expect(pill.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(trigger.compareDocumentPosition(containment as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   // spec:web-ui/host-detail-header/header-degrades-when-the-detail-fetch-fails
   it("falls back to the host id title when the detail fetch fails", async () => {
     vi.spyOn(api, "getHostDetail").mockRejectedValue(new Error("boom"));

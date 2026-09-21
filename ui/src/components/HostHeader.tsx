@@ -102,6 +102,9 @@ export function HostHeader({ hostId, actions }: HostHeaderProps) {
           {online ? "online" : "offline"}
         </span>
       )}
+      {/* Two clusters, in this order: what this host IS (name, liveness, and the Details panel of its id, agent, address and health),
+          then what its containment is (the state, any caveats, and the action that changes it). Details holds facts about the host,
+          so it belongs with the host; placed after the containment action it reads, by sheer adjacency, as details of the release. */}
       {detail && <HostDetailsPopover detail={detail} health={health} />}
       <HostContainment key={hostId} hostId={hostId} health={health} />
     </span>
@@ -218,6 +221,12 @@ function HostDetailsPopover({ detail, health }: { readonly detail: HostDetail; r
         Details
         {dotClass && <span className={`host-header__health-dot ${dotClass}`} aria-hidden="true" />}
         {dotClass && <span className="host-header__sr-only">agent needs attention</span>}
+        <span
+          className={`host-header__details-caret${open ? " host-header__details-caret--open" : ""}`}
+          aria-hidden="true"
+        >
+          &#9654;
+        </span>
       </button>
       {open && (
         <div className="host-header__details-popover" role="dialog" aria-label="Host details">

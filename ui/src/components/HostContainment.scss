@@ -13,6 +13,26 @@
   gap: 0.5rem;
 }
 
+// The live region holds the badges, and it has to be a flex row for them to line up with the rest of the header. Left as a plain
+// block it took the <h1>'s line-height for its own height, and the badges inside sat on that tall line's baseline: measured in the
+// browser, the containment badge's centre fell 4.5px below the online pill and the action button beside it.
+.host-containment__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+// Sized to the online pill it sits next to, NOT to the button. Both are labels reporting where the host stands, so they are the
+// pair that has to agree; at the badge's own 16px against the pill's 22px the two read as different kinds of thing. Deliberately
+// short of the 28px button: a label at button height reads as pressable, which is the same confusion in the other direction.
+.host-containment__badge {
+  min-height: 22px;
+  padding-top: 0;
+  padding-bottom: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 // The caveat trigger is a button wrapping a badge, so it carries no button chrome of its own: the badge is the affordance and the
 // focus ring is what says it can be pressed.
 .host-containment__caveat {
