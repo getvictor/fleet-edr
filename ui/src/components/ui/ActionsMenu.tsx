@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useDismiss } from "./useDismiss";
 import "./ActionsMenu.scss";
 
@@ -39,6 +39,7 @@ export function ActionsMenu({ items, label }: ActionsMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const panelID = useId();
 
   // The panel is positioned against the VIEWPORT rather than against the row, because the table it lives in scrolls sideways and so
   // carries overflow-x: auto. A box with overflow on one axis computes the other to auto as well, so the table clips vertically too:
@@ -88,12 +89,15 @@ export function ActionsMenu({ items, label }: ActionsMenuProps) {
 
   return (
     <div className="actions-menu" ref={ref}>
+      {/* aria-expanded and aria-controls, and deliberately NOT aria-haspopup: that attribute's bare true means "menu", and a screen
+          reader announcing a menu invites the arrow-key navigation the ARIA menu pattern carries. This is a disclosure of plain
+          buttons reached by Tab, so claiming a menu would promise a keyboard model that is not here (#1143 review). */}
       <button
         type="button"
         ref={triggerRef}
         className="actions-menu__trigger"
-        aria-haspopup="true"
         aria-expanded={open}
+        aria-controls={panelID}
         aria-label={label}
         onClick={() => {
           setOpen((v) => !v);
@@ -103,6 +107,7 @@ export function ActionsMenu({ items, label }: ActionsMenuProps) {
       </button>
       {open && (
         <div
+          id={panelID}
           className="actions-menu__dropdown"
           ref={panelRef}
           // Hidden for the one frame between being in the document and having been measured, so it is never painted at the top-left

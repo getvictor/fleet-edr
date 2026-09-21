@@ -89,6 +89,23 @@ describe("ActionsMenu", () => {
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 
+  // aria-haspopup with a bare true means "menu", and a screen reader announcing a menu invites the arrow-key navigation the ARIA
+  // menu pattern carries. This is a disclosure of plain buttons reached by Tab, so it says only that it expands, and names what it
+  // expands. Raised by CodeRabbit on #1143.
+  it("announces itself as a disclosure rather than a menu", () => {
+    render(<ActionsMenu label="Actions for rule-1" items={items()} />);
+    const trigger = screen.getByRole("button", { name: "Actions for rule-1" });
+
+    expect(trigger).not.toHaveAttribute("aria-haspopup");
+    const panelID = trigger.getAttribute("aria-controls");
+    expect(panelID).toBeTruthy();
+
+    fireEvent.click(trigger);
+    // The id the trigger points at is the panel that actually opened, not a dangling reference.
+    const panel = screen.getByRole("button", { name: "Edit" }).parentElement as HTMLElement;
+    expect(panel.id).toBe(panelID);
+  });
+
   it("carries an item's explanation as its hover title", () => {
     render(<ActionsMenu label="Actions for rule-1" items={items()} />);
     fireEvent.click(screen.getByRole("button", { name: "Actions for rule-1" }));
