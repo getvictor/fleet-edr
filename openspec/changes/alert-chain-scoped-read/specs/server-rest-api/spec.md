@@ -28,6 +28,13 @@ A chain read naming a process that is not stored SHALL return an empty chain rat
 - **THEN** it does not report the read as truncated
 - **AND** it does not report a capped count of a window it did not read
 
+#### Scenario: Descendants are capped
+
+- **GIVEN** a process that spawned more descendants than the cap admits
+- **WHEN** its chain is read
+- **THEN** the result holds no more than the cap
+- **AND** the read reports itself as truncated
+
 #### Scenario: A chain read for a missing process is empty
 
 - **GIVEN** a chain read naming a process that is not stored

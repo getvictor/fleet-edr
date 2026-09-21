@@ -24,9 +24,6 @@ const maxChainDescendants = 500
 func (q *Query) BuildChainTree(
 	ctx context.Context, hostID string, tr api.TimeRange, pinnedID int64, flatten bool,
 ) (api.ProcessTreeResult, error) {
-	if pinnedID == 0 {
-		return api.ProcessTreeResult{Roots: []api.ProcessNode{}}, nil
-	}
 	pinned, err := q.store.GetProcessByID(ctx, hostID, pinnedID)
 	if err != nil {
 		return api.ProcessTreeResult{}, err
@@ -39,12 +36,16 @@ func (q *Query) BuildChainTree(
 
 	// Ancestors first, which also gives the resolved parent edges: the forest must link these by identity, because matching on the
 	// process number picks the newest row holding it and a recycled number then attaches the chain to a stranger.
-	procs, resolved, err := q.withPinnedChain(ctx, hostID, nil, pinnedID)
+	//
+	// The row just read is handed over rather than left to be fetched again. Besides saving the second query, it is what makes the
+	// walk's "pinned process is gone" path unreachable from here, and that path returns a nil edge map that the descendant walk
+	// below writes into.
+	procs, resolved, err := q.withPinnedChain(ctx, hostID, []api.Process{*pinned}, pinnedID)
 	if err != nil {
 		return api.ProcessTreeResult{}, err
 	}
 
-	descendants, truncated, err := q.chainDescendants(ctx, hostID, *pinned, tr)
+	descendants, truncated, err := q.chainDescendants(ctx, hostID, *pinned, tr, resolved)
 	if err != nil {
 		return api.ProcessTreeResult{}, err
 	}
@@ -66,12 +67,12 @@ func (q *Query) BuildChainTree(
 
 // chainDescendants walks down from root, breadth first, and reports whether it stopped at the cap.
 //
-// A process's children are the rows naming its process number as their parent and forked within ITS lifetime. The lifetime bound is
-// what keeps a recycled number out: a number can only be reused once its holder has exited, so a row forked after this process
-// exited belongs to whatever took the number next, not to this one. A process still running has no successor to confuse it with, so
-// its bound is the window's own end.
+// Every edge the walk crosses is recorded in resolved, because the walk already knows the answer the forest would otherwise have to
+// guess. buildForest links a child to its parent by process number, and that guess picks the newest row holding the number: a chain
+// containing both a process and the later one that reused its number hangs the child under the wrong one, and the two can even name
+// each other, which drops both from the forest entirely. The walk fetched each child FROM its parent, so the edge is a fact here.
 func (q *Query) chainDescendants(
-	ctx context.Context, hostID string, root api.Process, tr api.TimeRange,
+	ctx context.Context, hostID string, root api.Process, tr api.TimeRange, resolved map[int64]int64,
 ) ([]api.Process, bool, error) {
 	var out []api.Process
 	seen := map[int64]struct{}{root.ID: {}}
@@ -92,6 +93,7 @@ func (q *Query) chainDescendants(
 				if len(out) >= maxChainDescendants {
 					return out, true, nil
 				}
+				resolved[child.ID] = parent.ID
 				out = append(out, child)
 				next = append(next, child)
 			}
@@ -113,8 +115,7 @@ func (q *Query) childrenOf(
 	if parent.ExitTimeNs != nil && *parent.ExitTimeNs < until {
 		until = *parent.ExitTimeNs
 	}
-	if until < parent.ForkTimeNs {
-		return nil, nil
-	}
+	// A process forked after the window closes leaves until below its own fork time. That needs no branch of its own: the range is
+	// then empty and the query matches nothing, which is the answer.
 	return q.store.GetChildProcesses(ctx, hostID, parent.PID, api.TimeRange{FromNs: parent.ForkTimeNs, ToNs: until})
 }
