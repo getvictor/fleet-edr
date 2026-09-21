@@ -346,7 +346,13 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     // Pin the alerted process so the server never folds it into a sibling "×N" aggregate (issue #416 gives aggregated headers a synthetic
     // negative id the id-keyed paths cannot match). This keeps the alerted process a first-class node so the alert-chain filter and the
     // alert dot can find it by its real id even when it has identical siblings. 0 (no alert) sends no pin.
-    getProcessTree(hostId, bounds.fromNs, bounds.toNs, undefined, alertEntry.processId || undefined)
+    // Read only the alert's chain while focused on it. The chain filter below is otherwise applied to a host-wide page, which on a
+    // busy host does not contain the alerted process at all: the read returns the newest rows in the window, so everything that ran
+    // after the alert fills it and the focus silently falls back to showing the whole host (issue #1138).
+    getProcessTree(
+      hostId, bounds.fromNs, bounds.toNs, undefined, alertEntry.processId || undefined,
+      focusAlertChain && Boolean(alertEntry.processId),
+    )
       .then((res) => {
         if (cancelled) return;
         setRoots(res.roots);
@@ -359,7 +365,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [hostId, bounds, alertEntry.processId]);
+  }, [hostId, bounds, alertEntry.processId, focusAlertChain]);
 
   // Fetch this host's open + acknowledged alerts to mark nodes with an alert dot (by process DB id) and to map each node to its
   // alerts' MITRE technique ids for the inline tooltip tags (issue #585).

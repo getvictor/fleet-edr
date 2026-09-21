@@ -179,7 +179,18 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	// ParseIntParam would truncate a large id on a platform where int is 32-bit.
 	pinnedID := httpserver.ParseInt64Param(r, "pin", 0)
 
-	res, err := h.svc.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
+	// ?scope=chain reads the pinned process with its ancestors and descendants instead of the host's window. It is what the alert
+	// view wants, and it is the difference between a read costing the chain and one costing however busy the host was: the window
+	// read returns the newest rows, so on a busy host the alerted process is not in its own page (issue #1138). It needs a pin to
+	// name the process, and without one there is no chain to read, so it falls through to the window read rather than failing: a
+	// caller that asked for a chain and named no process is asking for the host.
+	var res api.ProcessTreeResult
+	var err error
+	if r.URL.Query().Get("scope") == "chain" && pinnedID != 0 {
+		res, err = h.svc.BuildChainTree(ctx, hostID, tr, pinnedID, flatten)
+	} else {
+		res, err = h.svc.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
+	}
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
 		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)

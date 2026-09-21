@@ -1071,3 +1071,43 @@ describe("ProcessTreeView alert-chain timeline scope", () => {
     });
   });
 });
+
+// An alert attributed to a process, which is the case a chain scope exists for. launchDaemonAlert names none.
+const processBackedAlert: AlertDetail = {
+  ...launchDaemonAlert,
+  id: 9,
+  rule_id: "suspicious_exec",
+  title: "Suspicious exec chain",
+  techniques: ["T1059.004"],
+  process_id: 200,
+};
+
+describe("ProcessTreeView chain-scoped read", () => {
+  // The chain filter used to be applied to a host-wide page. On a busy host that page does not contain the alerted process at all,
+  // because the read returns the newest rows in the window and everything that ran after the alert fills it, so the focus fell back
+  // to showing the whole host (issue #1138). Focused, the page now asks the server for the chain itself.
+  it("asks for the chain while focused on the alert, and for the window once it is not", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(processBackedAlert);
+    const tree = vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
+    renderTree("?alert=9&process=200&at=1750248000000");
+
+    // Opens focused, so the first read is chain-scoped.
+    await waitFor(() => { expect(tree).toHaveBeenCalled(); });
+    expect(tree.mock.calls[0][5]).toBe(true);
+    expect(tree.mock.calls[0][4]).toBe(200);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Full tree" }));
+    await waitFor(() => { expect(tree.mock.calls.length).toBeGreaterThan(1); });
+    expect(tree.mock.calls[tree.mock.calls.length - 1][5]).toBe(false);
+  });
+
+  // An alert with no attributed process has no chain to ask for, so the read stays the host's window whatever the focus is.
+  it("does not ask for a chain when the alert names no process", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    const tree = vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    await waitFor(() => { expect(tree).toHaveBeenCalled(); });
+    expect(tree.mock.calls[0][5]).toBe(false);
+  });
+});
