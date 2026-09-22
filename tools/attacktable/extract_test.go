@@ -15,7 +15,7 @@ func fixtureBundle() stixBundle {
 	tactic := func(id, short, name string) stixObject {
 		return stixObject{Type: "x-mitre-tactic", ID: id, Shortname: short, Name: name}
 	}
-	technique := func(extID, name string, phases []string, revoked, deprecated bool) stixObject {
+	technique := func(extID, name string, phases []string, revoked, deprecated bool, platforms ...string) stixObject {
 		kc := make([]killChainPhase, 0, len(phases))
 		for _, p := range phases {
 			kc = append(kc, killChainPhase{KillChainName: "mitre-attack", PhaseName: p})
@@ -23,6 +23,7 @@ func fixtureBundle() stixBundle {
 		return stixObject{
 			Type: "attack-pattern", Name: name, Revoked: revoked, Deprecated: deprecated,
 			KillChainPhases:   kc,
+			Platforms:         platforms,
 			ExternalReference: []externalReference{{SourceName: "mitre-attack", ExternalID: extID}},
 		}
 	}
@@ -37,6 +38,8 @@ func fixtureBundle() stixBundle {
 		technique("T2000", "Later Id", []string{"execution"}, false, false),
 		technique("T1000", "Earlier Id", []string{"execution"}, false, false),
 		technique("T1500", "Multi Tactic", []string{"persistence", "privilege-escalation"}, false, false),
+		// Carries platforms, so the emitted list is pinned rather than only the empty case.
+		technique("T3000", "Mac Only", []string{"execution"}, false, false, "macOS"),
 		technique("T9998", "Withdrawn", []string{"execution"}, true, false),
 		technique("T9999", "Retired", []string{"execution"}, false, true),
 	}}
@@ -62,7 +65,12 @@ func TestExtract(t *testing.T) {
 	}
 	// Sorted by id so a regeneration diff shows only real ATT&CK changes, and the revoked and deprecated ones are gone: a
 	// table naming a withdrawn technique would send an operator to a page ATT&CK no longer publishes.
-	assert.Equal(t, []string{"T1000", "T1500", "T2000"}, ids)
+	assert.Equal(t, []string{"T1000", "T1500", "T2000", "T3000"}, ids)
+
+	// The platforms travel with the technique. Without them every technique in the enterprise matrix reads alike, and a macOS
+	// sensor's coverage page cannot tell a gap it could close from one it never could.
+	assert.Equal(t, []string{"macOS"}, techniques[3].Platforms, "a technique keeps the platforms ATT&CK gives it")
+	assert.Empty(t, techniques[0].Platforms, "and one ATT&CK gives none keeps none")
 
 	assert.Equal(t, []string{"persistence", "privilege-escalation"}, techniques[1].Tactics,
 		"a technique keeps every tactic ATT&CK gives it, in ATT&CK's order")
@@ -116,7 +124,12 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, out, `export const ATTACK_VERSION = "19.2";`)
 	// Tactic display names, resolved from the shortnames the techniques carry.
 	assert.Contains(t, out, `"T1500": { id: "T1500", name: "Multi Tactic", tactic: "Persistence", `+
-		`tactics: ["Persistence", "Privilege Escalation"] },`)
+		`tactics: ["Persistence", "Privilege Escalation"], platforms: [] },`)
+
+	// A technique that names platforms, so what is emitted is pinned rather than only the empty case. The list is what separates
+	// a technique this product could cover from one it could not, and a reader of the coverage page depends on it.
+	assert.Contains(t, out, `"T3000": { id: "T3000", name: "Mac Only", tactic: "Execution", `+
+		`tactics: ["Execution"], platforms: ["macOS"] },`)
 
 	// Byte-identical across runs, so a regeneration diff is readable and an unchanged release produces no diff at all.
 	assert.Equal(t, out, render(version, tactics, techniques))

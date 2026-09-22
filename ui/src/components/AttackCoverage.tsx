@@ -34,6 +34,57 @@ interface CoverageGroup {
   techniques: TechniqueWithCoverage[];
 }
 
+// A gap is a technique this sensor could in principle cover and no rule does.
+interface GapGroup {
+  tactic: string;
+  techniques: TechniqueMeta[];
+}
+
+// COVERED_SCOPE is what a reader is choosing between: the techniques rules cover, the ones they do not, or both.
+type CoverageScope = "covered" | "gaps";
+
+// SENSOR_PLATFORM is the platform this product watches. A technique ATT&CK does not list for it is not a gap in this deployment's
+// coverage, it is a technique that cannot be run against the estate: of the 697 live enterprise techniques only around half carry
+// macOS, and counting the rest as missing would bury the real gaps under Windows registry and cloud entries.
+const SENSOR_PLATFORM = "macOS";
+
+// inSensorScope reports whether ATT&CK lists this technique for the platform the product watches. A technique with no platforms
+// recorded is treated as in scope: the table is generated from MITRE's bundle, and a missing list is a fact about the bundle
+// rather than evidence the technique is irrelevant, so it is shown rather than silently dropped.
+function inSensorScope(meta: TechniqueMeta): boolean {
+  return meta.platforms.length === 0 || meta.platforms.includes(SENSOR_PLATFORM);
+}
+
+// buildGapGroups returns the in-scope techniques no rule covers, grouped by tactic in the same order the covered table uses, so
+// the two views of the matrix read alike.
+function buildGapGroups(layer: AttackNavigatorLayer | null): GapGroup[] {
+  if (!layer) return [];
+  const covered = new Set(layer.techniques.map((t) => t.techniqueID));
+  const byTactic = new Map<string, TechniqueMeta[]>();
+  for (const meta of Object.values(TECHNIQUE_CATALOG)) {
+    if (covered.has(meta.id) || !inSensorScope(meta)) continue;
+    const list = byTactic.get(meta.tactic) ?? [];
+    list.push(meta);
+    byTactic.set(meta.tactic, list);
+  }
+  const groups: GapGroup[] = [];
+  for (const tactic of TACTIC_ORDER) {
+    const techniques = byTactic.get(tactic);
+    if (techniques) groups.push({ tactic, techniques: [...techniques].sort((a, b) => a.id.localeCompare(b.id)) });
+  }
+  // Anything under a tactic the order does not name still has to appear, for the same reason the covered table keeps its leftovers.
+  for (const [tactic, techniques] of byTactic) {
+    if (!TACTIC_ORDER.includes(tactic)) groups.push({ tactic, techniques });
+  }
+  return groups;
+}
+
+// newRuleHref opens the authoring surface with the technique already named, so a gap is answered by writing the rule for it rather
+// than by remembering which one the reader was looking at. Sigma's tag vocabulary is lowercase and `attack.` prefixed.
+function newRuleHref(id: string): string {
+  return `/rules/new?technique=${encodeURIComponent(id)}`;
+}
+
 // All 14 enterprise tactics in MITRE's canonical kill-chain order. Anything
 // the catalog or server emits that isn't on this list lands at the end via
 // the "leftover" pass below, never silently dropped.
@@ -83,6 +134,16 @@ export function AttackCoverage() {
   };
 
   const { groups, distinctRules } = useMemo(() => buildCoverageGroups(layer), [layer]);
+  // Which half of the matrix is being read. Covered is the default because it is what the deployment has; the gaps are what it
+  // could do next, which is a question asked deliberately rather than on arrival.
+  const [scope, setScope] = useState<CoverageScope>("covered");
+  const gapGroups = useMemo(() => buildGapGroups(layer), [layer]);
+  // The denominator this page could never state before: how many techniques the sensor's platform even has. Without it the
+  // covered count is a number with nothing to be a fraction of, and a reader cannot tell sixty-four out of ninety from
+  // sixty-four out of three hundred and fifty-six.
+  const inScopeTotal = useMemo(() => Object.values(TECHNIQUE_CATALOG).filter(inSensorScope).length, []);
+  const gapCount = useMemo(() => gapGroups.reduce((n, g) => n + g.techniques.length, 0), [gapGroups]);
+  const canWriteRules = useCan()(PermissionAction.RuleContentWrite);
   // Split by whether anything covering the technique actually alerts. The server scores a technique below 1 when every rule
   // covering it raises nothing as built in (issue #764), and most of the catalog is now in that state, so a single "techniques
   // covered" figure would tell a reader the product raises alerts for sixty-odd techniques when it raises them for thirteen.
@@ -159,7 +220,40 @@ export function AttackCoverage() {
             )}
             <StatCard accent="green" value={distinctRules.size} label="detection rules" />
             <StatCard accent="green" value={groups.length} label="tactics with coverage" />
+            {/* The fraction the page could not state before. A covered count with no denominator cannot tell a reader sixty-four
+                out of ninety from sixty-four out of three hundred and fifty-six, and the second is the honest picture. */}
+            <StatCard
+              accent="neutral"
+              value={gapCount}
+              label={`macOS techniques with no rule, of ${String(inScopeTotal)}`}
+              hint="Techniques ATT&CK lists for macOS that no rule in this deployment covers. Techniques ATT&CK does not list for macOS are left out: they cannot be run against this estate, and counting them would bury the real gaps."
+            />
           </SummaryStrip>
+
+          {/* Which half of the matrix to read. A nav of links would put this in the URL, but the choice is a filter over one
+              page's table rather than a surface of its own, so it stays a control. */}
+          <fieldset className="attack-coverage__scope">
+            {/* A fieldset with a legend rather than a div carrying role="group": the native element says the same thing without
+                an ARIA role, which is what the enforcement choice on the application-control dialogs already does here. The
+                legend is the group's name and is read rather than shown, since the two buttons say what they select. */}
+            <legend className="attack-coverage__scope-legend">Which techniques to list</legend>
+            <button
+              type="button"
+              className={`attack-coverage__scope-item${scope === "covered" ? " attack-coverage__scope-item--active" : ""}`}
+              aria-pressed={scope === "covered"}
+              onClick={() => { setScope("covered"); }}
+            >
+              Covered
+            </button>
+            <button
+              type="button"
+              className={`attack-coverage__scope-item${scope === "gaps" ? " attack-coverage__scope-item--active" : ""}`}
+              aria-pressed={scope === "gaps"}
+              onClick={() => { setScope("gaps"); }}
+            >
+              Not covered
+            </button>
+          </fieldset>
 
           {groups.length === 0 ? (
             <EmptyState>No coverage data yet.</EmptyState>
@@ -180,7 +274,10 @@ export function AttackCoverage() {
                 <tr>
                   <th>Technique</th>
                   <th>Name</th>
-                  <th>Covered by</th>
+                  {/* The third column is what the row has to say about itself, which differs by which half is listed: the rules
+                      covering a technique, or the rule that is missing. Left as "Covered by" over the gaps it labelled a column
+                      of offers to write one as though they were coverage. */}
+                  <th>{scope === "covered" ? "Covered by" : "No rule yet"}</th>
                 </tr>
               </thead>
               {/* One <tbody> per tactic with scope="rowgroup" on the
@@ -188,7 +285,7 @@ export function AttackCoverage() {
                     label, which lets screen readers announce the tactic as
                     context for each technique row. Visually identical to a
                     Fragment-with-shared-tbody approach. */}
-              {groups.map((g) => (
+              {scope === "covered" && groups.map((g) => (
                 <tbody key={g.tactic}>
                   <tr className="attack-coverage__tactic-row">
                     <th colSpan={3} scope="rowgroup">
@@ -221,6 +318,44 @@ export function AttackCoverage() {
                             </Link>
                           </span>
                         ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              ))}
+              {scope === "gaps" && gapGroups.map((g) => (
+                <tbody key={g.tactic}>
+                  <tr className="attack-coverage__tactic-row">
+                    <th colSpan={3} scope="rowgroup">
+                      {g.tactic}
+                    </th>
+                  </tr>
+                  {g.techniques.map((t) => (
+                    <tr key={t.id}>
+                      <td>
+                        <a
+                          className="attack-coverage__technique-id"
+                          href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {t.id}
+                        </a>
+                      </td>
+                      <td>{t.name}</td>
+                      <td>
+                        {/* Offered only to an operator who may write one. Without the permission the row still carries the gap,
+                            which is the part they can act on by asking someone who has it, the same way the tuning link above
+                            is handled. */}
+                        {canWriteRules && (
+                          <Link
+                            className="attack-coverage__rule-link"
+                            to={newRuleHref(t.id)}
+                            title={`Write a detection rule for ${t.id}`}
+                          >
+                            Write a rule
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   ))}

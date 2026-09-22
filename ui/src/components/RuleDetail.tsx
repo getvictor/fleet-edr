@@ -103,7 +103,7 @@ export function RuleDetail() {
       )}
       {!error && entries !== null && !entry && !awaitingNewRule && (
         <EmptyState>
-          Unknown rule <code>{ruleId}</code>. <Link to="/coverage">Back to coverage</Link>.
+          Unknown rule <code>{ruleId}</code>. <Link to="/rules">Back to rules</Link>.
         </EmptyState>
       )}
       {entry && <RuleBody entry={entry} />}
@@ -300,8 +300,12 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
         </>
       )}
 
+      {/* Back to the catalogue, which is where a rule is listed and where the reader almost always came from. It said "Back to
+          ATT&CK coverage" unconditionally, which was a claim about where they had been rather than a link to somewhere: arriving
+          from the catalogue, as anyone browsing rules does, it offered to send them back to a page they had never opened. Both
+          surfaces are one section now and the tab row on either reaches the other, so this needs to name only one. */}
       <p className="rule-detail__back">
-        <Link to="/coverage">&larr; Back to ATT&amp;CK coverage</Link>
+        <Link to="/rules">&larr; Back to rules</Link>
       </p>
     </div>
   );

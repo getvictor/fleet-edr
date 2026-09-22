@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { NEW_RULE_TEMPLATE, seedTechnique } from "./ruleTemplate";
 import {
   checkRuleContentDocument,
   fetchRuleDocs,
@@ -29,19 +30,6 @@ const authoredDirectory = "authored";
 // loader is the authority and refuses anything else with its own reason.
 const identifierPattern = /^[A-Za-z0-9_-]{1,255}$/;
 
-// A new rule starts from the smallest document the loader accepts, so the operator edits a rule rather than recalling the format.
-const newRuleTemplate = `title: My rule
-status: experimental
-description: What this rule detects.
-logsource:
-    category: process_creation
-    product: macos
-detection:
-    selection:
-        Image: '/usr/bin/example'
-    condition: selection
-level: medium
-`;
 
 type LoadState =
   | { kind: "loading" }
@@ -67,9 +55,10 @@ export function RuleEditor() {
 function RuleEditorPage({ ruleId }: { readonly ruleId: string | undefined }) {
   const isNew = ruleId === undefined;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [identifier, setIdentifier] = useState("");
-  const [content, setContent] = useState(isNew ? newRuleTemplate : "");
+  const [content, setContent] = useState(isNew ? seedTechnique(NEW_RULE_TEMPLATE, searchParams.get("technique")) : "");
   const [load, setLoad] = useState<LoadState>(isNew ? { kind: "ready", path: "" } : { kind: "loading" });
   const [check, setCheck] = useState<RuleContentCheckResult | null>(null);
   const [checking, setChecking] = useState(false);

@@ -57,6 +57,7 @@ type stixObject struct {
 	Version           string              `json:"x_mitre_version"`
 	TacticRefs        []string            `json:"tactic_refs"`
 	KillChainPhases   []killChainPhase    `json:"kill_chain_phases"`
+	Platforms         []string            `json:"x_mitre_platforms"`
 	ExternalReference []externalReference `json:"external_references"`
 }
 
@@ -77,6 +78,10 @@ type technique struct {
 	// Tactics are the technique's tactic shortnames in the order ATT&CK lists them. A technique legitimately belongs to more
 	// than one (T1053.003 is execution, persistence AND privilege-escalation), which is why this is not a single value.
 	Tactics []string
+	// Platforms are the systems ATT&CK says the technique applies to, verbatim ("macOS", "Windows", "Linux", "Containers").
+	// Carried so a reader can tell a technique this product could ever cover from one it could not: without it, every Windows
+	// technique in the enterprise matrix reads as a gap in a macOS sensor's coverage, and the real gaps are lost among them.
+	Platforms []string
 }
 
 func main() {
@@ -206,7 +211,7 @@ func liveTechniques(bundle stixBundle) []technique {
 				phases = append(phases, p.PhaseName)
 			}
 		}
-		techniques = append(techniques, technique{ID: id, Name: o.Name, Tactics: phases})
+		techniques = append(techniques, technique{ID: id, Name: o.Name, Tactics: phases, Platforms: o.Platforms})
 	}
 	return techniques
 }
@@ -241,6 +246,10 @@ export interface TechniqueMeta {
   // Persistence and Privilege Escalation); this is the first ATT&CK lists, and tactics carries the rest.
   tactic: string;
   tactics: string[];
+  // The systems ATT&CK says this technique applies to, verbatim. Carried so a reader can tell a technique this product could ever
+  // cover from one it could not: without it every Windows technique in the enterprise matrix reads as a gap in a macOS sensor's
+  // coverage, and the real gaps are lost among them.
+  platforms: string[];
 }
 
 // ATTACK_VERSION is the ATT&CK release this table was cut from. It must match navigatorATTACKVersion in
@@ -276,8 +285,12 @@ export const TACTIC_ORDER: string[] = [
 		for _, n := range names {
 			quoted = append(quoted, fmt.Sprintf("%q", n))
 		}
-		fmt.Fprintf(&b, "  %q: { id: %q, name: %q, tactic: %q, tactics: [%s] },\n",
-			t.ID, t.ID, t.Name, primary, strings.Join(quoted, ", "))
+		platforms := make([]string, 0, len(t.Platforms))
+		for _, pf := range t.Platforms {
+			platforms = append(platforms, fmt.Sprintf("%q", pf))
+		}
+		fmt.Fprintf(&b, "  %q: { id: %q, name: %q, tactic: %q, tactics: [%s], platforms: [%s] },\n",
+			t.ID, t.ID, t.Name, primary, strings.Join(quoted, ", "), strings.Join(platforms, ", "))
 	}
 	b.WriteString("};\n")
 	return b.String()

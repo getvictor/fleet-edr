@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
 import { RuleEditor } from "./RuleEditor";
+import { seedTechnique } from "./ruleTemplate";
 import * as api from "../api";
 
 function renderEditor(entry: string) {
@@ -29,6 +30,34 @@ afterEach(() => {
 const content = (): HTMLTextAreaElement => screen.getByLabelText<HTMLTextAreaElement>("Rule document");
 const ruleDoc: api.RuleDoc = { title: "t", summary: "s", description: "d", severity: "high", event_types: ["exec"] };
 const passingCheck = "The document is valid. Saving also checks it against the deployment's other rules.";
+
+describe("seedTechnique", () => {
+  // spec:web-ui/coverage-reports-what-is-not-covered/a-gap-offers-the-rule-that-would-close-it
+  // Coverage sends the technique when the reader followed a gap. Answering that gap is the point of the trip, so the id they just
+  // clicked is put in the document rather than left for them to retype.
+  it("tags the starting document with the technique the reader came to cover", () => {
+    expect(seedTechnique("title: x\n", "T1059.004")).toBe("title: x\ntags:\n    - attack.t1059.004\n");
+  });
+
+  it("leaves the template alone when no technique was named", () => {
+    expect(seedTechnique("title: x\n", null)).toBe("title: x\n");
+  });
+
+  // The value arrives from the query string, which anyone can write, and it is put into a document the loader parses. Only
+  // ATT&CK's own shape is accepted, so nothing else reaches the template.
+  // spec:web-ui/coverage-reports-what-is-not-covered/a-technique-identifier-that-is-not-one-is-refused
+  it.each([
+    { name: "a tag of its own", value: "T1059.004\ntags:\n    - attack.t1003" },
+    { name: "a different key", value: "x\nlevel: critical" },
+    { name: "not a technique at all", value: "../../etc/passwd" },
+    { name: "an empty value", value: "" },
+    { name: "the wrong shape", value: "T105" },
+    // ATT&CK nests exactly one level. A third part is not a deeper technique, it is something else wearing the shape of one.
+    { name: "a third dotted part", value: "T1059.004.001" },
+  ])("refuses $name rather than writing it into the document", ({ value }) => {
+    expect(seedTechnique("title: x\n", value)).toBe("title: x\n");
+  });
+});
 
 describe("RuleEditor, new rule", () => {
   // spec:web-ui/rules-can-be-written-in-the-console/a-new-rule-says-it-will-not-alert-until-promoted

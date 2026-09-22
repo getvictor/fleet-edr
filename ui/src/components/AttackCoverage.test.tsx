@@ -36,6 +36,91 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// The view could report only what it covered: the exported layer carries a technique when a rule covers it, so an uncovered one
+// was absent rather than shown missing, and the page could state a count with nothing to be a fraction of.
+// GAP_RENDER_MS is the per-case budget for these. They render the real ATT&CK table filtered to the platform, which is 292 rows
+// each carrying a link, and that is deliberate: a stubbed three-technique catalogue would assert the filter against a fixture
+// written to satisfy it rather than against the data the page actually draws. It exceeds vitest's 5s default on a CI runner under
+// coverage instrumentation, where it first showed up.
+const GAP_RENDER_MS = 20_000;
+
+describe("AttackCoverage gaps", () => {
+  const renderWith = (permissions: string[]) =>
+    render(
+      <PermissionsContext.Provider value={permissions}>
+        <MemoryRouter><AttackCoverage /></MemoryRouter>
+      </PermissionsContext.Provider>,
+    );
+
+  const showGaps = async () => {
+    const button = await screen.findByRole("button", { name: "Not covered" });
+    button.click();
+  };
+
+  // spec:web-ui/coverage-reports-what-is-not-covered/the-view-states-how-much-is-not-covered
+  it("states how many in-scope techniques no rule covers, against how many there are", async () => {
+    renderWith([PermissionAction.AlertRead]);
+    // waitFor retries on a throw, not on a null return, so the assertion has to be inside it.
+    const strip = await waitFor(() => {
+      const el = document.querySelector(".summary-strip");
+      expect(el).toBeInTheDocument();
+      return el as HTMLElement;
+    });
+    // The label carries the denominator, which is the half the page could never state.
+    expect(within(strip).getByText(/macOS techniques with no rule, of \d+/)).toBeVisible();
+  }, GAP_RENDER_MS);
+
+  // spec:web-ui/coverage-reports-what-is-not-covered/techniques-off-the-platform-are-not-counted-as-gaps
+  it("lists a macOS technique nothing covers and leaves a Windows-only one out", async () => {
+    renderWith([PermissionAction.AlertRead]);
+    await showGaps();
+    // T1543.001 (Launch Agent) is macOS and uncovered by the fixture; T1547.001 (Registry Run Keys) is Windows only.
+    await waitFor(() => { expect(screen.getByText("T1543.001")).toBeVisible(); });
+    expect(screen.queryByText("T1547.001")).toBeNull();
+  }, GAP_RENDER_MS);
+
+  // spec:web-ui/coverage-reports-what-is-not-covered/a-gap-offers-the-rule-that-would-close-it
+  it("offers to write the rule that would close a gap, carrying the technique", async () => {
+    renderWith([PermissionAction.AlertRead, PermissionAction.RuleContentWrite]);
+    await showGaps();
+    const row = (await screen.findByText("T1543.001")).closest("tr") as HTMLElement;
+    expect(within(row).getByRole("link", { name: "Write a rule" }))
+      .toHaveAttribute("href", "/rules/new?technique=T1543.001");
+  }, GAP_RENDER_MS);
+
+  // spec:web-ui/coverage-reports-what-is-not-covered/a-gap-is-shown-to-an-operator-who-cannot-write-rules
+  it("shows the gap but no offer to an operator who may not write rules", async () => {
+    renderWith([PermissionAction.AlertRead]);
+    await showGaps();
+    expect(await screen.findByText("T1543.001")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Write a rule" })).toBeNull();
+  }, GAP_RENDER_MS);
+
+  // The third column says a different thing about each half. Left as "Covered by" over the gaps it labelled a column of offers to
+  // write a rule as though they were coverage.
+  it("labels the third column for the half being listed", async () => {
+    renderWith([PermissionAction.AlertRead]);
+    expect(await screen.findByRole("columnheader", { name: "Covered by" })).toBeVisible();
+    await showGaps();
+    await waitFor(() => { expect(screen.getByRole("columnheader", { name: "No rule yet" })).toBeVisible(); });
+    expect(screen.queryByRole("columnheader", { name: "Covered by" })).toBeNull();
+  }, GAP_RENDER_MS);
+
+  // A native grouping element rather than a div carrying role="group", matching the enforcement choice on the application-control
+  // dialogs, and named for assistive technology by a legend the two buttons make redundant on screen.
+  it("groups the switch as a named fieldset rather than an ARIA role", async () => {
+    renderWith([PermissionAction.AlertRead]);
+    await screen.findByRole("button", { name: "Not covered" });
+    expect(screen.getByRole("group", { name: "Which techniques to list" }).tagName).toBe("FIELDSET");
+  }, GAP_RENDER_MS);
+
+  it("lists the covered techniques rather than the gaps until asked", async () => {
+    renderWith([PermissionAction.AlertRead]);
+    expect(await screen.findByText("T1059")).toBeVisible();
+    expect(screen.queryByText("T1543.001")).toBeNull();
+  });
+});
+
 describe("AttackCoverage summary strip", () => {
   it("renders three stat cards with the derived counts", async () => {
     render(
@@ -49,7 +134,9 @@ describe("AttackCoverage summary strip", () => {
       return el as HTMLElement;
     });
     const cards = strip.querySelectorAll(".stat-card");
-    expect(cards).toHaveLength(3);
+    // Four now: the fourth states how many macOS techniques no rule covers, against how many there are. A covered count with no
+    // denominator cannot tell a reader sixty-four out of ninety from sixty-four out of three hundred and fifty-six.
+    expect(cards).toHaveLength(4);
 
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;

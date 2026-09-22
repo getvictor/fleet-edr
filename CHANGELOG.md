@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Coverage now shows what is not covered.** The ATT&CK page could report the techniques your rules detect and not the ones they miss, so the number it gave had nothing to be a fraction of. It now reports how many macOS techniques no rule covers, out of how many there are, and lists them by tactic. An operator who can write rules is offered a link from each gap that opens the rule editor with that technique already tagged. Techniques ATT&CK does not list for macOS are left out rather than counted as holes.
+
 ### Changed
 
 - **ATT&CK coverage is now a tab of the Rules page** rather than its own navigation entry. The coverage view is built from the rules it lists, so the two sit together and each offers the other. Existing links to the coverage page still work.
