@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthedApp } from "./App";
 import * as api from "./api";
@@ -48,19 +48,19 @@ const authedSession = {
 // succeeds and renders the home view) and every other /api/* call to 401 (so the home view's first
 // background fetch trips session expiry). fetchJSON calls fetch with a URL instance, so the first arg
 // is stringified to read the path.
-function stubSessionThen401(): ReturnType<typeof vi.fn> {
+function stubSessionThen401(permissions: string[] = []): ReturnType<typeof vi.fn> {
   const mock = vi.fn((input: unknown): Promise<FakeResponse> => {
     const url = String(input);
-    if (url.includes("/api/session")) return Promise.resolve(makeResponse(authedSession, 200));
+    if (url.includes("/api/session")) return Promise.resolve(makeResponse({ ...authedSession, permissions }, 200));
     return Promise.resolve(makeResponse(null, 401));
   });
   vi.stubGlobal("fetch", mock);
   return mock;
 }
 
-function renderAuthedApp() {
+function renderAuthedApp(at = "/") {
   return render(
-    <MemoryRouter initialEntries={["/"]}>
+    <MemoryRouter initialEntries={[at]}>
       <Routes>
         <Route path="/login" element={<div>LOGIN PAGE</div>} />
         <Route path="/*" element={<AuthedApp />} />
@@ -145,12 +145,42 @@ describe("AuthedApp account menu", () => {
   });
 });
 
+// Each route is guarded by the action its own data needs. A rule's detail and its monitor records read surfaces the server gates
+// on alert.read, and both carried no guard at all while the catalogue beside them carried a stricter one.
+describe("route guards match the action the data needs", () => {
+  // spec:web-ui/navigation-and-action-affordances-are-capability-gated/a-rule-s-detail-and-its-monitor-records-follow-the-catalogue
+  it.each([
+    { name: "a rule's detail", at: "/rules/suspicious_exec" },
+    { name: "its monitor records", at: "/rules/suspicious_exec/monitor-records" },
+  ])("presents $name to an operator holding alert.read", async ({ at }) => {
+    stubAuthedSession([PermissionAction.AlertRead]);
+    renderAuthedApp(at);
+    // Rendered, not refused. The page's own empty state is beside the point; what is asserted is that the guard let it through.
+    await waitFor(() => {
+      expect(screen.queryByText(/don't have access/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // The landing used to resolve to Coverage because Coverage was the one ungated entry, which guaranteed a ROUTE rather than a
+  // page the operator could read: the surface then answered with its own 403 (issue #1144).
+  // spec:web-ui/navigation-and-action-affordances-are-capability-gated/coverage-is-gated-rather-than-relied-on-as-a-landing
+  it("tells an operator holding nothing that they lack access, rather than failing a read", async () => {
+    stubAuthedSession([]);
+    renderAuthedApp();
+    expect(await screen.findByText(/don't have access/i)).toBeVisible();
+    expect(screen.queryByText(/API error: 403/)).toBeNull();
+  });
+});
+
 describe("AuthedApp mid-session expiry", () => {
   // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
   it("redirects to login when a background fetch returns 401 after a successful session probe", async () => {
-    stubSessionThen401();
+    // The session holds alert.read so the landing resolves to a surface that actually reads something. With no actions at all the
+    // landing now renders the no-access state, which issues no request, so there would be no background 401 to expire on: that is
+    // the point of gating every entry, and it would leave this test passing for the wrong reason.
+    stubSessionThen401([PermissionAction.AlertRead]);
     renderAuthedApp();
-    // The mount probe authenticates, the home view renders, its first /api/hosts fetch 401s, the
+    // The mount probe authenticates, the home view renders, its first background fetch 401s, the
     // registered unauthorized handler flips auth -> anon, and AuthedApp navigates to /login.
     expect(await screen.findByText("LOGIN PAGE")).toBeInTheDocument();
   });

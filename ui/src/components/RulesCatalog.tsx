@@ -44,6 +44,10 @@ export function RulesCatalog() {
   const [ownershipFilter, setOwnershipFilter] = useState<OwnershipFilter>("all");
   const can = useCan();
   const canWrite = can(PermissionAction.RuleContentWrite);
+  // The pack panel reads the authoring surface, which the server gates on rule_content.read, while this page is reached on
+  // alert.read. A page admitted on one action does not admit every call it makes: rendered unconditionally, the panel is a failed
+  // read sitting on the catalogue for an analyst or auditor, who hold the catalogue but not the authoring surface.
+  const canReadRuleContent = can(PermissionAction.RuleContentRead);
   // Set by a rule page after a delete, so the operator lands somewhere that confirms it.
   const deleted = (useLocation().state as { deleted?: string } | null)?.deleted;
 
@@ -112,7 +116,7 @@ export function RulesCatalog() {
           listed here until then.
         </p>
       )}
-      <RulePackPanel canWrite={canWrite} />
+      {canReadRuleContent && <RulePackPanel canWrite={canWrite} />}
       {error !== null && <EmptyState>Rules could not be loaded: {error}</EmptyState>}
       {error === null && rules === null && <EmptyState>Loading rules...</EmptyState>}
       {rules !== null && (

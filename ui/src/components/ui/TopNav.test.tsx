@@ -42,11 +42,19 @@ describe("TopNav capability gating", () => {
     expect(screen.queryByRole("link", { name: "Detection tuning" })).not.toBeInTheDocument();
   });
 
-  it("always shows the ungated Coverage entry", () => {
-    // Even an operator with an empty permission set sees Coverage (no gating action).
+  // Coverage is gated like every other entry, on the action the server gates its data on. It used to be left ungated so the
+  // landing redirect always matched something, which showed it to an operator whose every read of it the server refuses.
+  it("hides Coverage from an operator who cannot read what it is built from", () => {
     renderNav([]);
-    expect(screen.getByRole("link", { name: "Coverage" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Coverage" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Hosts" })).not.toBeInTheDocument();
+  });
+
+  it("shows Coverage and Rules to an operator holding alert.read", () => {
+    renderNav([PermissionAction.AlertRead]);
+    expect(screen.getByRole("link", { name: "Coverage" })).toBeVisible();
+    // The rule catalogue is reached on the same action: the server serves GET /api/rules on alert.read.
+    expect(screen.getByRole("link", { name: "Rules" })).toBeVisible();
   });
 
   it("shows every entry optimistically when the permission set is unavailable", () => {
@@ -62,7 +70,7 @@ describe("TopNav alert-first order and active state", () => {
   it("lists entries in the order Alerts, Hosts, Application control, Coverage", () => {
     renderNav(ALL_NAV_PERMISSIONS);
     const labels = screen.getAllByRole("link").map((link) => link.textContent);
-    expect(labels).toEqual(["Alerts", "Hosts", "Application control", "Coverage"]);
+    expect(labels).toEqual(["Alerts", "Hosts", "Application control", "Rules", "Coverage"]);
   });
 
   // spec:web-ui/alert-first-navigation-order/hosts-entry-active-on-host-detail

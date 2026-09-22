@@ -194,7 +194,14 @@ export function AuthedApp() {
               </RequirePermission>
             )}
           />
-          <Route path="/coverage" element={<AttackCoverage />} />
+          <Route
+            path="/coverage"
+            element={(
+              <RequirePermission action={PermissionAction.AlertRead} surface="Coverage">
+                <AttackCoverage />
+              </RequirePermission>
+            )}
+          />
           <Route
             path="/admin/settings/sso"
             element={(
@@ -238,7 +245,7 @@ export function AuthedApp() {
           <Route
             path="/rules"
             element={(
-              <RequirePermission action={PermissionAction.RuleContentRead} surface="Rules">
+              <RequirePermission action={PermissionAction.AlertRead} surface="Rules">
                 <RulesCatalog />
               </RequirePermission>
             )}
@@ -259,8 +266,22 @@ export function AuthedApp() {
               </RequirePermission>
             )}
           />
-          <Route path="/rules/:ruleId" element={<RuleDetail />} />
-          <Route path="/rules/:ruleId/monitor-records" element={<MonitorRecords />} />
+          <Route
+            path="/rules/:ruleId"
+            element={(
+              <RequirePermission action={PermissionAction.AlertRead} surface="this rule">
+                <RuleDetail />
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/rules/:ruleId/monitor-records"
+            element={(
+              <RequirePermission action={PermissionAction.AlertRead} surface="monitor records">
+                <MonitorRecords />
+              </RequirePermission>
+            )}
+          />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="/alerts/:alertId" element={<AlertGraphRoute />} />
           <Route path="*" element={<Navigate to="/" replace />} />

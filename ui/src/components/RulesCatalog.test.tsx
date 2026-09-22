@@ -129,6 +129,38 @@ describe("RulesCatalog", () => {
     expect(await screen.findByRole("link", { name: "New rule" })).toHaveAttribute("href", "/rules/new");
   });
 
+  // The catalogue is reached on alert.read, the action the server gates GET /api/rules on. The analyst and auditor roles hold that
+  // and not rule_content.read, and were refused this page by the console alone.
+  // spec:web-ui/navigation-and-action-affordances-are-capability-gated/the-rule-catalogue-is-reached-on-the-action-its-data-needs
+  it("presents the catalogue to an operator holding alert.read alone", async () => {
+    vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(rules);
+    renderCatalog([PermissionAction.AlertRead]);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("link", { name: "Curl download" })).toBeVisible();
+  });
+
+  // The pack panel reads the authoring surface, which the server gates on rule_content.read. Rendered for an operator who lacks it,
+  // it is a failed read sitting on a page they are entitled to.
+  // spec:web-ui/navigation-and-action-affordances-are-capability-gated/the-built-in-rules-panel-is-gated-on-its-own-action
+  it("leaves out the built-in rules panel for an operator who cannot read rule content", async () => {
+    vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(rules);
+    const pack = vi.spyOn(api, "getRulePackStatus");
+    renderCatalog([PermissionAction.AlertRead]);
+
+    await screen.findByRole("table");
+    expect(screen.queryByRole("heading", { name: "Built-in rules" })).toBeNull();
+    // Not merely hidden: the read is never issued, so there is no 403 for the page to absorb.
+    expect(pack).not.toHaveBeenCalled();
+  });
+
+  it("shows the built-in rules panel to an operator who can read rule content", async () => {
+    vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(rules);
+    renderCatalog([PermissionAction.AlertRead, PermissionAction.RuleContentRead]);
+
+    expect(await screen.findByRole("heading", { name: "Built-in rules" })).toBeVisible();
+  });
+
   it("reports a failed load rather than an empty catalogue", async () => {
     vi.spyOn(api, "fetchRuleDocs").mockRejectedValue(new Error("boom"));
     renderCatalog();
