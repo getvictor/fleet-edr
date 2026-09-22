@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **ATT&CK coverage is now a tab of the Rules page** rather than its own navigation entry. The coverage view is built from the rules it lists, so the two sit together and each offers the other. Existing links to the coverage page still work.
+
 ### Fixed
 
 - **Analysts and auditors can reach the Rules page and a rule's detail.** The console asked for a permission those roles do not hold, while the server served them the rule catalogue all along, so the page was withheld from operators entitled to it. The parts that read rule authoring, including the built-in rules panel and its rollback, still need `rule_content.write` or `rule_content.read` as before.

@@ -161,6 +161,23 @@ describe("route guards match the action the data needs", () => {
     });
   });
 
+  // Coverage keeps its own path rather than moving under the catalogue. A fixed /rules/coverage would rank above /rules/{id} in
+  // the router whatever the declaration order, so a rule with that identifier would be unreachable; this pins that it is not.
+  // spec:web-ui/coverage-is-read-beside-the-rules-it-is-computed-from/a-rule-identifier-is-not-shadowed-by-the-coverage-surface
+  it("opens a rule whose identifier is the word coverage, rather than the coverage surface", async () => {
+    stubAuthedSession([PermissionAction.AlertRead]);
+    // A real rule carrying that identifier, so the assertion is that ITS detail rendered. Asserting only the absence of the
+    // coverage view passed on the unknown-rule fallback too, which the stub's empty list produces for any id: the test would
+    // have held just as well if the route had resolved to nothing at all.
+    vi.spyOn(api, "fetchRuleDocs").mockResolvedValue([
+      { id: "coverage", techniques: [], doc: { title: "Coverage", summary: "", description: "", severity: "high", event_types: ["exec"] } },
+    ]);
+    renderAuthedApp("/rules/coverage");
+
+    expect(await screen.findByRole("heading", { name: "Coverage" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Export JSON" })).toBeNull();
+  });
+
   // The landing used to resolve to Coverage because Coverage was the one ungated entry, which guaranteed a ROUTE rather than a
   // page the operator could read: the surface then answered with its own 403 (issue #1144).
   // spec:web-ui/navigation-and-action-affordances-are-capability-gated/coverage-is-gated-rather-than-relied-on-as-a-landing

@@ -4,6 +4,8 @@ import { useCan, PermissionAction } from "../permissions-core";
 import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
+import { SubNav } from "./ui/SubNav";
+import { RULES_TABS, RULES_TABS_LABEL } from "./rulesTabs";
 import { Button } from "./ui/Button";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
 import { TECHNIQUE_CATALOG, TACTIC_ORDER, type TechniqueMeta } from "./attack-techniques.generated";
@@ -110,6 +112,7 @@ export function AttackCoverage() {
           </Button>
         }
       />
+      <SubNav items={RULES_TABS} label={RULES_TABS_LABEL} />
 
       {error && (
         <div className="form-error" role="alert">

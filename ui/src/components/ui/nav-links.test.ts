@@ -22,9 +22,9 @@ describe("firstPermittedRoute", () => {
     {
       name: "a rule-content-only operator matches no entry and lands on a gated surface",
       permissions: [PermissionAction.RuleContentRead],
-      expected: "/coverage",
+      expected: "/rules",
     },
-    { name: "an empty permission set lands on a gated surface, which refuses gracefully", permissions: [], expected: "/coverage" },
+    { name: "an empty permission set lands on a gated surface, which refuses gracefully", permissions: [], expected: "/rules" },
   ];
   it.each(cases)("$name", ({ permissions, expected }) => {
     const can = (action: string) => permissions.includes(action);

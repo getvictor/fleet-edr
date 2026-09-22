@@ -37,7 +37,10 @@ export function TopNav({ user, authMethod, roles, onLogout }: TopNavProps) {
         </div>
         <ul className="top-nav__links">
           {visibleLinks.map((link) => {
-            const isActive = location.pathname === link.to || location.pathname.startsWith(`${link.to}/`);
+            const onPath = (path: string) => location.pathname === path || location.pathname.startsWith(`${path}/`);
+            // Active on the entry's own path or on any sibling surface of its section, so a section's tabs do not each look like
+            // a different place in the top navigation.
+            const isActive = onPath(link.to) || (link.siblings?.some(onPath) ?? false);
             return (
               <li key={link.to}>
                 <Link

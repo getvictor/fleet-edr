@@ -8,6 +8,8 @@ import { Input, Select } from "./ui/Input";
 import { PageHeader } from "./ui/PageHeader";
 import { PermissionAction, useCan } from "../permissions-core";
 import { RulePackPanel } from "./RulePackPanel";
+import { SubNav } from "./ui/SubNav";
+import { RULES_TABS, RULES_TABS_LABEL } from "./rulesTabs";
 import { ruleModeLabel } from "./ruleMode";
 import { isLocallyAuthored } from "./ruleOrigin";
 import "./RulesCatalog.scss";
@@ -110,6 +112,7 @@ export function RulesCatalog() {
   return (
     <>
       <PageHeader title="Rules" actions={filters} />
+      <SubNav items={RULES_TABS} label={RULES_TABS_LABEL} />
       {deleted !== undefined && (
         <p className="rules-catalog__summary" role="status">
           Deleted <code>{deleted}</code>. The server stops evaluating it when it next reloads its rules, within 30 seconds, and it may be
