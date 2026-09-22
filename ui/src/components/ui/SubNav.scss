@@ -1,0 +1,38 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+
+// Second-level navigation within a section. Deliberately the same underline treatment the host page's graph and timeline switch
+// already uses, so a reader meets one shape for "these are the views of this page" rather than a new one per section.
+.sub-nav {
+  display: flex;
+  gap: $pad-medium;
+  margin-bottom: $pad-medium;
+  border-bottom: 1px solid $ui-fleet-black-10;
+}
+
+.sub-nav__item {
+  // The underline sits on the item and overlaps the row's own rule, so the current item's mark reads as part of that line rather
+  // than as a second one under it.
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  padding: $pad-small $pad-xxsmall;
+  color: $ui-fleet-black-50;
+  font-size: $x-small;
+  text-decoration: none;
+
+  &:hover {
+    color: $core-fleet-blue;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $core-focused-outline;
+    outline-offset: -2px;
+  }
+
+  &--current {
+    border-bottom-color: $core-vibrant-blue;
+    color: $core-fleet-blue;
+    font-weight: $bold;
+  }
+}

@@ -8,6 +8,11 @@ export interface NavLink {
   // withholds a page from an operator entitled to it, and one gated on less is reached and then fails with a transport error.
   // Hiding is presentation only; the server still enforces every read on the destination surface.
   action: PermissionActionValue;
+  // siblings are the section's other surfaces, which keep their own paths. The entry stays marked active on any of them, so an
+  // operator moving between a section's tabs is not told they have left the section. Coverage is a tab of Rules and keeps
+  // /coverage: a fixed segment under /rules would rank above the /rules/{id} a rule's detail is read at, so a rule whose
+  // identifier was that word could not be reached at all.
+  siblings?: readonly string[];
 }
 
 export const NAV_LINKS: NavLink[] = [
@@ -15,8 +20,7 @@ export const NAV_LINKS: NavLink[] = [
   { to: "/hosts", label: "Hosts", action: PermissionAction.HostRead },
   { to: "/search", label: "Search", action: PermissionAction.ProcessRead },
   { to: "/app-control", label: "Application control", action: PermissionAction.AppControlRead },
-  { to: "/rules", label: "Rules", action: PermissionAction.AlertRead },
-  { to: "/coverage", label: "Coverage", action: PermissionAction.AlertRead },
+  { to: "/rules", label: "Rules", action: PermissionAction.AlertRead, siblings: ["/coverage"] },
 ];
 
 // firstPermittedRoute is the landing-redirect target for "/": the first nav entry the operator's permission set confers, in

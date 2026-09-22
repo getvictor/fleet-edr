@@ -18,7 +18,14 @@ function renderNav(permissions: string[] | undefined, children: ReactNode = null
   );
 }
 
-const ALL_NAV_PERMISSIONS = [PermissionAction.AlertRead, PermissionAction.HostRead, PermissionAction.AppControlRead];
+// Every action any entry is gated on. It omitted ProcessRead, so the order test below asserted four entries while calling itself
+// an operator who confers every one of them, and Search, which has been third since it was added, was never in the assertion.
+const ALL_NAV_PERMISSIONS = [
+  PermissionAction.AlertRead,
+  PermissionAction.HostRead,
+  PermissionAction.ProcessRead,
+  PermissionAction.AppControlRead,
+];
 
 describe("TopNav capability gating", () => {
   // spec:web-ui/navigation-and-action-affordances-are-capability-gated/application-control-entry-hidden-without-read-access
@@ -44,33 +51,39 @@ describe("TopNav capability gating", () => {
 
   // Coverage is gated like every other entry, on the action the server gates its data on. It used to be left ungated so the
   // landing redirect always matched something, which showed it to an operator whose every read of it the server refuses.
-  it("hides Coverage from an operator who cannot read what it is built from", () => {
+  it("hides the Rules section from an operator who cannot read what it is built from", () => {
     renderNav([]);
-    expect(screen.queryByRole("link", { name: "Coverage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Rules" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Hosts" })).not.toBeInTheDocument();
   });
 
-  it("shows Coverage and Rules to an operator holding alert.read", () => {
+  // Coverage is a tab of Rules now, so it has no entry of its own; the section is reached through Rules.
+  it("shows the Rules section to an operator holding alert.read", () => {
     renderNav([PermissionAction.AlertRead]);
-    expect(screen.getByRole("link", { name: "Coverage" })).toBeVisible();
-    // The rule catalogue is reached on the same action: the server serves GET /api/rules on alert.read.
     expect(screen.getByRole("link", { name: "Rules" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Coverage" })).toBeNull();
   });
 
   it("shows every entry optimistically when the permission set is unavailable", () => {
     renderNav(undefined);
     expect(screen.getByRole("link", { name: "Hosts" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Application control" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Coverage" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Rules" })).toBeInTheDocument();
   });
 });
 
 describe("TopNav alert-first order and active state", () => {
   // spec:web-ui/alert-first-navigation-order/navigation-lists-alerts-first
-  it("lists entries in the order Alerts, Hosts, Application control, Coverage", () => {
+  it("lists entries in the order Alerts, Hosts, Search, Application control, Rules", () => {
     renderNav(ALL_NAV_PERMISSIONS);
     const labels = screen.getAllByRole("link").map((link) => link.textContent);
-    expect(labels).toEqual(["Alerts", "Hosts", "Application control", "Rules", "Coverage"]);
+    expect(labels).toEqual(["Alerts", "Hosts", "Search", "Application control", "Rules"]);
+  });
+
+  // spec:web-ui/alert-first-navigation-order/the-rules-entry-stays-active-on-coverage
+  it("keeps the Rules entry active while the operator reads coverage", () => {
+    renderNav(ALL_NAV_PERMISSIONS, null, "/coverage");
+    expect(screen.getByRole("link", { name: "Rules" }).className).toContain("top-nav__link--active");
   });
 
   // spec:web-ui/alert-first-navigation-order/hosts-entry-active-on-host-detail
