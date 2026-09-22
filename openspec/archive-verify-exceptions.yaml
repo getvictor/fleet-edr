@@ -277,10 +277,6 @@
     because `task lint:dashes` bans a spaced hyphen standing in for an em dash. Every difference between the two bodies is
     one of those four punctuation swaps.
 
-- requirement: web-ui/navigation-and-action-affordances-are-capability-gated
-  covered_by: web-ui/navigation-and-action-affordances-are-capability-gated
-  reason: Intact; the same spaced-hyphen-to-parentheses rewrite, and nothing else.
-
 # ---------------------------------------------------------------------------------------------------------------------------
 # Declared in two capabilities, one copy kept.
 # ---------------------------------------------------------------------------------------------------------------------------

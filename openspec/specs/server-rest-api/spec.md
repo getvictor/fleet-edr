@@ -497,3 +497,90 @@ The system SHALL expose `GET /api/hosts/{host_id}/activity-histogram` accepting 
 - **GIVEN** a request whose `from` is not before its `to`
 - **WHEN** the client calls the endpoint
 - **THEN** the response status is 400
+
+### Requirement: An alert's chain can be read on its own
+
+The process-forest endpoint SHALL offer a read scoped to one process's chain: that process, its ancestors, and its descendants, and nothing else. A client reading a single alert is asking what that process did and what it came from, and answering with the host's activity over a window costs rows in proportion to how busy the host was rather than to the size of the answer.
+
+A chain read SHALL name the process it is the chain of. Asked for a chain with no process named, the system SHALL read the host's window instead, because a caller that named no process has described the host.
+
+A chain read SHALL NOT count the host's window, and SHALL NOT report the window as truncated. Those describe what a windowed read left out, and a chain read left nothing out because it read no window. Reporting them anyway would tell an analyst that the chain in front of them is part of something larger that was cut short, which is not what happened.
+
+Descendants SHALL be bounded by each process's own lifetime. A process number is reused only once its holder has exited, so a process forked after this one exited belongs to whichever process took the number next; attributing it here would show an analyst activity the process never spawned, under its name.
+
+Descendants SHALL be capped, and a chain read SHALL report truncation only about that cap. They are the one direction with no natural bound: ancestors are bounded by the depth of a process tree, while a single process may spawn without limit.
+
+A chain read naming a process that is not stored SHALL return an empty chain rather than the host's forest. Retention removes processes while the alerts raised on them remain, and answering with the host's activity is the fallback this read exists to remove.
+
+#### Scenario: A chain read returns the chain and nothing else
+
+- **GIVEN** a host carrying unrelated activity alongside a process's chain
+- **WHEN** the chain is read for that process
+- **THEN** the result holds that process, its ancestors and its descendants
+- **AND** none of the host's unrelated activity
+
+#### Scenario: A chain read reports no window truncation
+
+- **GIVEN** a chain read that completed
+- **WHEN** its result metadata is inspected
+- **THEN** it does not report the read as truncated
+- **AND** it does not report a capped count of a window it did not read
+
+#### Scenario: Descendants are capped
+
+- **GIVEN** a process that spawned more descendants than the cap admits
+- **WHEN** its chain is read
+- **THEN** no more descendants than the cap are returned
+- **AND** the process and its ancestors are still returned, because the cap bounds the one direction that has no bound of its own
+- **AND** the read reports itself as truncated
+
+#### Scenario: A chain read for a missing process is empty
+
+- **GIVEN** a chain read naming a process that is not stored
+- **WHEN** the read completes
+- **THEN** the result is empty rather than the host's forest
+
+### Requirement: A pinned process is in the page with its ancestors
+
+A process-forest read naming a process to pin SHALL return that process, and every ancestor back to its root, whatever the row limit admitted. A client pins a process because that process is the reason it is reading, so a page that does not contain it has not answered the request, however many other rows it carries.
+
+The row limit alone cannot satisfy this. The read returns the newest rows in the window, so a host busy enough to fill the page after the pinned process forked pushes that process off the page entirely, and does so more reliably the longer an analyst waits before opening the alert.
+
+The ancestors SHALL come with it rather than the pinned row alone. A forest links a child to its parent only among the rows it was given, so a pinned process whose parent is absent is returned as a root: a process presented as having no parent, when it has one the read simply did not fetch.
+
+Each ancestor SHALL be resolved by the same rule the system uses everywhere else to decide which generation of a pid was running at a given instant, because a pid is reused and a second rule for one caller would answer differently from the rest of the system for the same process. The walk SHALL be bounded, so that data claiming a process is its own ancestor cannot make the read run forever.
+
+The counts describing the read SHALL continue to describe the page the limit admitted, not the page plus what the pin added. They exist to tell a client what the read did not return, and a count that silently absorbed the pinned rows would report a page larger than the limit allowed.
+
+A pinned process that no longer exists SHALL NOT fail the read. Retention removes processes while the alerts raised on them remain, and a host's forest is still worth returning to an analyst whose alert has outlived its process.
+
+#### Scenario: The pinned process survives a page of newer activity
+
+- **GIVEN** a host where more processes forked after the pinned process than the row limit admits
+- **WHEN** the forest is read for a window containing both, pinning that process
+- **THEN** the pinned process is in the result
+
+#### Scenario: Its ancestors come with it
+
+- **GIVEN** the same read
+- **WHEN** the result is inspected
+- **THEN** every ancestor of the pinned process back to its root is present, so it is returned as part of its chain rather than as a root
+
+#### Scenario: Without a pin the limit still decides the page
+
+- **GIVEN** the same host and window, read without pinning anything
+- **WHEN** the result is inspected
+- **THEN** it holds only what the row limit admitted
+
+#### Scenario: The counts still describe the page
+
+- **GIVEN** a read whose pin added rows the limit had excluded
+- **WHEN** the result metadata is inspected
+- **THEN** the count of rows returned is the number the limit admitted
+- **AND** the read is still reported as truncated
+
+#### Scenario: A pinned process that no longer exists is not an error
+
+- **GIVEN** a pin naming a process that is not stored
+- **WHEN** the forest is read
+- **THEN** the read succeeds and returns the host's forest
