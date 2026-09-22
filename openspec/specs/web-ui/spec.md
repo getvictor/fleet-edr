@@ -263,6 +263,12 @@ The UI SHALL provide a rule documentation page reachable by rule id from the cov
 
 The UI SHALL hide navigation entries and action controls that the authenticated operator's effective permission set (obtained from the session probe) does not authorize, so an operator is not shown affordances they cannot use. A navigation entry SHALL be hidden when the permission set does not contain the read action that gates its destination surface. An action control SHALL be hidden when the permission set does not contain the action that the control performs. Gating SHALL be derived solely from the server-provided permission set; the UI SHALL NOT contain its own mapping from role names to permitted actions. Hiding an affordance is a usability measure only and SHALL NOT be relied upon as access control; the server remains authoritative for every action.
 
+The action a surface is gated on SHALL be the action the server gates that surface's own data on. A surface gated on more than the server asks refuses an operator the server would have answered, which is a page withheld from someone entitled to it rather than a safety margin. A surface gated on less is reached and then fails, which is how a raw transport error arrives at an operator who should have been told they lack access. Neither direction is safe by default, so neither is the one to guess.
+
+A surface SHALL NOT be left ungated in order to give the landing redirect something to resolve to. An operator holding no actions has no surface to land on, and saying so is the honest answer; sending them to whichever surface happens to be ungated answers with that surface's own failure instead.
+
+Where one page reads a surface the operator may not hold, that part of the page SHALL be gated on its own action rather than the page's. A page admitted on one action does not thereby admit every call it makes.
+
 #### Scenario: Application control entry hidden without read access
 
 - **GIVEN** an operator whose permission set does not contain `application_control.read`
@@ -287,6 +293,33 @@ The UI SHALL hide navigation entries and action controls that the authenticated 
 - **GIVEN** an operator whose permission set contains `host.kill_process`
 - **WHEN** the operator opens a process's detail
 - **THEN** the Kill process control is rendered and can be invoked
+
+#### Scenario: The rule catalogue is reached on the action its data needs
+
+- **GIVEN** an operator whose permission set contains `alert.read` and not `rule_content.read`
+- **WHEN** the operator opens the rule catalogue
+- **THEN** the catalogue is presented
+- **AND** the rules it lists are shown
+
+#### Scenario: A rule's detail and its monitor records follow the catalogue
+
+- **GIVEN** the same operator
+- **WHEN** they open a rule's detail, and that rule's monitor records
+- **THEN** both are presented
+
+#### Scenario: The built-in rules panel is gated on its own action
+
+- **GIVEN** an operator holding `alert.read` and not `rule_content.read`
+- **WHEN** they open the rule catalogue
+- **THEN** the panel reporting which built-in rules the deployment runs is not rendered
+- **AND** no failed read of it is shown in its place
+
+#### Scenario: Coverage is gated rather than relied on as a landing
+
+- **GIVEN** an operator whose permission set contains no actions
+- **WHEN** they sign in and are redirected to a landing surface
+- **THEN** they are shown the no-access state
+- **AND** they are not shown a raw transport error
 
 ### Requirement: Authorization denials degrade gracefully
 
@@ -525,19 +558,27 @@ The UI SHALL render the alert list as the home view of the authenticated applica
 
 ### Requirement: Alert-first navigation order
 
-The top navigation SHALL present its entries in the order Alerts, Hosts, Application control, Coverage, subject to the existing capability gating that hides entries the operator cannot read. The Hosts entry SHALL be highlighted as active on both the host list route and a host's process tree route.
+The top navigation SHALL present its entries in the order Alerts, Hosts, Search, Application control, Rules, subject to the existing capability gating that hides entries the operator cannot read. The Hosts entry SHALL be highlighted as active on both the host list route and a host's process tree route.
+
+An entry whose section holds more than one surface SHALL be highlighted as active on any of them, so an operator moving between a section's surfaces is not told they have left it.
 
 #### Scenario: Navigation lists Alerts first
 
 - **GIVEN** an authenticated operator whose permission set confers every navigation entry
 - **WHEN** the authenticated application renders its navigation
-- **THEN** the entries appear in the order Alerts, Hosts, Application control, Coverage
+- **THEN** the entries appear in the order Alerts, Hosts, Search, Application control, Rules
 
 #### Scenario: Hosts entry active on host detail
 
 - **GIVEN** an authenticated operator viewing a host's process tree page
 - **WHEN** the navigation renders
 - **THEN** the Hosts entry is highlighted as the active entry
+
+#### Scenario: The Rules entry stays active on coverage
+
+- **GIVEN** an authenticated operator viewing the coverage surface
+- **WHEN** the navigation renders
+- **THEN** the Rules entry is highlighted as the active entry
 
 ### Requirement: Host list page
 
@@ -1424,3 +1465,68 @@ The Detection tuning page SHALL include a Watched file paths section that shows 
 - **WHEN** the first operator saves
 - **THEN** the save names the version the draft started from, the server refuses it, and the section says someone changed the watched paths after the page loaded them
 - **AND** the draft is kept, and loading the latest set on request replaces the draft with the other operator's set
+
+### Requirement: Coverage is read beside the rules it is computed from
+
+The rule catalogue and the coverage view SHALL be presented as two surfaces of one section, each reachable from the other without returning to the top navigation. The coverage layer is computed entirely from the registered rules and names them on every technique row, so an operator reading either is reading about the same corpus; presenting them as separate destinations asks them to know that already.
+
+Both surfaces SHALL be reached on the same authorization, because a section whose surfaces answer to different actions would show an operator a way to a page that then refuses them.
+
+The coverage surface SHALL keep its own path rather than becoming a path below the catalogue's. A fixed segment below the catalogue would rank above the identifier a rule's detail is read at, so a rule whose identifier matched that segment could not be reached at all, and every link already written to the coverage path would have to be rewritten to keep working.
+
+#### Scenario: Each surface offers the other
+
+- **GIVEN** an operator on either the rule catalogue or the coverage view
+- **WHEN** the surface renders
+- **THEN** it offers both surfaces of the section
+- **AND** marks the one being read
+
+#### Scenario: A rule identifier is not shadowed by the coverage surface
+
+- **GIVEN** a rule whose identifier is the word the coverage surface is named by
+- **WHEN** an operator opens that rule's detail
+- **THEN** the rule's detail is shown rather than the coverage view
+
+### Requirement: Coverage reports what is not covered
+
+The coverage view SHALL report the techniques no rule covers, not only the ones some rule does. A view built from the covered set alone can state a count and not a fraction: a reader learns how many techniques are covered and cannot learn how many there were to cover, which is the number that says whether the deployment is well covered or barely started.
+
+A technique SHALL be counted as in scope only when ATT&CK records it for the platform the product watches. The enterprise matrix is mostly techniques that cannot be run against this estate, and counting them as missing would bury the ones that can under them. A technique ATT&CK records no platform for SHALL be treated as in scope, because an absent list is a fact about the published bundle rather than evidence the technique does not apply, and dropping it would hide a gap on the strength of missing data.
+
+The uncovered techniques SHALL be listed, grouped the same way the covered ones are, so the two are read as two halves of one matrix rather than as two different pages.
+
+An uncovered technique SHALL offer to be answered: an operator authorized to write rules SHALL be offered a way to open the authoring surface with that technique already named, so closing the gap does not depend on them carrying the identifier there themselves. An operator not so authorized SHALL still be shown the gap, which is the part they can act on by asking someone who is.
+
+Where a technique identifier is carried to the authoring surface, it SHALL be accepted only in ATT&CK's own form. It arrives as a request parameter, which anything can write, and it is placed into a document the rule loader parses.
+
+#### Scenario: The view states how much is not covered
+
+- **GIVEN** a deployment whose rules cover some of the techniques in scope
+- **WHEN** an operator reads the coverage view
+- **THEN** it reports how many in-scope techniques no rule covers
+- **AND** how many techniques are in scope
+
+#### Scenario: Techniques off the platform are not counted as gaps
+
+- **GIVEN** a technique ATT&CK does not record for the platform the product watches
+- **WHEN** the uncovered techniques are counted and listed
+- **THEN** that technique is neither counted nor listed
+
+#### Scenario: A gap offers the rule that would close it
+
+- **GIVEN** an operator authorized to write rules, reading an uncovered technique
+- **WHEN** they follow the offer to write one
+- **THEN** the authoring surface opens with that technique already named in the document
+
+#### Scenario: A gap is shown to an operator who cannot write rules
+
+- **GIVEN** an operator not authorized to write rules
+- **WHEN** they read the uncovered techniques
+- **THEN** the techniques are listed
+- **AND** no offer to write a rule is made
+
+#### Scenario: A technique identifier that is not one is refused
+
+- **GIVEN** a request to the authoring surface carrying a technique identifier that is not in ATT&CK's form
+- **WHEN** the starting document is prepared
+- **THEN** the identifier is not placed into it

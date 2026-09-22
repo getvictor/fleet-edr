@@ -4,24 +4,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
-### Added
-
-- **Coverage now shows what is not covered.** The ATT&CK page could report the techniques your rules detect and not the ones they miss, so the number it gave had nothing to be a fraction of. It now reports how many macOS techniques no rule covers, out of how many there are, and lists them by tactic. An operator who can write rules is offered a link from each gap that opens the rule editor with that technique already tagged. Techniques ATT&CK does not list for macOS are left out rather than counted as holes.
-
-### Changed
-
-- **ATT&CK coverage is now a tab of the Rules page** rather than its own navigation entry. The coverage view is built from the rules it lists, so the two sit together and each offers the other. Existing links to the coverage page still work.
-
-### Fixed
-
-- **Analysts and auditors can reach the Rules page and a rule's detail.** The console asked for a permission those roles do not hold, while the server served them the rule catalogue all along, so the page was withheld from operators entitled to it. The parts that read rule authoring, including the built-in rules panel and its rollback, still need `rule_content.write` or `rule_content.read` as before.
-- **An operator whose role grants nothing is told so, instead of being shown a failed page.** Signing in sent them to Coverage, the one page the console never gated, where the server refused the read and the page reported `API error: 403`. Every page is now gated on what its data needs, so they get the usual no-access message.
-- **An application-control rule's identifier is readable, and its actions are separable.** The identifier was cut to 16 characters whatever the column's width, so a path showed as `/Applications/Co…` with half the column empty, and copying the cell gave that fragment rather than the value. It now fills the column, keeps the whole value for copying, and offers a copy button and a hover reveal when it still does not fit. A rule's four actions were link-styled words a few pixels apart that read as one run of text; they are now one **Actions** menu per row, with Delete set apart at the foot.
-- **Rules that come with the product are called built-in.** They were labelled "shipped", which describes a release rather than where a rule came from. The Rules page, the rollback controls and the exported ATT&CK coverage layer all say built-in now. The **Rules** filter row also drops its **Search:** and **Show:** labels, which sat in different places and read as unrelated; each control names itself instead.
-- **An alert's process graph shows the alert's own chain.** The graph asked for every process on the host over a 24-hour window and narrowed to the alert in the browser, so on a busy host it was slow to open, it warned that most of the day had been left out, and the alerted process was often missing from it entirely: the page fell back to showing unrelated activity. It now reads that alert's chain directly, and the whole-host view keeps the alerted process and its parents in the page.
-- **Release host no longer looks like the button beside it that only opens a panel.** On a host page, Details and Release host were near-identical bordered buttons, so the control that cuts a Mac off the network was hard to tell from the one that shows its agent version. Details is now plain text with a caret, leaving the containment action the only button in the row, and the containment badge is sized and aligned to the online pill next to it.
-
-## [0.6.0] (2026-09-20)
+## [0.6.0] (2026-09-22)
 
 ### Upgrade notes (action required)
 
@@ -41,11 +24,13 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 - **SSO roles can follow identity provider groups.** Map IdP groups to EDR roles, and each SSO sign-in sets the operator's role to the most privileged role among their mapped groups, or the default role when none match. A role set by hand is replaced at the next sign-in, a group cannot grant super admin, and every change is audited. Set it in **Admin settings, Single sign-on**; see [Okta setup](docs/okta-setup.md#map-okta-groups-to-edr-roles).
 - **Watch more files for tampering.** In **Detection tuning**, add files or directories that every host records writes, renames, truncations and deletions of, on top of the sudoers files it always watches. A saved change reaches online hosts within seconds, and hosts that were offline or enroll later within minutes.
 - **A SigmaHQ threat-hunting rule for clipboard collection.** Runs of `pbpaste` are recorded in monitor mode, from SigmaHQ's threat-hunting rules, which are now vendored alongside its main macOS rules.
+- **Coverage now shows what is not covered.** The ATT&CK page could report the techniques your rules detect and not the ones they miss, so the number it gave had nothing to be a fraction of. It now reports how many macOS techniques no rule covers, out of how many there are, and lists them by tactic. An operator who can write rules is offered a link from each gap that opens the rule editor with that technique already tagged. Techniques ATT&CK does not list for macOS are left out rather than counted as holes.
 
 ### Changed
 
 - **A sensor that could not repair itself is now host health, not an alert.** A host whose capture provider stopped and could not be restarted is a fault in this product rather than an attack, so it leaves the alert queue and is recorded against the host, under **Details**, with how long the host went uncaptured. It can be delivered to webhook destinations as its own event; alert deliveries are unchanged, and alerts of this kind already raised are left as they are.
 - **Withdrawing a command is recorded as its own audit action.** Cancelling a command wrote an audit row saying `command.issue`, the same action an issuance writes, with the same host and command, so the audit log could not tell a command that was sent from one that was taken back. A withdrawal now records `command.cancel`. A SIEM rule counting `command.issue` will see fewer events and should count both actions if it means "response actions taken".
+- **ATT&CK coverage is now a tab of the Rules page** rather than its own navigation entry. The coverage view is built from the rules it lists, so the two sit together and each offers the other. Existing links to the coverage page still work.
 
 ### Fixed
 
@@ -63,6 +48,12 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 - **Saving an application-control rule without changing it no longer fails** with "rule not found", and does not push the policy to hosts or add an audit entry.
 - **An agent restart no longer reads as a fault in the control-channel telemetry**, which had made error-rate panels report the fleet's uptime rather than its health.
 - **A long exclusion value no longer widens the exclusion table**, so the Reason, Expires and Created by columns stay on screen.
+- **Analysts and auditors can reach the Rules page, a rule's detail and its monitor records.** The console asked for a permission those roles do not hold, though the server had been serving them the rule catalogue all along. Rule authoring, including the built-in rules panel and its rollback, still needs `rule_content.read` or `rule_content.write`.
+- **An operator whose role grants nothing is told so, instead of landing on a page that fails.** Signing in sent them to Coverage, the one page the console never gated, where the read was refused and the page reported `API error: 403`.
+- **An application-control rule's identifier is readable, and its actions are separable.** The identifier was cut to 16 characters whatever the column's width, and copying the cell gave that fragment rather than the value. It now fills the column, copies in full, and offers a copy button. The four row actions, which ran together as one line of text, become one **Actions** menu with Delete set apart.
+- **Rules that come with the product are called built-in**, not "shipped", which describes a release rather than where a rule came from. The Rules page, the rollback controls and the exported ATT&CK layer all follow. The Rules filter row also drops its **Search:** and **Show:** labels, which sat in different places; each control names itself now.
+- **An alert's process graph shows the alert's own chain.** It asked for every process on the host across a 24-hour window and narrowed in the browser, so on a busy host it opened slowly, warned that most of the day was left out, and often did not contain the alerted process at all. It reads that alert's chain directly now, and the whole-host view keeps the alerted process and its parents.
+- **Release host no longer looks like the control beside it that only opens a panel.** Details and Release host were near-identical buttons, so the one that cuts a Mac off the network was hard to tell from the one showing its agent version. Details is plain text with a caret now, leaving containment the only button in the row.
 
 ## [0.5.1] (2026-09-12)
 
