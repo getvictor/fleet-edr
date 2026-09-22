@@ -22,10 +22,10 @@ interface TopNavProps {
 export function TopNav({ user, authMethod, roles, onLogout }: TopNavProps) {
   const location = useLocation();
   const can = useCan();
-  // Hide nav entries the operator's role does not confer. An entry with no gating
-  // action (Coverage) always shows. Presentation only: the route guards + server
-  // still enforce access independently.
-  const visibleLinks = NAV_LINKS.filter((link) => link.action === undefined || can(link.action));
+  // Hide nav entries the operator's role does not confer. Every entry names a gating action, so there is no entry that always
+  // shows: one left ungated to guarantee the landing redirect a match is what sent an operator holding nothing to a page that
+  // then refused their read. Presentation only: the route guards + server still enforce access independently.
+  const visibleLinks = NAV_LINKS.filter((link) => can(link.action));
 
   return (
     <nav className="top-nav">

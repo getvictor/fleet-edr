@@ -17,8 +17,14 @@ describe("firstPermittedRoute", () => {
       permissions: [PermissionAction.AppControlRead],
       expected: "/app-control",
     },
-    { name: "a rule-content-only operator lands on Rules", permissions: [PermissionAction.RuleContentRead], expected: "/rules" },
-    { name: "an empty permission set lands on the ungated Coverage", permissions: [], expected: "/coverage" },
+    // Rules is reached on alert.read now, the action the server gates its data on, so rule_content.read alone matches no entry.
+    // It falls to the last, which is gated, so the operator is told they lack access rather than shown a page that then fails.
+    {
+      name: "a rule-content-only operator matches no entry and lands on a gated surface",
+      permissions: [PermissionAction.RuleContentRead],
+      expected: "/coverage",
+    },
+    { name: "an empty permission set lands on a gated surface, which refuses gracefully", permissions: [], expected: "/coverage" },
   ];
   it.each(cases)("$name", ({ permissions, expected }) => {
     const can = (action: string) => permissions.includes(action);
