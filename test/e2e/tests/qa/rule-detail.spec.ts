@@ -53,21 +53,23 @@ test.describe("per-rule documentation page", () => {
   });
 
   // spec:web-ui/per-rule-documentation-page/unknown-rule-id-renders-a-navigable-empty-state
-  test("unknown rule id renders an empty state that links back to coverage", async ({ page }) => {
+  test("unknown rule id renders an empty state that links back to the rules catalogue", async ({ page }) => {
     // A made-up rule id the catalog has never registered. Reserves the qa- prefix so any future qa fixture
     // rule can't shadow this test.
     await page.goto("/ui/rules/qa-unknown-rule-id-not-in-catalog");
 
     // The page must NOT 404. The SPA stays at /ui/rules/<bad-id> and renders an empty state with a link to
-    // the coverage page. The exact copy is "Unknown rule <code> ... Back to coverage" per RuleDetail.tsx;
+    // the rules catalogue. The exact copy is "Unknown rule <code> ... Back to rules" per RuleDetail.tsx;
     // a regex on the prefix tolerates copy edits while still pinning to "unknown" + "rule" + the bad id.
     await expect(page.getByText(/unknown rule/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("code", { hasText: "qa-unknown-rule-id-not-in-catalog" })).toBeVisible();
-    // Scoped to main, and to the empty state's own wording. /coverage/i alone now matches the top nav's Coverage tab as well as
-    // this link, which is a strict-mode violation rather than a pass: the tab was added after this spec was written and the spec
-    // has not run in CI since, so nothing caught the ambiguity.
-    const backLink = page.getByRole("main").getByRole("link", { name: /back to coverage/i });
+    // Scoped to main, and to the empty state's own wording: /rules/i alone would also match the top navigation's Rules entry and
+    // the sub-navigation tab beside it, which is a strict-mode violation rather than a pass.
+    //
+    // It offered coverage before. A rule's detail said that however the reader arrived, so anyone browsing from the catalogue,
+    // which is where a rule is listed, was offered a way back to a page they had never opened.
+    const backLink = page.getByRole("main").getByRole("link", { name: /back to rules/i });
     await expect(backLink).toBeVisible();
-    await expect(backLink).toHaveAttribute("href", /\/coverage$/);
+    await expect(backLink).toHaveAttribute("href", /\/rules$/);
   });
 });

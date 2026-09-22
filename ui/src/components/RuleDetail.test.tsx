@@ -103,7 +103,9 @@ describe("RuleDetail loading and error states", () => {
     renderAt("missing_rule");
     expect(await screen.findByText(/unknown rule/i)).toBeInTheDocument();
     expect(screen.getByText("missing_rule", { selector: "code" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /back to coverage/i })).toHaveAttribute("href", "/coverage");
+    // Back to the catalogue, which is where a rule is listed and where a reader browsing rules came from. It used to offer
+    // coverage unconditionally, which was a claim about where they had been rather than a link to somewhere.
+    expect(screen.getByRole("link", { name: /back to rules/i })).toHaveAttribute("href", "/rules");
   });
 });
 
