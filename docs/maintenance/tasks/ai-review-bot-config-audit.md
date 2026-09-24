@@ -10,11 +10,18 @@ This task is the periodic re-grounding. It is deliberately small (30 min) becaus
 
 ## Scope
 
-Primary: `.coderabbit.yaml`.
+Primary: `.coderabbit.yaml` and [`.github/workflows/pr-agent.yml`](../../../.github/workflows/pr-agent.yml), which is where the open-source reviewer's configuration lives. It is deliberately not in `.pr_agent.toml`: that file is the hosted Qodo app's, and keeping the two apart stopped them perturbing each other. If Qodo is retired, `.pr_agent.toml` becomes dead config and should be deleted rather than left to look authoritative.
 
-Secondary (when they appear): any future PR-review-bot config files committed to the repo, such as [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), `.qodo/config.yaml`, etc. Treat this audit as the catch-all for the class.
+Secondary: [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), and any future PR-review-bot config committed to the repo. Treat this audit as the catch-all for the class.
 
-Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), CodeRabbit's organization-level / dashboard-only settings (those drift separately and the bot's own UI surfaces them).
+Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), and the review skill `ai-review-fixes-edr`, which holds the round policy and is per-maintainer.
+
+**Not in scope because it is already automated:** the pinned version of the pr-agent action. Dependabot's `github-actions` ecosystem entry groups `patterns: ["*"]`, so the pin is bumped weekly on its own. Do not hand-check it.
+
+Two dashboard-only settings have no committed file and so can only be verified here, by looking at them:
+
+- **Copilot review effort.** Policy is Lite by default and Balanced only for large or sensitive pull requests, because Balanced was measured on this repo at roughly 204 credits (about $2.04) a review against Lite's fraction of that. Confirm the org or repo setting still matches, and note that GitHub's own default moved to Balanced on 2026-09-28, so a setting left on "Default" is Balanced.
+- **CodeReviewBot trigger mode**, which has no in-repo config at all.
 
 ## Steps
 
@@ -27,6 +34,16 @@ Skim CodeRabbit's [configuration reference](https://docs.coderabbit.ai/reference
 - No new top-level key was added that this repo would obviously benefit from (e.g. an audit-trail option, a security-tuning preset).
 
 Note any deprecation warnings in CodeRabbit's most recent walkthrough on a merged PR: the bot itself flags deprecated keys.
+
+### 1b. pr-agent config currency
+
+The open-source reviewer's schema drifts from the hosted product it was forked out of, and most of the hosted keys simply do not exist upstream. Check the workflow's `env:` block against upstream's [`configuration.toml`](https://github.com/The-PR-Agent/pr-agent/blob/main/pr_agent/settings/configuration.toml):
+
+- Every `config.*` / `pr_reviewer.*` / `github_action_config.*` key set in the workflow still exists upstream and still means what the comment says it does.
+- `config.model` and `config.fallback_models` still name models that exist and are still priced as assumed. The pin is deliberate: upstream's default is a MOVING alias, so leaving it unset locks neither a version nor a price.
+- Anything new upstream worth adopting. `service_tier` is the one to watch: it would halve token cost via flex processing, and its absence is the only reason flex is not used here.
+
+Note what this step cannot protect against. The action is SHA-pinned but upstream's Dockerfile is `FROM pragent/pr-agent:github_action`, a mutable tag, so the code that actually runs is always upstream's latest regardless of the pin. The exposure is an upstream regression reaching CI ungated, not staleness.
 
 ### 2. Path glob validity
 

@@ -8,13 +8,18 @@ name: PR review (pr-agent)
 #
 # 1. TRIGGER. Upstream reviews on `synchronize` as well, which is what made the hosted bill scale with pushes rather than PRs
 #    (2.35 commits per PR here, so ~2.35x the reviews). This runs once when a PR opens, and again only when a draft is marked
-#    ready. Re-review before merge stays manual, which is already how CodeRabbit is used here.
+#    ready. Re-review is manual, via a `/review` comment, which is the same shape as `@coderabbitai review`.
 #
 # 2. SCOPE. Upstream documents `pull_request_target` so that forks can be reviewed. That is deliberately NOT used. This repo is
 #    public, anyone can open a pull request, and a reviewing agent reads the diff as instructions (OWASP LLM01, indirect prompt
 #    injection). `pull_request_target` would hand a workflow processing attacker-authored text both the model key and a
 #    write-capable token. With the plain `pull_request` event a fork PR gets neither secrets nor write access, so the failure
 #    mode is a skipped review rather than a compromised one. The `if:` below makes that explicit rather than incidental.
+#
+#    The `/review` comment trigger reopens that question, because `issue_comment` DOES carry secrets even when the pull request
+#    came from a fork. That is why authorization is a separate job that holds no secrets and no environment: it re-resolves the
+#    pull request through the API and only then lets the review job start. Gating inside the review job would be too late, since
+#    the environment (and therefore the model key) is granted when the job begins, not when its first step passes.
 #
 # SUPPLY CHAIN CAVEAT: the action is pinned by commit SHA, but upstream's `Dockerfile.github_action_dockerhub` is only
 # `FROM pragent/pr-agent:github_action`, a MUTABLE Docker Hub tag. So the pin fixes the wrapper, not the code that executes.
@@ -24,26 +29,69 @@ name: PR review (pr-agent)
 on:
   pull_request:
     types: [opened, ready_for_review]
+  # Manual re-review. Round 2b of the review policy re-runs this agent after a round of fixes on a large or sensitive pull
+  # request, to check that the fixes did not introduce new defects. `created` only: an edited comment must not re-trigger, or
+  # editing an old comment becomes a replay button.
+  issue_comment:
+    types: [created]
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # issue_comment carries no pull_request object, so the number comes from the issue instead. Not cancel-in-progress here: a
+  # review that is already talking to the model should finish rather than be discarded by a second `/review`.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
 
 jobs:
+  # Authorization is its own job ON PURPOSE, and it declares no environment and receives no secrets. The review job below cannot
+  # start until this one says yes, so the model key is never granted to a run that turns out to be unauthorized. Doing the same
+  # check as a first step inside the review job would be strictly weaker: environments are granted at job start.
+  authorize:
+    name: Authorize
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    # Cheap event-shape filter. It rejects the obvious cases without an API call, but it is NOT the security boundary: the
+    # payload of an issue_comment describes the comment, not the pull request, so everything that matters is re-resolved below.
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.user.login == github.repository_owner)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request != null
+        && github.event.comment.user.login == github.repository_owner
+        && startsWith(github.event.comment.body, '/review'))
+    steps:
+      - name: Resolve the pull request and decide
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `github.event.comment.body` is deliberately NOT passed to the shell. It is attacker-influenceable text on a public
+          # repository, and the only thing needed from it was already tested in the `if:` above, where an expression cannot be
+          # made to execute anything.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # Read the three facts from the API rather than the event payload. For the pull_request path this is belt and braces;
+          # for the comment path it is the whole check, because a comment on a fork's pull request looks identical to a comment
+          # on a local one until you ask.
+          read -r author head_repo is_draft < <(
+            gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '"\(.user.login) \(.head.repo.full_name // "deleted") \(.draft)"'
+          )
+          deny() { echo "::notice::Review skipped: $1"; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$author" = "$OWNER" ]      || deny "pull request #$PR_NUMBER is authored by $author, not $OWNER."
+          [ "$head_repo" = "$REPO" ]    || deny "pull request #$PR_NUMBER comes from $head_repo, which is not this repository."
+          [ "$is_draft" = "false" ]     || deny "pull request #$PR_NUMBER is still a draft."
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
   review:
     name: Review
-    # Maintainer pull requests only. Three independent conditions, each of which alone would skip an untrusted PR:
-    #   - author is the repository owner, so a collaborator's branch does not spend tokens or reach the model either;
-    #   - the head branch lives in THIS repository, which excludes every fork;
-    #   - the PR is not a draft (upstream's own default is to stay quiet on drafts).
-    # Bot-authored pull requests (Dependabot and friends) fail the first condition, which is intended: a dependency bump does
-    # not need a model review.
-    if: >-
-      github.event.pull_request.user.login == github.repository_owner
-      && github.event.pull_request.head.repo.full_name == github.repository
-      && github.event.pull_request.draft == false
+    needs: authorize
+    if: needs.authorize.outputs.ok == 'true'
     runs-on: ubuntu-latest
     # A dedicated environment, not a bare repository secret. Two reasons: the model key is then scoped to this one job rather
     # than readable by every workflow in the repo, and the environment carries its own branch policy, so the key stays
@@ -121,7 +169,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Interpolated into the environment, never into the script body: a PR number is harmless, but keeping every dynamic
           # value out of `run:` is what stops a future edit from introducing template injection.
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Same fallback as the authorize job: an issue_comment payload carries no pull_request object.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           SINCE: ${{ steps.before.outputs.at }}
           REPO: ${{ github.repository }}
         run: |
