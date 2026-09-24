@@ -91,7 +91,7 @@ A new platform's code landing should not require rewriting `.coderabbit.yaml` fr
 
 ### 7. Commit + log
 
-If anything changed: open a PR titled `coderabbit: config audit YYYY-Q\d`, listing each change with a one-line rationale.
+If anything changed: open a PR titled `review-bots: config audit YYYY-Q\d`, listing each change with a one-line rationale. The prefix says review-bots rather than coderabbit because the audit now covers pr-agent and the dashboard-only settings too.
 
 Even if nothing changed: append an entry to [`docs/maintenance/log.md`](../log.md) recording `done` with `no findings`. The empty entries are how we know the cadence is being honoured. Keep the entry to one tight line per the format at the top of that file.
 
