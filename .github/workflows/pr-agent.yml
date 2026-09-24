@@ -1,0 +1,98 @@
+name: PR review (pr-agent)
+
+# Open-source PR review, running as a replacement for the metered hosted bots (issue #1141). The software is MIT and Actions
+# minutes are free on this public repository, so the only cost is model tokens: roughly 20k in / 2k out per review against the
+# ~41 KB median diff here.
+#
+# Two deliberate narrowings from the upstream example workflow, both load-bearing:
+#
+# 1. TRIGGER. Upstream reviews on `synchronize` as well, which is what made the hosted bill scale with pushes rather than PRs
+#    (2.35 commits per PR here, so ~2.35x the reviews). This runs once when a PR opens, and again only when a draft is marked
+#    ready. Re-review before merge stays manual, which is already how CodeRabbit is used here.
+#
+# 2. SCOPE. Upstream documents `pull_request_target` so that forks can be reviewed. That is deliberately NOT used. This repo is
+#    public, anyone can open a pull request, and a reviewing agent reads the diff as instructions (OWASP LLM01, indirect prompt
+#    injection). `pull_request_target` would hand a workflow processing attacker-authored text both the model key and a
+#    write-capable token. With the plain `pull_request` event a fork PR gets neither secrets nor write access, so the failure
+#    mode is a skipped review rather than a compromised one. The `if:` below makes that explicit rather than incidental.
+#
+# SUPPLY CHAIN CAVEAT: the action is pinned by commit SHA, but upstream's `Dockerfile.github_action_dockerhub` is only
+# `FROM pragent/pr-agent:github_action`, a MUTABLE Docker Hub tag. So the pin fixes the wrapper, not the code that executes.
+# Accepted here because the job holds no checkout, a scoped token, and one secret. Pinning the image by digest instead would
+# mean vendoring the Dockerfile; revisit if this job is ever given more than it has now.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review
+    # Maintainer pull requests only. Three independent conditions, each of which alone would skip an untrusted PR:
+    #   - author is the repository owner, so a collaborator's branch does not spend tokens or reach the model either;
+    #   - the head branch lives in THIS repository, which excludes every fork;
+    #   - the PR is not a draft (upstream's own default is to stay quiet on drafts).
+    # Bot-authored pull requests (Dependabot and friends) fail the first condition, which is intended: a dependency bump does
+    # not need a model review.
+    if: >-
+      github.event.pull_request.user.login == github.repository_owner
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    # A dedicated environment, not a bare repository secret. Two reasons: the model key is then scoped to this one job rather
+    # than readable by every workflow in the repo, and the environment carries its own branch policy, so the key stays
+    # unreachable even if the `if:` above were ever loosened by mistake. zizmor's secrets-outside-env audit requires it.
+    environment: pr-agent-review
+    permissions:
+      # Enough to read the diff and post one review comment. Upstream's example also asks for `contents: write` and
+      # `checks: write`; neither is needed, because this job never pushes a commit and never publishes a check run.
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Review the pull request
+        uses: the-pr-agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
+        env:
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Configuration lives here rather than in `.pr_agent.toml` on purpose. That file is read by the hosted Qodo app, which
+          # keeps running in parallel until the comparison in #1141 settles; keeping this job's settings in the workflow means
+          # the two reviewers cannot perturb each other, and the baseline stays a baseline.
+          #
+          # Review only. `describe` is off because the maintainer owns PR bodies (same rule the hosted config states), and
+          # `improve` is off because its suggestions duplicate what the other bots already emit.
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+          # The model is upstream's shipped default (gpt-5.6, falling back to gpt-5.6-terra) and is deliberately not overridden.
+          # Choosing a non-Claude reviewer is intentional: Claude writes the code here, and a reviewer sharing its blind spots
+          # agrees with a bug rather than catching it.
+          #
+          # The hosted config's review guidance lives under keys the open-source schema does not have
+          # (`review_agent.issues_user_guidelines`), so it is restated here against the key that does exist.
+          pr_reviewer.extra_instructions: |
+            This is an EDR (endpoint detection and response) product; security and hot-path performance findings are the priority.
+            Prioritize: bypassed or reordered authorization checks, TOCTOU races, blocking calls or network access on Endpoint
+            Security callback paths (code-signing evaluation there must pass kSecCSNoNetworkAccess / .noNetworkAccess), unbounded
+            CPU or memory in kernel-adjacent handlers, IPC peer-validation gaps (audit_token plus a code-signing requirement on
+            every XPC channel), trusting userspace-claimed fields where a kernel-vouched value exists (use audit_token-derived
+            PIDs, not es_process_t claims), secrets or PII in log statements, audit-log tampering (audit_events is append-only),
+            weak crypto, and SQL injection.
+            Performance on ingestion paths (ES event handling, event upload pipeline, MySQL writes on the ingest path) is a
+            correctness concern: flag per-event allocations, N+1 queries, and lock contention there.
+            This tree is largely AI-generated, so also flag, secondary to the above: a new helper, type, validator, or endpoint
+            that re-implements logic already present in the same bounded context or in shared internal/ or api/ packages (name the
+            existing symbol to reuse), and defensive branches for states no caller can produce or the type system already rules
+            out.
+            Do not flag: style or formatting that linters own (golangci-lint, SwiftLint, Prettier, dash-lint); Go 1.27 language
+            and stdlib features (integer range expressions, strings.SplitSeq, stdlib uuid) as compile errors; the words "fleet"
+            and "fleets" in docs/fleet-deployment.md; long Markdown lines, because prose here is never hard-wrapped.
+            Files under openspec/ use literal tool-parsed markers ("## ADDED Requirements", "### Requirement:",
+            "#### Scenario:") that are exempt from heading-style rules. A behavior change is specified by a delta under
+            openspec/changes/<name>/specs/**; the canonical openspec/specs/** tree changes only when `openspec archive` runs at
+            release, so never ask a PR to edit openspec/specs/** directly.
