@@ -37,12 +37,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  # issue_comment carries no pull_request object, so the number comes from the issue instead. Not cancel-in-progress here: a
-  # review that is already talking to the model should finish rather than be discarded by a second `/review`.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: false
-
 jobs:
   # Authorization is its own job ON PURPOSE, and it declares no environment and receives no secrets. The review job below cannot
   # start until this one says yes, so the model key is never granted to a run that turns out to be unauthorized. Doing the same
@@ -92,6 +86,16 @@ jobs:
     name: Review
     needs: authorize
     if: needs.authorize.outputs.ok == 'true'
+    # Concurrency belongs on THIS job, not on the workflow. Every comment on the pull request triggers a run, including the ones
+    # `authorize` is about to reject, and a workflow-level group would admit all of them. GitHub keeps a running job but replaces
+    # the PENDING one whenever a newer run joins the group, so an ordinary unrelated comment could evict an owner's queued
+    # `/review` before it ever started. Gating the group on the authorized job means only real reviews contend.
+    #
+    # issue_comment carries no pull_request object, so the number comes from the issue instead. Not cancel-in-progress: a review
+    # already talking to the model should finish rather than be discarded.
+    concurrency:
+      group: ${{ github.workflow }}-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     # A dedicated environment, not a bare repository secret. Two reasons: the model key is then scoped to this one job rather
     # than readable by every workflow in the repo, and the environment carries its own branch policy, so the key stays

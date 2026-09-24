@@ -109,6 +109,14 @@ Steps:
   1. Check CodeRabbit schema currency vs https://docs.coderabbit.ai/reference/configuration
      and https://docs.coderabbit.ai/reference/yaml-template - flag any deprecated keys
      used in the repo's .coderabbit.yaml.
+  1b. Check the pr-agent config in .github/workflows/pr-agent.yml against upstream's
+     configuration.toml: every config.* / pr_reviewer.* / github_action_config.* key
+     still exists, config.model and config.fallback_models still name real models at
+     the assumed prices, and note anything new worth adopting (service_tier especially).
+     Do NOT hand-check the action's pinned version; Dependabot bumps it weekly.
+  1c. Look at the two dashboard-only settings, which have no file to audit:
+     Copilot review effort (policy: Lite by default, Balanced only for large or
+     sensitive PRs) and CodeReviewBot's trigger mode.
   2. For every path_filters + path_instructions glob, verify at least one
      file matches the current tree (use `git ls-files`).
   3. Review the tools list: confirm disables still match CI's gates, and
@@ -121,7 +129,7 @@ Steps:
   6. Verify multi-platform glob patterns still work for an EDR extending
      beyond macOS.
 
-If changes are needed: open a PR `coderabbit: config audit YYYY-Q\d` with
+If changes are needed: open a PR `review-bots: config audit YYYY-Q\d` with
 each change one-line-justified. If nothing changed: append a `done | no
 findings` entry to docs/maintenance/log.md.
 
