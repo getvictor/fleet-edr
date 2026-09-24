@@ -20,7 +20,7 @@ Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), a
 
 Two dashboard-only settings have no committed file and so can only be verified here, by looking at them:
 
-- **Copilot review effort.** Policy is Lite by default and Balanced only for large or sensitive pull requests, because Balanced was measured on this repo at roughly 204 credits (about $2.04) a review against Lite's fraction of that. Confirm the org or repo setting still matches, and note that GitHub's own default moved to Balanced on 2026-09-28, so a setting left on "Default" is Balanced.
+- **Copilot review effort.** Policy is Lite by default and Balanced only for large or sensitive pull requests, because Balanced was measured on this repo at roughly 204 credits (about $2.04) a review against Lite's fraction of that. Confirm the org or repo setting still matches, and note that GitHub's own default changes from Lite to Balanced on 2026-09-28: before that date a setting left on "Default" is Lite, on or after it the same setting is Balanced.
 - **CodeReviewBot trigger mode**, which has no in-repo config at all.
 
 ## Steps
