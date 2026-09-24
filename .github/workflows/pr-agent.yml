@@ -55,6 +55,14 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      # pr-agent exits 0 even when the model call fails. A wrong, missing, or revoked key surfaces only as a WARNING in the step
+      # log ("Incorrect API key provided: dummy_key") and the job still reports success, so the review silently stops happening and
+      # the green check says otherwise. Bracketing the review with a timestamp and asserting that something was actually posted is
+      # what turns that into a failure.
+      - name: Note the time before the review
+        id: before
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Review the pull request
         uses: the-pr-agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
         env:
@@ -107,3 +115,30 @@ jobs:
             "#### Scenario:") that are exempt from heading-style rules. A behavior change is specified by a delta under
             openspec/changes/<name>/specs/**; the canonical openspec/specs/** tree changes only when `openspec archive` runs at
             release, so never ask a PR to edit openspec/specs/** directly.
+
+      - name: Fail if no review was posted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Interpolated into the environment, never into the script body: a PR number is harmless, but keeping every dynamic
+          # value out of `run:` is what stops a future edit from introducing template injection.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SINCE: ${{ steps.before.outputs.at }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # pr-agent publishes as github-actions[bot], on either surface depending on the tool and the settings in play, so both
+          # are counted. `--jq` filters server-side on the timestamp taken before the review ran, which is what keeps an older
+          # review on the same PR from vouching for this run.
+          comments=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.created_at >= \"$SINCE\")] | length")
+          reviews=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            --jq "[.[] | select(.user.login == \"github-actions[bot]\") | select(.submitted_at >= \"$SINCE\")] | length")
+          total=$(( comments + reviews ))
+          if [ "$total" -eq 0 ]; then
+            echo "::error::pr-agent posted no review (checked comments and reviews since $SINCE)." \
+                 "The step above exits 0 even when the model call fails, so read its log:" \
+                 "an authentication error naming 'dummy_key' means OPENAI_KEY is missing from the pr-agent-review environment" \
+                 "or is no longer valid."
+            exit 1
+          fi
+          echo "pr-agent posted $total item(s) since $SINCE."
