@@ -90,7 +90,7 @@ Use any existing task file as a template. Update the cadence calendar above and 
 
 - [`claude-config-audit`](tasks/claude-config-audit.md): `.claude/settings*.json`, hooks, slash commands, skills
 - [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md): `~/.claude/projects/.../MEMORY.md` + [`CLAUDE.md`](../../CLAUDE.md) accuracy
-- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md): `.coderabbit.yaml` + future Copilot/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
+- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md): `.coderabbit.yaml` and the pr-agent workflow's config, plus Copilot instructions: schema currency against upstream, path-glob validity, tools roster, pre-merge thresholds, and the two dashboard-only settings (Copilot review effort, CodeReviewBot trigger mode) that no committed file records
 
 ### Product / cross-cutting
 

@@ -10,11 +10,18 @@ This task is the periodic re-grounding. It is deliberately small (30 min) becaus
 
 ## Scope
 
-Primary: `.coderabbit.yaml`.
+Primary: `.coderabbit.yaml` and [`.github/workflows/pr-agent.yml`](../../../.github/workflows/pr-agent.yml), which is where the open-source reviewer's configuration lives. It is deliberately not in `.pr_agent.toml`: that file is the hosted Qodo app's, and keeping the two apart stopped them perturbing each other. If Qodo is retired, `.pr_agent.toml` becomes dead config and should be deleted rather than left to look authoritative.
 
-Secondary (when they appear): any future PR-review-bot config files committed to the repo, such as [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), `.qodo/config.yaml`, etc. Treat this audit as the catch-all for the class.
+Secondary: [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), and any future PR-review-bot config committed to the repo. Treat this audit as the catch-all for the class.
 
-Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), CodeRabbit's organization-level / dashboard-only settings (those drift separately and the bot's own UI surfaces them).
+Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), and the review skill `ai-review-fixes-edr`, which holds the round policy and is per-maintainer.
+
+**Not in scope because it is already automated:** the pinned version of the pr-agent action. Dependabot's `github-actions` ecosystem entry groups `patterns: ["*"]`, so the pin is bumped weekly on its own. Do not hand-check it.
+
+Two dashboard-only settings have no committed file and so can only be verified here, by looking at them:
+
+- **Copilot review effort.** Policy is Lite by default and Balanced only for large or sensitive pull requests, because Balanced was measured on this repo at roughly 204 credits (about $2.04) a review against Lite's fraction of that. Confirm the org or repo setting still matches, and note that GitHub's own default changes from Lite to Balanced on 2026-09-28: before that date a setting left on "Default" is Lite, on or after it the same setting is Balanced.
+- **CodeReviewBot trigger mode**, which has no in-repo config at all.
 
 ## Steps
 
@@ -27,6 +34,16 @@ Skim CodeRabbit's [configuration reference](https://docs.coderabbit.ai/reference
 - No new top-level key was added that this repo would obviously benefit from (e.g. an audit-trail option, a security-tuning preset).
 
 Note any deprecation warnings in CodeRabbit's most recent walkthrough on a merged PR: the bot itself flags deprecated keys.
+
+### 1b. pr-agent config currency
+
+The open-source reviewer's schema drifts from the hosted product it was forked out of, and most of the hosted keys simply do not exist upstream. Check the workflow's `env:` block against upstream's [`configuration.toml`](https://github.com/The-PR-Agent/pr-agent/blob/main/pr_agent/settings/configuration.toml):
+
+- Every `config.*` / `pr_reviewer.*` / `github_action_config.*` key set in the workflow still exists upstream and still means what the comment says it does.
+- `config.model` and `config.fallback_models` still name models that exist and are still priced as assumed. The pin is deliberate: upstream's default is a MOVING alias, so leaving it unset locks neither a version nor a price.
+- Anything new upstream worth adopting. `service_tier` is the one to watch: it would halve token cost via flex processing, and its absence is the only reason flex is not used here.
+
+Note what this step cannot protect against. The action is SHA-pinned but upstream's Dockerfile is `FROM pragent/pr-agent:github_action`, a mutable tag, so the code that actually runs is always upstream's latest regardless of the pin. The exposure is an upstream regression reaching CI ungated, not staleness.
 
 ### 2. Path glob validity
 
@@ -74,7 +91,7 @@ A new platform's code landing should not require rewriting `.coderabbit.yaml` fr
 
 ### 7. Commit + log
 
-If anything changed: open a PR titled `coderabbit: config audit YYYY-Q\d`, listing each change with a one-line rationale.
+If anything changed: open a PR titled `review-bots: config audit YYYY-Q\d`, listing each change with a one-line rationale. The prefix says review-bots rather than coderabbit because the audit now covers pr-agent and the dashboard-only settings too.
 
 Even if nothing changed: append an entry to [`docs/maintenance/log.md`](../log.md) recording `done` with `no findings`. The empty entries are how we know the cadence is being honoured. Keep the entry to one tight line per the format at the top of that file.
 
@@ -92,6 +109,14 @@ Steps:
   1. Check CodeRabbit schema currency vs https://docs.coderabbit.ai/reference/configuration
      and https://docs.coderabbit.ai/reference/yaml-template - flag any deprecated keys
      used in the repo's .coderabbit.yaml.
+  1b. Check the pr-agent config in .github/workflows/pr-agent.yml against upstream's
+     configuration.toml: every config.* / pr_reviewer.* / github_action_config.* key
+     still exists, config.model and config.fallback_models still name real models at
+     the assumed prices, and note anything new worth adopting (service_tier especially).
+     Do NOT hand-check the action's pinned version; Dependabot bumps it weekly.
+  1c. Look at the two dashboard-only settings, which have no file to audit:
+     Copilot review effort (policy: Lite by default, Balanced only for large or
+     sensitive PRs) and CodeReviewBot's trigger mode.
   2. For every path_filters + path_instructions glob, verify at least one
      file matches the current tree (use `git ls-files`).
   3. Review the tools list: confirm disables still match CI's gates, and
@@ -104,7 +129,7 @@ Steps:
   6. Verify multi-platform glob patterns still work for an EDR extending
      beyond macOS.
 
-If changes are needed: open a PR `coderabbit: config audit YYYY-Q\d` with
+If changes are needed: open a PR `review-bots: config audit YYYY-Q\d` with
 each change one-line-justified. If nothing changed: append a `done | no
 findings` entry to docs/maintenance/log.md.
 
