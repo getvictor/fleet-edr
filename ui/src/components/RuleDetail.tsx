@@ -203,8 +203,9 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
                       Gated on `resolved` as well as the mode: for a legacy response that omits `mode`, this row reports the rule's
                       own DECLARATION and says the server cannot tell what is in force. A rule declaring monitor can be disabled by a
                       setting that response knows nothing about, so offering its records there would contradict the sentence beside
-                      them. Offered without the "only when matches were recorded" condition the Observed-count link carries. That condition is derived from the match counts, which live behind
-                      detection_config.read and are not readable here; the records page states its own empty case. */}
+                      them. Offered without the "only when matches were recorded" condition the Observed-count link carries: that
+                      condition is derived from the match counts, which live behind detection_config.read and are not readable
+                      here, and the records page states its own empty case. */}
                   {row.resolved && row.mode === "monitor" && (
                     <>
                       {" "}
