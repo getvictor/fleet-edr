@@ -6,11 +6,11 @@ Monitor records are gated on `alert.read` and their only entry point is the Obse
 
 That is most of what the engine observes: 66 imported rules default to monitor, and on the dogfood deployment 1,296 of 2,419 rows in the alerts table are monitor records.
 
-The rule detail page makes it worse rather than neutral. It is gated on `alert.read`, it tells the reader the rule runs in monitor mode, and the only thing it offers them is a link into detection tuning, which will refuse them.
-
 ## What changes
 
-The rule detail page offers a monitor-mode rule's records, and stops linking an operator to detection tuning when they cannot open it.
+The rule detail page offers a monitor-mode rule's records.
+
+The issue also claimed the page's post-create notice linked analysts into detection tuning, which would refuse them. That was wrong and is not changed here: the notice renders only after a rule is created, creating needs `rule_content.write`, and every role holding it (`admin`, `super_admin`) also holds `detection_config.read`. No role can reach the branch, so adding one would have been dead code.
 
 This is navigation only. The permission model is unchanged: both the page and the records route were already gated on `alert.read`, and nothing here widens what anyone may read.
 

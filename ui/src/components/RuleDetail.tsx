@@ -83,9 +83,7 @@ export function RuleDetail() {
           seconds.
           {saved === "created" && (
             <>
-              {" "}It runs in monitor mode until it is promoted{can(PermissionAction.DetectionConfigRead)
-                ? <> in <Link to="/detection-config">Detection tuning</Link></>
-                : ", which needs the detection-tuning permission"}.
+              {" "}It runs in monitor mode until you promote it in <Link to="/detection-config">Detection tuning</Link>.
             </>
           )}
         </div>
@@ -202,10 +200,12 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
                       role does not hold, so without this link the records are permitted and unreachable for the role whose job is
                       reading them (issue #1165).
 
-                      Offered whenever the rule is in monitor mode, without the "only when matches were recorded" condition the
-                      Observed-count link carries. That condition is derived from the match counts, which live behind
+                      Gated on `resolved` as well as the mode: for a legacy response that omits `mode`, this row reports the rule's
+                      own DECLARATION and says the server cannot tell what is in force. A rule declaring monitor can be disabled by a
+                      setting that response knows nothing about, so offering its records there would contradict the sentence beside
+                      them. Offered without the "only when matches were recorded" condition the Observed-count link carries. That condition is derived from the match counts, which live behind
                       detection_config.read and are not readable here; the records page states its own empty case. */}
-                  {row.mode === "monitor" && (
+                  {row.resolved && row.mode === "monitor" && (
                     <>
                       {" "}
                       <Link to={`/rules/${encodeURIComponent(entry.id)}/monitor-records`}>See what it has matched</Link>.

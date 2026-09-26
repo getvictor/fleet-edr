@@ -4,9 +4,8 @@
 
 The detection-tuning view SHALL offer, beside each rule's Observed count, a way to open that rule's monitor records. The count tells an operator how often a rule matched, and the records show what it matched, which is what promoting a rule turns on. A rule with no recorded matches, or whose counts could not be read, SHALL NOT offer the link, because it would open onto records the count gives no reason to expect.
 
-A rule's detail view SHALL offer the same destination for a rule running in monitor mode, to any operator who may open that view. The records and the rule detail are gated on the same action, while detection tuning is gated on another that the investigating role does not hold, so without this the records are readable and unreachable for that role. This entry point SHALL NOT carry the Observed count's "only when matches were recorded" condition, because that condition is derived from the match counts, which are served behind the detection-tuning action and are not available here; the records view states its own empty case instead.
+A rule's detail view SHALL offer the same destination for a rule running in monitor mode, to any operator who may open that view. The records and the rule detail are gated on the same action, while detection tuning is gated on another that the investigating role does not hold, so without this the records are readable and unreachable for that role. This entry point SHALL NOT carry the Observed count's "only when matches were recorded" condition, because that condition is derived from the match counts, which are served behind the detection-tuning action and are not available here; the records view states its own empty case instead. It SHALL be offered only where the mode in force was actually resolved: a response that cannot report the mode in force reports the rule's own declaration, and a rule declaring monitor may be disabled by a setting that response knows nothing about, so offering its records there would contradict the view beside them.
 
-A view SHALL NOT offer an operator a link to detection tuning when they may not open it. Where the destination is unavailable, the surface SHALL say what is needed instead of presenting a link that resolves to a refusal.
 
 The records view SHALL list the rule's monitor records newest first, each opening the same investigation surface an alert opens. It SHALL state that monitor records are not alerts, and SHALL explain that records collapse repeat matches on the same process and are kept on their own retention window, so there can be fewer records than the Observed count. Where the two numbers meet, an unexplained difference reads as lost data.
 
@@ -25,7 +24,7 @@ A monitor record's investigation surface SHALL NOT offer triage controls, becaus
 - **WHEN** they open the detail of a rule running in monitor mode
 - **THEN** that rule's monitor records are offered from the detail view
 - **AND** a rule that alerts, or that is disabled, offers no records link
-- **AND** where the view would otherwise link to detection tuning, it says what is needed instead of offering the link
+- **AND** a rule whose mode in force the server cannot report offers no records link
 
 #### Scenario: The records view explains why it can show fewer than the count
 

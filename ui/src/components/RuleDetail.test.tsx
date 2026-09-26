@@ -390,22 +390,15 @@ describe("RuleDetail monitor records", () => {
     expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
   });
 
-  // The post-create notice used to send every author to Detection tuning. An analyst who writes a rule holds alert.read and not
-  // detection_config.read, so that link opened onto a refusal; the sentence now says what is needed instead of linking.
-  it("does not link a new rule's author to detection tuning without the permission for it", async () => {
-    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
-    render(
-      <PermissionsProvider permissions={[PermissionAction.AlertRead]}>
-        <MemoryRouter initialEntries={[{ pathname: "/rules/vendored", state: { saved: "created" } }]}>
-          <Routes>
-            <Route path="/rules/:ruleId" element={<RuleDetail />} />
-          </Routes>
-        </MemoryRouter>
-      </PermissionsProvider>,
-    );
+  // A response that omits `mode` is an older server saying it cannot report the mode in force, not one reporting monitor. The rule
+  // may be disabled by a setting that response knows nothing about, so offering its records would contradict the sentence beside
+  // them. The row is still rendered, because the declaration is worth showing; only the affordance is withheld.
+  it("offers no records link when the server cannot report the mode in force", async () => {
+    mockDocs([makeEntry({ id: "legacy", default_mode: "monitor", mode: undefined, mode_source: undefined })]);
+    renderWithPermissions([PermissionAction.AlertRead], "legacy");
 
-    expect(await screen.findByText(/needs the detection-tuning permission/i)).toBeVisible();
-    expect(screen.queryByRole("link", { name: /detection tuning/i })).toBeNull();
+    expect(await screen.findByText(/does not report the mode in force/)).toBeVisible();
+    expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
   });
 });
 
@@ -490,9 +483,7 @@ describe("RuleDetail after a save", () => {
     expect(await screen.findByText(/Waiting for the server to load/)).toBeVisible();
     expect(screen.queryByText(/Unknown rule/)).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent("Rule created. The server applies it when it next reloads its rules, within 30");
-    // This harness renders without a PermissionsProvider, which grants everything, so the sentence carries the Detection-tuning
-    // link. The companion case, an author who cannot open that page, is covered in the monitor-records describe block.
-    expect(screen.getByRole("status")).toHaveTextContent("It runs in monitor mode until it is promoted in Detection tuning.");
+    expect(screen.getByRole("status")).toHaveTextContent("It runs in monitor mode until you promote it in Detection tuning.");
 
     // The notice leads the page, above whatever the body shows while it waits.
     const waiting = screen.getByText(/Waiting for the server to load/);
