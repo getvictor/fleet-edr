@@ -337,6 +337,78 @@ describe("RuleDetail references", () => {
   });
 });
 
+// Monitor records are gated on alert.read, the same action that gates this page, but their only other entry point is the Observed
+// column in detection tuning, which needs detection_config.read. The analyst role holds the first and not the second, so before
+// issue #1165 the records were permitted and unreachable for the role whose job is reading them.
+describe("RuleDetail monitor records", () => {
+  function renderWithPermissions(permissions: string[], ruleId = "vendored") {
+    return render(
+      <PermissionsProvider permissions={permissions}>
+        <MemoryRouter initialEntries={[`/rules/${ruleId}`]}>
+          <Routes>
+            <Route path="/rules/:ruleId" element={<RuleDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </PermissionsProvider>,
+    );
+  }
+
+  // spec:web-ui/monitor-records-are-reachable-from-the-observed-count/a-monitor-rule-offers-its-records-from-its-own-page
+  it("offers a monitor rule's records to an operator who cannot open detection tuning", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    renderWithPermissions([PermissionAction.AlertRead]);
+
+    expect(await screen.findByRole("link", { name: /what it has matched/i }))
+      .toHaveAttribute("href", "/rules/vendored/monitor-records");
+  });
+
+  // The link is about what the rule is DOING, not about who is looking: an admin reads the same page and the records are the same
+  // records. Gating it on the absence of detection_config.read would hide it from the operator most likely to act on it.
+  it("offers the records to an operator who can also open detection tuning", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    renderWithPermissions([PermissionAction.AlertRead, PermissionAction.DetectionConfigRead]);
+
+    expect(await screen.findByRole("link", { name: /what it has matched/i })).toBeVisible();
+  });
+
+  // A rule that alerts has no monitor records to read, and the Mode row it would hang off is not rendered for one either.
+  it("offers no records link for a rule that alerts", async () => {
+    mockDocs([makeEntry({ id: "ours", default_mode: "alert", mode: "alert", mode_source: "default" })]);
+    renderWithPermissions([PermissionAction.AlertRead], "ours");
+
+    expect(await screen.findByText("Suspicious exec")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
+  });
+
+  // A disabled rule produces nothing now, but its records are the history of what it matched while it was still monitoring, so the
+  // row is rendered without the link: the page must not imply a disabled rule is still recording.
+  it("offers no records link for a disabled rule", async () => {
+    mockDocs([makeEntry({ id: "off", default_mode: "monitor", mode: "disabled", mode_source: "setting" })]);
+    renderWithPermissions([PermissionAction.AlertRead], "off");
+
+    expect(await screen.findByText("Disabled")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
+  });
+
+  // The post-create notice used to send every author to Detection tuning. An analyst who writes a rule holds alert.read and not
+  // detection_config.read, so that link opened onto a refusal; the sentence now says what is needed instead of linking.
+  it("does not link a new rule's author to detection tuning without the permission for it", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    render(
+      <PermissionsProvider permissions={[PermissionAction.AlertRead]}>
+        <MemoryRouter initialEntries={[{ pathname: "/rules/vendored", state: { saved: "created" } }]}>
+          <Routes>
+            <Route path="/rules/:ruleId" element={<RuleDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </PermissionsProvider>,
+    );
+
+    expect(await screen.findByText(/needs the detection-tuning permission/i)).toBeVisible();
+    expect(screen.queryByRole("link", { name: /detection tuning/i })).toBeNull();
+  });
+});
+
 // The rule's document is read through endpoints gated on rule_content.read, so the page shows it only to an operator who holds that
 // permission and never offers a panel that could only fail (issue #1001).
 describe("RuleDetail rule document", () => {
@@ -418,7 +490,9 @@ describe("RuleDetail after a save", () => {
     expect(await screen.findByText(/Waiting for the server to load/)).toBeVisible();
     expect(screen.queryByText(/Unknown rule/)).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent("Rule created. The server applies it when it next reloads its rules, within 30");
-    expect(screen.getByRole("status")).toHaveTextContent("It runs in monitor mode until you promote it in Detection tuning.");
+    // This harness renders without a PermissionsProvider, which grants everything, so the sentence carries the Detection-tuning
+    // link. The companion case, an author who cannot open that page, is covered in the monitor-records describe block.
+    expect(screen.getByRole("status")).toHaveTextContent("It runs in monitor mode until it is promoted in Detection tuning.");
 
     // The notice leads the page, above whatever the body shows while it waits.
     const waiting = screen.getByText(/Waiting for the server to load/);

@@ -1,0 +1,4 @@
+- [x] Offer a monitor-mode rule's records from the rule detail page, for any operator who can open that page
+- [x] Stop offering a Detection-tuning link to an operator without `detection_config.read`; say what is needed instead
+- [x] Tests: records link present for a monitor rule, absent for alerting and disabled rules, present regardless of `detection_config.read`, and the post-create notice does not link without the permission
+- [x] Mutation-test both guards (the monitor-mode condition and the permission gate)
