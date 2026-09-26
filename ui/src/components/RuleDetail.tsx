@@ -194,6 +194,24 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
                   {/* Only claimed when a mode was actually resolved: saying "resolved at global scope" right after "this server
                       does not report the mode in force" is a contradiction in consecutive sentences. */}
                   {row.resolved && " Resolved at global scope; a host-group setting can differ for the hosts in that group."}
+                  {/* The records are the point of monitor mode: they are what promoting the rule would have raised. This page is
+                      gated on alert.read and so is the records route, so every reader here can follow it. Detection tuning offers
+                      the same destination beside its Observed count, but that view needs detection_config.read, which the analyst
+                      role does not hold, so without this link the records are permitted and unreachable for the role whose job is
+                      reading them (issue #1165).
+
+                      Gated on `resolved` as well as the mode: for a legacy response that omits `mode`, this row reports the rule's
+                      own DECLARATION and says the server cannot tell what is in force. A rule declaring monitor can be disabled by a
+                      setting that response knows nothing about, so offering its records there would contradict the sentence beside
+                      them. Offered without the "only when matches were recorded" condition the Observed-count link carries: that
+                      condition is derived from the match counts, which live behind detection_config.read and are not readable
+                      here, and the records page states its own empty case. */}
+                  {row.resolved && row.mode === "monitor" && (
+                    <>
+                      {" "}
+                      <Link to={`/rules/${encodeURIComponent(entry.id)}/monitor-records`}>See what it has matched</Link>.
+                    </>
+                  )}
                 </td>
               </tr>
             );

@@ -337,6 +337,71 @@ describe("RuleDetail references", () => {
   });
 });
 
+// Monitor records are gated on alert.read, the same action that gates this page, but their only other entry point is the Observed
+// column in detection tuning, which needs detection_config.read. The analyst role holds the first and not the second, so before
+// issue #1165 the records were permitted and unreachable for the role whose job is reading them.
+describe("RuleDetail monitor records", () => {
+  function renderWithPermissions(permissions: string[], ruleId = "vendored") {
+    return render(
+      <PermissionsProvider permissions={permissions}>
+        <MemoryRouter initialEntries={[`/rules/${ruleId}`]}>
+          <Routes>
+            <Route path="/rules/:ruleId" element={<RuleDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </PermissionsProvider>,
+    );
+  }
+
+  // spec:web-ui/monitor-records-are-reachable-from-the-observed-count/a-monitor-rule-offers-its-records-from-its-own-page
+  it("offers a monitor rule's records to an operator who cannot open detection tuning", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    renderWithPermissions([PermissionAction.AlertRead]);
+
+    expect(await screen.findByRole("link", { name: /what it has matched/i }))
+      .toHaveAttribute("href", "/rules/vendored/monitor-records");
+  });
+
+  // The link is about what the rule is DOING, not about who is looking: an admin reads the same page and the records are the same
+  // records. Gating it on the absence of detection_config.read would hide it from the operator most likely to act on it.
+  it("offers the records to an operator who can also open detection tuning", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    renderWithPermissions([PermissionAction.AlertRead, PermissionAction.DetectionConfigRead]);
+
+    expect(await screen.findByRole("link", { name: /what it has matched/i })).toBeVisible();
+  });
+
+  // A rule that alerts has no monitor records to read, and the Mode row it would hang off is not rendered for one either.
+  it("offers no records link for a rule that alerts", async () => {
+    mockDocs([makeEntry({ id: "ours", default_mode: "alert", mode: "alert", mode_source: "default" })]);
+    renderWithPermissions([PermissionAction.AlertRead], "ours");
+
+    expect(await screen.findByText("Suspicious exec")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
+  });
+
+  // A disabled rule produces nothing now, but its records are the history of what it matched while it was still monitoring, so the
+  // row is rendered without the link: the page must not imply a disabled rule is still recording.
+  it("offers no records link for a disabled rule", async () => {
+    mockDocs([makeEntry({ id: "off", default_mode: "monitor", mode: "disabled", mode_source: "setting" })]);
+    renderWithPermissions([PermissionAction.AlertRead], "off");
+
+    expect(await screen.findByText("Disabled")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
+  });
+
+  // A response that omits `mode` is an older server saying it cannot report the mode in force, not one reporting monitor. The rule
+  // may be disabled by a setting that response knows nothing about, so offering its records would contradict the sentence beside
+  // them. The row is still rendered, because the declaration is worth showing; only the affordance is withheld.
+  it("offers no records link when the server cannot report the mode in force", async () => {
+    mockDocs([makeEntry({ id: "legacy", default_mode: "monitor", mode: undefined, mode_source: undefined })]);
+    renderWithPermissions([PermissionAction.AlertRead], "legacy");
+
+    expect(await screen.findByText(/does not report the mode in force/)).toBeVisible();
+    expect(screen.queryByRole("link", { name: /what it has matched/i })).toBeNull();
+  });
+});
+
 // The rule's document is read through endpoints gated on rule_content.read, so the page shows it only to an operator who holds that
 // permission and never offers a panel that could only fail (issue #1001).
 describe("RuleDetail rule document", () => {

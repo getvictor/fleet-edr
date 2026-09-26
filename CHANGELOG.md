@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rule that runs in monitor mode links to what it has matched.** Those records were reachable only from the Observed count in Detection tuning, which needs a permission the analyst role does not hold, so the records were readable in principle and unreachable in practice for the people who investigate. A rule's own page now offers them.
+
 ## [0.6.0] (2026-09-22)
 
 ### Upgrade notes (action required)
