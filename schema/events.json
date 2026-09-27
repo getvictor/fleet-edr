@@ -113,6 +113,18 @@
         "is_platform_binary": { "type": "boolean" }
       }
     },
+    "package_signing": {
+      "type": "object",
+      "required": ["signed", "notarized", "team_id"],
+      "properties": {
+        "signed": { "type": "boolean", "description": "True when the package's signature chains to a certificate macOS trusts." },
+        "notarized": { "type": "boolean", "description": "True when Apple's notary service accepted the package. Context, not trust." },
+        "team_id": {
+          "type": "string",
+          "description": "The Developer ID team that signed the package, or empty when unsigned, untrusted, or signed by Apple itself."
+        }
+      }
+    },
     "btm_launch_item_add_payload": {
       "type": "object",
       "required": ["item_type", "item_path"],
@@ -162,6 +174,10 @@
           "type": "string",
           "pattern": "^[0-9a-f]{40}$",
           "description": "Code-directory hash (sha1 of the CDDirectory blob) the agent extracts on Hardened-Runtime binaries (issue #68). Optional: NULL for non-HR processes since the ESF target tuple lacks a meaningful cdhash for them. 40 lowercase hex characters when present."
+        },
+        "package_signing": {
+          "$ref": "#/definitions/package_signing",
+          "description": "Optional. On an installer script's exec only: the signature of the package the script belongs to, read by the agent from the package path PackageKit passes as the script's first argument. Set only when the exec's parent is Apple's package_script_service; absent when the package could not be read."
         },
         "snapshot": {
           "type": "boolean",

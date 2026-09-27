@@ -197,7 +197,9 @@ func pumpEvents(ctx context.Context, recv *receiver.Receiver, q *queue.Queue, lo
 				return
 			}
 			// Mirror the production agent: fill a btm_launch_item_add event's executable_code_signing on darwin. The
-			// linux headless build's codesign.Evaluate is a no-op stub, so synthetic events keep their pre-set signing.
+			// linux headless build's codesign.Evaluate is a no-op stub, so synthetic events keep their pre-set signing. The
+			// installer-script package signature is not mirrored: it needs the process table this build does not keep, and
+			// off darwin there are no packages to read.
 			data := enrich.BtmExecutableSigning(ev.Data, codesign.Evaluate)
 			if err := q.Enqueue(ctx, data); err != nil {
 				logger.WarnContext(ctx, "enqueue failed", "err", err, "event_bytes", len(data))
