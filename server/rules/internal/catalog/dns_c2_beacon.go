@@ -31,7 +31,11 @@ import (
 //
 // MITRE ATT&CK: T1071.004 (Application Layer Protocol: DNS), plus T1568.002 (Dynamic Resolution: Domain Generation
 // Algorithms) when the resolved domain trips the entropy signal.
-type DNSC2Beacon struct{}
+type DNSC2Beacon struct {
+	// Exclusions is the per-host false-positive resolver, consulted for the connecting process and for the domain it resolved (issue
+	// #1154). Nil excludes nothing.
+	Exclusions api.ExclusionResolver
+}
 
 func (r *DNSC2Beacon) ID() string { return "dns_c2_beacon" }
 
@@ -39,8 +43,18 @@ func (r *DNSC2Beacon) ID() string { return "dns_c2_beacon" }
 // a later outbound connect whose remote address the query resolved, inside a window.
 func (r *DNSC2Beacon) AlgorithmName() string { return "dns_resolve_then_connect" }
 
-// SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
-func (r *DNSC2Beacon) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+// SupportedExclusionMatchTypes lists what an operator can waive a known-good phone-home by (issue #1154): the domain the process
+// resolved, or the process itself by its path glob and code-signing identity. The process dimensions are processExcluded's, so a
+// signing_id here resists a planted binary exactly as it does on suspicious_exec.
+func (r *DNSC2Beacon) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
+	return []api.ExclusionMatchType{
+		api.ExclusionMatchDomain,
+		api.ExclusionMatchPathGlob,
+		api.ExclusionMatchTeamID,
+		api.ExclusionMatchSigningID,
+		api.ExclusionMatchCDHash,
+	}
+}
 
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 //
@@ -89,8 +103,11 @@ func (r *DNSC2Beacon) Doc() api.Documentation {
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"network_connect", "dns_query", "exec"},
 		FalsePositives: []string{
-			"A legitimate tool staged in a temporary path that looks up a hostname and connects to it. This is rare on managed " +
-				"fleets; allowlist the path if it recurs.",
+			"A legitimate tool staged in a temporary path that looks up a hostname and connects to it, such as a build, test or " +
+				"load-generating binary. Exclude the service it talks to with a `domain` exclusion, which also covers its subdomains, " +
+				"when the destination is what you trust. Exclude the program instead when it is: by `team_id` or `signing_id` if it " +
+				"is signed, since a planted binary cannot claim either, or by a path glob anchored to its full path, with an expiry, " +
+				"if it is not.",
 		},
 		Limitations: []string{
 			"Sees plain UDP/TCP DNS only. Encrypted DNS (DoH/DoT) bypasses the proxy and is not correlated.",
@@ -99,6 +116,9 @@ func (r *DNSC2Beacon) Doc() api.Documentation {
 				"terminal) is a planned addition.",
 			"The lookup-then-connect window is bounded (currently 30 seconds). A beacon that looks up its domain far in advance of " +
 				"connecting is missed by design.",
+			"A `domain` exclusion trusts every address that domain resolves to. When two looked-up domains resolve to the same " +
+				"address, the most recent lookup is the one judged, so a program that looks up an excluded domain sharing a hosting " +
+				"provider's address with its real destination is not reported.",
 		},
 	}
 }
@@ -240,6 +260,10 @@ func (r *DNSC2Beacon) evalEvent(
 	if !isSuspiciousPath(proc.Path) {
 		return nil, 0, nil
 	}
+	// Checked before the network-event lookup, which an excluded process then never pays for.
+	if r.Exclusions != nil && processExcluded(r.Exclusions, r.ID(), api.ExclusionMatchPathGlob, proc, evt.HostID) {
+		return nil, 0, nil
+	}
 
 	// Retrieve the pid's network/DNS events, then bound the correlation in-memory on timestamp_ns. network_connect +
 	// dns_query share the NE clock, so timestamp_ns proximity is sound here even though GetNetworkEventsForProcess
@@ -253,6 +277,9 @@ func (r *DNSC2Beacon) evalEvent(
 
 	dnsEvt, queryName := selectResolvingQuery(netEvents, conn.RemoteAddress, evt.TimestampNs)
 	if dnsEvt == nil {
+		return nil, 0, nil
+	}
+	if r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchDomain, queryName, evt.HostID) {
 		return nil, 0, nil
 	}
 

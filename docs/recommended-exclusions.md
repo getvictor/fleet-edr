@@ -13,6 +13,7 @@ An exclusion is `(rule_id, match_type, value)`, with an optional expiry. The val
 - `signing_id`: matches a code-signing identifier QUALIFIED by who signed it, written `<TEAMID>:<identifier>` (for example `Q6L2SF6YDW:com.anthropic.claude-code`) or `platform:<identifier>` for a binary Apple ships. Both parts must match, so an ad-hoc binary claiming a vendor's identifier is not covered. `codesign -dv <binary>` prints both fields. A bare identifier is refused.
 - `cdhash`: matches a binary's code-directory hash exactly (40 lowercase hex characters), pinning one exact build. The agent reports a cdhash only for binaries built with Hardened Runtime, so it cannot match an ad-hoc signed binary such as most Homebrew formulae.
 - `path_glob`: matches an absolute filesystem path with the same glob semantics as `parent_path_glob`.
+- `domain`: matches a DNS name exactly or as a parent domain, ignoring case and a trailing dot: `example.com` matches `example.com` and `api.example.com`, not `notexample.com`.
 
 Which rule consumes which match type is fixed by the rule, and the console offers only the match types the selected rule actually consults. Creating an exclusion for a `(rule_id, match_type)` pair the rule does not consult, or for a rule that does not exist, is rejected by the API, so a stored exclusion cannot silently do nothing:
 
@@ -24,6 +25,8 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `persistence_launchagent` | `path_glob` | The plist path as typed on the launchctl command |
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
+| `dns_c2_beacon` | `domain` | The domain the process looked up before connecting |
+| `dns_c2_beacon` | `path_glob`, `team_id`, `signing_id`, `cdhash` | The process that looked it up and connected |
 
 Exclusions are keyed by rule id. `suspicious_exec` and `shell_network_connect` share the same parent-matching logic but not their exclusions, so silencing a parent on both shapes takes one exclusion per rule.
 

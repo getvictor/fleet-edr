@@ -157,7 +157,7 @@ func TestAll_CanonicalDisplayName(t *testing.T) {
 	}
 }
 
-// TestAll_ThreadsExclusionResolver confirms that the four exclusion-aware rules actually thread the supplied resolver onto their
+// TestAll_ThreadsExclusionResolver confirms that every exclusion-aware rule actually threads the supplied resolver onto their
 // Exclusions field. Without this, a refactor of New could silently drop the wiring and every fleet would suddenly see the alerts they
 // thought they'd silenced. The other rules don't consult exclusions, so they have no Exclusions field to check.
 func TestAll_ThreadsExclusionResolver(t *testing.T) {
@@ -171,6 +171,9 @@ func TestAll_ThreadsExclusionResolver(t *testing.T) {
 	assert.Same(t, res, byID["persistence_launchagent"].(*PersistenceLaunchAgent).Exclusions)
 	assert.Same(t, res, byID["privilege_launchd_plist_write"].(*PrivilegeLaunchdPlistWrite).Exclusions)
 	assert.Same(t, res, byID["sudoers_tamper"].(*SudoersTamper).Exclusions)
+	assert.Same(t, res, byID["sudoers_destroyed"].(*SudoersDestroyed).Exclusions)
+	assert.Same(t, res, byID["shell_network_connect"].(*ShellNetworkConnect).Exclusions)
+	assert.Same(t, res, byID["dns_c2_beacon"].(*DNSC2Beacon).Exclusions)
 }
 
 // Compile-time proof that the non-detections satisfy the optional interface. A rule that stops implementing it silently

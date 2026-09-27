@@ -452,13 +452,14 @@ A high-entropy, algorithmically generated domain name (the kind produced by a do
 
 ### Known false-positive sources
 
-- A legitimate tool staged in a temporary path that looks up a hostname and connects to it. This is rare on managed fleets; allowlist the path if it recurs.
+- A legitimate tool staged in a temporary path that looks up a hostname and connects to it, such as a build, test or load-generating binary. Exclude the service it talks to with a `domain` exclusion, which also covers its subdomains, when the destination is what you trust. Exclude the program instead when it is: by `team_id` or `signing_id` if it is signed, since a planted binary cannot claim either, or by a path glob anchored to its full path, with an expiry, if it is not.
 
 ### Limitations
 
 - Sees plain UDP/TCP DNS only. Encrypted DNS (DoH/DoT) bypasses the proxy and is not correlated.
 - The current detection requires the program to have been launched from a temporary or world-writable path. Detecting beacons started by a scripting interpreter that is running non-interactively (for example, a shell script with no terminal) is a planned addition.
 - The lookup-then-connect window is bounded (currently 30 seconds). A beacon that looks up its domain far in advance of connecting is missed by design.
+- A `domain` exclusion trusts every address that domain resolves to. When two looked-up domains resolve to the same address, the most recent lookup is the one judged, so a program that looks up an excluded domain sharing a hosting provider's address with its real destination is not reported.
 
 ## sensor_tamper
 
