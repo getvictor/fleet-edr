@@ -59,36 +59,36 @@ func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
 	assert.Equal(t, []string{"T1543.004"}, r.Techniques())
 }
 
-// TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases pins the contract of the allowed() helper over the executable's code-signing: an
-// Apple platform binary or an allowlisted team ID is trusted; an ad-hoc/unsigned or unknown-vendor executable is not. Notarization
-// is deliberately not a trust signal (see the rule doc). Exercised directly so the platform-binary + allowlist branches are covered
-// without fabricating a fixture per branch.
-func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
+// TestPrivilegeLaunchdPlistWrite_TrustedExecutables pins which registered executables the rule trusts: an Apple platform binary or an
+// excluded team; an ad-hoc/unsigned or unknown-vendor executable is not. Notarization is deliberately not a trust signal (see the
+// rule doc).
+func TestPrivilegeLaunchdPlistWrite_TrustedExecutables(t *testing.T) {
 	t.Parallel()
-	r := &PrivilegeLaunchdPlistWrite{Exclusions: &fakeExclusions{entries: []fakeExcl{
+	excluded := &fakeExclusions{entries: []fakeExcl{
 		{ruleID: "privilege_launchd_plist_write", matchType: api.ExclusionMatchTeamID, value: "VENDORALLOW"},
-	}}}
+	}}
 
 	cases := []struct {
-		name string
-		cs   codeSigningJSON
-		want bool
+		name  string
+		cs    codeSigningJSON
+		excl  api.ExclusionResolver
+		fires bool
 	}{
-		{"platform binary", codeSigningJSON{IsPlatformBinary: true}, true},
-		{"excluded team", codeSigningJSON{TeamID: "VENDORALLOW", IsPlatformBinary: false}, true},
-		{"unknown team, no exclusion hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
-		{"ad-hoc / unsigned (empty team, not platform)", codeSigningJSON{IsPlatformBinary: false}, false},
+		{"platform binary", codeSigningJSON{IsPlatformBinary: true}, excluded, false},
+		{"excluded team", codeSigningJSON{TeamID: "VENDORALLOW"}, excluded, false},
+		{"unknown team, no exclusion hit", codeSigningJSON{TeamID: "EVILCORP1"}, excluded, true},
+		{"ad-hoc / unsigned (empty team, not platform)", codeSigningJSON{}, excluded, true},
+		{"no resolver excludes nothing", codeSigningJSON{TeamID: "VENDORALLOW"}, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, r.allowed(tc.cs, "host-a"))
+			evt := btmRegistrationEvent(t, "daemon", "/Library/LaunchDaemons/x.plist", "/opt/x", &tc.cs, false)
+			findings, err := (&PrivilegeLaunchdPlistWrite{Exclusions: tc.excl}).Evaluate(t.Context(), []api.Event{evt}, stubGraphReader{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.fires, len(findings) == 1)
 		})
 	}
-
-	// Nil resolver branch: any non-platform executable falls through to "not allowed", the rule's default-construction shape.
-	rNoList := &PrivilegeLaunchdPlistWrite{}
-	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}, "host-a"))
 }
 
 // TestPrivilegeLaunchdPlistWrite_MalformedPayload exercises the json.Unmarshal failure path inside evalEvent: a btm_launch_item_add

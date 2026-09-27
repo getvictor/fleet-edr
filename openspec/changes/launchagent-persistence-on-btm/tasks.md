@@ -1,0 +1,6 @@
+- [x] Extract the BTM registration gate, the item subject and the signature matcher from the daemon rule, and share `signatureExcluded` with `processExcluded`
+- [x] Rebuild `persistence_launchagent` on agent registrations with `team_id`, `signing_id` and `path_glob` exclusions, converting the plist URL to a path
+- [x] Remove the rule's Sigma detection block and the conversion tests that pinned it; re-home their spec markers on the remaining conversions
+- [x] Replace the fixtures, the L6 efficacy and demo scenarios, and the attack runbook step with agent registrations
+- [x] Operator docs, the generated rule reference and the rule pack
+- [ ] Run the attack runbook's LaunchAgent step on a VM and confirm the alert

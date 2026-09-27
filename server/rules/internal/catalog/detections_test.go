@@ -153,27 +153,20 @@ func TestMustLoadDetections_LoadsTheEmbeddedPack(t *testing.T) {
 	assert.NotPanics(t, MustLoadDetections)
 }
 
-// spec:server-detection-rules-engine/an-alert-from-a-converted-rule-names-what-fired/a-finding-names-the-matched-element-rather-than-the-whole-field
-//
-// TestFieldReadback covers the helpers a converted rule uses to name what fired. The evaluator reports only THAT a list-valued
-// field matched, not which element did, so the rule re-finds it with the same predicate the detection used.
+// TestFieldReadback covers the helper a converted rule uses to read back a single-valued field it matched on.
 func TestFieldReadback(t *testing.T) {
 	t.Parallel()
 
-	payload := `{"pid":1,"ppid":0,"path":"/bin/launchctl","args":["launchctl","load","-w","/Library/LaunchAgents/evil.plist"]}`
+	payload := `{"pid":1,"ppid":0,"path":"/usr/bin/security","args":["security","dump-keychain","-d"]}`
 	se, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: []byte(payload)})
 	require.NoError(t, err)
 
-	assert.Equal(t, "load", firstField(se, "Subcommand"))
-	assert.Equal(t, "/Library/LaunchAgents/evil.plist", firstMatching(se, "CommandArguments", launchAgentPath.MatchString),
-		"the element that satisfied the detection, not the first operand")
-
+	assert.Equal(t, "dump-keychain", firstField(se, "Subcommand"))
 	assert.Empty(t, firstField(se, "EnvAssignments"), "an absent field reads as empty rather than panicking")
-	assert.Empty(t, firstMatching(se, "CommandArguments", func(string) bool { return false }), "no element matches")
-	assert.Empty(t, firstMatching(se, "NoSuchField", func(string) bool { return true }))
 }
 
 // spec:server-detection-rules-engine/an-alert-from-a-converted-rule-names-what-fired/an-attacker-supplied-value-is-withheld-from-the-description
+// spec:server-detection-rules-engine/an-alert-from-a-converted-rule-names-what-fired/a-finding-names-the-matched-element-rather-than-the-whole-field
 //
 // TestRedactedDyldAssignment pins that the injected library path stays out of the alert. The variable identifies the technique;
 // the value is attacker-chosen content that would be rendered into an operator-facing string.
@@ -192,6 +185,10 @@ func TestRedactedDyldAssignment(t *testing.T) {
 		{"library path", "/usr/bin/env", []string{"env", "DYLD_LIBRARY_PATH=/tmp/evil", "prog"}, "DYLD_LIBRARY_PATH=<redacted>"},
 		{"no assignment", "/usr/bin/true", []string{"/usr/bin/true"}, ""},
 		{"an unrelated assignment", "/usr/bin/env", []string{"env", "PATH=/bin", "prog"}, ""},
+		// EnvAssignments is list-valued and the detection reports only that SOME element matched, so the name must be the element
+		// that did, not the first assignment and not the whole list.
+		{"the matched element among several", "/usr/bin/env", []string{"env", "PATH=/bin", "DYLD_LIBRARY_PATH=/tmp/evil", "prog"},
+			"DYLD_LIBRARY_PATH=<redacted>"},
 		{"a leading assignment on an ordinary binary names nothing", "/bin/ls", []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib", "/bin/ls"}, ""},
 	}
 	for _, tc := range cases {

@@ -28,7 +28,7 @@ rules:
   - rule_id: persistence_launchagent
     severity: high
     expect: alert
-    description: launchctl load of a synthetic LaunchAgent plist
+    description: BTM registration of a synthetic LaunchAgent running an ad-hoc signed program
   - rule_id: dyld_insert
     severity: medium
     expect: alert

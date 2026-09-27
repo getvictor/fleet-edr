@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,197 +9,139 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/an-excluded-candidate-does-not-cover-its-neighbour
-// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/every-candidate-excluded-suppresses-the-finding
-// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/several-candidates-are-all-named
-func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
+func evaluateLaunchAgent(t *testing.T, excl api.ExclusionResolver, events ...api.Event) []api.Finding {
+	t.Helper()
+	findings, err := (&PersistenceLaunchAgent{Exclusions: excl}).Evaluate(t.Context(), events, stubGraphReader{})
+	require.NoError(t, err)
+	return findings
+}
+
+var zoomUpdater = &codeSigningJSON{TeamID: "BJ4HAAB9B3", SigningID: "us.zoom.ZoomDaemon"}
+
+// spec:server-detection-rules-engine/launchagent-persistence-judged-on-the-program/an-untrusted-agent-fires-without-launchctl
+//
+// The registration is the event, so nothing about how the plist became active matters. The fixture has no exec at all, which is
+// the shape the launchctl-based rule never saw: a plist written into ~/Library/LaunchAgents and picked up at the next login.
+func TestPersistenceLaunchAgent_AnUntrustedAgentFires(t *testing.T) {
 	t.Parallel()
-	type fixture struct {
-		name        string
-		args        []string
-		path        string
-		parentPath  string
-		wantFinding bool
-		wantDescHas string
-		// wantDescLacks is what the description must NOT name. An excluded plist belongs here: an analyst reading the alert
-		// should see what the exclusion left behind, not the benign path that was already accounted for (issue #1028).
-		wantDescLacks string
-		exclusions    *fakeExclusions
-	}
+	evt := btmRegistrationEvent(t, "agent", "/Users/alice/Library/LaunchAgents/com.evil.plist", "/Users/alice/.cache/evil",
+		&codeSigningJSON{SigningID: "a.out"}, false)
+	findings := evaluateLaunchAgent(t, nil, evt)
 
-	cases := []fixture{
-		{
-			name:        "user-level LaunchAgent load fires",
-			args:        []string{"/bin/launchctl", "load", "/Users/alice/Library/LaunchAgents/com.evil.agent.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: true,
-			wantDescHas: "com.evil.agent.plist",
-		},
-		{
-			name:        "system-level LaunchAgent bootstrap fires",
-			args:        []string{"/bin/launchctl", "bootstrap", "system", "/Library/LaunchAgents/com.evil.root.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/usr/bin/sudo",
-			wantFinding: true,
-			wantDescHas: "com.evil.root.plist",
-		},
-		{
-			name:        "launchctl unload does NOT fire (removing persistence is benign)",
-			args:        []string{"/bin/launchctl", "unload", "/Users/alice/Library/LaunchAgents/com.evil.agent.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: false,
-		},
-		{
-			name:        "launchctl list does NOT fire (no plist argument)",
-			args:        []string{"/bin/launchctl", "list"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: false,
-		},
-		{
-			name:        "non-launchctl binary does NOT fire",
-			args:        []string{"/bin/ls", "/Users/alice/Library/LaunchAgents/"},
-			path:        "/bin/ls",
-			parentPath:  "/bin/bash",
-			wantFinding: false,
-		},
-		{
-			name:        "plist outside LaunchAgents dir does NOT fire",
-			args:        []string{"/bin/launchctl", "load", "/opt/homebrew/Cellar/postgres/foo.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: false,
-		},
-		{
-			// The bypass issue #1028 closes, in the exact shape the issue describes: dogfood excludes the Logitech plist, and
-			// naming it first suppressed whatever was registered alongside it. Planting under /Library/LaunchAgents needs root;
-			// this needs none, because the first argument only has to NAME the excluded plist.
-			name: "an excluded plist does not cover the one beside it",
-			args: []string{
-				"/bin/launchctl", "load",
-				"/Library/LaunchAgents/com.logi.ghub.plist",
-				"/Users/alice/Library/LaunchAgents/evil.plist",
-			},
-			path:          "/bin/launchctl",
-			parentPath:    "/bin/bash",
-			wantFinding:   true,
-			wantDescHas:   "evil.plist",
-			wantDescLacks: "com.logi.ghub.plist",
-			exclusions: &fakeExclusions{entries: []fakeExcl{
-				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.logi.*.plist"},
-			}},
-		},
-		{
-			// Suppressed only when the operator excluded every one of them.
-			name: "several plists all excluded does NOT fire",
-			args: []string{
-				"/bin/launchctl", "load",
-				"/Library/LaunchAgents/com.logi.ghub.plist",
-				"/Library/LaunchAgents/com.okta.agent.plist",
-			},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: false,
-			exclusions: &fakeExclusions{entries: []fakeExcl{
-				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.logi.*.plist"},
-				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.okta.agent.plist"},
-			}},
-		},
-		{
-			// With no exclusion at all the description still has to name both, or an analyst reads the alert and never learns
-			// the second plist was registered.
-			name: "several plists with no exclusion names them all",
-			args: []string{
-				"/bin/launchctl", "load",
-				"/Users/alice/Library/LaunchAgents/com.first.plist",
-				"/Users/alice/Library/LaunchAgents/com.second.plist",
-			},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: true,
-			wantDescHas: "com.second.plist",
-		},
-		{
-			name:        "allowlisted plist does NOT fire",
-			args:        []string{"/bin/launchctl", "load", "/Library/LaunchAgents/com.okta.agent.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: false,
-			exclusions: &fakeExclusions{entries: []fakeExcl{
-				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.okta.agent.plist"},
-			}},
-		},
-		{
-			name:        "load with -w flag still fires (flag ignored during arg walk)",
-			args:        []string{"/bin/launchctl", "load", "-w", "/Users/bob/Library/LaunchAgents/com.stealth.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: true,
-			wantDescHas: "com.stealth.plist",
-		},
-		{
-			// Regression: CodeRabbit flagged that `bootstrap gui/501 <plist>` was captured with "gui/501" as the plistPath
-			// (first arg containing "/"), so the rule dropped the event. Matching on the LaunchAgents plist regex fixes
-			// it.
-			name:        "bootstrap with launch-domain specifier still fires",
-			args:        []string{"/bin/launchctl", "bootstrap", "gui/501", "/Users/alice/Library/LaunchAgents/com.domain.plist"},
-			path:        "/bin/launchctl",
-			parentPath:  "/bin/bash",
-			wantFinding: true,
-			wantDescHas: "com.domain.plist",
-		},
-	}
+	require.Len(t, findings, 1)
+	f := findings[0]
+	assert.Equal(t, "persistence_launchagent", f.RuleID)
+	assert.Equal(t, api.SeverityHigh, f.Severity)
+	assert.Contains(t, f.Description, "/Users/alice/.cache/evil")
+	assert.Contains(t, f.Description, "/Users/alice/Library/LaunchAgents/com.evil.plist")
+	assert.NotContains(t, f.Description, "file://", "the plist is named as a path, the form an operator excludes it by")
+	assert.Equal(t, "launchagent:/Users/alice/Library/LaunchAgents/com.evil.plist", f.Subject)
+	assert.Zero(t, f.ProcessID, "process-optional: the registered program is not running yet and smd is not the attacker")
+	assert.Equal(t, []string{evt.EventID}, f.EventIDs)
+}
 
+// spec:server-detection-rules-engine/launchagent-persistence-judged-on-the-program/an-apple-or-managed-agent-does-not-fire
+//
+// Three of the five benign LaunchAgent alerts on the dogfood deployment were Apple's own (XProtect, MobileDevice). They stop here
+// with no configuration at all.
+func TestPersistenceLaunchAgent_AppleAndManagedAgentsDoNotFire(t *testing.T) {
+	t.Parallel()
+	apple := btmRegistrationEvent(t, "agent", "/Library/Apple/System/Library/LaunchAgents/com.apple.XProtect.agent.scan.plist",
+		"/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/MacOS/XProtect",
+		&codeSigningJSON{SigningID: "com.apple.XProtect", IsPlatformBinary: true}, false)
+	managed := btmRegistrationEvent(t, "agent", "/Library/LaunchAgents/com.acme.managed.plist", "/opt/acme/agent",
+		&codeSigningJSON{SigningID: "a.out"}, true)
+	assert.Empty(t, evaluateLaunchAgent(t, nil, apple, managed))
+}
+
+// spec:server-detection-rules-engine/launchagent-persistence-judged-on-the-program/a-vendor-agent-is-waived-by-its-signer
+// spec:server-detection-rules-engine/launchagent-persistence-judged-on-the-program/an-ad-hoc-binary-cannot-claim-a-signer
+func TestPersistenceLaunchAgent_WaivedBySigner(t *testing.T) {
+	t.Parallel()
+	byTeam := fakeExcl{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchTeamID, value: "BJ4HAAB9B3"}
+	bySigningID := fakeExcl{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchSigningID, value: "BJ4HAAB9B3:us.zoom.ZoomDaemon"}
+	bareSigningID := fakeExcl{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchSigningID, value: "us.zoom.ZoomDaemon"}
+	claimant := &codeSigningJSON{SigningID: "us.zoom.ZoomDaemon"}
+
+	cases := []struct {
+		name  string
+		excl  fakeExcl
+		cs    *codeSigningJSON
+		fires bool
+	}{
+		{"the vendor's team", byTeam, zoomUpdater, false},
+		{"the vendor's qualified signing id", bySigningID, zoomUpdater, false},
+		{"an ad-hoc binary claiming the identifier, against the qualified exclusion", bySigningID, claimant, true},
+		{"an ad-hoc binary claiming the identifier, against a bare one", bareSigningID, claimant, true},
+		{"another vendor's team", fakeExcl{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchTeamID, value: "OTHERTEAM1"},
+			zoomUpdater, true},
+		{"the same team, saved for the daemon rule", fakeExcl{ruleID: "privilege_launchd_plist_write",
+			matchType: api.ExclusionMatchTeamID, value: "BJ4HAAB9B3"}, zoomUpdater, true},
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := openCatalogStore(t)
-			ctx := t.Context()
-
-			parentPayload, _ := json.Marshal(map[string]any{
-				"pid": 50, "ppid": 1, "path": tc.parentPath, "args": []string{tc.parentPath},
-				"uid": 501, "gid": 20,
-			})
-			targetPayload, _ := json.Marshal(map[string]any{
-				"pid": 100, "ppid": 50, "path": tc.path, "args": tc.args,
-				"uid": 501, "gid": 20,
-			})
-			events := []api.Event{
-				{EventID: "fork-parent", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
-					Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
-				{EventID: "exec-parent", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
-					Payload: parentPayload},
-				{EventID: "fork-target", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
-					Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
-				{EventID: "exec-target", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
-					Payload: targetPayload},
-			}
-			require.NoError(t, s.InsertEvents(ctx, events))
-			materialize(t, s, events)
-
-			rule := &PersistenceLaunchAgent{}
-			if tc.exclusions != nil {
-				rule.Exclusions = tc.exclusions
-			}
-			findings, err := rule.Evaluate(ctx, events, s.GraphReader())
-			require.NoError(t, err)
-
-			if !tc.wantFinding {
-				assert.Empty(t, findings)
-				return
-			}
-			require.Len(t, findings, 1)
-			assert.Equal(t, "persistence_launchagent", findings[0].RuleID)
-			assert.Equal(t, rule.DisplayName(), findings[0].Title, "alert title is the rule's canonical DisplayName (issue #519)")
-			assert.Equal(t, "high", findings[0].Severity)
-			assert.Contains(t, findings[0].Description, tc.wantDescHas)
-			if tc.wantDescLacks != "" {
-				assert.NotContains(t, findings[0].Description, tc.wantDescLacks,
-					"an excluded plist must not be named: the description is what the exclusion left behind")
-			}
-			assert.Contains(t, findings[0].EventIDs, "exec-target")
+			evt := btmRegistrationEvent(t, "agent", "/Library/LaunchAgents/us.zoom.updater.plist", "/Library/Application Support/zoom/updater",
+				tc.cs, false)
+			findings := evaluateLaunchAgent(t, &fakeExclusions{entries: []fakeExcl{tc.excl}}, evt)
+			assert.Equal(t, tc.fires, len(findings) == 1)
 		})
 	}
+}
+
+// spec:server-detection-rules-engine/launchagent-persistence-judged-on-the-program/a-plist-path-exclusion-keeps-working
+//
+// A path_glob saved when the rule matched the launchctl command line named the plist as a path. The extension reports the plist as
+// a file URL, so matching the URL would have left every such exclusion suppressing nothing after the upgrade.
+func TestPersistenceLaunchAgent_APlistPathExclusionKeepsWorking(t *testing.T) {
+	t.Parallel()
+	excl := &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.logi.ghub.plist"},
+	}}
+	evt := btmRegistrationEvent(t, "agent", "/Library/LaunchAgents/com.logi.ghub.plist", "/Applications/lghub.app/Contents/MacOS/lghub_agent",
+		&codeSigningJSON{SigningID: "a.out"}, false)
+	assert.Empty(t, evaluateLaunchAgent(t, excl, evt))
+}
+
+// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/an-excluded-registration-does-not-cover-its-neighbour
+// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/every-registration-excluded-suppresses-every-finding
+// spec:server-detection-rules-engine/an-exclusion-covers-only-what-it-names/several-registrations-are-each-reported
+//
+// The bypass #1028 closed on the command-line rule, restated for registrations: `launchctl load benign.plist evil.plist` registers
+// two items, and an exclusion for the first must say nothing about the second.
+func TestPersistenceLaunchAgent_AnExclusionCoversOnlyWhatItNames(t *testing.T) {
+	t.Parallel()
+	benign := btmRegistrationEvent(t, "agent", "/Library/LaunchAgents/com.logi.ghub.plist", "/opt/logi/agent",
+		&codeSigningJSON{SigningID: "a.out"}, false)
+	benign.EventID = "benign"
+	evil := btmRegistrationEvent(t, "agent", "/Users/alice/Library/LaunchAgents/evil.plist", "/Users/alice/evil",
+		&codeSigningJSON{SigningID: "a.out"}, false)
+	evil.EventID = "evil"
+	pathExcl := func(plist string) fakeExcl {
+		return fakeExcl{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: plist}
+	}
+
+	t.Run("an excluded registration does not cover its neighbour", func(t *testing.T) {
+		t.Parallel()
+		findings := evaluateLaunchAgent(t, &fakeExclusions{entries: []fakeExcl{pathExcl("/Library/LaunchAgents/com.logi.ghub.plist")}},
+			benign, evil)
+		require.Len(t, findings, 1)
+		assert.Contains(t, findings[0].Description, "evil.plist")
+		assert.NotContains(t, findings[0].Description, "com.logi.ghub.plist")
+	})
+	t.Run("every registration excluded suppresses every finding", func(t *testing.T) {
+		t.Parallel()
+		excl := &fakeExclusions{entries: []fakeExcl{
+			pathExcl("/Library/LaunchAgents/com.logi.ghub.plist"), pathExcl("/Users/alice/Library/LaunchAgents/evil.plist"),
+		}}
+		assert.Empty(t, evaluateLaunchAgent(t, excl, benign, evil))
+	})
+	t.Run("several registrations are each reported", func(t *testing.T) {
+		t.Parallel()
+		findings := evaluateLaunchAgent(t, nil, benign, evil)
+		require.Len(t, findings, 2)
+		assert.Contains(t, findings[0].Description, "com.logi.ghub.plist")
+		assert.Contains(t, findings[1].Description, "evil.plist")
+		assert.NotEqual(t, findings[0].Subject, findings[1].Subject, "distinct items dedup separately")
+	})
 }

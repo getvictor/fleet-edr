@@ -1,10 +1,9 @@
 # Demo corpus copy of test/efficacy/corpus/T1543.001-launchagent-persistence.
 # T1543.001 Create or Modify System Process: Launch Agent.
 #
-# A process invokes /bin/launchctl load against a plist path. The
-# persistence_launchagent rule matches path == /bin/launchctl plus the
-# `load` subcommand argument and fires a high-severity alert.
-name: "T1543.001 persistence via launchctl load <plist>"
+# A LaunchAgent whose program is unsigned is registered with Background Task Management. persistence_launchagent judges
+# the registered program's signature and fires a high-severity alert.
+name: "T1543.001 LaunchAgent registration of an unsigned program"
 mitre: T1543.001
 host:
   id: DE300543-0001-0000-0000-000000000001
@@ -12,15 +11,15 @@ host:
   os: macOS 26.0
 timeline:
   - at: 0ms
-    type: fork
-    child_pid: 4543
-    parent_pid: 1
-  - at: 10ms
-    type: exec
-    pid: 4543
-    ppid: 1
-    path: /bin/launchctl
-    args: ["launchctl", "load", "/Users/demo/Library/LaunchAgents/com.acme.persist.plist"]
-    cwd: /Users/demo
+    type: btm_launch_item_add
+    item_type: agent
+    item_path: /Users/demo/Library/LaunchAgents/com.acme.persist.plist
+    executable_path: /Users/demo/.local/share/persist
+    executable_code_signing_present: true
+    executable_team_id: ""
+    executable_is_platform_binary: false
+    instigator_pid: 93
+    instigator_team_id: ""
+    instigator_is_platform_binary: true
     uid: 501
     gid: 20
