@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Upgrade notes (action required)
+
+- **The quickstart keeps the process graph for 30 days, not 7.** This matches the event timeline, so an old alert's graph no longer shows its process alone. Expect the MySQL process table to grow to about four times its size; set `EDR_RETENTION_DAYS=7` in `.env` to keep the old window.
+
 ### Added
 
 - **Detection tuning counts the processes a rule gave up on.** When a rule needs a process record that never arrived, it now counts that process as abandoned, shown in the Cost column beside the undecided evaluations it retried. A rule failing to decide no longer looks the same as a rule with nothing to report. Rules that cannot yet count this, and days before the upgrade, show no figure rather than zero.
@@ -16,6 +20,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Fixed
 
 - **An osascript download-and-run chain is no longer missed when its last step is recorded late.** The rule now waits for that step's record, as the other rules do, rather than giving up on the chain.
+- **The process graph says when its window predates retention.** A window reaching back past process retention now shows a notice, rather than an alert's process alone with nothing around it.
 - **A rule that runs in monitor mode links to what it has matched.** Those records were reachable only from the Observed count in Detection tuning, which needs a permission the analyst role does not hold, so the records were readable in principle and unreachable in practice for the people who investigate. A rule's own page now offers them.
 
 ## [0.6.0] (2026-09-22)

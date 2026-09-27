@@ -22,6 +22,7 @@ import { Button } from "./ui/Button";
 import {
   buildPreservedIds,
   buildQueryFilterIds,
+  agedOutBefore,
   buildVisibleRoots,
   chainGenerations,
   collectMatches,
@@ -36,6 +37,7 @@ import {
   type D3PointNode,
 } from "./ProcessTree.helpers";
 import { renderTree, TREE_MARGIN_PX } from "./ProcessTree.render";
+import { formatNs } from "./Search/format";
 import "./ProcessTree.scss";
 
 // Evidence tooltip layout (issue #580): how far the hover card sits from the pointer, and the room reserved so a card near the
@@ -110,6 +112,8 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // the read as truncated. Storing null in the untruncated case rather than the counts plus a flag keeps the notice's presence
   // exactly equal to the server's own judgment, so the page cannot invent a warning the server did not raise.
   const [truncation, setTruncation] = useState<{ returned: number; totalMatched: number; capped: boolean } | null>(null);
+  // agedOut is the retention boundary when this window starts before it (issue #1153), and null otherwise.
+  const [agedOut, setAgedOut] = useState<number | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
   // techniquesByNodeId maps a process DB id to the deduped MITRE technique ids of its alerts (issue #585), so the hover tooltip can
   // show the technique mapping inline. Built from the same alert fetch that drives alertProcessIds.
@@ -359,6 +363,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
         setTruncation(
           res.truncated ? { returned: res.returned, totalMatched: res.total_matched, capped: res.total_matched_capped } : null,
         );
+        setAgedOut(agedOutBefore(bounds.fromNs, res.retained_from_ns));
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
@@ -756,6 +761,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
             onFocusAlertChain={setFocusAlertChain}
             rootsEmpty={roots.length === 0}
             truncation={truncation}
+            agedOut={agedOut}
             svgRef={svgRef}
             hoverTip={hoverTip}
             selectedNode={selectedNode}
@@ -778,6 +784,8 @@ interface GraphBodyProps {
   readonly rootsEmpty: boolean;
   // truncation is non-null only when the server reported the read as truncated (issue #423).
   readonly truncation: { returned: number; totalMatched: number; capped: boolean } | null;
+  // agedOut is the retention boundary when the window starts before it (issue #1153).
+  readonly agedOut: number | null;
   readonly svgRef: RefObject<SVGSVGElement | null>;
   readonly hoverTip: { x: number; y: number; tooltip: NodeTooltip } | null;
   readonly selectedNode: ProcessNode | null;
@@ -789,8 +797,8 @@ interface GraphBodyProps {
 // effect), the hover tooltip, and the selected-process detail aside. Split out of ProcessTreeView (issue #583) so the graph's status
 // conditionals don't nest under the graph/timeline view branch and inflate the parent's cognitive complexity.
 function GraphBody({
-  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, truncation, svgRef, hoverTip,
-  selectedNode, onCloseDetail, currentAlertId,
+  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, truncation, agedOut, svgRef,
+  hoverTip, selectedNode, onCloseDetail, currentAlertId,
 }: GraphBodyProps) {
   return (
     <>
@@ -803,6 +811,14 @@ function GraphBody({
         <p className="process-tree__status process-tree__status--info" role="status">
           Showing {truncation.returned.toLocaleString()} of {truncation.capped ? "more than " : ""}
           {truncation.totalMatched.toLocaleString()} processes. Narrow the time range or use search to see the rest.
+        </p>
+      )}
+      {/* The window reaches back past process retention, so earlier processes are gone except those an alert references. Without
+          this an old alert's graph shows its process alone and reads as broken, while the timeline beside it is complete (#1153). */}
+      {!loading && !error && agedOut !== null && (
+        <p className="process-tree__status process-tree__status--info" role="status">
+          Process records from before {formatNs(agedOut)} have been deleted by retention, so processes from earlier in this window
+          are missing unless an alert references them. The event timeline is kept separately and may still show them.
         </p>
       )}
       {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph

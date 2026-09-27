@@ -648,6 +648,11 @@ type ProcessTreeResult struct {
 	// rows already read became the floor. Never set on an untruncated read, which counted every row it returned.
 	TotalMatchedCapped bool `json:"total_matched_capped"`
 	Truncated          bool `json:"truncated"`
+	// RetainedFromNs is the moment before which completed process records have been deleted by retention (issue #1153), or 0 when
+	// retention is disabled. A window that starts earlier can come back with a lone alerted process and none of its neighbours,
+	// because a process an alert references is kept while the rest age out. The read is not truncated, the rows are simply gone,
+	// so without this the graph reads as broken while the event timeline beside it, retained on its own window, is complete.
+	RetainedFromNs int64 `json:"retained_from_ns,omitempty"`
 }
 
 // ProcessNode is the tree shape the UI's process-tree view renders.

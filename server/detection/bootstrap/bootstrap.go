@@ -209,6 +209,7 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 	d.operatorH.SetProcessSearch(store)
 	d.operatorH.SetEventSearch(store)
 	d.operatorH.SetHostTimeline(store)
+	d.operatorH.SetProcessRetention(deps.RetentionDays)
 
 	processor, err := pipeline.NewProcessor(
 		deps.EventLog,

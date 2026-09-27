@@ -151,7 +151,7 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 	if r.retentionDays == 0 {
 		return 0, nil
 	}
-	cutoff := r.now().Add(-time.Duration(r.retentionDays) * 24 * time.Hour).UnixNano()
+	cutoff := ProcessRetentionCutoff(r.now(), r.retentionDays).UnixNano()
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.Int(attrRetentionDays, r.retentionDays),
@@ -346,4 +346,14 @@ func (r *RetentionRunner) pruneBatched(ctx context.Context, query string, args .
 			return total, nil
 		}
 	}
+}
+
+// retentionDay is one retention day as an exact duration. Deliberately not a calendar day: the cutoff must not move by an hour
+// across a daylight-saving change in the server's time zone.
+const retentionDay = 24 * time.Hour
+
+// ProcessRetentionCutoff is the moment before which completed process records are deleted, for a retention of days. Shared with
+// the process-tree endpoint, which reports it (issue #1153), so the boundary a client is shown is the one the pruner applies.
+func ProcessRetentionCutoff(now time.Time, days int) time.Time {
+	return now.Add(-time.Duration(days) * retentionDay)
 }

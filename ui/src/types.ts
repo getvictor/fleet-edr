@@ -255,6 +255,9 @@ export interface TreeResponse {
   total_matched: number;
   total_matched_capped: boolean;
   truncated: boolean;
+  // retained_from_ns is the moment before which completed process records were deleted by retention (issue #1153). Absent when
+  // retention is disabled, or from a server that predates the field.
+  retained_from_ns?: number;
 }
 
 export interface Alert {

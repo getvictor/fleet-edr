@@ -207,7 +207,9 @@ func TestProcessTreeResult_WireRoundTrip_PBT(t *testing.T) {
 			Returned:           rapid.Int64().Draw(rt, "returned"),
 			TotalMatched:       rapid.Int64().Draw(rt, "total_matched"),
 			TotalMatchedCapped: rapid.Bool().Draw(rt, "total_matched_capped"),
-			Truncated:          rapid.Bool().Draw(rt, "truncated"),
+			// Non-negative: an epoch-nanosecond boundary, omitted (zero) when retention is disabled.
+			RetainedFromNs: rapid.Int64Range(0, 1<<62).Draw(rt, "retained_from_ns"),
+			Truncated:      rapid.Bool().Draw(rt, "truncated"),
 		}
 
 		encoded, err := json.Marshal(original)
@@ -234,6 +236,9 @@ func TestProcessTreeResult_WireFieldNames(t *testing.T) {
 	assert.Contains(t, generic, "total_matched")
 	assert.Contains(t, generic, "truncated")
 	assert.Contains(t, generic, "total_matched_capped")
+	withBoundary, err := json.Marshal(ProcessTreeResult{RetainedFromNs: 1789000000000000000})
+	require.NoError(t, err)
+	assert.Contains(t, string(withBoundary), `"retained_from_ns":1789000000000000000`)
 	// Present even when false: the UI branches on both, and an omitempty here would make "not truncated" indistinguishable from an
 	// older server that does not report truncation at all, and an exact total indistinguishable from one that does not say whether
 	// the number is a floor. A client that cannot tell those apart shows "2,588" for a number it has no right to state exactly.
@@ -241,4 +246,6 @@ func TestProcessTreeResult_WireFieldNames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(plain), `"truncated":false`)
 	assert.Contains(t, string(plain), `"total_matched_capped":false`)
+	// Omitted, unlike the two above: absent means "nothing has aged out", which is also what a server predating the field says.
+	assert.NotContains(t, string(plain), "retained_from_ns")
 }
