@@ -124,6 +124,17 @@ type osascriptPayload struct {
 }
 
 func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
+func (r *OsascriptNetworkExec) CountsMaterializationAbandons() {}
+
+// EvaluateScoped is Evaluate with the batch scope, which this rule needs to record a temp exec it gave up on because the exec's
+// own process record never arrived (issue #1170).
+func (r *OsascriptNetworkExec) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	// One osascript chain commonly produces multiple temp-exec descendants: the kernel re-execs sh→bash, the chain runs more than one
 	// stage, etc. Track which osascript ancestor PIDs we've already fired on within this batch so we emit one finding per chain, not one
 	// per descendant row.
@@ -131,7 +142,7 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event,
 	var findings []api.Finding
 	var miss pendingMiss
 	for _, evt := range events {
-		f, osaPID, err := r.evalEvent(ctx, evt, s, seenOsa)
+		f, osaPID, err := r.evalEvent(ctx, scope, evt, s, seenOsa)
 		if fatal := miss.absorb(err); fatal != nil {
 			return fatalResult(findings, fatal)
 		}
@@ -146,7 +157,7 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event,
 // evalEvent inspects a single event and returns (finding, osaPID, err) on a match. osaPID is the PID of the osascript ancestor that
 // triggered the finding; the caller uses it for batch-level dedupe.
 func (r *OsascriptNetworkExec) evalEvent(
-	ctx context.Context, evt api.Event, s api.GraphReader, seenOsa map[int]struct{},
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader, seenOsa map[int]struct{},
 ) (*api.Finding, int, error) {
 	if evt.EventType != "exec" {
 		return nil, 0, nil
@@ -155,11 +166,25 @@ func (r *OsascriptNetworkExec) evalEvent(
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, 0, nil
 	}
-	if !looksLikeTempExec(p) {
+	if !looksLikeTempExec(p) || p.PID <= 0 {
+		// No pid means no subject: skipped, never looked up as process zero, and never counted as an abandon, which it is not.
 		return nil, 0, nil
 	}
 
-	osa, err := r.findOsascriptAncestor(ctx, s, evt.HostID, p.PID, evt.TimestampNs)
+	// The temp exec's own record, resolved FIRST and through the grace (issue #1170). The ancestor walk used to look the same pid
+	// up plainly and end on a miss, so a young temp exec whose record had not landed yet was dropped rather than retried, and one
+	// that never landed was dropped without being counted. The walk's first step was this same lookup, so resolving here costs
+	// nothing extra.
+	subject, err := resolveSubjectProcess(ctx, s, evt, p.PID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if subject == nil {
+		scope.RecordMaterializationAbandoned(r.ID(), p.PID)
+		return nil, 0, nil
+	}
+
+	osa, err := r.findOsascriptAncestor(ctx, s, evt.HostID, subject, evt.TimestampNs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -192,36 +217,24 @@ func (r *OsascriptNetworkExec) evalEvent(
 		return nil, 0, nil
 	}
 
-	tempExecProc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
-	if err != nil {
-		return nil, 0, err
-	}
-	if tempExecProc == nil {
-		// The temp-exec's own row never materialized within the grace window (a young miss raises the retryable
-		// ErrProcessNotYetMaterialized instead). Same shape as credential_keychain_dump and friends.
-		return nil, 0, nil
-	}
-
 	return &api.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    api.SeverityCritical,
 		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("osascript → %s → %s", downloader.Path, displayTempExec(p)),
-		ProcessID:   tempExecProc.ID,
+		ProcessID:   subject.ID,
 		EventIDs:    []string{evt.EventID},
 	}, osa.PID, nil
 }
 
-// findOsascriptAncestor walks the parent chain upward from startPID looking for an osascript process within `maxAncestorWalkSteps`
-// hops. Returns nil if no osascript ancestor exists or the chain bottoms out at launchd (PPID 1).
+// findOsascriptAncestor walks the parent chain upward from start looking for an osascript process within `maxAncestorWalkSteps`
+// hops. Returns nil if no osascript ancestor exists or the chain bottoms out at launchd (PPID 1). An ancestor missing from the graph
+// ends the walk without a retry: a parent can legitimately predate the capture and never materialize (see resolveSubjectProcess).
 func (r *OsascriptNetworkExec) findOsascriptAncestor(
-	ctx context.Context, s api.GraphReader, hostID string, startPID int, asOfNs int64,
+	ctx context.Context, s api.GraphReader, hostID string, start *api.Process, asOfNs int64,
 ) (*api.Process, error) {
-	current, err := s.GetProcessByPID(ctx, hostID, startPID, asOfNs)
-	if err != nil {
-		return nil, fmt.Errorf("get pid %d: %w", startPID, err)
-	}
+	current := start
 	for steps := 0; current != nil && steps < maxAncestorWalkSteps; steps++ {
 		if osascriptPaths()[current.Path] {
 			return current, nil

