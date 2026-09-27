@@ -1594,6 +1594,14 @@ export interface RuleEvalSummary {
   rule_id: string;
   evaluations: number;
   retryable_misses: number;
+  // Processes the rule GAVE UP on: it needed the process record an event named, the record was still missing after the
+  // materialization grace, and it evaluated the event as if nothing matched (issue #1158). retryable_misses is the waiting and this
+  // is the giving up.
+  //
+  // Optional because the server omits it when the window reaches back before it began counting, and a server that predates it
+  // omits it too. Absent is not zero: a figure that was not measured is not a measurement of no abandons, so the render says
+  // nothing rather than "0".
+  materialization_abandoned?: number;
   mean_eval_ns: number;
   max_eval_ns: number;
   // What the rule's evaluations cost over the whole window. The figure the column sorts on: a mean carries no volume, so
@@ -1623,6 +1631,10 @@ function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
   // the same rows, so either means the response is not what it claims. Rendering it anyway would put a contradictory number in
   // front of an operator as plausible evidence, which is worse than the unavailable path a rejection takes.
   const withinAttempts = wholeCount(r.retryable_misses) && (r.retryable_misses as number) <= (r.evaluations as number);
+  // NOT bounded by evaluations, unlike the miss count above, and the difference is the point. A miss is at most one per attempt,
+  // so exceeding the attempts is impossible; an abandon is one per PROCESS, and a single attempt over a batch can give up on
+  // several. Copying the relation here would reject real rows and read a rule failing to decide as having no statistics at all.
+  const abandonsWellFormed = r.materialization_abandoned === undefined || wholeCount(r.materialization_abandoned);
   const meanWithinMax =
     wholeCount(r.mean_eval_ns) && wholeCount(r.max_eval_ns) && (r.mean_eval_ns as number) <= (r.max_eval_ns as number);
   // The total is a sum over at least one attempt, each of them at most the maximum, so a total BELOW the maximum is
@@ -1636,6 +1648,7 @@ function isRuleEvalSummary(row: unknown): row is RuleEvalSummary {
     r.rule_id !== "" &&
     atLeastOne(r.evaluations) &&
     withinAttempts &&
+    abandonsWellFormed &&
     meanWithinMax &&
     totalCoversMax &&
     parseableTime(r.last_seen)

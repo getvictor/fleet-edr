@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Detection tuning counts the processes a rule gave up on.** When a rule needs a process record that never arrived, it now counts that process as abandoned, shown in the Cost column beside the undecided evaluations it retried. A rule failing to decide no longer looks the same as a rule with nothing to report. Rules that cannot yet count this, and days before the upgrade, show no figure rather than zero.
+
 ### Fixed
 
 - **A rule that runs in monitor mode links to what it has matched.** Those records were reachable only from the Observed count in Detection tuning, which needs a permission the analyst role does not hold, so the records were readable in principle and unreachable in practice for the people who investigate. A rule's own page now offers them.

@@ -93,19 +93,23 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 	now := time.Now().UTC()
 	day := now.Format(time.DateOnly)
 	placeholders := make([]string, 0, len(ruleIDs))
-	args := make([]any, 0, len(ruleIDs)*8)
+	args := make([]any, 0, len(ruleIDs)*10)
 	for _, id := range ruleIDs {
 		st := folded[id]
-		placeholders = append(placeholders, "(?, ?, ?, ?, ?, ?, ?, ?)")
-		args = append(args, id, day, st.Evaluations, st.RetryableMisses, st.EvalNs, st.MaxEvalNs, now, now)
+		placeholders = append(placeholders, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		args = append(args, id, day, st.Evaluations, st.RetryableMisses, st.MaterializationAbandoned, abandonMeasuredEvaluations(st),
+			st.EvalNs, st.MaxEvalNs, now, now)
 	}
 	query := `
 		INSERT INTO detection_rule_eval_stats
-			(rule_id, day, evaluations, retryable_misses, eval_ns_sum, eval_ns_max, first_seen, last_seen)
+			(rule_id, day, evaluations, retryable_misses, materialization_abandoned, abandon_measured_evaluations, eval_ns_sum, eval_ns_max,
+			 first_seen, last_seen)
 		VALUES ` + strings.Join(placeholders, ", ") + `
 		ON DUPLICATE KEY UPDATE
 			evaluations      = evaluations + VALUES(evaluations),
 			retryable_misses = retryable_misses + VALUES(retryable_misses),
+			materialization_abandoned = materialization_abandoned + VALUES(materialization_abandoned),
+			abandon_measured_evaluations = abandon_measured_evaluations + VALUES(abandon_measured_evaluations),
 			eval_ns_sum      = eval_ns_sum + VALUES(eval_ns_sum),
 			eval_ns_max      = GREATEST(eval_ns_max, VALUES(eval_ns_max)),
 			first_seen       = LEAST(first_seen, VALUES(first_seen)),
@@ -123,6 +127,16 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 	return nil
 }
 
+// abandonMeasuredEvaluations is how many of st's evaluations counted their abandons: all of them for a rule that counts, none for
+// one that does not. The read reports abandons only for a window where this sums to the evaluations, so a zero from a rule that
+// cannot report an abandon is read back as not measured rather than as having given up on nothing.
+func abandonMeasuredEvaluations(st api.RuleEvalStat) int64 {
+	if !st.AbandonsMeasured {
+		return 0
+	}
+	return st.Evaluations
+}
+
 // foldEvalStats collapses a batch's entries to one per rule, dropping entries that name no rule or report no attempt.
 //
 // Folding first means the statement carries one row per key, since MySQL applies ON DUPLICATE KEY UPDATE per row and two rows with the same
@@ -137,6 +151,8 @@ func foldEvalStats(stats api.RuleEvalStats) map[string]api.RuleEvalStat {
 		cur := folded[st.RuleID]
 		cur.Evaluations += st.Evaluations
 		cur.RetryableMisses += st.RetryableMisses
+		cur.MaterializationAbandoned += st.MaterializationAbandoned
+		cur.AbandonsMeasured = cur.AbandonsMeasured || st.AbandonsMeasured
 		cur.EvalNs += st.EvalNs
 		cur.MaxEvalNs = max(cur.MaxEvalNs, st.MaxEvalNs)
 		folded[st.RuleID] = cur
@@ -170,6 +186,8 @@ func (s *Store) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.
 		SELECT rule_id,
 		       SUM(evaluations)                                  AS evaluations,
 		       SUM(retryable_misses)                             AS retryable_misses,
+		       CASE WHEN SUM(abandon_measured_evaluations) = SUM(evaluations)
+		            THEN SUM(materialization_abandoned) END      AS materialization_abandoned,
 		       SUM(eval_ns_sum) DIV NULLIF(SUM(evaluations), 0)   AS mean_eval_ns,
 		       SUM(eval_ns_sum)                                  AS total_eval_ns,
 		       MAX(eval_ns_max)                                  AS max_eval_ns,

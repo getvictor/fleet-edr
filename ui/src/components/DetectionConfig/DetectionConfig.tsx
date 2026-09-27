@@ -349,9 +349,16 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
   // Always in the LABEL, even at zero, because that is where the figure is promised and where a reader without the column's width
   // gets it. Only the VISIBLE annotation is suppressed at zero, since "0 undecided" on every row spends width saying nothing.
   const misses = `, ${stat.retryable_misses.toLocaleString()} of which could not decide`;
+  // Said only when the server reports the figure. A server that predates it has measured nothing, and "gave up on 0" would state a
+  // measurement that never happened, which for a count whose whole purpose is exposing lost detections is the worst reading.
+  const abandoned = stat.materialization_abandoned;
+  const gaveUp =
+    abandoned === undefined
+      ? ""
+      : `, and gave up on ${abandoned.toLocaleString()} process${abandoned === 1 ? "" : "es"} whose record never arrived`;
   const title =
     `${formatDuration(stat.total_eval_ns)} in total across ${evaluations} in the last ${String(days)} days, ` +
-    `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst${misses}`;
+    `${formatDuration(stat.mean_eval_ns)} on average and ${formatDuration(stat.max_eval_ns)} at worst${misses}${gaveUp}`;
   return (
     <AbbreviatedFigure full={title}>
       {formatDuration(stat.total_eval_ns)}
@@ -359,6 +366,11 @@ function renderCost(stat: RuleEvalSummary | undefined, ruleID: string, days: num
       <span className="detection-config__observed-hosts"> &middot; {formatDuration(stat.mean_eval_ns)} avg</span>
       {stat.retryable_misses === 0 ? null : (
         <span className="detection-config__observed-last"> &middot; {stat.retryable_misses.toLocaleString()} undecided</span>
+      )}
+      {/* Separate from "undecided" rather than folded into it: that figure is waiting, this one is failure to decide at all, and
+          an operator acts on them differently. Hidden at zero for the same width reason; absent means unreported, so also hidden. */}
+      {abandoned === undefined || abandoned === 0 ? null : (
+        <span className="detection-config__observed-last"> &middot; {abandoned.toLocaleString()} abandoned</span>
       )}
     </AbbreviatedFigure>
   );

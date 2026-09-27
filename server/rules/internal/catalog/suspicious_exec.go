@@ -148,6 +148,9 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
+func (r *SuspiciousExec) CountsMaterializationAbandons() {}
+
 // EvaluateScoped implements api.ScopedRule. The scope carries nothing this rule derives; it is here so a chain declined for
 // incomplete ancestry is counted rather than silently dropped (issue #829).
 func (r *SuspiciousExec) EvaluateScoped(
@@ -190,7 +193,8 @@ func (r *SuspiciousExec) evalExec(
 		return nil, 0, nil
 	}
 	tempPath, ok := suspiciousTempPath(p)
-	if !ok {
+	if !ok || p.PID <= 0 {
+		// No pid means no subject: skipped, never looked up as process zero, and never counted as an abandon, which it is not.
 		return nil, 0, nil
 	}
 
@@ -201,6 +205,9 @@ func (r *SuspiciousExec) evalExec(
 		return nil, 0, err
 	}
 	if tempProc == nil {
+		// Past the materialization grace: evaluated as a non-match, which is right, and recorded, because otherwise a temp exec the
+		// rule never got to judge would be indistinguishable from one it judged benign (issue #1158).
+		scope.RecordMaterializationAbandoned(r.ID(), p.PID)
 		return nil, 0, nil
 	}
 

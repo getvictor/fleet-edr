@@ -93,7 +93,18 @@ type applicationControlBlockPayload struct {
 // timestamp_ns, plus host pinning) and never unmarshals or schema-validates the payload, so a malformed
 // application_control_block payload reaches this rule intact and is dropped here or nowhere.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
-	return evaluateRuleMatchEvents(ctx, events, gr, ruleMatchRendering{
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, gr)
+}
+
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
+func (r *ApplicationControlBlock) CountsMaterializationAbandons() {}
+
+// EvaluateScoped is Evaluate with the batch scope. The scope is needed to record a block whose process record never arrived: that
+// event raises nothing, and a block the endpoint really enforced then produces no alert, so it has to be countable (issue #1158).
+func (r *ApplicationControlBlock) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, gr api.GraphReader,
+) ([]api.Finding, error) {
+	return evaluateRuleMatchEvents(ctx, scope, r.ID(), events, gr, ruleMatchRendering{
 		eventType:   applicationControlBlockEventType,
 		title:       blockAlertTitle,
 		description: blockAlertDescription,
@@ -111,7 +122,7 @@ type ruleMatchRendering struct {
 // evaluateRuleMatchEvents turns each accepted event of the rendering's type into a Finding, as documented on
 // ApplicationControlBlock.Evaluate. The per-event loop and its retry handling are evalEachEvent's.
 func evaluateRuleMatchEvents(
-	ctx context.Context, events []api.Event, gr api.GraphReader, rendering ruleMatchRendering,
+	ctx context.Context, scope *api.BatchScope, ruleID string, events []api.Event, gr api.GraphReader, rendering ruleMatchRendering,
 ) ([]api.Finding, error) {
 	findings, err := evalEachEvent(ctx, events, gr, func(ctx context.Context, evt api.Event, gr api.GraphReader) (*api.Finding, error) {
 		if evt.EventType != rendering.eventType {
@@ -121,12 +132,17 @@ func evaluateRuleMatchEvents(
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			return nil, nil
 		}
-		if p.RuleID == "" || p.Severity == "" {
+		// No pid means no subject: skipped, never looked up as process zero, and never counted as an abandon, which it is not.
+		if p.RuleID == "" || p.Severity == "" || p.PID <= 0 {
 			return nil, nil
 		}
 		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
-		if err != nil || proc == nil {
+		if err != nil {
 			return nil, err
+		}
+		if proc == nil {
+			scope.RecordMaterializationAbandoned(ruleID, p.PID)
+			return nil, nil
 		}
 		return &api.Finding{
 			HostID:      evt.HostID,

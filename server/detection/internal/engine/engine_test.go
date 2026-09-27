@@ -1127,6 +1127,64 @@ func (r *decliningRule) EvaluateScoped(
 	return nil, nil
 }
 
+// abandoningRule gives up on the configured number of distinct processes, standing in for a rule whose process record never arrived
+// before the materialization grace passed, so the engine's recording can be pinned without a real graph or a real clock.
+type abandoningRule struct {
+	stubRule
+	abandons int
+}
+
+func (r *abandoningRule) EvaluateScoped(
+	_ context.Context, scope *rulesapi.BatchScope, events []api.Event, _ rulesapi.GraphReader,
+) ([]api.Finding, error) {
+	r.calls++
+	r.received = events
+	// Distinct pids: the scope counts each abandoned process once per rule, so repeating one would collapse to a single abandon.
+	for i := range r.abandons {
+		scope.RecordMaterializationAbandoned(r.ID(), 200+i)
+	}
+	return nil, nil
+}
+
+func (r *abandoningRule) CountsMaterializationAbandons() {}
+
+// spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/the-count-reaches-the-rule-s-durable-evaluation-counters
+// spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/an-uncounting-rule-is-not-reported-as-having-none
+//
+// The rules record abandons into the batch scope, and their own tests stop there. The step that carries the count into the durable
+// counters is the one whose failure would be silent: the column would read zero, and a zero is exactly what a healthy rule reports.
+// Two rules share the batch and only one gives up, because the scope is shared by every rule in it, so a recorder that read a
+// batch total or the wrong key would still pass a single-rule test.
+func TestEngine_Evaluate_AbandonsReachTheRuleThatGaveUp(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, nil)
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&abandoningRule{stubRule: stubRule{id: "gives-up"}, abandons: 3},
+		&abandoningRule{stubRule: stubRule{id: "decides"}},
+		&stubRule{id: "never-counts"},
+	}})
+
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+
+	gaveUp, ok := rec.byRule("gives-up")
+	require.True(t, ok)
+	assert.Equal(t, int64(3), gaveUp.MaterializationAbandoned, "each distinct process the rule gave up on is counted")
+	assert.Zero(t, gaveUp.RetryableMisses, "giving up is not a retry: the batch was decided, not nacked")
+
+	decided, ok := rec.byRule("decides")
+	require.True(t, ok)
+	assert.Zero(t, decided.MaterializationAbandoned, "another rule's abandons must not be charged to a rule that decided")
+	assert.True(t, gaveUp.AbandonsMeasured && decided.AbandonsMeasured, "a rule that counts its abandons reports a measured zero")
+
+	// A rule that does not count its abandons reports zero whether or not it gave up, so its zero must not be stored as one.
+	uncounted, ok := rec.byRule("never-counts")
+	require.True(t, ok)
+	assert.False(t, uncounted.AbandonsMeasured)
+}
+
 // spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-declined-chain-is-counted-against-the-rule-that-declined-it
 //
 // TestEngine_Evaluate_PerRuleSpanCarriesAncestryDeclines pins that the decline actually reaches a span, and reaches the RIGHT one.

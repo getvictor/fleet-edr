@@ -191,6 +191,44 @@ describe("detection-config API client", () => {
     expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
   });
 
+  // More abandons than evaluations is a REAL row, not an impossible one, and this is the case a copied relation would break. A miss
+  // is at most one per attempt, so misses above attempts cannot happen; an abandon is one per process, and one attempt over a batch
+  // can give up on several. Rejecting it would take the Cost column to "unavailable" for exactly the rules failing worst.
+  // spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/abandons-are-not-bounded-by-evaluations
+  it("listDetectionRuleEvalStats accepts more abandons than evaluations", async () => {
+    const row = {
+      rule_id: "dns_c2_beacon", evaluations: 2, retryable_misses: 1, materialization_abandoned: 9,
+      mean_eval_ns: 1_000, max_eval_ns: 1_500, total_eval_ns: 2_000, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
+  // A server that predates the field omits it, and during a rolling deploy this client can be talking to one. Requiring it would
+  // mark every rule's statistics unavailable for the length of the deploy.
+  it("listDetectionRuleEvalStats accepts a row from a server that does not report abandons", async () => {
+    const row = {
+      rule_id: "suspicious_exec", evaluations: 400, retryable_misses: 0,
+      mean_eval_ns: 1_500_000, max_eval_ns: 90_000_000, total_eval_ns: 600_000_000, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    expect(await listDetectionRuleEvalStats()).toEqual({ stats: [row], days: 7 });
+  });
+
+  // Optional does not mean unchecked: a present value still has to be a whole count.
+  it.each([
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["a string", "3"],
+  ])("listDetectionRuleEvalStats rejects a row whose abandon count is %s", async (_name, value) => {
+    const row = {
+      rule_id: "dns_c2_beacon", evaluations: 2, retryable_misses: 0, materialization_abandoned: value,
+      mean_eval_ns: 1_000, max_eval_ns: 1_500, total_eval_ns: 2_000, last_seen: GOOD_TS,
+    };
+    stubFetch({ eval_stats: [row], days: 7 });
+    await expect(listDetectionRuleEvalStats()).rejects.toThrow(/malformed rule-eval-stats/);
+  });
+
   it("listDetectionRuleEvalStats omits the query when no window is given", async () => {
     const mock = stubFetch({ eval_stats: [], days: 7 });
     const out = await listDetectionRuleEvalStats();

@@ -161,6 +161,17 @@ type dnsQueryPayload struct {
 }
 
 func (r *DNSC2Beacon) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
+func (r *DNSC2Beacon) CountsMaterializationAbandons() {}
+
+// EvaluateScoped is Evaluate with the batch scope, which this rule needs for one thing: recording a connect whose process it gave
+// up waiting for, so the abandon is counted rather than indistinguishable from a connect that matched nothing (issue #1158).
+func (r *DNSC2Beacon) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	// One process commonly emits several outbound connections; emit one finding per process per batch. The engine
 	// additionally dedups on ProcessID across batches.
 	seenPID := map[int]struct{}{}
@@ -171,7 +182,7 @@ func (r *DNSC2Beacon) Evaluate(ctx context.Context, events []api.Event, s api.Gr
 	// until that beacon's own grace had elapsed, at which point it was silently dropped (issue #661). See pendingMiss in eval.go.
 	var miss pendingMiss
 	for _, evt := range events {
-		f, pid, err := r.evalEvent(ctx, evt, s, seenPID)
+		f, pid, err := r.evalEvent(ctx, scope, evt, s, seenPID)
 		if fatal := miss.absorb(err); fatal != nil {
 			return fatalResult(findings, fatal)
 		}
@@ -186,7 +197,7 @@ func (r *DNSC2Beacon) Evaluate(ctx context.Context, events []api.Event, s api.Gr
 // evalEvent inspects one event. On a match it returns (finding, pid, nil); pid is the connecting process's PID for
 // batch-level dedup.
 func (r *DNSC2Beacon) evalEvent(
-	ctx context.Context, evt api.Event, s api.GraphReader, seenPID map[int]struct{},
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader, seenPID map[int]struct{},
 ) (*api.Finding, int, error) {
 	if evt.EventType != "network_connect" {
 		return nil, 0, nil
@@ -197,6 +208,10 @@ func (r *DNSC2Beacon) evalEvent(
 	}
 	// Only outbound connections beacon. Inbound flows have a peer remote_address that the local process never resolved.
 	if conn.Direction != "outbound" || conn.RemoteAddress == "" {
+		return nil, 0, nil
+	}
+	// No pid means no subject: skipped, never looked up as process zero, and never counted as an abandon, which it is not.
+	if conn.PID <= 0 {
 		return nil, 0, nil
 	}
 	if _, dupe := seenPID[conn.PID]; dupe {
@@ -217,6 +232,7 @@ func (r *DNSC2Beacon) evalEvent(
 		if withinGrace(evt.IngestedAtNs, time.Now().UnixNano(), flowProcessMaterializationGrace) {
 			return nil, 0, fmt.Errorf("dns_c2_beacon connect pid %d flow process: %w", conn.PID, api.ErrProcessNotYetMaterialized)
 		}
+		scope.RecordMaterializationAbandoned(r.ID(), conn.PID)
 		return nil, 0, nil
 	}
 	// Suspicion gate: only a process exec'd from a temp / world-writable path is a candidate. This is what keeps benign

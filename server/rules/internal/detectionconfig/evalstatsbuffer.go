@@ -105,6 +105,7 @@ func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 		}
 		existing.Evaluations += s.Evaluations
 		existing.RetryableMisses += s.RetryableMisses
+		existing.MaterializationAbandoned += s.MaterializationAbandoned
 		existing.EvalNs += s.EvalNs
 		if s.MaxEvalNs > existing.MaxEvalNs {
 			existing.MaxEvalNs = s.MaxEvalNs
