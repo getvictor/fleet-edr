@@ -152,9 +152,8 @@ type ScopedRule interface {
 // through BatchScope.RecordMaterializationAbandoned (issue #1158).
 //
 // It exists so a zero can be told apart from no measurement. A rule that never records abandons reports zero whether or not it
-// gave up on anything, and a rule that can give up without recording it (the imported Sigma rules, #1169) is exactly the one an
-// operator would otherwise read as healthy. Only a rule declaring this has its count stored; every other rule's is stored as not
-// measured.
+// gave up on anything, so only a rule declaring this has its count stored; every other rule's is stored as not measured, and an
+// operator is not shown a zero nobody measured.
 type AbandonCounter interface {
 	ScopedRule
 

@@ -102,6 +102,10 @@ func (r *SudoersDestroyed) Evaluate(
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, through the shared Sigma view (issue
+// #1169), so its zero is a measurement.
+func (r *SudoersDestroyed) CountsMaterializationAbandons() {}
+
 // EvaluateScoped implements api.ScopedRule.
 func (r *SudoersDestroyed) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
@@ -130,10 +134,11 @@ func (r *SudoersDestroyed) evalEvent(
 		return nil, resolveErr
 	}
 	if !matched {
+		view.noteUnmatched(scope, r.ID())
 		return nil, nil
 	}
 
-	proc, err := view.Subject()
+	proc, err := view.subjectOrAbandon(scope, r.ID())
 	if err != nil {
 		return nil, err
 	}

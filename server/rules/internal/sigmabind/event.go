@@ -197,6 +197,11 @@ func (e *Event) setPID(pid *int) {
 // from a process that genuinely has no parent or could not be identified, and the two deserve different handling.
 func (e *Event) ResolveErr() error { return e.resolveErr }
 
+// ImageResolved reports whether this copy of the event resolved its supplied image, that is, whether the detection evaluated against
+// it read the graph-resolved field: Image on a file event, ParentImage on an exec. Per copy, like ResolveErr, so one rule reading it
+// does not mark it read for another (issue #1169).
+func (e *Event) ImageResolved() bool { return e.resolveDone }
+
 // suppliedImageValues returns the caller-supplied image, resolving it on first access and at most once per event.
 func (e *Event) suppliedImageValues() ([]string, bool) {
 	if e.resolveImage != nil && !e.resolveDone {

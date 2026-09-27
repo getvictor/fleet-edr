@@ -312,5 +312,5 @@ func TestExecEventWithParent_ReportsAResolverFailure(t *testing.T) {
 	_, present := se.Field("ParentImage")
 	assert.False(t, present, "a failed lookup leaves the field absent")
 	require.Error(t, se.ResolveErr(), "and the failure is reported rather than silently read as no parent")
-	assert.Contains(t, se.ResolveErr().Error(), "get child pid 1")
+	assert.Contains(t, se.ResolveErr().Error(), "get process pid 1", "the child is read through the shared subject lookup")
 }

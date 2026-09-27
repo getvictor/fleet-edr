@@ -88,6 +88,10 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, through the shared Sigma view (issue
+// #1169), so its zero is a measurement.
+func (r *DyldInsert) CountsMaterializationAbandons() {}
+
 // EvaluateScoped implements api.ScopedRule.
 func (r *DyldInsert) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
@@ -104,13 +108,14 @@ func (r *DyldInsert) EvaluateScoped(
 		}
 		se := view.Event
 		if !dyldDetection().Matches(se) {
+			view.noteUnmatched(scope, r.ID())
 			continue
 		}
 		// The variable the detection matched on, named in the alert WITHOUT its value: the injected dylib path is attacker-chosen
 		// content and the finding is read by people, so the rule has always redacted it.
 		matched := redactedDyldAssignment(se)
 
-		proc, err := view.Subject()
+		proc, err := view.subjectOrAbandon(scope, r.ID())
 		if fatal := miss.absorb(err); fatal != nil {
 			return fatalResult(findings, fatal)
 		}

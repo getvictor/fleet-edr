@@ -136,6 +136,10 @@ func (r *SudoersTamper) Evaluate(
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, through the shared Sigma view (issue
+// #1169), so its zero is a measurement.
+func (r *SudoersTamper) CountsMaterializationAbandons() {}
+
 // EvaluateScoped implements api.ScopedRule.
 func (r *SudoersTamper) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
@@ -169,13 +173,14 @@ func (r *SudoersTamper) evalEvent(
 		return nil, resolveErr
 	}
 	if !matched {
+		view.noteUnmatched(scope, r.ID())
 		return nil, nil
 	}
 
 	// The same process the detection matched on, not a second lookup of it: resolving again could return a different image if a
 	// materialization commit landed in between, and the finding would then describe a writer other than the one the suppression
 	// was decided against.
-	proc, err := view.Subject()
+	proc, err := view.subjectOrAbandon(scope, r.ID())
 	if err != nil {
 		return nil, err
 	}

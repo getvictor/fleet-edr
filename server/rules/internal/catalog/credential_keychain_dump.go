@@ -74,6 +74,10 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, through the shared Sigma view (issue
+// #1169), so its zero is a measurement.
+func (r *CredentialKeychainDump) CountsMaterializationAbandons() {}
+
 // EvaluateScoped implements api.ScopedRule.
 func (r *CredentialKeychainDump) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
@@ -95,6 +99,7 @@ func (r *CredentialKeychainDump) EvaluateScoped(
 		}
 		se := view.Event
 		if !keychainDetection().Matches(se) {
+			view.noteUnmatched(scope, r.ID())
 			continue
 		}
 		// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired.
@@ -103,7 +108,7 @@ func (r *CredentialKeychainDump) EvaluateScoped(
 			sub = values[0]
 		}
 
-		proc, err := view.Subject()
+		proc, err := view.subjectOrAbandon(scope, r.ID())
 		if fatal := miss.absorb(err); fatal != nil {
 			return fatalResult(findings, fatal)
 		}
