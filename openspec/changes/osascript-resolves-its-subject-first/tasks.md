@@ -1,0 +1,3 @@
+- [x] Resolve the temp exec through `resolveSubjectProcess` before the ancestor walk, and walk from the resolved process
+- [x] Record an abandon past the grace, skip an event with no pid, and declare `api.AbandonCounter`
+- [x] Named repro (fails on the previous code) and the rule added to the shared abandon table

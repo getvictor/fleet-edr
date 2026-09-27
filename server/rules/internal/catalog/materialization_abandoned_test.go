@@ -54,6 +54,21 @@ func abandonedCases() []abandonedCase {
 				}
 			},
 		},
+		// Resolves the temp exec before walking to an osascript ancestor since issue #1170, which is what put it in this table.
+		{
+			name: "osascript_network_exec",
+			rule: &OsascriptNetworkExec{},
+			event: func(ingestedAtNs int64) api.Event {
+				return api.Event{
+					EventID:      "abandon-osascript",
+					HostID:       "fixture-host",
+					TimestampNs:  1,
+					IngestedAtNs: ingestedAtNs,
+					EventType:    "exec",
+					Payload:      json.RawMessage(`{"pid":4444,"path":"/tmp/stage2"}`),
+				}
+			},
+		},
 		{name: "application_control_block", rule: &ApplicationControlBlock{}, event: appControl(applicationControlBlockEventType)},
 		{name: "application_control_would_block", rule: &ApplicationControlWouldBlock{}, event: appControl(applicationControlWouldBlockEventType)},
 	}
@@ -66,6 +81,7 @@ func pastEveryGrace() int64 {
 }
 
 // spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/a-rule-that-gives-up-on-a-missing-process-record-is-counted
+// spec:server-detection-rules-engine/osascript-waits-for-the-temp-exec-it-judges/a-temp-exec-whose-record-never-arrives-is-counted
 //
 // The abandon is the branch no other counter sees. Inside the grace a missing record raises the retryable sentinel, which is what
 // retryable_misses counts; past it the rule evaluates the event as a non-match. That is the correct decision and also a detection
