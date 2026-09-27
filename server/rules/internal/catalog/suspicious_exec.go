@@ -201,6 +201,9 @@ func (r *SuspiciousExec) evalExec(
 		return nil, 0, err
 	}
 	if tempProc == nil {
+		// Past the materialization grace: evaluated as a non-match, which is right, and recorded, because otherwise a temp exec the
+		// rule never got to judge would be indistinguishable from one it judged benign (issue #1158).
+		scope.RecordMaterializationAbandoned(r.ID(), p.PID)
 		return nil, 0, nil
 	}
 

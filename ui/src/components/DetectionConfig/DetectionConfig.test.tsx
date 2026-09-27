@@ -971,6 +971,44 @@ describe("DetectionConfig observed column", () => {
       expect(within(screen.getByRole("row", { name: /suspicious_exec/ })).queryByText(/undecided/)).not.toBeInTheDocument();
     });
 
+    // spec:web-ui/the-detection-tuning-cost-column-reports-the-total-cost/abandoned-evaluations-are-shown-apart-from-undecided-ones
+    //
+    // Abandoned is failing to decide at all; undecided is waiting. An operator acts on them differently, so they are separate
+    // annotations rather than one sum, and this row carries both so a render that merged them would show the wrong number.
+    it("annotates abandoned evaluations apart from undecided ones, and only when there are some", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 12, materialization_abandoned: 5 })] });
+      renderPage();
+      const row = await screen.findByRole("row", { name: /suspicious_exec/ });
+      await waitFor(() => {
+        expect(within(row).getByText(/5 abandoned/)).toBeVisible();
+      });
+      expect(within(row).getByText(/12 undecided/)).toBeVisible();
+    });
+
+    // Absent is NOT zero. A server that predates the field has measured nothing, and the column's promise for this figure is to
+    // expose lost detections, so rendering "0" for an unmeasured count would state the one reassuring thing the data does not.
+    it("says nothing about abandons for a server that does not report them", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ retryable_misses: 3 })] });
+      renderPage();
+      const row = await screen.findByRole("row", { name: /suspicious_exec/ });
+      await waitFor(() => {
+        expect(within(row).getByText(/3 undecided/)).toBeVisible();
+      });
+      expect(within(row).queryByText(/abandoned/)).not.toBeInTheDocument();
+      expect(within(row).queryByTitle(/gave up on/)).not.toBeInTheDocument();
+    });
+
+    it("hides the abandoned annotation at zero but still states the figure in the label", async () => {
+      stubReads({ rules: [makeRuleEntry()], evalStats: [stat({ materialization_abandoned: 0 })] });
+      renderPage();
+      const row = await screen.findByRole("row", { name: /suspicious_exec/ });
+      await waitFor(() => {
+        expect(within(row).getByText("600.0ms")).toBeVisible();
+      });
+      expect(within(row).queryByText(/abandoned/)).not.toBeInTheDocument();
+      expect(within(row).getByTitle(/gave up on 0 processes whose record never arrived/)).toBeVisible();
+    });
+
     // The same distinction the Observed column draws, and for the same reason pointed the other way: a failed read rendered as
     // absence reads as a CHEAP rule, so an operator hunting the slow one skips it.
     // spec:observability-instrumentation/evaluation-statistics-are-readable-per-rule/a-failed-read-is-not-presented-as-no-cost

@@ -26,6 +26,14 @@ type RuleEvalStat struct {
 	// RetryableMisses is how many of those attempts ended in a retryable error rather than a decision. Not a subset that reduces
 	// Evaluations: an attempt that missed still cost its time and still counts as an attempt.
 	RetryableMisses int64
+	// MaterializationAbandoned is how many distinct processes the rule gave up on in those attempts: it needed the process record
+	// an event referenced, the record was still missing once the materialization grace had passed, and it evaluated the event as
+	// if nothing matched (issue #1158). RetryableMisses is the waiting and this is the giving up. Read the two together: a rule with
+	// many retries and no abandons is only slow, while one with abandons is failing to decide events at all.
+	//
+	// Per attempt, like the counters above, so a replayed batch counts its abandons again. The ratio to Evaluations is what reads
+	// honestly; the absolute is not a count of distinct lost detections.
+	MaterializationAbandoned int64
 	// EvalNs is the total wall time across those attempts, and MaxEvalNs the worst single one. Wall time rather than CPU time
 	// because a rule that is slow through graph reads is exactly as much of an operator problem as one slow through matching,
 	// and the reader is trying to find the rule holding up the drain loop.
@@ -69,6 +77,9 @@ type RuleEvalSummary struct {
 	// identifies a rule whose misses are driving retries.
 	Evaluations     int64 `db:"evaluations" json:"evaluations"`
 	RetryableMisses int64 `db:"retryable_misses" json:"retryable_misses"`
+	// MaterializationAbandoned is the total over the window of processes the rule gave up on (see RuleEvalStat). Its ratio to
+	// Evaluations is the figure to read: RetryableMisses says the rule is waiting, this says it is failing to decide.
+	MaterializationAbandoned int64 `db:"materialization_abandoned" json:"materialization_abandoned"`
 	// MeanEvalNs and MaxEvalNs are the mean and worst-case wall time. The mean is computed in SQL from the stored sum and count
 	// rather than stored, so it stays correct as days are added to the window and as the retention sweep removes them.
 	MeanEvalNs int64 `db:"mean_eval_ns" json:"mean_eval_ns"`

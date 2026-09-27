@@ -185,6 +185,43 @@ func TestRuleEvalStatsIgnoresEntriesThatReportNoAttempt(t *testing.T) {
 //
 // Summing the struct field for field is the plausible mistake and it would be invisible in the totals: evaluations and the sum
 // would still be right, and only the worst case would silently become the total of the two durations.
+// spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/the-count-reaches-the-rule-s-durable-evaluation-counters
+//
+// TestRuleEvalStatsCarriesAbandonsThroughEveryWritePath drives the abandon count through each of the four places it can be lost: the
+// in-call fold (two entries for one rule in a single write), the INSERT that creates the row, the ON DUPLICATE KEY UPDATE that
+// accumulates into it, and the SUM that reads it back. A column dropped from any one of them reads zero, which is also what a rule
+// that never gave up reports, so the failure would look like good news.
+//
+// The miss count is set to a different value on purpose. Abandons and misses live side by side in every statement, and a statement
+// that wrote one into the other's slot would pass a test where the two happened to be equal.
+func TestRuleEvalStatsCarriesAbandonsThroughEveryWritePath(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+
+	// Folded in one call, then inserted: 2 + 1.
+	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
+		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, RetryableMisses: 1, MaterializationAbandoned: 2},
+		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 1},
+		{RuleID: "decides", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10},
+	}))
+	// Accumulated by the upsert: 3 + 4.
+	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
+		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 4},
+	}))
+
+	rows, err := detectionconfig.NewStore(db).EvalStats(ctx, api.DefaultEvalStatsWindow)
+	require.NoError(t, err)
+	got := map[string]api.RuleEvalSummary{}
+	for _, r := range rows {
+		got[r.RuleID] = r
+	}
+
+	assert.Equal(t, int64(7), got["gives-up"].MaterializationAbandoned, "folded, inserted, then accumulated")
+	assert.Equal(t, int64(1), got["gives-up"].RetryableMisses, "misses are their own column and must not absorb abandons")
+	assert.Zero(t, got["decides"].MaterializationAbandoned, "a rule that never gave up reads zero rather than being absent")
+}
+
 func TestRuleEvalStatsFoldsRepeatedRulesInOneCall(t *testing.T) {
 	t.Parallel()
 	store, _ := openStore(t)

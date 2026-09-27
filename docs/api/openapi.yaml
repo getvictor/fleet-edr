@@ -2586,6 +2586,28 @@ components:
             knows whether another attempt follows, so most but not all are
             retried. This is what names the rule driving retry churn.
           example: 12
+        materialization_abandoned:
+          type: integer
+          format: int64
+          minimum: 0
+          # A JSON number is an IEEE 754 double, so a value above 2^53-1 cannot
+          # round-trip through a JSON parser without losing precision. The bound
+          # is stated rather than left implied by `int64`, which promises a range
+          # the wire format cannot carry and which a client is right to refuse.
+          maximum: 9007199254740991
+          description: |
+            Processes the rule gave up on: it needed the process record an
+            event named, the record was still missing once the
+            materialization grace had passed, and it evaluated the event as
+            if nothing matched. `retryable_misses` is the waiting and this is
+            the giving up, and each is a detection that did not happen.
+
+            NOT bounded by `evaluations`, unlike `retryable_misses`: that is
+            at most one per attempt, while this is one per process, and a
+            single attempt over a batch can give up on several. Counted per
+            attempt, so a replayed batch counts again; read it as a rate
+            against `evaluations`. A server that predates the field omits it.
+          example: 3
         mean_eval_ns:
           type: integer
           format: int64

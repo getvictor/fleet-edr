@@ -138,7 +138,10 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 					RuleID:          id,
 					Evaluations:     int64(rapid.IntRange(1, 5).Draw(t, "evals")),
 					RetryableMisses: int64(rapid.IntRange(0, 2).Draw(t, "misses")),
-					EvalNs:          int64(rapid.IntRange(0, 1_000_000).Draw(t, "ns")),
+					// Drawn independently of misses: a rule can wait and then give up, or give up having never waited, and a
+					// buffer that summed one into the other would be caught only if the two are free to differ.
+					MaterializationAbandoned: int64(rapid.IntRange(0, 2).Draw(t, "abandons")),
+					EvalNs:                   int64(rapid.IntRange(0, 1_000_000).Draw(t, "ns")),
 				}
 				s.MaxEvalNs = s.EvalNs
 				batch = append(batch, s)
@@ -147,6 +150,7 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 				agg.RuleID = id
 				agg.Evaluations += s.Evaluations
 				agg.RetryableMisses += s.RetryableMisses
+				agg.MaterializationAbandoned += s.MaterializationAbandoned
 				agg.EvalNs += s.EvalNs
 				agg.MaxEvalNs = max(agg.MaxEvalNs, s.MaxEvalNs)
 				want[id] = agg

@@ -30,6 +30,17 @@ type BatchScope struct {
 	// note at the annotation for why, and for what the per-attempt framing does and does not let you conclude.
 	ancestryIncomplete map[string]int
 	declinedShells     map[declinedShell]struct{}
+
+	// materializationAbandoned counts, per rule id, the DISTINCT processes a rule gave up on because the process record an event
+	// referenced was still absent once the materialization grace had passed, and abandonedProcs is the dedup set.
+	//
+	// Inside the grace a missing record is retried: the rule raises the retryable sentinel and the batch is re-evaluated, and that
+	// churn is what retryable_misses counts. Past it the rule stops waiting and evaluates the event as if nothing matched. That
+	// decision is correct, since a record that has not appeared by then may never appear, but it is also a detection that did not
+	// happen, and until this existed nothing recorded it: an operator could see how often a rule retried and never how often it gave
+	// up (issue #1158).
+	materializationAbandoned map[string]int
+	abandonedProcs           map[abandonedProc]struct{}
 }
 
 // declinedShell identifies one declined shell within a batch, so a rule reached by several trigger events on the same chain counts
@@ -74,6 +85,44 @@ func (s *BatchScope) AncestryIncompleteCounts() map[string]int {
 		return nil
 	}
 	return s.ancestryIncomplete
+}
+
+// abandonedProc identifies one process a rule gave up on within a batch. Keyed per process for the reason declinedShell is: a rule's
+// findings dedupe per process, so counting per trigger event would report several abandons against at most one lost finding.
+type abandonedProc struct {
+	ruleID string
+	pid    int
+}
+
+// RecordMaterializationAbandoned notes that ruleID could not decide an event because the process record for pid was still missing
+// after the materialization grace, and evaluated it as if nothing matched. Idempotent per rule and process within the batch.
+//
+// Nil-safe for the same reason RecordAncestryIncomplete is: the replay harness and direct callers evaluate rules without a scope.
+func (s *BatchScope) RecordMaterializationAbandoned(ruleID string, pid int) {
+	if s == nil {
+		return
+	}
+	if s.abandonedProcs == nil {
+		s.abandonedProcs = make(map[abandonedProc]struct{}, 1)
+	}
+	key := abandonedProc{ruleID: ruleID, pid: pid}
+	if _, dupe := s.abandonedProcs[key]; dupe {
+		return
+	}
+	s.abandonedProcs[key] = struct{}{}
+	if s.materializationAbandoned == nil {
+		s.materializationAbandoned = make(map[string]int, 1)
+	}
+	s.materializationAbandoned[ruleID]++
+}
+
+// MaterializationAbandoned returns how many distinct processes ruleID gave up on in this batch. The engine reads it once per rule,
+// after that rule's evaluation, into the rule's durable evaluation counters.
+func (s *BatchScope) MaterializationAbandoned(ruleID string) int {
+	if s == nil {
+		return 0
+	}
+	return s.materializationAbandoned[ruleID]
 }
 
 // Derive returns the value stored under key, building it with build the first time this batch asks for it.

@@ -556,6 +556,9 @@ func (e *Engine) evaluateRule(
 			// A retryable outcome is an attempt that cost its time and could not decide, and it drives the replay this counter
 			// exists to attribute to a rule.
 			RetryableMisses: boolToCount(evalRetryable),
+			// Read after the rule ran, which this deferred function is. Safe per rule because rulesFor compacts its indices, so
+			// the rule is evaluated once per batch and its entry in the shared scope is its own.
+			MaterializationAbandoned: int64(scope.MaterializationAbandoned(rule.ID())),
 		})
 	}()
 

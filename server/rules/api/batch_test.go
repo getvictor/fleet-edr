@@ -68,3 +68,33 @@ func TestBatchScopeReportsNilBeforeAnythingIsDeclined(t *testing.T) {
 	assert.Nil(t, s.AncestryIncompleteCounts())
 	assert.Equal(t, 0, s.AncestryIncompleteCounts()["suspicious_exec"], "the engine indexes this map without checking it first")
 }
+
+// TestBatchScopeCountsEachAbandonedProcessOncePerRule pins the abandon counter's keying, which has to agree with how the rules that
+// feed it dedupe their findings. They emit at most one finding per process, so a count per trigger event would report several
+// abandons against at most one lost finding, and the ratio an operator reads against evaluations would overstate the loss.
+//
+// The same pid under a second rule is a SEPARATE abandon: the scope is shared by every rule in the batch, and two rules that each
+// needed the same missing record each failed to decide their own event.
+func TestBatchScopeCountsEachAbandonedProcessOncePerRule(t *testing.T) {
+	t.Parallel()
+
+	var s BatchScope
+	s.RecordMaterializationAbandoned("dns_c2_beacon", 100)
+	s.RecordMaterializationAbandoned("dns_c2_beacon", 100)
+	s.RecordMaterializationAbandoned("dns_c2_beacon", 200)
+	s.RecordMaterializationAbandoned("suspicious_exec", 100)
+
+	assert.Equal(t, 2, s.MaterializationAbandoned("dns_c2_beacon"), "two distinct processes, one of them reached twice")
+	assert.Equal(t, 1, s.MaterializationAbandoned("suspicious_exec"), "the same pid under another rule is that rule's own abandon")
+	assert.Zero(t, s.MaterializationAbandoned("never_ran"), "a rule that recorded nothing reads zero")
+}
+
+// TestBatchScopeAbandonCounterIsNilSafe covers the callers that evaluate without a scope, the replay harness and direct callers,
+// for whom recording must never be the thing that behaves differently from the engine.
+func TestBatchScopeAbandonCounterIsNilSafe(t *testing.T) {
+	t.Parallel()
+
+	var s *BatchScope
+	assert.NotPanics(t, func() { s.RecordMaterializationAbandoned("dns_c2_beacon", 100) })
+	assert.Zero(t, s.MaterializationAbandoned("dns_c2_beacon"))
+}

@@ -64,7 +64,14 @@ func (r *ApplicationControlWouldBlock) Doc() api.Documentation {
 
 // Evaluate maps each accepted would-block event to a Finding, exactly as ApplicationControlBlock.Evaluate does for block events.
 func (r *ApplicationControlWouldBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
-	return evaluateRuleMatchEvents(ctx, events, gr, ruleMatchRendering{
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, gr)
+}
+
+// EvaluateScoped is Evaluate with the batch scope, for the same reason as ApplicationControlBlock's (issue #1158).
+func (r *ApplicationControlWouldBlock) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, gr api.GraphReader,
+) ([]api.Finding, error) {
+	return evaluateRuleMatchEvents(ctx, scope, r.ID(), events, gr, ruleMatchRendering{
 		eventType:   applicationControlWouldBlockEventType,
 		title:       wouldBlockTitle,
 		description: wouldBlockDescription,

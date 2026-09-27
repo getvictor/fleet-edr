@@ -1,0 +1,7 @@
+- [x] `BatchScope.RecordMaterializationAbandoned` and `MaterializationAbandoned`, deduplicated per rule and process, nil-safe
+- [x] `RuleEvalStat.MaterializationAbandoned`, populated by the engine from the scope after each rule's evaluation
+- [x] Migration `00009` adding `materialization_abandoned` to `detection_rule_eval_stats`; buffer merge, fold, insert, upsert and read
+- [x] Record the abandon in `dns_c2_beacon`, `suspicious_exec`, `application_control_block`, `application_control_would_block`
+- [x] UI: optional field, a validator that does not bound abandons by evaluations, and a separate "abandoned" figure in the Cost cell
+- [x] Tests at every layer, each mutation-tested: 20 mutants, all killed
+- [x] Follow-up issues for the Sigma path (#1169) and for `osascript_network_exec`'s resolution order (#1170)

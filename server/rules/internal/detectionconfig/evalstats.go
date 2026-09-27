@@ -93,19 +93,20 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 	now := time.Now().UTC()
 	day := now.Format(time.DateOnly)
 	placeholders := make([]string, 0, len(ruleIDs))
-	args := make([]any, 0, len(ruleIDs)*8)
+	args := make([]any, 0, len(ruleIDs)*9)
 	for _, id := range ruleIDs {
 		st := folded[id]
-		placeholders = append(placeholders, "(?, ?, ?, ?, ?, ?, ?, ?)")
-		args = append(args, id, day, st.Evaluations, st.RetryableMisses, st.EvalNs, st.MaxEvalNs, now, now)
+		placeholders = append(placeholders, "(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		args = append(args, id, day, st.Evaluations, st.RetryableMisses, st.MaterializationAbandoned, st.EvalNs, st.MaxEvalNs, now, now)
 	}
 	query := `
 		INSERT INTO detection_rule_eval_stats
-			(rule_id, day, evaluations, retryable_misses, eval_ns_sum, eval_ns_max, first_seen, last_seen)
+			(rule_id, day, evaluations, retryable_misses, materialization_abandoned, eval_ns_sum, eval_ns_max, first_seen, last_seen)
 		VALUES ` + strings.Join(placeholders, ", ") + `
 		ON DUPLICATE KEY UPDATE
 			evaluations      = evaluations + VALUES(evaluations),
 			retryable_misses = retryable_misses + VALUES(retryable_misses),
+			materialization_abandoned = materialization_abandoned + VALUES(materialization_abandoned),
 			eval_ns_sum      = eval_ns_sum + VALUES(eval_ns_sum),
 			eval_ns_max      = GREATEST(eval_ns_max, VALUES(eval_ns_max)),
 			first_seen       = LEAST(first_seen, VALUES(first_seen)),
@@ -137,6 +138,7 @@ func foldEvalStats(stats api.RuleEvalStats) map[string]api.RuleEvalStat {
 		cur := folded[st.RuleID]
 		cur.Evaluations += st.Evaluations
 		cur.RetryableMisses += st.RetryableMisses
+		cur.MaterializationAbandoned += st.MaterializationAbandoned
 		cur.EvalNs += st.EvalNs
 		cur.MaxEvalNs = max(cur.MaxEvalNs, st.MaxEvalNs)
 		folded[st.RuleID] = cur
@@ -170,6 +172,7 @@ func (s *Store) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.
 		SELECT rule_id,
 		       SUM(evaluations)                                  AS evaluations,
 		       SUM(retryable_misses)                             AS retryable_misses,
+		       SUM(materialization_abandoned)                    AS materialization_abandoned,
 		       SUM(eval_ns_sum) DIV NULLIF(SUM(evaluations), 0)   AS mean_eval_ns,
 		       SUM(eval_ns_sum)                                  AS total_eval_ns,
 		       MAX(eval_ns_max)                                  AS max_eval_ns,
