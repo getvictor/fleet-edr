@@ -1,0 +1,4 @@
+- [x] Extract `processExcluded` from `parentExcluded` so the subject and the parent share one matcher
+- [x] `dns_c2_beacon` consults `domain`, `path_glob`, `team_id`, `signing_id` and `cdhash`, and is wired to the resolver
+- [x] Rule documentation, the generated rule reference and the rule pack updated
+- [x] Tests for every match type, a planted ad-hoc binary claiming a vendor identifier, and host scoping

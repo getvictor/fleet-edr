@@ -44,9 +44,14 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"credential_keychain_dump":        {},
 		"application_control_block":       {},
 		"application_control_would_block": {},
-		"dns_c2_beacon":                   {},
-		"sensor_tamper":                   {},
-		"sensor_recovery_failed":          {},
+		// The destination by the domain the process looked up, or the process by what suspicious_exec names a parent by, through the
+		// same processExcluded (issue #1154). path_glob rather than parent_path_glob because here the process is the subject.
+		"dns_c2_beacon": {
+			api.ExclusionMatchDomain, api.ExclusionMatchPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID,
+			api.ExclusionMatchCDHash,
+		},
+		"sensor_tamper":          {},
+		"sensor_recovery_failed": {},
 	}
 
 	// Scoped to the rules this project authors, whose exclusion surface is a design decision someone made and should have to
