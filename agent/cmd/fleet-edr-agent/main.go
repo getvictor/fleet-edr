@@ -38,6 +38,7 @@ import (
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/hostinfo"
 	"github.com/fleetdm/edr/agent/metrics"
+	"github.com/fleetdm/edr/agent/pkgsign"
 	"github.com/fleetdm/edr/agent/procgen"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
@@ -740,9 +741,11 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 				}
 			}
 			// Fill a btm_launch_item_add event's executable_code_signing from the on-disk signing of the registered
-			// executable: the sandboxed extension cannot read it on a SIP-enabled host, so the agent (unsandboxed root,
-			// off the ES callback thread) computes it here. No-op for every other event and on the linux headless build.
+			// executable, and an installer script's exec with the signature of its package (issue #1161): the sandboxed
+			// extension cannot read either on a SIP-enabled host, so the agent (unsandboxed root, off the ES callback thread)
+			// computes them here. No-op for every other event and on the linux headless build.
 			data := enrich.BtmExecutableSigning(evt.Data, codesign.Evaluate)
+			data = enrich.PackageScriptSigning(data, p.parentPath, pkgsign.Evaluate)
 			if p.updateTable {
 				updateProcTable(p.pt, data)
 			}
@@ -863,6 +866,16 @@ type execFields struct {
 
 type exitFields struct {
 	PID int32 `json:"pid"`
+}
+
+// parentPath is the executable path the process table holds for pid. The installer-script enrichment asks it for an exec's
+// parent, which PackageKit exec'd before it ran the script, so the parent is already recorded when its child arrives.
+func (p receiverLoopParams) parentPath(pid int) (string, bool) {
+	if p.pt == nil {
+		return "", false
+	}
+	info, ok := p.pt.Lookup(int32(pid)) //nolint:gosec // a kernel pid fits in int32
+	return info.Path, ok
 }
 
 func updateProcTable(pt *proctable.Table, data []byte) {

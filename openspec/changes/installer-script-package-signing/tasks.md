@@ -1,0 +1,4 @@
+- [x] `agent/pkgsign`: read a package's signature with `pkgutil --check-signature`, parse it, and stub it off darwin
+- [x] `enrich.PackageScriptSigning`: attach it to an installer script's exec, only under `package_script_service`, sharing the envelope handling with the BTM enrichment
+- [x] `package_signing` in `schema/events.json`, with a round-trip property and a literal wire-shape pin
+- [ ] Exercise on a live VM before the release candidate
