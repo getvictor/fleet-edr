@@ -29,7 +29,17 @@ import "./DetectionConfig.scss";
 // The canonical display order for exclusion match types, mirroring api.ExclusionMatchType server-side. The editor never offers all of
 // these at once: it filters this list down to the match types the selected rule actually consults (issue #520), sourced from that
 // rule's supported_exclusion_match_types on GET /api/rules.
-const MATCH_TYPES = ["path_glob", "parent_path_glob", "team_id", "signing_id", "cdhash", "sha256", "command_substring", "domain"] as const;
+const MATCH_TYPES = [
+  "path_glob",
+  "parent_path_glob",
+  "team_id",
+  "signing_id",
+  "cdhash",
+  "sha256",
+  "command_substring",
+  "domain",
+  "package_team_id",
+] as const;
 
 // What a value for each match type has to look like, where that is not obvious from the name. Only signing_id has a shape the
 // API refuses, and it is the one an operator is most likely to get wrong: the identifier alone is whatever the signer typed, and
@@ -43,6 +53,10 @@ const VALUE_HINTS: Partial<Record<(typeof MATCH_TYPES)[number], { placeholder: s
       "signature can claim any vendor's.",
   },
   team_id: { placeholder: "Q6L2SF6YDW", help: "The TeamIdentifier field from `codesign -dv <binary>`." },
+  package_team_id: {
+    placeholder: "94KV3E626L",
+    help: "The team in parentheses on the Developer ID Installer line of `pkgutil --check-signature <package>`.",
+  },
   cdhash: { placeholder: "40 lowercase hex characters", help: "Pins one exact build; reported only for Hardened Runtime binaries." },
 };
 

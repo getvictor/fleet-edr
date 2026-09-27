@@ -74,6 +74,32 @@ func TestStoreCreateExclusionBumpsVersionAndResolves(t *testing.T) {
 	assert.False(t, snap.Excluded("suspicious_exec", api.ExclusionMatchParentPathGlob, "/usr/bin/python3", "host-a"))
 }
 
+// spec:server-detection-rules-engine/an-installer-script-is-waived-by-its-package-signer/the-package-team-is-a-storable-match-type
+//
+// package_team_id is a new value of an ENUM column (migration 00010), so the database itself must accept it: a match type the API
+// validates but the column refuses would fail at the INSERT, after the operator had been told it was valid (issue #1161).
+func TestStoreStoresAPackageTeamExclusion(t *testing.T) {
+	t.Parallel()
+	s, _ := openStore(t)
+	ctx := context.Background()
+
+	_, err := s.CreateExclusion(ctx, detectionconfig.CreateExclusionInput{
+		RuleID:      "suspicious_exec",
+		MatchType:   api.ExclusionMatchPackageTeamID,
+		Value:       "94KV3E626L",
+		HostGroupID: api.GlobalScope,
+		Reason:      "AWS VPN Client installers",
+		Actor:       "alice",
+	}, auditFor)
+	require.NoError(t, err)
+
+	snap, err := s.LoadSnapshot(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.True(t, snap.Excluded("suspicious_exec", api.ExclusionMatchPackageTeamID, "94KV3E626L", "host-a"))
+	assert.False(t, snap.Excluded("suspicious_exec", api.ExclusionMatchTeamID, "94KV3E626L", "host-a"),
+		"a package team is not a process team")
+}
+
 func TestStoreUpsertRuleSettingResolves(t *testing.T) {
 	t.Parallel()
 	s, _ := openStore(t)

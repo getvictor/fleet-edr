@@ -1,0 +1,4 @@
+- [x] `package_team_id` match type, validated and matched exactly; migration 00010 appends it to the column's ENUM
+- [x] `suspicious_exec` consults it for an installer script under `package_script_service` with a trusted package signature, and names the package in the alert
+- [x] UI hint, OpenAPI enums, operator docs, rule reference and pack
+- [x] Tests: the waiver and its guards, the alert note, the consultation guard, the stored type, the catalog response; mutation-tested

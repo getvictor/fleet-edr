@@ -15,6 +15,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
+- **Package installs can be excluded by who signed the package.** Installing a `.pkg` raises a suspicious-exec alert for each of its install scripts. Exclude a vendor's installers with a `package_team_id` exclusion, the team that signed the package; an unsigned package cannot be excluded this way. The alert now names the package and its signer.
 - **LaunchAgent persistence is judged on the program it registers.** The rule now watches LaunchAgent registrations rather than `launchctl`, so it also catches a plist that becomes active at the next login, and skips Apple's own and MDM-managed agents. Vendor agents can be excluded by `team_id` or `signing_id`, which a planted file cannot defeat; existing plist path exclusions keep working. If the background items profile is not installed, exclude team `FDG8Q7N4CC` for this rule so the EDR's own LaunchAgent is not reported.
 
 ### Fixed

@@ -13,6 +13,7 @@ An exclusion is `(rule_id, match_type, value)`, with an optional expiry. The val
 - `signing_id`: matches a code-signing identifier QUALIFIED by who signed it, written `<TEAMID>:<identifier>` (for example `Q6L2SF6YDW:com.anthropic.claude-code`) or `platform:<identifier>` for a binary Apple ships. Both parts must match, so an ad-hoc binary claiming a vendor's identifier is not covered. `codesign -dv <binary>` prints both fields. A bare identifier is refused.
 - `cdhash`: matches a binary's code-directory hash exactly (40 lowercase hex characters), pinning one exact build. The agent reports a cdhash only for binaries built with Hardened Runtime, so it cannot match an ad-hoc signed binary such as most Homebrew formulae.
 - `path_glob`: matches an absolute filesystem path with the same glob semantics as `parent_path_glob`.
+- `package_team_id`: matches exactly the Developer ID team that signed an installer package, for the scripts that package runs during install. `pkgutil --check-signature <package>` prints it in parentheses on the `Developer ID Installer` line. An unsigned package has none, so it cannot be excluded this way.
 - `domain`: matches a DNS name exactly or as a parent domain, ignoring case and a trailing dot: `example.com` matches `example.com` and `api.example.com`, not `notexample.com`.
 
 Which rule consumes which match type is fixed by the rule, and the console offers only the match types the selected rule actually consults. Creating an exclusion for a `(rule_id, match_type)` pair the rule does not consult, or for a rule that does not exist, is rejected by the API, so a stored exclusion cannot silently do nothing:
@@ -20,6 +21,7 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | Rule | Match types used | Matched against |
 | --- | --- | --- |
 | `suspicious_exec` | `parent_path_glob`, `team_id`, `signing_id`, `cdhash` | The chain's non-shell parent |
+| `suspicious_exec` | `package_team_id` | The package whose install script is running, under macOS's installer |
 | `shell_network_connect` | `parent_path_glob`, `team_id`, `signing_id`, `cdhash` | The chain's non-shell parent |
 | `privilege_launchd_plist_write` | `team_id` | The registered daemon's executable |
 | `persistence_launchagent` | `team_id`, `signing_id` | The program the LaunchAgent registers |

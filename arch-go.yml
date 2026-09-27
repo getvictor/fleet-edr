@@ -71,6 +71,10 @@ dependenciesRules:
         - "**.versionedset"
         # catchup is the shared catch-up policy (issue #1071): one decision about when a host is owed a state again.
         - "**.catchup"
+        # installerscript is the one definition of a package installer script that the agent (which attaches the package's
+        # signature) and suspicious_exec (which trusts it) must share exactly, or a signature could be attributed to one path
+        # while the alert names another (issue #1161).
+        - "**.installerscript"
         # auditoutbox is shared server platform code (issue #1070 moved it out of this context so response could use it too);
         # detection-config changes and watched-path replacements commit their audit entries through it.
         - "**.auditoutbox"

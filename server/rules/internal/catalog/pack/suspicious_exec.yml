@@ -26,7 +26,7 @@ logsource:
 falsepositives:
   - Interactive SSH where an admin runs a script from /tmp. Where that is routine on a server, a parent-path-glob exclusion for `/usr/libexec/sshd-session` silences it, but it also silences every command an attacker runs with a stolen SSH credential. Set an expiry on it and do not apply it to workstations.
   - Developer tooling that shells out (AI coding assistants, git hooks, IDEs). Exclude a Developer-ID signed tool by its `team_id` (Claude Code is `Q6L2SF6YDW`), which survives upgrades and cannot be claimed by a planted binary. For an unsigned tool use a parent-path-glob anchored to its full install path, never a leading `*`, with an expiry. Either way the exclusion trusts everything that parent can be made to run, so do not exclude a script interpreter.
-  - Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.
+  - 'Every package install: PackageKit runs a package''s preinstall and postinstall out of a temporary sandbox under its own `package_script_service`, so each script is this chain. Exclude a vendor''s installers by `package_team_id`, the Developer ID team that signed the package (`pkgutil --check-signature <pkg>` prints it). An unsigned package cannot be excluded this way.'
 x-engine:
   rule_id: suspicious_exec
   type: graph
@@ -44,7 +44,9 @@ x-engine:
     - team_id
     - signing_id
     - cdhash
+    - package_team_id
   limitations:
     - The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
     - Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa.
+    - A `package_team_id` exclusion covers the installer script itself. A script that runs a second program out of a temporary path is still reported, since that program is not the package's signed content.
     - 'A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. Skipped chains are counted per rule on the server''s detection traces. A shell started directly by launchd is a different case: it has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.'

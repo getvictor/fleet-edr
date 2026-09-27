@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/agent/pkgsign"
+	"github.com/fleetdm/edr/internal/installerscript"
 )
 
 // A postinstall exec as recorded on edr-dev for issue #1161: bash running the script out of PackageKit's sandbox, with the
@@ -33,7 +34,7 @@ func parents(t *testing.T) ParentPath {
 	return func(pid int) (string, bool) {
 		switch pid {
 		case scriptServicePID:
-			return PackageScriptServicePath, true
+			return installerscript.ServicePath, true
 		case 200:
 			return "/bin/zsh", true
 		}
@@ -133,18 +134,4 @@ func TestPackageScriptSigning_PassesThrough(t *testing.T) {
 			assert.Equal(t, tc.data, PackageScriptSigning(tc.data, parents(t), tc.eval.eval))
 		})
 	}
-}
-
-// A compiled postinstall is argv[0] itself, with the package right after it.
-func TestInstallerScript(t *testing.T) {
-	t.Parallel()
-	script, pkg := installerScript([]string{"/tmp/PKInstallSandbox.a/Scripts/b/postinstall", "/p.pkg", "/", "/", "/"})
-	assert.Equal(t, "/tmp/PKInstallSandbox.a/Scripts/b/postinstall", script)
-	assert.Equal(t, "/p.pkg", pkg)
-	_, pkg = installerScript([]string{"/bin/sh", "/tmp/PKInstallSandbox.a/Scripts/b/preinstall", "/p.pkg"})
-	assert.Equal(t, "/p.pkg", pkg)
-	_, pkg = installerScript([]string{"/tmp/PKInstallSandbox.a/Scripts/b/postinstall"})
-	assert.Empty(t, pkg, "nothing follows the script")
-	_, pkg = installerScript(nil)
-	assert.Empty(t, pkg)
 }
