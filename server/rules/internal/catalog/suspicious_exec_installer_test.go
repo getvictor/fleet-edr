@@ -57,6 +57,10 @@ func TestSuspiciousExecInstaller_WaivedByThePackagesTeam(t *testing.T) {
 	chain := installerChain(t, packageScriptServicePath, amazonSigned)
 	require.Len(t, evaluateInstaller(t, nil, chain), 1, "the fixture fires with no exclusion")
 	assert.Empty(t, evaluateInstaller(t, packageTeam("94KV3E626L"), chain))
+	// Notarization is context, not a condition: an in-house Developer ID package deployed by MDM is commonly not notarized, and
+	// the operator's team exclusion is the trust decision.
+	unnotarized := installerChain(t, packageScriptServicePath, `{"signed":true,"notarized":false,"team_id":"94KV3E626L"}`)
+	assert.Empty(t, evaluateInstaller(t, packageTeam("94KV3E626L"), unnotarized))
 	assert.Len(t, evaluateInstaller(t, packageTeam("OTHERTEAM1"), chain), 1, "another vendor's team waives nothing")
 }
 
@@ -78,7 +82,7 @@ func TestSuspiciousExecInstaller_OnlyATrustedSignatureCounts(t *testing.T) {
 	}
 }
 
-// spec:server-detection-rules-engine/an-installer-script-is-waived-by-its-package-signer/a-package-signature-outside-packagekit-counts-for-nothing
+// spec:server-detection-rules-engine/an-installer-script-is-waived-by-its-package-signer/a-signature-outside-packagekit-counts-for-nothing
 //
 // The agent attaches a package signature only under PackageKit's service, and the rule checks again: a chain under any other
 // parent carrying one (a fabricated or replayed event) must not be waived by it.
@@ -95,7 +99,9 @@ func TestSuspiciousExecInstaller_TheAlertNamesThePackage(t *testing.T) {
 		signing string
 		want    string
 	}{
-		"signed":   {amazonSigned, "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, signed by team 94KV3E626L)"},
+		"signed": {amazonSigned, "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, signed by team 94KV3E626L, notarized)"},
+		"signed, not notarized": {`{"signed":true,"notarized":false,"team_id":"94KV3E626L"}`,
+			"(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, signed by team 94KV3E626L, not notarized)"},
 		"unsigned": {`{"signed":false,"notarized":false,"team_id":""}`, "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, unsigned)"},
 		"unknown":  {"", "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg)"},
 	}

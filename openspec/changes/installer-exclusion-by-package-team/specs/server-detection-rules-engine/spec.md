@@ -19,7 +19,7 @@ The `suspicious_exec` rule SHALL consult exclusions of match type `package_team_
 - **WHEN** the rule evaluates it
 - **THEN** a finding is produced
 
-#### Scenario: A package signature outside PackageKit counts for nothing
+#### Scenario: A signature outside PackageKit counts for nothing
 
 - **GIVEN** a `package_team_id` exclusion for a vendor's team
 - **AND** a chain whose parent is not `package_script_service` but whose trigger carries that vendor's package signature

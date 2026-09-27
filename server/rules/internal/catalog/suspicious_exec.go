@@ -371,12 +371,22 @@ func installerPackageNote(p execPayload, parent *api.Process) string {
 	case p.PackageSigning == nil:
 		return fmt.Sprintf(" (installing %s)", pkg)
 	case p.PackageSigning.Signed && p.PackageSigning.TeamID != "":
-		return fmt.Sprintf(" (installing %s, signed by team %s)", pkg, p.PackageSigning.TeamID)
+		return fmt.Sprintf(" (installing %s, signed by team %s, %s)", pkg, p.PackageSigning.TeamID, notarization(p.PackageSigning))
 	case p.PackageSigning.Signed:
-		return fmt.Sprintf(" (installing %s, signed)", pkg)
+		return fmt.Sprintf(" (installing %s, signed, %s)", pkg, notarization(p.PackageSigning))
 	default:
 		return fmt.Sprintf(" (installing %s, unsigned)", pkg)
 	}
+}
+
+// notarization says whether Apple's notary service accepted the package. Shown for triage and deliberately not a condition of the
+// waiver: the operator's team exclusion is the trust decision, as it is for LaunchDaemons, and an in-house package deployed by MDM
+// is commonly signed with Developer ID and never notarized.
+func notarization(ps *packageSigning) string {
+	if ps.Notarized {
+		return "notarized"
+	}
+	return "not notarized"
 }
 
 // installerPackagePath is the argument after the installer script, which PackageKit passes as the package's path (Apple's script
