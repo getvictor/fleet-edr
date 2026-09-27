@@ -12,6 +12,7 @@ import (
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	"github.com/fleetdm/edr/server/detection/internal/pipeline"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
@@ -208,7 +209,7 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		res.Roots = []api.ProcessNode{}
 	}
 	if h.processRetentionDays > 0 {
-		res.RetainedFromNs = time.Now().AddDate(0, 0, -h.processRetentionDays).UnixNano()
+		res.RetainedFromNs = pipeline.ProcessRetentionCutoff(time.Now(), h.processRetentionDays).UnixNano()
 	}
 	h.writeJSON(w, r, res)
 }

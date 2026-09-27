@@ -322,7 +322,6 @@ paths:
                     type: integer
                     format: int64
                     minimum: 0
-                    maximum: 9007199254740991
                     description: |
                       The moment, in nanoseconds since the epoch, before which completed process records have been deleted
                       by retention (`EDR_RETENTION_DAYS`). A window starting earlier returns the processes an alert references
