@@ -246,11 +246,13 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	var watchedPathConverger *watchedpaths.Converger
 	if deps.CommandBatchInserter != nil && deps.EnrolledHostLister != nil {
 		watchedPathStore := watchedpaths.NewStore(deps.DB)
-		detectionConfigH.SetWatchedPaths(watchedpaths.NewService(
-			watchedPathStore, deps.CommandBatchInserter, deps.EnrolledHostLister, detectionConfigAuditDrain, logger))
+		watchedPathSvc := watchedpaths.NewService(
+			watchedPathStore, deps.CommandBatchInserter, deps.EnrolledHostLister, detectionConfigAuditDrain, logger)
+		detectionConfigH.SetWatchedPaths(watchedPathSvc)
 		if deps.WatchedPathEnrollments != nil && deps.WatchedPathLatestCommands != nil {
 			watchedPathConverger = watchedpaths.NewConverger(watchedPathStore, deps.CommandBatchInserter,
 				deps.WatchedPathEnrollments, deps.WatchedPathLatestCommands, logger)
+			watchedPathConverger.SetEnsureDefaults(watchedPathSvc.EnsureDefaults)
 		}
 	}
 	r := &Rules{

@@ -66,7 +66,7 @@ func (h *DetectionConfigHandler) handleGetWatchedPaths(w http.ResponseWriter, r 
 	}
 	h.resolveUpdatedByLabel(ctx, &set)
 	writeJSON(ctx, h.logger, w, http.StatusOK, watchedPathsResponse{
-		WatchedPathSet: set, BuiltIn: api.BuiltInWatchedPaths, MaxPaths: api.MaxWatchedPaths,
+		WatchedPathSet: set, BuiltIn: api.AlwaysWatchedPaths(), MaxPaths: api.MaxWatchedPaths,
 	})
 }
 

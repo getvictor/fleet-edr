@@ -3,6 +3,7 @@
 package watchedpaths
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,7 +47,16 @@ func NewStore(db *sqlx.DB) *Store {
 // ErrVersionConflict is returned for a conditional replacement of a set that has changed since the caller read it.
 var ErrVersionConflict = errors.New("the watched paths were changed since they were read")
 
+// document is the stored form of a set: the operator's paths, and the server defaults that version was stored, and so pushed, with.
+type document struct {
+	Paths    []api.WatchedPath `json:"paths"`
+	Defaults []api.WatchedPath `json:"defaults"`
+}
+
 // decode maps a stored row onto the API's set.
+//
+// A row written before defaults existed (issue #1167) holds a bare array of paths. It decodes with no defaults, which is the truth
+// about what those hosts were sent, and is what makes the next converge pass push the current defaults.
 func decode(row versionedset.Row) (api.WatchedPathSet, error) {
 	out := api.WatchedPathSet{
 		Version:   row.Version,
@@ -54,9 +64,21 @@ func decode(row versionedset.Row) (api.WatchedPathSet, error) {
 		UpdatedAt: row.UpdatedAtPtr(),
 		Paths:     []api.WatchedPath{},
 	}
-	if err := json.Unmarshal(row.Payload, &out.Paths); err != nil {
+	payload := bytes.TrimSpace(row.Payload)
+	if len(payload) > 0 && payload[0] == '[' {
+		if err := json.Unmarshal(payload, &out.Paths); err != nil {
+			return api.WatchedPathSet{}, fmt.Errorf("decode watched paths: %w", err)
+		}
+		return out, nil
+	}
+	var doc document
+	if err := json.Unmarshal(payload, &doc); err != nil {
 		return api.WatchedPathSet{}, fmt.Errorf("decode watched paths: %w", err)
 	}
+	if doc.Paths != nil {
+		out.Paths = doc.Paths
+	}
+	out.Defaults = doc.Defaults
 	return out, nil
 }
 
@@ -80,7 +102,8 @@ func (s *Store) Replace(
 	ctx context.Context, paths []api.WatchedPath, actor string, expectedVersion *int64,
 	audit func(previous, next api.WatchedPathSet) (auditoutbox.Entry, error),
 ) (previous, next api.WatchedPathSet, auditID int64, err error) {
-	encoded, err := json.Marshal(paths)
+	// Every write records the defaults this build pushes, so a set stored by this server is never behind them.
+	encoded, err := json.Marshal(document{Paths: paths, Defaults: api.DefaultWatchedPaths})
 	if err != nil {
 		return api.WatchedPathSet{}, api.WatchedPathSet{}, 0, fmt.Errorf("encode watched paths: %w", err)
 	}

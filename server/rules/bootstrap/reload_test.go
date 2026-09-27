@@ -139,12 +139,12 @@ func TestReload_LeavesTheRunningSetAloneWhenContentIsUnusable(t *testing.T) {
 		},
 		{
 			// The loader refuses a rule it cannot run individually and reports that as success with nothing loaded, NOT as an
-			// error, so this arrives on the happy path. A file_event rule is the real refusal this sensor produces, since it reads
-			// telemetry the agent does not collect.
+			// error, so this arrives on the happy path. A file_event rule for a path no host watches is the real refusal this sensor
+			// produces, since the agent emits no event for it.
 			name: "every document is refused individually",
 			corpus: fakeCorpus{version: 9, docs: []rulecontentapi.Document{{
-				Path:    "imported/file_event/file_event_macos_emond_launch_daemon.yml",
-				Content: mustReadEmbedded(t, "imported/file_event/file_event_macos_emond_launch_daemon.yml"),
+				Path:    "imported/file_event/file_event_macos_python_path_configuration_files.yml",
+				Content: mustReadEmbedded(t, "imported/file_event/file_event_macos_python_path_configuration_files.yml"),
 			}}},
 		},
 	}

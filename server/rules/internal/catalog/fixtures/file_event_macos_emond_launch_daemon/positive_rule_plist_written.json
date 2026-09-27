@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"event_id": "file_event_macos_emond_launch_daemon-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":5100,"parent_pid":1}},
+    {"event_id": "file_event_macos_emond_launch_daemon-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":5100,"ppid":1,"path":"/bin/cp","args":["cp","/tmp/evil.plist","/etc/emond.d/rules/evil.plist"],"uid":0,"gid":0}},
+    {"event_id": "file_event_macos_emond_launch_daemon-open", "host_id": "fixture-host", "timestamp_ns": 1040000000, "event_type": "open",
+     "payload": {"pid":5100,"path":"/private/etc/emond.d/rules/evil.plist","flags":1537}}
+  ],
+  "expected_findings": [
+    {"rule_id": "file_event_macos_emond_launch_daemon", "severity": "medium", "event_ids": ["file_event_macos_emond_launch_daemon-open"]}
+  ]
+}

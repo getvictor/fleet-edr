@@ -90,8 +90,37 @@ func (s *Service) Replace(
 // caught up gets exactly what the push sent. The set must have been changed at least once, so it carries its update time. Marshalling
 // a struct of strings and integers cannot fail.
 func commandPayload(set api.WatchedPathSet) []byte {
-	payload, _ := json.Marshal(api.SetWatchedPathsPayload{Version: set.Version, Epoch: set.UpdatedAt.UnixMicro(), Paths: set.Paths})
+	payload, _ := json.Marshal(api.SetWatchedPathsPayload{
+		Version: set.Version, Epoch: set.UpdatedAt.UnixMicro(), Paths: api.PushedWatchedPaths(set),
+	})
 	return payload
+}
+
+// defaultsReason is the audit reason for the system change that brings a set up to this build's default paths.
+const defaultsReason = "built-in watched paths changed: this server pushes new defaults to every host"
+
+// EnsureDefaults brings the stored set up to this build's api.DefaultWatchedPaths when it was stored with others, or with none
+// (issue #1167), by storing the operator's same paths again as a change by the system. That is what carries new defaults to hosts:
+// the extension applies only a set newer than the last one it accepted, so the version and epoch have to move, and the ordinary
+// push, catch-up and audit then do the rest. A no-op once the set carries the current defaults, which is every call but the first
+// after an upgrade. Two replicas racing converge: the loser's conditional write conflicts, and on re-reading it finds nothing to do.
+func (s *Service) EnsureDefaults(ctx context.Context) error {
+	for range 2 {
+		set, err := s.store.Get(ctx)
+		if err != nil {
+			return err
+		}
+		if slices.Equal(set.Defaults, api.DefaultWatchedPaths) {
+			return nil
+		}
+		version := set.Version
+		system := &identityapi.Actor{Principal: identityapi.SystemPrincipal()}
+		_, err = s.Replace(ctx, system, defaultsReason, set.Paths, &version)
+		if !errors.Is(err, ErrVersionConflict) {
+			return err
+		}
+	}
+	return nil
 }
 
 // fanout queues the set for every enrolled host in one batched insert and reports how many hosts it tried, how many it missed, and

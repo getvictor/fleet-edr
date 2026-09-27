@@ -227,3 +227,64 @@ func FuzzValidateWatchedPaths(f *testing.F) {
 		assert.Contains(t, []WatchedPathMatch{WatchedPathLiteral, WatchedPathPrefix}, entry.Match)
 	})
 }
+
+// ReachesWatchedPath is the loader's proof that a file rule can see an event (issue #1167). Each case is one shape of condition
+// against one kind of watched entry, with the /private aliasing a macOS path carries.
+func TestReachesWatchedPath(t *testing.T) {
+	t.Parallel()
+	prefix := []WatchedPath{{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix}}
+	literal := []WatchedPath{{Path: "/etc/sudoers", Match: WatchedPathLiteral}}
+	cases := []struct {
+		name     string
+		watched  []WatchedPath
+		modifier string
+		value    string
+		want     bool
+	}{
+		{"a path inside a watched prefix", prefix, "", "/etc/emond.d/rules/x.plist", true},
+		{"a path outside it", prefix, "", "/etc/other/x.plist", false},
+		{"a narrower startswith", prefix, "startswith", "/etc/emond.d/rules/sub/", true},
+		{"a broader startswith", prefix, "startswith", "/etc/", true},
+		{"an unrelated startswith", prefix, "startswith", "/Library/", false},
+		{"contains the prefix itself", prefix, "contains", "/etc/emond.d/rules/", true},
+		{"contains a fragment of the prefix", prefix, "contains", "emond.d", true},
+		{"contains an unrelated fragment", prefix, "contains", "/Users/", false},
+		{"the /private spelling of a watched prefix", prefix, "startswith", "/private/etc/emond.d/rules/", true},
+		{"endswith reaches nothing", prefix, "endswith", ".plist", false},
+		{"an unknown modifier reaches nothing", prefix, "re", "/etc/emond.d/rules/.*", false},
+		{"equality with a watched file", literal, "", "/etc/sudoers", true},
+		{"equality with another file", literal, "", "/etc/sudoers.bak", false},
+		{"equality with a path the watched file only starts with", literal, "", "/etc/sudo", false},
+		{"startswith a watched file", literal, "startswith", "/etc/sudo", true},
+		{"contains within a watched file", literal, "contains", "sudoers", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, ReachesWatchedPath(tc.watched, tc.modifier, tc.value))
+		})
+	}
+}
+
+// A host is sent the defaults first and then the operator's paths, without an operator entry that repeats a default, which would
+// otherwise mute one directory twice.
+func TestPushedWatchedPaths(t *testing.T) {
+	t.Parallel()
+	defaults := []WatchedPath{{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix}}
+	set := WatchedPathSet{Defaults: defaults, Paths: []WatchedPath{
+		{Path: "/private/etc/emond.d/rules/", Match: WatchedPathPrefix},
+		{Path: "/etc/periodic/daily/", Match: WatchedPathPrefix},
+	}}
+	assert.Equal(t, []WatchedPath{
+		{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix},
+		{Path: "/etc/periodic/daily/", Match: WatchedPathPrefix},
+	}, PushedWatchedPaths(set))
+	assert.Empty(t, PushedWatchedPaths(WatchedPathSet{}), "no defaults recorded and no paths is nothing")
+}
+
+// Every default must be a set entry the extension accepts, or the push carrying it would be refused on every host.
+func TestDefaultWatchedPathsAreValid(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, ValidateWatchedPaths(DefaultWatchedPaths))
+	require.NoError(t, ValidateWatchedPaths(AlwaysWatchedPaths()), "and none repeats a built-in path")
+}
