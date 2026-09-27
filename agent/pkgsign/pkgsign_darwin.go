@@ -22,7 +22,10 @@ const checkTimeout = 2 * time.Second
 //   - the package was changed after PackageKit set up the install sandbox the script runs from. The check runs after the script
 //     has started, so an unsigned package's preinstall could otherwise swap a notarized vendor package in at the same path and
 //     have its own postinstall reported as the vendor's. A file's ctime is set by the kernel on any write or rename and cannot be
-//     set back, so a package whose ctime is not older than the sandbox is one that changed during the install.
+//     set back, so a package whose ctime is not older than the sandbox is one that changed during the install;
+//   - the package changed while pkgutil was reading it. The file is statted again after the read and must be the same inode with
+//     the same ctime and size, so a swap between the check above and pkgutil's open cannot lend the answer a different package.
+//     Swapping the original back afterwards does not help either, since that is itself a change and moves the ctime again.
 func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 	if pkgPath == "" {
 		return nil, false
@@ -46,17 +49,32 @@ func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 	if res, hit := results.get(key); hit {
 		return &res, true
 	}
+	res, ok := Parse(checkSignature(pkgPath))
+	if !ok {
+		return nil, false
+	}
+	var after syscall.Stat_t
+	if err := syscall.Stat(pkgPath, &after); err != nil || !sameFile(pkg, after) {
+		return nil, false
+	}
+	results.put(key, res)
+	return &res, true
+}
+
+// checkSignature runs pkgutil on the package and returns its output. A variable so a test can change the file mid-read, which is
+// the race the second stat exists for and cannot otherwise be timed.
+var checkSignature = func(pkgPath string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
 	// pkgutil exits non-zero for an unsigned package, which is an answer rather than a failure, so the exit status is ignored
 	// and the output decides.
 	out, _ := exec.CommandContext(ctx, "/usr/sbin/pkgutil", "--check-signature", pkgPath).CombinedOutput() //nolint:gosec // fixed binary; the path is one argument, not a shell string
-	res, ok := Parse(string(out))
-	if !ok {
-		return nil, false
-	}
-	results.put(key, res)
-	return &res, true
+	return string(out)
+}
+
+// sameFile reports whether two stats of one path describe the same, unchanged file.
+func sameFile(a, b syscall.Stat_t) bool {
+	return a.Dev == b.Dev && a.Ino == b.Ino && a.Size == b.Size && a.Ctimespec.Nano() == b.Ctimespec.Nano()
 }
 
 // sandboxDir is the PKInstallSandbox directory an installer script runs from, which PackageKit creates before any script runs.

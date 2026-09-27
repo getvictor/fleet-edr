@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -94,6 +95,48 @@ func TestEvaluate_AScriptOutsideASandboxCannotBeClassified(t *testing.T) {
 	pkg, _ := buildPackage(t)
 	_, ok := Evaluate(pkg, "/tmp/elsewhere/postinstall")
 	assert.False(t, ok, "without the sandbox there is no install start to check the package against")
+}
+
+// The window between the ctime check and pkgutil's read is closed by statting again after the read: a file replaced in between, or
+// replaced and restored, is not the file that was checked.
+func TestSameFile(t *testing.T) {
+	t.Parallel()
+	pkg, _ := buildPackage(t)
+	var before syscall.Stat_t
+	require.NoError(t, syscall.Stat(pkg, &before))
+	var unchanged syscall.Stat_t
+	require.NoError(t, syscall.Stat(pkg, &unchanged))
+	assert.True(t, sameFile(before, unchanged))
+
+	time.Sleep(10 * time.Millisecond)
+	body, err := os.ReadFile(pkg) //nolint:gosec // a path under t.TempDir
+	require.NoError(t, err)
+	swap := pkg + ".swap"
+	require.NoError(t, os.WriteFile(swap, body, 0o600)) //nolint:gosec // a path under t.TempDir
+	require.NoError(t, os.Rename(swap, pkg))
+	var replaced syscall.Stat_t
+	require.NoError(t, syscall.Stat(pkg, &replaced))
+	assert.False(t, sameFile(before, replaced), "identical bytes under a new inode are a different file")
+}
+
+// The package is swapped while pkgutil is "reading" it: the answer describes the replacement, not the package being installed, so
+// it must not be reported. Not parallel: it replaces the package-level pkgutil runner.
+func TestEvaluate_APackageSwappedDuringTheReadIsNotClassified(t *testing.T) { //nolint:paralleltest // swaps a package variable
+	pkg, script := buildPackage(t)
+	original := checkSignature
+	t.Cleanup(func() { checkSignature = original })
+	checkSignature = func(path string) string {
+		body, err := os.ReadFile(path) //nolint:gosec // a path under t.TempDir
+		require.NoError(t, err)
+		swap := path + ".swap"
+		require.NoError(t, os.WriteFile(swap, body, 0o600)) //nolint:gosec // a path under t.TempDir
+		require.NoError(t, os.Rename(swap, path))
+		return notarizedDeveloperID
+	}
+
+	res, ok := Evaluate(pkg, script)
+	assert.False(t, ok, "the vendor identity pkgutil saw belongs to a file that is no longer the one checked")
+	assert.Nil(t, res)
 }
 
 func TestSandboxDir(t *testing.T) {
