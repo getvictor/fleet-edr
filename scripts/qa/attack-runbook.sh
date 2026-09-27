@@ -176,9 +176,12 @@ func main() {
 	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
 		log.Fatalf("write plist: %v", err)
 	}
-	// Register with launchd -> emits NOTIFY_BTM_LAUNCH_ITEM_ADD, the persistence signal.
-	if out, e := exec.Command("/bin/launchctl", "bootstrap", domain, target).CombinedOutput(); e != nil {
-		log.Printf("bootstrap (non-fatal): %v: %s", e, out)
+	// Register with launchd -> emits NOTIFY_BTM_LAUNCH_ITEM_ADD, the persistence signal. A refused bootstrap registers
+	// nothing, so no alert can follow: cleanup still runs, and the exit status tells the runbook to skip the step rather
+	// than count a detection miss.
+	out, bootstrapErr := exec.Command("/bin/launchctl", "bootstrap", domain, target).CombinedOutput()
+	if bootstrapErr != nil {
+		log.Printf("bootstrap failed: %v: %s", bootstrapErr, out)
 	}
 	// BTM delivers NOTIFY_BTM_LAUNCH_ITEM_ADD asynchronously. Booting the item out in the same instant coalesces the
 	// registration away before the kernel emits the ADD, so the extension never sees it (ground-truthed on edr-qa: a
@@ -189,6 +192,9 @@ func main() {
 	_ = exec.Command("/bin/launchctl", "bootout", domain+"/"+label).Run()
 	if err := os.Remove(target); err != nil {
 		log.Printf("cleanup remove: %v", err)
+	}
+	if bootstrapErr != nil {
+		os.Exit(1)
 	}
 }
 GO
@@ -245,7 +251,10 @@ step_persistence_launchagent() {
     skip_step persistence_launchagent "could not build the BTM dropper (no Go toolchain, or the build failed)"
     return 0
   fi
-  "$bin" agent || echo "[runbook] dropper failed - alert may not have fired"
+  if ! "$bin" agent; then
+    skip_step persistence_launchagent "launchd refused the LaunchAgent bootstrap (no GUI session for this user?)"
+    return 0
+  fi
   EXPECTED_ALERTS+=("persistence_launchagent: registered + removed LaunchAgent com.synthetic.edr-runbook via launchctl bootstrap gui/$(id -u)")
   return 0
 }
@@ -319,12 +328,17 @@ step_privilege_launchd_plist_write() {
     echo "[runbook] this step needs root to register a LaunchDaemon; trying sudo -n"
     # -n (non-interactive) bails immediately when sudo would otherwise prompt for a password. The runbook runs over SSH
     # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive prompt would deadlock the whole script.
-    if ! sudo -n "$bin" system; then
+    if ! sudo -n true 2>/dev/null; then
       skip_step privilege_launchd_plist_write "no NOPASSWD sudo for the dropper (see scripts/uat/README.md)"
       return 0
     fi
-  else
-    "$bin" system || echo "[runbook] dropper failed - alert may not have fired"
+    if ! sudo -n "$bin" system; then
+      skip_step privilege_launchd_plist_write "launchd refused the LaunchDaemon bootstrap"
+      return 0
+    fi
+  elif ! "$bin" system; then
+    skip_step privilege_launchd_plist_write "launchd refused the LaunchDaemon bootstrap"
+    return 0
   fi
   EXPECTED_ALERTS+=("privilege_launchd_plist_write: registered + removed LaunchDaemon com.synthetic.edr-runbook via launchctl bootstrap")
   return 0

@@ -96,10 +96,16 @@ func TestPersistenceLaunchAgent_WaivedBySigner(t *testing.T) {
 func TestPersistenceLaunchAgent_APlistPathExclusionKeepsWorking(t *testing.T) {
 	t.Parallel()
 	excl := &fakeExclusions{entries: []fakeExcl{
-		{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.logi.ghub.plist"},
+		{
+			ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob,
+			value: "/Users/jane doe/Library/LaunchAgents/com.logi.ghub.plist",
+		},
 	}}
-	evt := btmRegistrationEvent(t, "agent", "/Library/LaunchAgents/com.logi.ghub.plist", "/Applications/lghub.app/Contents/MacOS/lghub_agent",
-		&codeSigningJSON{SigningID: "a.out"}, false)
+	// A space in the path is escaped in the URL (%20) and written plainly in the exclusion, so this fails unless the URL is
+	// decoded to a path before matching.
+	evt := btmRegistrationEvent(t, "agent", "/Users/jane doe/Library/LaunchAgents/com.logi.ghub.plist",
+		"/Applications/lghub.app/Contents/MacOS/lghub_agent", &codeSigningJSON{SigningID: "a.out"}, false)
+	require.Contains(t, string(evt.Payload), "jane%20doe", "the fixture carries the escaped URL form a real host sends")
 	assert.Empty(t, evaluateLaunchAgent(t, excl, evt))
 }
 

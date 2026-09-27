@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -15,7 +16,9 @@ import (
 func btmRegistrationEvent(t *testing.T, itemType, plist, executable string, cs *codeSigningJSON, managed bool) api.Event {
 	t.Helper()
 	payload := map[string]any{
-		"item_type": itemType, "item_path": "file://" + plist, "executable_path": executable, "managed": managed,
+		// Built the way the extension's URL is, so a path with a space arrives escaped, as it does from a real host.
+		"item_type": itemType, "item_path": (&url.URL{Scheme: "file", Path: plist}).String(), "executable_path": executable,
+		"managed":        managed,
 		"instigator_pid": 93,
 	}
 	if cs != nil {
