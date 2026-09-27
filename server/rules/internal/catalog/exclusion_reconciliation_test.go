@@ -23,12 +23,15 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 	// expected is the authoritative (rule id -> supported match types) table. A new rule, or a change to a rule's exclusion surface,
 	// MUST update this table, which is exactly the reviewable signal we want.
 	expected := map[string][]api.ExclusionMatchType{
+		// package_team_id names the signer of the installer package an installer script belongs to (issue #1161).
 		"suspicious_exec": {
 			api.ExclusionMatchParentPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
+			api.ExclusionMatchPackageTeamID,
 		},
-		// Identical to suspicious_exec's, because the two rules share one ancestor walk and one parentExcluded (issue #776 split
-		// the arms, not the code). The set being the same is not the same as the exclusions being shared: they are keyed by rule
-		// id, so an operator who tuned suspicious_exec has to re-add anything that should silence this shape too.
+		// The parent dimensions are suspicious_exec's, because the two rules share one ancestor walk and one parentExcluded (issue
+		// #776 split the arms, not the code). Not package_team_id: this rule triggers on a connection, whose event carries no
+		// package signature. Sharing a set is not sharing exclusions either: they are keyed by rule id, so an operator who tuned
+		// suspicious_exec has to re-add anything that should silence this shape too.
 		"shell_network_connect": {
 			api.ExclusionMatchParentPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
 		},
@@ -147,6 +150,15 @@ func TestExclusionMatchTypes_NoUndeclaredConsultation(t *testing.T) {
 	rec := newRecordingResolver()
 	rule := &SuspiciousExec{Exclusions: rec}
 	_, err := rule.Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+
+	// package_team_id is consulted only for an installer script under PackageKit's service with a signed package (issue #1161),
+	// which the chain above is not, so a second store drives that shape through the same recording resolver.
+	installer := installerChain(t, packageScriptServicePath, amazonSigned)
+	installerStore := openCatalogStore(t)
+	require.NoError(t, installerStore.InsertEvents(ctx, installer))
+	materialize(t, installerStore, installer)
+	_, err = rule.Evaluate(ctx, installer, installerStore.GraphReader())
 	require.NoError(t, err)
 
 	declared := map[api.ExclusionMatchType]bool{}

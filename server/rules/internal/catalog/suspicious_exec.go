@@ -67,6 +67,7 @@ func (r *SuspiciousExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType
 		api.ExclusionMatchTeamID,
 		api.ExclusionMatchSigningID,
 		api.ExclusionMatchCDHash,
+		api.ExclusionMatchPackageTeamID,
 	}
 }
 
@@ -116,11 +117,12 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		FalsePositives: []string{
 			"Interactive SSH where an admin runs a script from /tmp. Where that is routine on a server, a parent-path-glob exclusion for `/usr/libexec/sshd-session` silences it, but it also silences every command an attacker runs with a stolen SSH credential. Set an expiry on it and do not apply it to workstations.",
 			"Developer tooling that shells out (AI coding assistants, git hooks, IDEs). Exclude a Developer-ID signed tool by its `team_id` (Claude Code is `Q6L2SF6YDW`), which survives upgrades and cannot be claimed by a planted binary. For an unsigned tool use a parent-path-glob anchored to its full install path, never a leading `*`, with an expiry. Either way the exclusion trusts everything that parent can be made to run, so do not exclude a script interpreter.",
-			"Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.",
+			"Every package install: PackageKit runs a package's preinstall and postinstall out of a temporary sandbox under its own `package_script_service`, so each script is this chain. Exclude a vendor's installers by `package_team_id`, the Developer ID team that signed the package (`pkgutil --check-signature <pkg>` prints it). An unsigned package cannot be excluded this way.",
 		},
 		Limitations: []string{
 			"The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa.",
+			"A `package_team_id` exclusion covers the installer script itself. A script that runs a second program out of a temporary path is still reported, since that program is not the package's signed content.",
 			"A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. Skipped chains are counted per rule on the server's detection traces. A shell started directly by launchd is a different case: it has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.",
 		},
 	}
@@ -142,6 +144,16 @@ type execPayload struct {
 	PPID int      `json:"ppid"`
 	Path string   `json:"path"`
 	Args []string `json:"args"`
+	// PackageSigning is the signature of the installer package an installer script belongs to, attached by the agent only when
+	// the exec's parent is PackageKit's package_script_service (issue #1161). Nil on every other exec.
+	PackageSigning *packageSigning `json:"package_signing"`
+}
+
+// packageSigning mirrors schema/events.json's `package_signing`.
+type packageSigning struct {
+	Signed    bool   `json:"signed"`
+	Notarized bool   `json:"notarized"`
+	TeamID    string `json:"team_id"`
 }
 
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
@@ -250,10 +262,11 @@ func (r *SuspiciousExec) evalExecArm1(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	if !shouldFire(r, in.seenShell, shell, parent, in.evt.TimestampNs, in.evt.HostID) {
+	if !shouldFire(r, in.seenShell, shell, parent, in.evt.TimestampNs, in.evt.HostID) ||
+		r.installerExcluded(in.p, parent, in.evt.HostID) {
 		return nil, 0, nil
 	}
-	return r.makeExecFinding(in.evt, parent, shell, in.tempProc, in.tempPath, in.batch), shell.PID, nil
+	return r.makeExecFinding(in.evt, parent, shell, in.tempProc, in.tempPath, in.p, in.batch), shell.PID, nil
 }
 
 // evalExecArm2 handles the same-PID re-exec optimisation. `sh -c "/tmp/foo"` is commonly implemented by execve(/tmp/foo) at the
@@ -287,17 +300,19 @@ func (r *SuspiciousExec) evalExecArm2(
 	if prior == nil {
 		return nil, 0, nil
 	}
+	// No installer check here: this arm's trigger is a payload the shell exec'd in place, and the agent attaches a package
+	// signature only to the installer script's own exec, so this trigger never carries one.
 	if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
 		return nil, 0, nil
 	}
-	return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
+	return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.p, in.batch), prior.PID, nil
 }
 
 // makeExecFinding builds the temp-path finding shared by arm 1 and arm 2. In the arm-2 re-exec case tempProc and shell share a PID;
 // the finding still links to tempProc so the analyst lands on the temp-stage record (the re-exec'd row), not the earlier shell-stage
 // row.
 func (r *SuspiciousExec) makeExecFinding(
-	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, batch []api.Event,
+	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, p execPayload, batch []api.Event,
 ) *api.Finding {
 	parentPath := parentPathFor(parent, shell)
 	eventIDs := []string{evt.EventID}
@@ -309,10 +324,70 @@ func (r *SuspiciousExec) makeExecFinding(
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
 		Title:       r.DisplayName(),
-		Description: fmt.Sprintf("%s → %s → %s", parentPath, shell.Path, tempPath),
+		Description: fmt.Sprintf("%s → %s → %s", parentPath, shell.Path, tempPath) + installerPackageNote(p, parent),
 		ProcessID:   tempProc.ID,
 		EventIDs:    eventIDs,
 	}
+}
+
+// packageScriptServicePath is Apple's PackageKit service that runs every package's preinstall and postinstall. The agent keys its
+// package-signature enrichment on the same path (agent/enrich.PackageScriptServicePath).
+const packageScriptServicePath = "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/XPCServices/" +
+	"package_script_service.xpc/Contents/MacOS/package_script_service"
+
+// underPackageKit reports whether the chain's non-shell parent is PackageKit's script service, so the trigger is an installer
+// script and a package signature on it describes the package being installed.
+func underPackageKit(parent *api.Process) bool {
+	return parent != nil && parent.Path == packageScriptServicePath
+}
+
+// installerExcluded reports whether an installer script's chain is waived by a package_team_id exclusion naming the team that
+// signed the PACKAGE (issue #1161). PackageKit runs every package's scripts under its own service, so every other match type lands
+// on Apple's installer and would trust every package; the package's own signer is what tells one vendor's installer from
+// another's, or from a planted one.
+//
+// Consulted only under package_script_service, and only for a package signed by a certificate macOS trusts: an unsigned package
+// names no team, and an untrusted one names whatever its signer typed. The signature narrows an alert an operator chose to
+// exclude; it never raises trust on its own, since a root-run preinstall can in rare cases redirect what the agent reads.
+func (r *SuspiciousExec) installerExcluded(p execPayload, parent *api.Process, hostID string) bool {
+	if r.Exclusions == nil || !underPackageKit(parent) || p.PackageSigning == nil || !p.PackageSigning.Signed ||
+		p.PackageSigning.TeamID == "" {
+		return false
+	}
+	return r.Exclusions.Excluded(r.ID(), api.ExclusionMatchPackageTeamID, p.PackageSigning.TeamID, hostID)
+}
+
+// installerPackageNote names the package an installer script belongs to, and who signed it, so an analyst triaging the alert sees
+// what was being installed without opening the event. Empty for any chain that is not an installer script.
+func installerPackageNote(p execPayload, parent *api.Process) string {
+	if !underPackageKit(parent) {
+		return ""
+	}
+	pkg := installerPackagePath(p.Args)
+	if pkg == "" {
+		return ""
+	}
+	switch {
+	case p.PackageSigning == nil:
+		return fmt.Sprintf(" (installing %s)", pkg)
+	case p.PackageSigning.Signed && p.PackageSigning.TeamID != "":
+		return fmt.Sprintf(" (installing %s, signed by team %s)", pkg, p.PackageSigning.TeamID)
+	case p.PackageSigning.Signed:
+		return fmt.Sprintf(" (installing %s, signed)", pkg)
+	default:
+		return fmt.Sprintf(" (installing %s, unsigned)", pkg)
+	}
+}
+
+// installerPackagePath is the argument after the installer script, which PackageKit passes as the package's path (Apple's script
+// interface). The same rule the agent uses to find it.
+func installerPackagePath(args []string) string {
+	for i := 1; i < len(args); i++ {
+		if s := args[i-1]; strings.Contains(s, "/PKInstallSandbox.") && strings.Contains(s, "/Scripts/") {
+			return args[i]
+		}
+	}
+	return ""
 }
 
 func isSuspiciousPath(path string) bool {

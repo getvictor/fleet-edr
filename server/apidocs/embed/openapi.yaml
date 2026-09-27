@@ -2465,7 +2465,7 @@ components:
           example: suspicious_exec
         match_type:
           type: string
-          enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain]
+          enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain, package_team_id]
           example: team_id
         value:
           type: string
@@ -2677,7 +2677,7 @@ components:
         rule_id: {type: string, example: suspicious_exec}
         match_type:
           type: string
-          enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain]
+          enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain, package_team_id]
           example: team_id
         value: {type: string, example: "Q6L2SF6YDW"}
         reason:

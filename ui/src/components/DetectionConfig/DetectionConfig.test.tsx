@@ -302,6 +302,29 @@ describe("DetectionConfig", () => {
     expect(screen.getByLabelText("Value")).toHaveAttribute("placeholder", "/Applications/MyApp.app/Contents/MacOS/MyApp");
   });
 
+  // package_team_id names the team that signed an installer PACKAGE, which is not what team_id means (the team that signed a
+  // process), so the form says where to read it (issue #1161).
+  it("explains where a package_team_id value comes from", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry({
+          id: "suspicious_exec",
+          doc: makeRuleDoc({ title: "Suspicious execution" }),
+          supported_exclusion_match_types: ["parent_path_glob", "package_team_id"],
+        }),
+      ],
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
+
+    fireEvent.change(screen.getByLabelText("Match type"), { target: { value: "package_team_id" } });
+    expect(screen.getByText(/pkgutil --check-signature/)).toBeVisible();
+    expect(screen.getByLabelText("Value")).toHaveAttribute("placeholder", "94KV3E626L");
+  });
+
   // The match-type picker offers ONLY the match types the selected rule consults (issue #520), in canonical display order, so an
   // operator cannot create an exclusion the rule would silently ignore.
   // spec:web-ui/detection-configuration-admin-views/exclusion-match-type-picker-offers-only-the-supported-types-for-a-rule

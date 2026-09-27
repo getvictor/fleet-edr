@@ -63,6 +63,9 @@ const (
 	// ExclusionMatchDomain matches a DNS name exactly or as a parent domain (entry `example.com` matches `example.com` and
 	// `sub.example.com`).
 	ExclusionMatchDomain ExclusionMatchType = "domain"
+	// ExclusionMatchPackageTeamID matches exactly the Developer ID team that signed the installer PACKAGE an installer script belongs
+	// to (issue #1161), as opposed to team_id, which names the team that signed a process.
+	ExclusionMatchPackageTeamID ExclusionMatchType = "package_team_id"
 )
 
 // IsValidExclusionMatchType reports whether mt is one of the defined match types. Used at the REST boundary to reject untrusted input.
@@ -70,7 +73,7 @@ func IsValidExclusionMatchType(mt ExclusionMatchType) bool {
 	switch mt {
 	case ExclusionMatchPathGlob, ExclusionMatchParentPathGlob, ExclusionMatchTeamID,
 		ExclusionMatchSigningID, ExclusionMatchCDHash, ExclusionMatchSHA256,
-		ExclusionMatchCommandSubstring, ExclusionMatchDomain:
+		ExclusionMatchCommandSubstring, ExclusionMatchDomain, ExclusionMatchPackageTeamID:
 		return true
 	}
 	return false
@@ -102,7 +105,7 @@ func MatchExclusionValue(mt ExclusionMatchType, entry, candidate string) bool {
 		e := strings.TrimSuffix(strings.ToLower(entry), ".")
 		c := strings.TrimSuffix(strings.ToLower(candidate), ".")
 		return c == e || strings.HasSuffix(c, "."+e)
-	case ExclusionMatchTeamID, ExclusionMatchSigningID, ExclusionMatchCDHash, ExclusionMatchSHA256:
+	case ExclusionMatchTeamID, ExclusionMatchSigningID, ExclusionMatchCDHash, ExclusionMatchSHA256, ExclusionMatchPackageTeamID:
 		return entry == candidate
 	}
 	return false
