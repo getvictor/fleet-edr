@@ -5,6 +5,7 @@ package pkgsign
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,9 +26,19 @@ const checkTimeout = 2 * time.Second
 //     set back, so a package whose ctime is not older than the sandbox is one that changed during the install;
 //   - the package changed while pkgutil was reading it. The file is statted again after the read and must be the same inode with
 //     the same ctime and size, so a swap between the check above and pkgutil's open cannot lend the answer a different package.
-//     Swapping the original back afterwards does not help either, since that is itself a change and moves the ctime again.
+//     Swapping the original back afterwards does not help either, since that is itself a change and moves the ctime again;
+//   - the path no longer resolves to itself. PackageKit hands a script the package's canonical path (a package installed from
+//     /tmp arrives as /private/tmp/...), so a symlink anywhere in it was put there after the install began.
+//
+// Not closed: a root-run preinstall renaming a DIRECTORY in the path so it leads to an older, genuinely signed package, whose own
+// ctime predates the sandbox. Catching that would mean rejecting any ancestor changed after the sandbox, and a directory's ctime
+// moves whenever a file is added to it, so packages delivered through /tmp or ~/Downloads would almost never be classified. The
+// consumer is told so: this signature may only ever narrow an alert an operator chose to exclude, never raise trust on its own.
 func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 	if pkgPath == "" {
+		return nil, false
+	}
+	if resolved, err := filepath.EvalSymlinks(pkgPath); err != nil || resolved != pkgPath {
 		return nil, false
 	}
 	var pkg syscall.Stat_t
@@ -45,7 +56,7 @@ func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 	if !before(pkg.Ctimespec, box.Birthtimespec) {
 		return nil, false
 	}
-	key := cacheKey{path: pkgPath, ctime: pkg.Ctimespec.Nano(), size: pkg.Size}
+	key := cacheKey{path: pkgPath, dev: uint64(pkg.Dev), ino: pkg.Ino, ctime: pkg.Ctimespec.Nano(), size: pkg.Size} //nolint:gosec // a device number is not negative
 	if res, hit := results.get(key); hit {
 		return &res, true
 	}
@@ -93,9 +104,12 @@ func sandboxDir(scriptPath string) (string, bool) {
 
 func before(a, b syscall.Timespec) bool { return a.Nano() < b.Nano() }
 
-// cacheKey names one version of a package: the same path with a new ctime or size is a different file and is checked again.
+// cacheKey names one version of a package: the same path with a new inode, ctime or size is a different file and is checked again.
+// The inode is what makes that exact: ctime is a timestamp, so two files can in principle share one.
 type cacheKey struct {
 	path  string
+	dev   uint64
+	ino   uint64
 	ctime int64
 	size  int64
 }

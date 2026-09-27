@@ -18,7 +18,9 @@ import (
 // would run its scripts from. The sandbox is made after the package, as PackageKit makes it after the package exists.
 func buildPackage(t *testing.T) (pkg, script string) {
 	t.Helper()
-	dir := t.TempDir()
+	// Canonical, as PackageKit's argument is: the temp dir sits under /var, which is a symlink to /private/var.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	root := filepath.Join(dir, "root")
 	require.NoError(t, os.MkdirAll(root, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hi"), 0o600))
@@ -136,6 +138,19 @@ func TestEvaluate_APackageSwappedDuringTheReadIsNotClassified(t *testing.T) { //
 
 	res, ok := Evaluate(pkg, script)
 	assert.False(t, ok, "the vendor identity pkgutil saw belongs to a file that is no longer the one checked")
+	assert.Nil(t, res)
+}
+
+// A symlink in the package's path means the path was altered after PackageKit resolved it, so it no longer names the package being
+// installed. The fixture puts the package behind a symlinked directory.
+func TestEvaluate_APathThroughASymlinkIsNotClassified(t *testing.T) {
+	t.Parallel()
+	pkg, script := buildPackage(t)
+	link := filepath.Join(t.TempDir(), "via-link")
+	require.NoError(t, os.Symlink(filepath.Dir(pkg), link))
+
+	res, ok := Evaluate(filepath.Join(link, filepath.Base(pkg)), script)
+	assert.False(t, ok)
 	assert.Nil(t, res)
 }
 
