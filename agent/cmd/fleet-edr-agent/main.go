@@ -40,6 +40,7 @@ import (
 	"github.com/fleetdm/edr/agent/metrics"
 	"github.com/fleetdm/edr/agent/pkgsign"
 	"github.com/fleetdm/edr/agent/procgen"
+	"github.com/fleetdm/edr/agent/procpath"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
@@ -868,14 +869,18 @@ type exitFields struct {
 	PID int32 `json:"pid"`
 }
 
-// parentPath is the executable path the process table holds for pid. The installer-script enrichment asks it for an exec's
-// parent, which PackageKit exec'd before it ran the script, so the parent is already recorded when its child arrives.
+// parentPath is the executable path of pid, from the process table when it has the process and from the kernel when it does not.
+// The installer-script enrichment asks it for an exec's parent, PackageKit's package_script_service. That service is an XPC
+// service that stays running between installs, so after an agent restart or upgrade it is live but was never seen to exec, and
+// the table alone would miss it (found on edr-dev for issue #1161). The parent is waiting on the script, so it is still running
+// when the kernel is asked.
 func (p receiverLoopParams) parentPath(pid int) (string, bool) {
-	if p.pt == nil {
-		return "", false
+	if p.pt != nil {
+		if info, ok := p.pt.Lookup(int32(pid)); ok { //nolint:gosec // a kernel pid fits in int32
+			return info.Path, true
+		}
 	}
-	info, ok := p.pt.Lookup(int32(pid)) //nolint:gosec // a kernel pid fits in int32
-	return info.Path, ok
+	return procpath.Path(pid)
 }
 
 func updateProcTable(pt *proctable.Table, data []byte) {

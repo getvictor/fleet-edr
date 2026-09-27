@@ -43,13 +43,15 @@ func parents(t *testing.T) ParentPath {
 
 // recordingPackageEvaluator answers for any package and remembers which one it was asked about.
 type recordingPackageEvaluator struct {
-	asked  []string
-	result *pkgsign.Result
-	ok     bool
+	asked   []string
+	scripts []string
+	result  *pkgsign.Result
+	ok      bool
 }
 
-func (r *recordingPackageEvaluator) eval(path string) (*pkgsign.Result, bool) {
-	r.asked = append(r.asked, path)
+func (r *recordingPackageEvaluator) eval(pkgPath, scriptPath string) (*pkgsign.Result, bool) {
+	r.asked = append(r.asked, pkgPath)
+	r.scripts = append(r.scripts, scriptPath)
 	return r.result, r.ok
 }
 
@@ -70,6 +72,8 @@ func TestPackageScriptSigning_FillsTheScriptsPackage(t *testing.T) {
 	out := PackageScriptSigning(installerScriptExec(t, scriptServicePID), parents(t), rec.eval)
 
 	assert.Equal(t, []string{"/Users/alice/Downloads/AWS_VPN_Client.pkg"}, rec.asked, "the argument after the script is the package")
+	assert.Equal(t, []string{"/tmp/PKInstallSandbox.iJ0s6V/Scripts/com.amazon.awsvpnclient.gjgthW/postinstall"}, rec.scripts,
+		"the script is passed along, so the evaluator can check the package against the sandbox it runs from")
 	got, ok := packageSigningOf(t, out)
 	require.True(t, ok)
 	assert.JSONEq(t, `{"signed":true,"notarized":true,"team_id":"94KV3E626L"}`, string(got))
@@ -132,10 +136,15 @@ func TestPackageScriptSigning_PassesThrough(t *testing.T) {
 }
 
 // A compiled postinstall is argv[0] itself, with the package right after it.
-func TestPackageArgument(t *testing.T) {
+func TestInstallerScript(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "/p.pkg", packageArgument([]string{"/tmp/PKInstallSandbox.a/Scripts/b/postinstall", "/p.pkg", "/", "/", "/"}))
-	assert.Equal(t, "/p.pkg", packageArgument([]string{"/bin/sh", "/tmp/PKInstallSandbox.a/Scripts/b/preinstall", "/p.pkg"}))
-	assert.Empty(t, packageArgument([]string{"/tmp/PKInstallSandbox.a/Scripts/b/postinstall"}), "nothing follows the script")
-	assert.Empty(t, packageArgument(nil))
+	script, pkg := installerScript([]string{"/tmp/PKInstallSandbox.a/Scripts/b/postinstall", "/p.pkg", "/", "/", "/"})
+	assert.Equal(t, "/tmp/PKInstallSandbox.a/Scripts/b/postinstall", script)
+	assert.Equal(t, "/p.pkg", pkg)
+	_, pkg = installerScript([]string{"/bin/sh", "/tmp/PKInstallSandbox.a/Scripts/b/preinstall", "/p.pkg"})
+	assert.Equal(t, "/p.pkg", pkg)
+	_, pkg = installerScript([]string{"/tmp/PKInstallSandbox.a/Scripts/b/postinstall"})
+	assert.Empty(t, pkg, "nothing follows the script")
+	_, pkg = installerScript(nil)
+	assert.Empty(t, pkg)
 }

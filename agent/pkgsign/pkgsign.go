@@ -26,9 +26,20 @@ type Result struct {
 	TeamID string `json:"team_id"`
 }
 
-// teamSuffix is the parenthesised ten-character team identifier that ends a Developer ID certificate's common name, as in
-// "Developer ID Installer: Example Corp (ABCDE12345)".
-var teamSuffix = regexp.MustCompile(`\(([A-Z0-9]{10})\)\s*$`)
+// developerIDLeaf is the certificate chain's first entry when a Developer ID Installer certificate signed the package, ending in
+// the team's ten-character identifier, as in "1. Developer ID Installer: Example Corp (ABCDE12345)". Only this form names a team:
+// any trusted leaf can end in ten characters in parentheses, and a locally trusted enterprise certificate says whatever its issuer
+// typed, so reading a team from it would hand an exclusion a value nobody vouched for.
+var developerIDLeaf = regexp.MustCompile(`^1\. Developer ID Installer: .*\(([A-Z0-9]{10})\)$`)
+
+// trustedStatuses are the pkgutil statuses of a signature macOS accepts. An allowlist rather than a prefix: pkgutil also reports
+// expired and revoked certificates as "signed by ...", and those are exactly the packages macOS refuses.
+var trustedStatuses = map[string]bool{
+	"signed by a developer certificate issued by Apple for distribution": true,
+	"signed Apple Software":                       true,
+	"signed by a certificate trusted by macOS":    true,
+	"signed by a certificate trusted by Mac OS X": true,
+}
 
 // Parse reads `pkgutil --check-signature` output. ok is false when the output has no Status line, which means pkgutil could
 // not read the package at all: that is "cannot classify", not "unsigned".
@@ -38,20 +49,17 @@ func Parse(output string) (res Result, ok bool) {
 		switch {
 		case strings.HasPrefix(line, "Status:"):
 			ok = true
-			status := strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
-			res.Signed = strings.HasPrefix(status, "signed") && !strings.Contains(status, "untrusted")
+			res.Signed = trustedStatuses[strings.TrimSpace(strings.TrimPrefix(line, "Status:"))]
 		case line == "Notarization: trusted by the Apple notary service":
 			res.Notarized = true
-		case strings.HasPrefix(line, "1. "):
-			// The certificate chain's first entry is the leaf that signed the package; the rest are intermediates and Apple's root,
-			// which carry no team.
-			if m := teamSuffix.FindStringSubmatch(line); m != nil {
+		default:
+			if m := developerIDLeaf.FindStringSubmatch(line); m != nil {
 				res.TeamID = m[1]
 			}
 		}
 	}
 	if !res.Signed {
-		// A team named by an untrusted certificate is whatever the signer typed, so it is not reported.
+		// A team named by a certificate macOS does not accept is not a team anyone vouched for, so it is not reported.
 		res.TeamID = ""
 	}
 	return res, ok

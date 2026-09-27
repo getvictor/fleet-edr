@@ -43,6 +43,23 @@ const (
        ------------------------------------------------------------------------
     2. Apple Software Update Certification Authority
 `
+	// The shapes below are not captured output. They pin the parser's refusals: a status it does not know is not trusted, and a
+	// team is read only from a Developer ID Installer leaf.
+	expired = `Package "old.pkg":
+   Status: signed by a certificate that has since expired
+   Certificate Chain:
+    1. Developer ID Installer: Example Corp (ZYXWV98765)
+`
+	revoked = `Package "bad.pkg":
+   Status: signed by a revoked certificate
+   Certificate Chain:
+    1. Developer ID Installer: Example Corp (ZYXWV98765)
+`
+	enterprise = `Package "corp.pkg":
+   Status: signed by a certificate trusted by macOS
+   Certificate Chain:
+    1. Corp Internal Installer Signing (ABCDE12345)
+`
 	developerIDNotNotarized = `Package "internal.pkg":
    Status: signed by a developer certificate issued by Apple for distribution
    Certificate Chain:
@@ -64,6 +81,11 @@ func TestParse(t *testing.T) {
 		// The team in an untrusted certificate is whatever the signer typed into it, so it must not reach an exclusion.
 		{"untrusted certificate names no team", untrusted, Result{}, true},
 		{"signed by Apple itself has no Developer ID team", appleSigned, Result{Signed: true}, true},
+		// "signed by ..." is also how pkgutil reports certificates macOS refuses, so a prefix match would trust them.
+		{"an expired certificate is not trusted", expired, Result{}, true},
+		{"a revoked certificate is not trusted", revoked, Result{}, true},
+		// Trusted, but its leaf is not a Developer ID: the ten characters in parentheses are whatever the issuer typed.
+		{"an enterprise certificate names no team", enterprise, Result{Signed: true}, true},
 		// No Status line means pkgutil never read the package, which is "cannot classify" rather than "unsigned".
 		{"unreadable", `Error: could not open package`, Result{}, false},
 		{"empty", "", Result{}, false},

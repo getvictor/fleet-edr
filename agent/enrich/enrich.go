@@ -58,9 +58,10 @@ func BtmExecutableSigning(data []byte, eval Evaluator) []byte {
 	return encodeEvent(data, envelope, payload, "executable_code_signing", result)
 }
 
-// PackageEvaluator reads an installer package's signature. Production passes pkgsign.Evaluate; tests inject a fake. A false
-// return means the package could not be read, and the event is left without a package signature.
-type PackageEvaluator func(path string) (*pkgsign.Result, bool)
+// PackageEvaluator reads the signature of the package at pkgPath for the installer script at scriptPath. Production passes
+// pkgsign.Evaluate; tests inject a fake. A false return means no trustworthy answer (unreadable, or changed during the install),
+// and the event is left without a package signature.
+type PackageEvaluator func(pkgPath, scriptPath string) (*pkgsign.Result, bool)
 
 // ParentPath returns the executable path of the process with the given pid, as the agent's process table knows it.
 type ParentPath func(pid int) (string, bool)
@@ -93,30 +94,31 @@ func PackageScriptSigning(data []byte, parentPath ParentPath, eval PackageEvalua
 	if err := json.Unmarshal(envelope["payload"], &exec); err != nil {
 		return data
 	}
-	if parent, known := parentPath(exec.PPID); !known || parent != PackageScriptServicePath {
-		return data
-	}
-	pkg := packageArgument(exec.Args)
+	// The argument shape first: it is free, and it spares the parent lookup, which may ask the kernel, on every other exec.
+	script, pkg := installerScript(exec.Args)
 	if pkg == "" {
 		return data
 	}
-	result, ok := eval(pkg)
+	if parent, known := parentPath(exec.PPID); !known || parent != PackageScriptServicePath {
+		return data
+	}
+	result, ok := eval(pkg, script)
 	if !ok {
 		return data
 	}
 	return encodeEvent(data, envelope, payload, "package_signing", result)
 }
 
-// packageArgument returns the argument that follows the installer script in args: the package path, per Apple's script
+// installerScript returns the installer script in args and the argument that follows it: the package path, per Apple's script
 // interface ($1 is the package, then the target, the volume and its root). The script is argv[0] for a compiled script and
-// argv[1] behind an interpreter, so it is found by its sandbox path rather than by position.
-func packageArgument(args []string) string {
+// argv[1] behind an interpreter, so it is found by its sandbox path rather than by position. Both are "" when there is none.
+func installerScript(args []string) (script, pkg string) {
 	for i := 1; i < len(args); i++ {
-		if script := args[i-1]; strings.Contains(script, "/PKInstallSandbox.") && strings.Contains(script, installerSandboxScripts) {
-			return args[i]
+		if s := args[i-1]; strings.Contains(s, "/PKInstallSandbox.") && strings.Contains(s, installerSandboxScripts) {
+			return s, args[i]
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // decodeEvent parses an event envelope of wantType and its payload. ok is false for another type, malformed JSON, or a missing
