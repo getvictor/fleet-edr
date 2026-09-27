@@ -201,13 +201,14 @@ func TestRuleEvalStatsCarriesAbandonsThroughEveryWritePath(t *testing.T) {
 
 	// Folded in one call, then inserted: 2 + 1.
 	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
-		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, RetryableMisses: 1, MaterializationAbandoned: 2},
-		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 1},
-		{RuleID: "decides", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10},
+		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, RetryableMisses: 1, MaterializationAbandoned: 2, AbandonsMeasured: true},
+		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 1, AbandonsMeasured: true},
+		{RuleID: "decides", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, AbandonsMeasured: true},
+		{RuleID: "never-counts", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10},
 	}))
 	// Accumulated by the upsert: 3 + 4.
 	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
-		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 4},
+		{RuleID: "gives-up", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 4, AbandonsMeasured: true},
 	}))
 
 	rows, err := detectionconfig.NewStore(db).EvalStats(ctx, api.DefaultEvalStatsWindow)
@@ -217,9 +218,60 @@ func TestRuleEvalStatsCarriesAbandonsThroughEveryWritePath(t *testing.T) {
 		got[r.RuleID] = r
 	}
 
-	assert.Equal(t, int64(7), got["gives-up"].MaterializationAbandoned, "folded, inserted, then accumulated")
+	require.NotNil(t, got["gives-up"].MaterializationAbandoned)
+	assert.Equal(t, int64(7), *got["gives-up"].MaterializationAbandoned, "folded, inserted, then accumulated")
 	assert.Equal(t, int64(1), got["gives-up"].RetryableMisses, "misses are their own column and must not absorb abandons")
-	assert.Zero(t, got["decides"].MaterializationAbandoned, "a rule that never gave up reads zero rather than being absent")
+	require.NotNil(t, got["decides"].MaterializationAbandoned, "a rule that never gave up reads zero rather than being absent")
+	assert.Zero(t, *got["decides"].MaterializationAbandoned)
+	assert.Nil(t, got["never-counts"].MaterializationAbandoned, "a rule that does not count its abandons is not measured, not zero")
+}
+
+// spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/days-before-the-count-existed-are-not-reported-as-zero
+//
+// A row written before the counter existed holds NULL in it, which is what the migration leaves on every existing row. A window that
+// reaches such a day has an unmeasured stretch in it, and a total over the measured days alone would read as the whole window's.
+// So does the upgrade day itself: its row existed before the upgrade, and the counts added to it afterwards are only part of it.
+func TestRuleEvalStatsDoesNotReportUnmeasuredDaysAsZero(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+	today := time.Now().UTC().Format(time.DateOnly)
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
+
+	// Written the way a pre-upgrade server wrote them, which never named the column.
+	for _, row := range []struct{ ruleID, day string }{{"spans-the-upgrade", yesterday}, {"upgraded-today", today}} {
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO detection_rule_eval_stats (rule_id, day, evaluations, eval_ns_sum, eval_ns_max, first_seen, last_seen)
+			VALUES (?, ?, 1, 10, 10, NOW(6), NOW(6))`, row.ruleID, row.day)
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
+		{RuleID: "spans-the-upgrade", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true},
+		{RuleID: "upgraded-today", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true},
+		{RuleID: "measured-throughout", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true},
+	}))
+
+	summaries := func(days api.EvalStatsWindow) map[string]api.RuleEvalSummary {
+		rows, err := store.EvalStats(ctx, days)
+		require.NoError(t, err)
+		got := map[string]api.RuleEvalSummary{}
+		for _, r := range rows {
+			got[r.RuleID] = r
+		}
+		return got
+	}
+
+	wide := summaries(api.DefaultEvalStatsWindow)
+	assert.Nil(t, wide["spans-the-upgrade"].MaterializationAbandoned, "a window reaching a pre-upgrade day is not measured")
+	assert.Nil(t, wide["upgraded-today"].MaterializationAbandoned, "the upgrade day was only partly measured")
+	require.NotNil(t, wide["measured-throughout"].MaterializationAbandoned)
+	assert.Equal(t, int64(3), *wide["measured-throughout"].MaterializationAbandoned)
+	assert.Equal(t, int64(2), wide["spans-the-upgrade"].Evaluations, "the other counters are unaffected")
+
+	// Once the window no longer reaches the unmeasured day, the same rule is measured again.
+	todayOnly := summaries(1)
+	require.NotNil(t, todayOnly["spans-the-upgrade"].MaterializationAbandoned)
+	assert.Equal(t, int64(3), *todayOnly["spans-the-upgrade"].MaterializationAbandoned)
 }
 
 func TestRuleEvalStatsFoldsRepeatedRulesInOneCall(t *testing.T) {

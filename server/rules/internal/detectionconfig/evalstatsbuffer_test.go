@@ -126,6 +126,11 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 
 		// The expected fold, computed independently of the implementation.
 		want := map[string]api.RuleEvalStat{}
+		// Per rule rather than per entry, because it is a property of the rule: one either counts its abandons or does not.
+		measured := map[string]bool{}
+		for _, id := range ruleIDs {
+			measured[id] = rapid.Bool().Draw(t, "measured")
+		}
 		batches := rapid.IntRange(1, 12).Draw(t, "batches")
 		for range batches {
 			var batch api.RuleEvalStats
@@ -142,6 +147,7 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 					// buffer that summed one into the other would be caught only if the two are free to differ.
 					MaterializationAbandoned: int64(rapid.IntRange(0, 2).Draw(t, "abandons")),
 					EvalNs:                   int64(rapid.IntRange(0, 1_000_000).Draw(t, "ns")),
+					AbandonsMeasured:         measured[id],
 				}
 				s.MaxEvalNs = s.EvalNs
 				batch = append(batch, s)
@@ -151,6 +157,7 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 				agg.Evaluations += s.Evaluations
 				agg.RetryableMisses += s.RetryableMisses
 				agg.MaterializationAbandoned += s.MaterializationAbandoned
+				agg.AbandonsMeasured = measured[id]
 				agg.EvalNs += s.EvalNs
 				agg.MaxEvalNs = max(agg.MaxEvalNs, s.MaxEvalNs)
 				want[id] = agg

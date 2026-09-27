@@ -517,6 +517,9 @@ func (e *Engine) evaluateRule(
 	// The rule's OWN evaluation time, assigned below and read by the defer, for the same reason evalRetryable is a variable
 	// rather than derived from a return: the defer runs on every path and needs a value the happy path sets.
 	var ruleElapsed int64
+	// Whether this rule's abandon count is a measurement. A rule that does not record abandons reports zero regardless, and storing
+	// that zero would read as "gave up on nothing" for the rules least able to say so (rulesapi.AbandonCounter).
+	_, countsAbandons := rule.(rulesapi.AbandonCounter)
 	defer func() {
 		elapsed := time.Since(start).Nanoseconds()
 		// Deliberately NOT returned as an error. In Evaluate a rule error that is not retryable returns from the batch and the
@@ -559,6 +562,7 @@ func (e *Engine) evaluateRule(
 			// Read after the rule ran, which this deferred function is. Safe per rule because rulesFor compacts its indices, so
 			// the rule is evaluated once per batch and its entry in the shared scope is its own.
 			MaterializationAbandoned: int64(scope.MaterializationAbandoned(rule.ID())),
+			AbandonsMeasured:         countsAbandons,
 		})
 	}()
 

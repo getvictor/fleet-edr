@@ -97,7 +97,7 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 	for _, id := range ruleIDs {
 		st := folded[id]
 		placeholders = append(placeholders, "(?, ?, ?, ?, ?, ?, ?, ?, ?)")
-		args = append(args, id, day, st.Evaluations, st.RetryableMisses, st.MaterializationAbandoned, st.EvalNs, st.MaxEvalNs, now, now)
+		args = append(args, id, day, st.Evaluations, st.RetryableMisses, abandonedColumn(st), st.EvalNs, st.MaxEvalNs, now, now)
 	}
 	query := `
 		INSERT INTO detection_rule_eval_stats
@@ -124,6 +124,16 @@ func (s *Store) RecordRuleEvalStats(ctx context.Context, stats api.RuleEvalStats
 	return nil
 }
 
+// abandonedColumn is the value stored for a rule's abandons: its count when it counts them, and NULL when it does not, so a rule that
+// cannot report an abandon is read back as not measured rather than as having given up on nothing. NULL also keeps the day's row
+// unmeasured under the upsert, since NULL plus a count is NULL.
+func abandonedColumn(st api.RuleEvalStat) any {
+	if !st.AbandonsMeasured {
+		return nil
+	}
+	return st.MaterializationAbandoned
+}
+
 // foldEvalStats collapses a batch's entries to one per rule, dropping entries that name no rule or report no attempt.
 //
 // Folding first means the statement carries one row per key, since MySQL applies ON DUPLICATE KEY UPDATE per row and two rows with the same
@@ -139,6 +149,7 @@ func foldEvalStats(stats api.RuleEvalStats) map[string]api.RuleEvalStat {
 		cur.Evaluations += st.Evaluations
 		cur.RetryableMisses += st.RetryableMisses
 		cur.MaterializationAbandoned += st.MaterializationAbandoned
+		cur.AbandonsMeasured = cur.AbandonsMeasured || st.AbandonsMeasured
 		cur.EvalNs += st.EvalNs
 		cur.MaxEvalNs = max(cur.MaxEvalNs, st.MaxEvalNs)
 		folded[st.RuleID] = cur
@@ -172,7 +183,8 @@ func (s *Store) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.
 		SELECT rule_id,
 		       SUM(evaluations)                                  AS evaluations,
 		       SUM(retryable_misses)                             AS retryable_misses,
-		       SUM(materialization_abandoned)                    AS materialization_abandoned,
+		       CASE WHEN COUNT(materialization_abandoned) = COUNT(*)
+		            THEN SUM(materialization_abandoned) END      AS materialization_abandoned,
 		       SUM(eval_ns_sum) DIV NULLIF(SUM(evaluations), 0)   AS mean_eval_ns,
 		       SUM(eval_ns_sum)                                  AS total_eval_ns,
 		       MAX(eval_ns_max)                                  AS max_eval_ns,

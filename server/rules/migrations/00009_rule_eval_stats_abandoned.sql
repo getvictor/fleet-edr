@@ -7,12 +7,15 @@
 -- Per attempt, like retryable_misses and evaluations: a replayed batch abandons again and adds again. Read it as a ratio to
 -- evaluations, not as a count of distinct lost detections.
 --
--- NOT NULL DEFAULT 0, so existing rows read as "nothing recorded" rather than NULL. That is honest for them: no code recorded
--- abandons when they were written, so zero is the only value the history supports, and the column's meaning starts at deploy.
+-- NULL, with no default, so every row written before this column existed reads as NOT MEASURED rather than as zero. A zero there
+-- would claim "gave up on nothing" for days no code was counting, and the tuning page would show that as a measurement for as long as
+-- its window reached back past the upgrade. The upsert adds to the stored value, so the upgrade day's row, which already existed,
+-- stays NULL too: NULL plus a count is NULL, and that day was only partly measured. The read reports a total only for a window whose
+-- every row was measured.
 
 -- +goose StatementBegin
 ALTER TABLE detection_rule_eval_stats
-	ADD COLUMN materialization_abandoned BIGINT NOT NULL DEFAULT 0 AFTER retryable_misses;
+	ADD COLUMN materialization_abandoned BIGINT NULL AFTER retryable_misses;
 -- +goose StatementEnd
 
 -- +goose Down

@@ -10,6 +10,8 @@ An abandon SHALL be counted once per rule and process within a batch, matching h
 
 Like the other evaluation counters, abandons SHALL be recorded per attempt, so a replayed batch counts its abandons again, and a reader SHALL interpret them as a rate against evaluations. Abandons SHALL NOT be bounded by the evaluation count: a miss is at most one per attempt, but one attempt over a batch can give up on several processes.
 
+A rule that does not record its abandons SHALL have its abandon count reported as not measured rather than as zero, since its zero would be the same whether or not it gave up on anything. Days recorded before the count existed were not measured either, and SHALL NOT be reported as having no abandons. A read over a window that includes any such day, including the day the count began, which was measured only in part, SHALL report the abandon count as not measured rather than as a total over the measured days alone.
+
 A rule whose decision depends on the process only after an earlier graph read, such that a missing record ends its evaluation before the materialization decision is reached, is outside this requirement; the count covers only the point at which a rule chooses between waiting and giving up.
 
 #### Scenario: A rule that gives up on a missing process record is counted
@@ -39,3 +41,16 @@ A rule whose decision depends on the process only after an earlier graph read, s
 - **GIVEN** a rule's evaluation statistics in which the abandon count exceeds the evaluation count
 - **WHEN** a client reads those statistics
 - **THEN** the row is accepted as well formed
+
+#### Scenario: Days before the count existed are not reported as zero
+
+- **GIVEN** a rule whose evaluation counters include a day recorded before the abandon count existed
+- **WHEN** its statistics are read over a window that includes that day
+- **THEN** the abandon count is reported as not measured, while its other counters are reported as usual
+- **AND** a read over a window that excludes that day reports the abandon count
+
+#### Scenario: An uncounting rule is not reported as having none
+
+- **GIVEN** a rule that does not record the abandons it makes
+- **WHEN** its statistics are written and read back
+- **THEN** its abandon count is reported as not measured rather than as zero

@@ -1146,7 +1146,10 @@ func (r *abandoningRule) EvaluateScoped(
 	return nil, nil
 }
 
+func (r *abandoningRule) CountsMaterializationAbandons() {}
+
 // spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/the-count-reaches-the-rule-s-durable-evaluation-counters
+// spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/an-uncounting-rule-is-not-reported-as-having-none
 //
 // The rules record abandons into the batch scope, and their own tests stop there. The step that carries the count into the durable
 // counters is the one whose failure would be silent: the column would read zero, and a zero is exactly what a healthy rule reports.
@@ -1161,6 +1164,7 @@ func TestEngine_Evaluate_AbandonsReachTheRuleThatGaveUp(t *testing.T) {
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
 		&abandoningRule{stubRule: stubRule{id: "gives-up"}, abandons: 3},
 		&abandoningRule{stubRule: stubRule{id: "decides"}},
+		&stubRule{id: "never-counts"},
 	}})
 
 	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
@@ -1173,6 +1177,12 @@ func TestEngine_Evaluate_AbandonsReachTheRuleThatGaveUp(t *testing.T) {
 	decided, ok := rec.byRule("decides")
 	require.True(t, ok)
 	assert.Zero(t, decided.MaterializationAbandoned, "another rule's abandons must not be charged to a rule that decided")
+	assert.True(t, gaveUp.AbandonsMeasured && decided.AbandonsMeasured, "a rule that counts its abandons reports a measured zero")
+
+	// A rule that does not count its abandons reports zero whether or not it gave up, so its zero must not be stored as one.
+	uncounted, ok := rec.byRule("never-counts")
+	require.True(t, ok)
+	assert.False(t, uncounted.AbandonsMeasured)
 }
 
 // spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-declined-chain-is-counted-against-the-rule-that-declined-it

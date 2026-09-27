@@ -164,6 +164,9 @@ func (r *DNSC2Beacon) Evaluate(ctx context.Context, events []api.Event, s api.Gr
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
+func (r *DNSC2Beacon) CountsMaterializationAbandons() {}
+
 // EvaluateScoped is Evaluate with the batch scope, which this rule needs for one thing: recording a connect whose process it gave
 // up waiting for, so the abandon is counted rather than indistinguishable from a connect that matched nothing (issue #1158).
 func (r *DNSC2Beacon) EvaluateScoped(
@@ -205,6 +208,10 @@ func (r *DNSC2Beacon) evalEvent(
 	}
 	// Only outbound connections beacon. Inbound flows have a peer remote_address that the local process never resolved.
 	if conn.Direction != "outbound" || conn.RemoteAddress == "" {
+		return nil, 0, nil
+	}
+	// No pid means no subject: skipped, never looked up as process zero, and never counted as an abandon, which it is not.
+	if conn.PID <= 0 {
 		return nil, 0, nil
 	}
 	if _, dupe := seenPID[conn.PID]; dupe {

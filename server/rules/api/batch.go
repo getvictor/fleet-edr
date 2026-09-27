@@ -161,3 +161,17 @@ type ScopedRule interface {
 	// EvaluateScoped is Evaluate with access to per-batch scratch space. The scope is never nil when the engine calls it.
 	EvaluateScoped(ctx context.Context, scope *BatchScope, events []Event, gr GraphReader) ([]Finding, error)
 }
+
+// AbandonCounter is an OPTIONAL interface a ScopedRule implements to declare that it records every materialization abandon it makes
+// through BatchScope.RecordMaterializationAbandoned (issue #1158).
+//
+// It exists so a zero can be told apart from no measurement. A rule that never records abandons reports zero whether or not it
+// gave up on anything, and the rules that can give up without recording it (imported Sigma rules, #1169, and
+// osascript_network_exec, #1170) are exactly the ones an operator would otherwise read as healthy. Only a rule declaring this has
+// its count stored; every other rule's is stored as not measured.
+type AbandonCounter interface {
+	ScopedRule
+
+	// CountsMaterializationAbandons marks the declaration. It does nothing.
+	CountsMaterializationAbandons()
+}

@@ -1598,8 +1598,9 @@ export interface RuleEvalSummary {
   // materialization grace, and it evaluated the event as if nothing matched (issue #1158). retryable_misses is the waiting and this
   // is the giving up.
   //
-  // Optional because a server that predates it omits it, and during a rolling deploy this UI can be talking to one. Absent is not
-  // zero: a server that does not report the figure has not measured no abandons, so the render says nothing rather than "0".
+  // Optional because the server omits it when the window reaches back before it began counting, and a server that predates it
+  // omits it too. Absent is not zero: a figure that was not measured is not a measurement of no abandons, so the render says
+  // nothing rather than "0".
   materialization_abandoned?: number;
   mean_eval_ns: number;
   max_eval_ns: number;

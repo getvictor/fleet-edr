@@ -34,6 +34,9 @@ type RuleEvalStat struct {
 	// Per attempt, like the counters above, so a replayed batch counts its abandons again. The ratio to Evaluations is what reads
 	// honestly; the absolute is not a count of distinct lost detections.
 	MaterializationAbandoned int64
+	// AbandonsMeasured is whether the rule counts its abandons at all (api.AbandonCounter). When false, MaterializationAbandoned is
+	// zero because nothing counted, not because nothing was abandoned, and the store records it as not measured.
+	AbandonsMeasured bool
 	// EvalNs is the total wall time across those attempts, and MaxEvalNs the worst single one. Wall time rather than CPU time
 	// because a rule that is slow through graph reads is exactly as much of an operator problem as one slow through matching,
 	// and the reader is trying to find the rule holding up the drain loop.
@@ -79,7 +82,10 @@ type RuleEvalSummary struct {
 	RetryableMisses int64 `db:"retryable_misses" json:"retryable_misses"`
 	// MaterializationAbandoned is the total over the window of processes the rule gave up on (see RuleEvalStat). Its ratio to
 	// Evaluations is the figure to read: RetryableMisses says the rule is waiting, this says it is failing to decide.
-	MaterializationAbandoned int64 `db:"materialization_abandoned" json:"materialization_abandoned"`
+	//
+	// Nil, and omitted from the response, when any day in the window predates the counter: those days were not measured, and a total
+	// over them would present a partial count as a whole one.
+	MaterializationAbandoned *int64 `db:"materialization_abandoned" json:"materialization_abandoned,omitempty"`
 	// MeanEvalNs and MaxEvalNs are the mean and worst-case wall time. The mean is computed in SQL from the stored sum and count
 	// rather than stored, so it stays correct as days are added to the window and as the retention sweep removes them.
 	MeanEvalNs int64 `db:"mean_eval_ns" json:"mean_eval_ns"`

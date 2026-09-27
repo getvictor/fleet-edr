@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -22,10 +21,9 @@ type abandonedCase struct {
 	event func(ingestedAtNs int64) api.Event
 }
 
-type scopedAbandonRule interface {
-	ID() string
-	EvaluateScoped(ctx context.Context, scope *api.BatchScope, events []api.Event, gr api.GraphReader) ([]api.Finding, error)
-}
+// scopedAbandonRule is api.AbandonCounter, so a rule listed here that stopped declaring it fails to compile rather than having
+// its abandons stored as not measured.
+type scopedAbandonRule = api.AbandonCounter
 
 func abandonedCases() []abandonedCase {
 	appControl := func(eventType string) func(int64) api.Event {
@@ -120,5 +118,45 @@ func TestMaterializationAbandoned_AResolvedProcessIsNotAnAbandon(t *testing.T) {
 			require.NoError(t, err)
 			assert.Zero(t, scope.MaterializationAbandoned(tc.rule.ID()))
 		})
+	}
+}
+
+// withoutPID is evt with its payload's pid removed, the malformed shape the skip contract names.
+func withoutPID(t *testing.T, evt api.Event) api.Event {
+	t.Helper()
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(evt.Payload, &payload))
+	require.Contains(t, payload, "pid", "the fixture must carry a pid for its removal to mean anything")
+	delete(payload, "pid")
+	stripped, err := json.Marshal(payload)
+	require.NoError(t, err)
+	evt.Payload = stripped
+	return evt
+}
+
+// spec:server-detection-rules-engine/an-event-a-rule-cannot-identify-a-subject-for-is-skipped/an-event-carrying-no-process-identifier-is-skipped-rather-than-attributed-to-process-zero
+//
+// An event with no pid has no subject, so the rule has no process record to wait for or to give up on. Looking up process zero
+// would find nothing, and the rule would then count an abandon past the grace, or inside it raise the retryable sentinel on an event
+// that no retry can ever resolve. Both inflate the counter this change adds with events that were never decidable.
+func TestMaterializationAbandoned_AnEventWithNoPIDIsSkippedNotAbandoned(t *testing.T) {
+	t.Parallel()
+	for _, tc := range abandonedCases() {
+		for _, age := range []struct {
+			name       string
+			ingestedAt int64
+		}{{"past the grace", pastEveryGrace()}, {"inside the grace", time.Now().UnixNano()}} {
+			t.Run(tc.name+"/"+age.name, func(t *testing.T) {
+				t.Parallel()
+				scope := &api.BatchScope{}
+				gr := &recordingGraphReader{}
+				findings, err := tc.rule.EvaluateScoped(t.Context(), scope, []api.Event{withoutPID(t, tc.event(age.ingestedAt))}, gr)
+
+				require.NoError(t, err)
+				assert.Empty(t, findings)
+				assert.Zero(t, scope.MaterializationAbandoned(tc.rule.ID()))
+				assert.False(t, gr.calledByPID || gr.calledByVersion, "no process lookup is performed for identifier zero")
+			})
+		}
 	}
 }

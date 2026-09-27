@@ -2599,14 +2599,20 @@ components:
             Processes the rule gave up on: it needed the process record an
             event named, the record was still missing once the
             materialization grace had passed, and it evaluated the event as
-            if nothing matched. `retryable_misses` is the waiting and this is
-            the giving up, and each is a detection that did not happen.
+            if nothing matched. `retryable_misses` is the waiting, which is
+            retried and may still decide the event; this is the giving up,
+            and each one is a detection that did not happen.
 
             NOT bounded by `evaluations`, unlike `retryable_misses`: that is
             at most one per attempt, while this is one per process, and a
             single attempt over a batch can give up on several. Counted per
             attempt, so a replayed batch counts again; read it as a rate
-            against `evaluations`. A server that predates the field omits it.
+            against `evaluations`.
+
+            Omitted when it was not measured: for a rule that does not count
+            its abandons, when the window includes a day recorded before the
+            server began counting, and by a server that predates the field.
+            Absent is not zero.
           example: 3
         mean_eval_ns:
           type: integer

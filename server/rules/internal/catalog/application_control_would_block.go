@@ -67,6 +67,9 @@ func (r *ApplicationControlWouldBlock) Evaluate(ctx context.Context, events []ap
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, gr)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
+func (r *ApplicationControlWouldBlock) CountsMaterializationAbandons() {}
+
 // EvaluateScoped is Evaluate with the batch scope, for the same reason as ApplicationControlBlock's (issue #1158).
 func (r *ApplicationControlWouldBlock) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, gr api.GraphReader,
