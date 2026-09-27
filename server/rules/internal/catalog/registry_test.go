@@ -157,7 +157,7 @@ func TestAll_CanonicalDisplayName(t *testing.T) {
 	}
 }
 
-// TestAll_ThreadsExclusionResolver confirms that every exclusion-aware rule actually thread the supplied resolver onto their
+// TestAll_ThreadsExclusionResolver confirms that every exclusion-aware rule actually threads the supplied resolver onto their
 // Exclusions field. Without this, a refactor of New could silently drop the wiring and every fleet would suddenly see the alerts they
 // thought they'd silenced. The other rules don't consult exclusions, so they have no Exclusions field to check.
 func TestAll_ThreadsExclusionResolver(t *testing.T) {

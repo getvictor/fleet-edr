@@ -122,6 +122,7 @@ func TestHandler_ListRules_SupportedExclusionMatchTypes(t *testing.T) {
 	}
 	assert.Equal(t, []string{"parent_path_glob", "team_id", "signing_id", "cdhash"}, byID["suspicious_exec"])
 	assert.Equal(t, []string{"path_glob"}, byID["sudoers_tamper"])
+	assert.Equal(t, []string{"domain", "path_glob", "team_id", "signing_id", "cdhash"}, byID["dns_c2_beacon"])
 	// Present and empty, both: a missing key reads as an empty slice too, so Empty alone would pass for a rule the response omitted.
 	require.Contains(t, byID, "dyld_insert")
 	assert.Empty(t, byID["dyld_insert"], "a rule that consults no exclusions offers an empty set")

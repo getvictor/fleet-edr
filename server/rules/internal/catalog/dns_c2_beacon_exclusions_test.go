@@ -134,6 +134,34 @@ func TestDNSC2BeaconExclusions_AnAdHocBinaryCannotClaimAVendorSigningID(t *testi
 	}
 }
 
+// hostScopedExclusions excludes only on the host it was saved for, which fakeExclusions cannot say: it ignores the host argument.
+type hostScopedExclusions struct {
+	hostID string
+	inner  fakeExclusions
+}
+
+func (h *hostScopedExclusions) Excluded(ruleID string, matchType api.ExclusionMatchType, value, hostID string) bool {
+	return hostID == h.hostID && h.inner.Excluded(ruleID, matchType, value, hostID)
+}
+
+// An exclusion can be scoped to a host group, which the resolver decides from the host the rule passes it. Both checks must pass
+// the event's own host: one saved for another host must not waive this one, and one saved for this host must.
+func TestDNSC2BeaconExclusions_AreScopedToTheEventsHost(t *testing.T) {
+	t.Parallel()
+	for _, excl := range []fakeExcl{
+		{ruleID: "dns_c2_beacon", matchType: api.ExclusionMatchDomain, value: "example.com"},
+		{ruleID: "dns_c2_beacon", matchType: api.ExclusionMatchTeamID, value: "TEAM000001"},
+	} {
+		t.Run(string(excl.matchType), func(t *testing.T) {
+			t.Parallel()
+			elsewhere := &hostScopedExclusions{hostID: "another-host", inner: fakeExclusions{entries: []fakeExcl{excl}}}
+			assert.Len(t, evaluateBeaconWith(t, elsewhere, "loadtest.example.com", signedByTeam), 1)
+			here := &hostScopedExclusions{hostID: "fixture-host", inner: fakeExclusions{entries: []fakeExcl{excl}}}
+			assert.Empty(t, evaluateBeaconWith(t, here, "loadtest.example.com", signedByTeam))
+		})
+	}
+}
+
 // Exclusions are keyed by rule id. One saved for suspicious_exec on the same program must not silence this rule, or tuning one rule
 // would quietly tune another.
 func TestDNSC2BeaconExclusions_AnotherRulesExclusionDoesNotApply(t *testing.T) {
