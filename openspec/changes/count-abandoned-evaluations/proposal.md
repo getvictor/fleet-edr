@@ -21,6 +21,14 @@ Four rules make this decision at a point where a missing record means "stop wait
 
 Both are stated in the requirement so a zero for those rules is not read as a measurement.
 
+## Absent is not zero
+
+A count is only a measurement where every evaluation behind it counted its abandons. Each stored row records how many of its evaluations did, and the count is reported only for a window where that equals the evaluations; otherwise it is omitted. That covers days before the upgrade, rules that do not count (the two above), and a rolling upgrade in which an older replica is still adding evaluations.
+
+## Events with no process identifier
+
+The four rules now skip an event with no pid before resolving its process, as the existing requirement "An event a rule cannot identify a subject for is skipped" already demands and as imported Sigma rules already did. They were looking up process zero instead, which retried the batch inside the grace and would now have been counted as an abandon past it. The requirement's wording is unchanged, so no delta restates it; the four rules gain tests carrying its scenario marker.
+
 ## Not changed
 
-The grace windows, the retry behaviour, and the decision each rule makes are all unchanged. This only makes an existing outcome visible.
+The grace windows, the retry behaviour, and each rule's decision on an event it can attribute are unchanged.

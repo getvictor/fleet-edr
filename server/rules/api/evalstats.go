@@ -83,8 +83,9 @@ type RuleEvalSummary struct {
 	// MaterializationAbandoned is the total over the window of processes the rule gave up on (see RuleEvalStat). Its ratio to
 	// Evaluations is the figure to read: RetryableMisses says the rule is waiting, this says it is failing to decide.
 	//
-	// Nil, and omitted from the response, when any day in the window predates the counter: those days were not measured, and a total
-	// over them would present a partial count as a whole one.
+	// Nil, and omitted from the response, unless every evaluation in the window was made by code that counts abandons: not for a day
+	// before the counter existed, not for a rule that does not count them, and not while an older replica was still writing. A total
+	// over a partly measured window would present a partial count as a whole one.
 	MaterializationAbandoned *int64 `db:"materialization_abandoned" json:"materialization_abandoned,omitempty"`
 	// MeanEvalNs and MaxEvalNs are the mean and worst-case wall time. The mean is computed in SQL from the stored sum and count
 	// rather than stored, so it stays correct as days are added to the window and as the retention sweep removes them.

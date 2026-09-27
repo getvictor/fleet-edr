@@ -17,8 +17,7 @@ import "context"
 type BatchScope struct {
 	derived map[string]any
 
-	// ancestryIncomplete counts, per rule id, the DISTINCT shells a rule declined because an ancestor they needed had no record,
-	// and declinedShells is the dedup set that makes them distinct.
+	// ancestryIncomplete counts, per rule id, the DISTINCT shells a rule declined because an ancestor they needed had no record.
 	//
 	// Unlike `derived` above, the engine DOES read this, which the opacity note does not forbid: what it cannot do is name a type
 	// that lives inside the rules context. A count keyed by a rule id is primitive on both sides, so it crosses the boundary with
@@ -28,28 +27,44 @@ type BatchScope struct {
 	// rule with nothing to report, which is the documented way detections rot unnoticed, so the engine publishes this as a
 	// per-attempt span attribute an operator can compare against the rule's alert volume. Not a metric counter: see the engine's
 	// note at the annotation for why, and for what the per-attempt framing does and does not let you conclude.
-	ancestryIncomplete map[string]int
-	declinedShells     map[declinedShell]struct{}
+	ancestryIncomplete distinctPerRule
 
 	// materializationAbandoned counts, per rule id, the DISTINCT processes a rule gave up on because the process record an event
-	// referenced was still absent once the materialization grace had passed, and abandonedProcs is the dedup set.
+	// referenced was still absent once the materialization grace had passed.
 	//
 	// Inside the grace a missing record is retried: the rule raises the retryable sentinel and the batch is re-evaluated, and that
 	// churn is what retryable_misses counts. Past it the rule stops waiting and evaluates the event as if nothing matched. That
 	// decision is correct, since a record that has not appeared by then may never appear, but it is also a detection that did not
 	// happen, and until this existed nothing recorded it: an operator could see how often a rule retried and never how often it gave
 	// up (issue #1158).
-	materializationAbandoned map[string]int
-	abandonedProcs           map[abandonedProc]struct{}
+	materializationAbandoned distinctPerRule
 }
 
-// declinedShell identifies one declined shell within a batch, so a rule reached by several trigger events on the same chain counts
-// it once. Findings are deduped per shell for the same reason, and the count is specified to be read against the rule's alert
-// volume, so counting per trigger event where alerts count per shell would make the two sides of that comparison disagree: several
-// temp execs or outbound connections from one unresolved chain would report several declines against at most one lost alert.
-type declinedShell struct {
-	ruleID   string
-	shellPID int
+// distinctPerRule counts, per rule id, the distinct pids a rule recorded within one batch. Both of the scope's counters are this,
+// and for the same reason: each rule's findings dedupe per process (a shell, or the process a flow belongs to), and each count is
+// read against what the rule could have raised, so counting per trigger event would report several declines or abandons against at
+// most one lost finding.
+type distinctPerRule struct {
+	seen   map[rulePID]struct{}
+	counts map[string]int
+}
+
+type rulePID struct {
+	ruleID string
+	pid    int
+}
+
+func (d *distinctPerRule) record(ruleID string, pid int) {
+	key := rulePID{ruleID: ruleID, pid: pid}
+	if _, dupe := d.seen[key]; dupe {
+		return
+	}
+	if d.seen == nil {
+		d.seen = make(map[rulePID]struct{}, 1)
+		d.counts = make(map[string]int, 1)
+	}
+	d.seen[key] = struct{}{}
+	d.counts[ruleID]++
 }
 
 // RecordAncestryIncomplete notes that ruleID declined the shell at shellPID because an ancestor it needed was absent from the
@@ -61,18 +76,7 @@ func (s *BatchScope) RecordAncestryIncomplete(ruleID string, shellPID int) {
 	if s == nil {
 		return
 	}
-	if s.declinedShells == nil {
-		s.declinedShells = make(map[declinedShell]struct{}, 1)
-	}
-	key := declinedShell{ruleID: ruleID, shellPID: shellPID}
-	if _, dupe := s.declinedShells[key]; dupe {
-		return
-	}
-	s.declinedShells[key] = struct{}{}
-	if s.ancestryIncomplete == nil {
-		s.ancestryIncomplete = make(map[string]int, 1)
-	}
-	s.ancestryIncomplete[ruleID]++
+	s.ancestryIncomplete.record(ruleID, shellPID)
 }
 
 // AncestryIncompleteCounts returns the per-rule counts recorded during this batch, or nil when nothing was declined. The engine
@@ -84,14 +88,7 @@ func (s *BatchScope) AncestryIncompleteCounts() map[string]int {
 	if s == nil {
 		return nil
 	}
-	return s.ancestryIncomplete
-}
-
-// abandonedProc identifies one process a rule gave up on within a batch. Keyed per process for the reason declinedShell is: a rule's
-// findings dedupe per process, so counting per trigger event would report several abandons against at most one lost finding.
-type abandonedProc struct {
-	ruleID string
-	pid    int
+	return s.ancestryIncomplete.counts
 }
 
 // RecordMaterializationAbandoned notes that ruleID could not decide an event because the process record for pid was still missing
@@ -102,18 +99,7 @@ func (s *BatchScope) RecordMaterializationAbandoned(ruleID string, pid int) {
 	if s == nil {
 		return
 	}
-	if s.abandonedProcs == nil {
-		s.abandonedProcs = make(map[abandonedProc]struct{}, 1)
-	}
-	key := abandonedProc{ruleID: ruleID, pid: pid}
-	if _, dupe := s.abandonedProcs[key]; dupe {
-		return
-	}
-	s.abandonedProcs[key] = struct{}{}
-	if s.materializationAbandoned == nil {
-		s.materializationAbandoned = make(map[string]int, 1)
-	}
-	s.materializationAbandoned[ruleID]++
+	s.materializationAbandoned.record(ruleID, pid)
 }
 
 // MaterializationAbandoned returns how many distinct processes ruleID gave up on in this batch. The engine reads it once per rule,
@@ -122,7 +108,7 @@ func (s *BatchScope) MaterializationAbandoned(ruleID string) int {
 	if s == nil {
 		return 0
 	}
-	return s.materializationAbandoned[ruleID]
+	return s.materializationAbandoned.counts[ruleID]
 }
 
 // Derive returns the value stored under key, building it with build the first time this batch asks for it.

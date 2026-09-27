@@ -228,9 +228,10 @@ func TestRuleEvalStatsCarriesAbandonsThroughEveryWritePath(t *testing.T) {
 
 // spec:server-detection-rules-engine/evaluations-a-rule-abandons-are-counted/days-before-the-count-existed-are-not-reported-as-zero
 //
-// A row written before the counter existed holds NULL in it, which is what the migration leaves on every existing row. A window that
-// reaches such a day has an unmeasured stretch in it, and a total over the measured days alone would read as the whole window's.
-// So does the upgrade day itself: its row existed before the upgrade, and the counts added to it afterwards are only part of it.
+// Every way an abandon count can be partly unmeasured, in one window, each on its own rule: a day written before the counter existed,
+// the upgrade day whose row an older server created, and a row a newer replica created that an older one kept adding evaluations to
+// during a rolling upgrade. The last is the case a NULL-tracking design misses, because the older replica's upsert does not name the
+// column. Each must read as not measured, and a rule measured throughout must still read its count.
 func TestRuleEvalStatsDoesNotReportUnmeasuredDaysAsZero(t *testing.T) {
 	t.Parallel()
 	store, db := openStore(t)
@@ -238,18 +239,26 @@ func TestRuleEvalStatsDoesNotReportUnmeasuredDaysAsZero(t *testing.T) {
 	today := time.Now().UTC().Format(time.DateOnly)
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
 
-	// Written the way a pre-upgrade server wrote them, which never named the column.
-	for _, row := range []struct{ ruleID, day string }{{"spans-the-upgrade", yesterday}, {"upgraded-today", today}} {
+	// writeAsOlderServer is the statement a server predating the counter ran, which names neither new column.
+	writeAsOlderServer := func(ruleID, day string) {
+		t.Helper()
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO detection_rule_eval_stats (rule_id, day, evaluations, eval_ns_sum, eval_ns_max, first_seen, last_seen)
-			VALUES (?, ?, 1, 10, 10, NOW(6), NOW(6))`, row.ruleID, row.day)
+			VALUES (?, ?, 1, 10, 10, NOW(6), NOW(6))
+			ON DUPLICATE KEY UPDATE evaluations = evaluations + VALUES(evaluations)`, ruleID, day)
 		require.NoError(t, err)
 	}
+	counted := func(ruleID string) api.RuleEvalStat {
+		return api.RuleEvalStat{RuleID: ruleID, Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true}
+	}
+
+	writeAsOlderServer("spans-the-upgrade", yesterday)
+	writeAsOlderServer("upgraded-today", today)
 	require.NoError(t, store.RecordRuleEvalStats(ctx, api.RuleEvalStats{
-		{RuleID: "spans-the-upgrade", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true},
-		{RuleID: "upgraded-today", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true},
-		{RuleID: "measured-throughout", Evaluations: 1, EvalNs: 10, MaxEvalNs: 10, MaterializationAbandoned: 3, AbandonsMeasured: true},
+		counted("spans-the-upgrade"), counted("upgraded-today"), counted("rolling-upgrade"), counted("measured-throughout"),
 	}))
+	// The older replica writes after the newer one created the row.
+	writeAsOlderServer("rolling-upgrade", today)
 
 	summaries := func(days api.EvalStatsWindow) map[string]api.RuleEvalSummary {
 		rows, err := store.EvalStats(ctx, days)
@@ -264,6 +273,7 @@ func TestRuleEvalStatsDoesNotReportUnmeasuredDaysAsZero(t *testing.T) {
 	wide := summaries(api.DefaultEvalStatsWindow)
 	assert.Nil(t, wide["spans-the-upgrade"].MaterializationAbandoned, "a window reaching a pre-upgrade day is not measured")
 	assert.Nil(t, wide["upgraded-today"].MaterializationAbandoned, "the upgrade day was only partly measured")
+	assert.Nil(t, wide["rolling-upgrade"].MaterializationAbandoned, "an older replica's evaluations were not measured")
 	require.NotNil(t, wide["measured-throughout"].MaterializationAbandoned)
 	assert.Equal(t, int64(3), *wide["measured-throughout"].MaterializationAbandoned)
 	assert.Equal(t, int64(2), wide["spans-the-upgrade"].Evaluations, "the other counters are unaffected")

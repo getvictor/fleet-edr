@@ -7,18 +7,19 @@
 -- Per attempt, like retryable_misses and evaluations: a replayed batch abandons again and adds again. Read it as a ratio to
 -- evaluations, not as a count of distinct lost detections.
 --
--- NULL, with no default, so every row written before this column existed reads as NOT MEASURED rather than as zero. A zero there
--- would claim "gave up on nothing" for days no code was counting, and the tuning page would show that as a measurement for as long as
--- its window reached back past the upgrade. The upsert adds to the stored value, so the upgrade day's row, which already existed,
--- stays NULL too: NULL plus a count is NULL, and that day was only partly measured. The read reports a total only for a window whose
--- every row was measured.
+-- abandon_measured_evaluations is how many of the row's evaluations were made by code that counts abandons, and the read reports
+-- materialization_abandoned only when it equals evaluations. That one comparison covers every way a zero could be unmeasured: rows
+-- written before this migration, a rule that does not count its abandons, and a rolling upgrade where an older replica keeps adding
+-- evaluations to a row a newer one created. Tracking NULL instead handles the first two and not the third, because the older
+-- replica's upsert does not name the column and so leaves a partial count looking whole.
 
 -- +goose StatementBegin
 ALTER TABLE detection_rule_eval_stats
-	ADD COLUMN materialization_abandoned BIGINT NULL AFTER retryable_misses;
+	ADD COLUMN materialization_abandoned BIGINT NOT NULL DEFAULT 0 AFTER retryable_misses,
+	ADD COLUMN abandon_measured_evaluations BIGINT NOT NULL DEFAULT 0 AFTER materialization_abandoned;
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
-ALTER TABLE detection_rule_eval_stats DROP COLUMN materialization_abandoned;
+ALTER TABLE detection_rule_eval_stats DROP COLUMN abandon_measured_evaluations, DROP COLUMN materialization_abandoned;
 -- +goose StatementEnd
