@@ -72,6 +72,36 @@ type sigmaView struct {
 	PID int
 }
 
+// subjectOrAbandon is Subject for a detection that MATCHED: it returns the process the finding names, and when that process never
+// materialized (nil past the grace; a young miss is the retryable error instead) records the abandon against ruleID. The finding is
+// dropped there, so without the count a match the rule could not report is indistinguishable from no match (issue #1169).
+func (v *sigmaView) subjectOrAbandon(scope *api.BatchScope, ruleID string) (*api.Process, error) {
+	proc, err := v.Subject()
+	if err == nil && proc == nil {
+		scope.RecordMaterializationAbandoned(ruleID, v.PID)
+	}
+	return proc, err
+}
+
+// noteUnmatched records an abandon for a detection that did NOT match because the subject's record was missing. The only field a
+// detection reads from the graph is the one the adapter resolves (Image on a file event, ParentImage on an exec), and both are read
+// through the subject: a file event's Image IS the subject's path, and an exec's parent is found from the subject's row. So a rule
+// that read that field while the subject was missing decided without it, and one that never read it did not depend on the process
+// and is not charged. A present subject whose PARENT is missing is not an abandon either: a parent can predate the capture. The
+// subject was already resolved by the read, through the shared memo, so this reads nothing new.
+//
+// Every Sigma-backed rule calls this on a non-match, including rules whose current detection never reads a graph field. The
+// detection is authored in the pack file and can start reading one without the Go code changing, and the rule's AbandonCounter
+// declaration has to stay true when it does.
+func (v *sigmaView) noteUnmatched(scope *api.BatchScope, ruleID string) {
+	if !v.Event.ImageResolved() {
+		return
+	}
+	if proc, err := v.Subject(); err == nil && proc == nil {
+		scope.RecordMaterializationAbandoned(ruleID, v.PID)
+	}
+}
+
 // sigmaEvent returns this rule's view of the shared adaptation of one event, or nil when the event cannot be adapted at all.
 //
 // Every Sigma-backed rule goes through here rather than constructing its own adapter, and that is what turns the two decodes per
@@ -118,14 +148,25 @@ func buildAdapted(evt api.Event, gr api.GraphReader) *adaptedEvent {
 		return &adaptedEvent{core: core}
 	}
 
-	// The subject is memoized in both branches, but it is not the same lookup as the image in either. On an open they resolve the
-	// SAME row, so they share one accessor and a finding cannot name a different process than the detection matched. On an exec
-	// they are genuinely different rows, the parent's and the subject's, so each gets its own memo.
+	// The image is read THROUGH the subject in both branches. On an open they resolve the same row, so a finding cannot name a
+	// different process than the detection matched. On an exec the image is the parent's, found from the subject's row, so a young
+	// subject is a retry there too rather than an absent ParentImage (issue #1169).
 	subject := subjectProcessOf(evt, gr, pid)
 	// A rename resolves the same way an open does: the acting process IS the subject, so Image and the finding's subject are
 	// one row and a finding cannot name a process the detection did not match on.
 	if evt.EventType == "open" || evt.EventType == "file_rename" || evt.EventType == "file_truncate" || evt.EventType == "file_delete" {
 		return &adaptedEvent{core: core, pid: pid, hasPID: true, image: subjectImageOf(subject), subject: subject}
 	}
-	return &adaptedEvent{core: core, pid: pid, hasPID: true, image: parentImageOf(evt, gr, pid), subject: subject}
+	return &adaptedEvent{core: core, pid: pid, hasPID: true, image: parentImageOf(evt, gr, subject), subject: subject}
 }
+
+// Every Sigma-backed rule records its abandons through sigmaView (subjectOrAbandon and noteUnmatched), so each declares that it
+// counts. Asserted here so a rule that stops satisfying the interface fails to compile rather than silently reporting "not measured".
+var (
+	_ api.AbandonCounter = (*CredentialKeychainDump)(nil)
+	_ api.AbandonCounter = (*DyldInsert)(nil)
+	_ api.AbandonCounter = (*ShellFromOffice)(nil)
+	_ api.AbandonCounter = (*SudoersTamper)(nil)
+	_ api.AbandonCounter = (*SudoersDestroyed)(nil)
+	_ api.AbandonCounter = (*importedRule)(nil)
+)

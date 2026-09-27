@@ -1,0 +1,4 @@
+- [x] Resolve an exec's parent image through the shared subject memo
+- [x] `subjectOrAbandon` and `noteUnmatched` on the shared Sigma view, used by the imported corpus and every converted rule
+- [x] Every Sigma-backed rule declares `api.AbandonCounter`, pinned at compile time
+- [x] Tests: charged only to the reader, matched with no subject, missing parent vs missing subject, retry inside the grace, every converted rule's call site; mutation-tested

@@ -518,6 +518,10 @@ func (r *importedRule) Evaluate(ctx context.Context, events []api.Event, s api.G
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, through the shared Sigma view (issue
+// #1169), so its zero is a measurement.
+func (r *importedRule) CountsMaterializationAbandons() {}
+
 // EvaluateScoped runs the compiled detection over the batch, decoding each event through the scope so the corpus does not decode
 // every event once per rule (issue #794).
 func (r *importedRule) EvaluateScoped(
@@ -555,11 +559,12 @@ func (r *importedRule) evalEvent(
 		return nil, resolveErr
 	}
 	if !matched {
+		view.noteUnmatched(scope, r.id)
 		return nil, nil
 	}
 
 	// The same process the detection matched against, not a second lookup of it.
-	proc, err := view.Subject()
+	proc, err := view.subjectOrAbandon(scope, r.id)
 	if err != nil {
 		return nil, err
 	}

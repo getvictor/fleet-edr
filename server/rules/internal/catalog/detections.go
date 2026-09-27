@@ -171,7 +171,14 @@ func firstField(se *sigmabind.Event, name string) string {
 //
 // A FAILED lookup is memoized too. The alternative lets every later rule in the batch retry a failing graph read, which multiplies
 // load exactly when the database is already struggling, and lets two rules disagree about whether the same process exists.
-func parentImageOf(evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) func(context.Context) (string, error) {
+//
+// The child is read through subject, the event's shared subject memo, rather than looked up again (issue #1169). That makes a young
+// child a retry rather than an absent ParentImage, which a detection would read as "no parent matched" and drop for good, and it lets
+// a rule that declined for want of a ParentImage be told apart: a missing CHILD is the rule's subject never arriving, which is an
+// abandon; a present child whose parent is missing is not, since a parent can predate the capture.
+func parentImageOf(
+	evt rulesapi.Event, gr rulesapi.GraphReader, subject func(context.Context) (*rulesapi.Process, error),
+) func(context.Context) (string, error) {
 	var (
 		path     string
 		err      error
@@ -182,7 +189,7 @@ func parentImageOf(evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) fu
 			return path, err
 		}
 		resolved = true
-		path, err = lookupParentImage(ctx, evt, gr, childPID)
+		path, err = lookupParentImage(ctx, evt, gr, subject)
 		return path, err
 	}
 }
@@ -192,10 +199,12 @@ func parentImageOf(evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) fu
 // The parent is resolved at the CHILD'S FORK TIME, not the exec timestamp. A parent must be alive when it forks the child, but by
 // the time the child execs it may have exited and had its pid reused, so the exec timestamp can select a different process
 // entirely. This is the same bracket SuspiciousExec.lookupParentOf uses, and the reason it uses it.
-func lookupParentImage(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) (string, error) {
-	child, err := gr.GetProcessByPID(ctx, evt.HostID, childPID, evt.TimestampNs)
+func lookupParentImage(
+	ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, subject func(context.Context) (*rulesapi.Process, error),
+) (string, error) {
+	child, err := subject(ctx)
 	if err != nil {
-		return "", fmt.Errorf("get child pid %d: %w", childPID, err)
+		return "", err
 	}
 	if child == nil || child.PPID <= 1 {
 		return "", nil

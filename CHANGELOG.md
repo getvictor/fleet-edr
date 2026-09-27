@@ -21,6 +21,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 - **An osascript download-and-run chain is no longer missed when its last step is recorded late.** The rule now waits for that step's record, as the other rules do, rather than giving up on the chain.
 - **The process graph says when its window predates retention.** A window reaching back past process retention now shows a notice, rather than an alert's process alone with nothing around it.
+- **Sigma rules no longer drop an exec whose own record arrives late.** A rule that checks the parent program now waits for the record it is found from, instead of reading the parent as missing. Detection tuning now also counts the events Sigma rules give up on.
 - **A rule that runs in monitor mode links to what it has matched.** Those records were reachable only from the Observed count in Detection tuning, which needs a permission the analyst role does not hold, so the records were readable in principle and unreachable in practice for the people who investigate. A rule's own page now offers them.
 
 ## [0.6.0] (2026-09-22)

@@ -74,6 +74,10 @@ func (r *ShellFromOffice) Evaluate(ctx context.Context, events []api.Event, s ap
 	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
+// CountsMaterializationAbandons declares that every abandon this rule makes is recorded, through the shared Sigma view (issue
+// #1169), so its zero is a measurement.
+func (r *ShellFromOffice) CountsMaterializationAbandons() {}
+
 // EvaluateScoped implements api.ScopedRule.
 func (r *ShellFromOffice) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
@@ -103,11 +107,14 @@ func (r *ShellFromOffice) evalEvent(
 		return nil, err
 	}
 	if !matched {
+		view.noteUnmatched(scope, r.ID())
 		return nil, nil
 	}
 	// The parent the detection matched on, read back from the same field, so the alert names the Office app that spawned the shell.
 	parentPath := firstField(se, "ParentImage")
 
+	// Plain Subject, not subjectOrAbandon: the detection requires ParentImage, which is found through the subject, so a match means
+	// the subject resolved. A missing subject is counted where it is decided, by noteUnmatched above (issue #1169).
 	proc, err := view.Subject()
 	if err != nil {
 		return nil, err
