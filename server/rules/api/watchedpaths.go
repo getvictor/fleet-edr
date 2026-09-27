@@ -217,10 +217,12 @@ func ValidateWatchedPaths(paths []WatchedPath) error {
 		}
 		seen[key] = struct{}{}
 	}
-	// Measured with the encoder the payload is written with, so JSON escaping (which can grow a byte to six) is counted as sent.
-	encoded, _ := json.Marshal(paths)
+	// Measured on what a host is actually sent, the defaults followed by these paths (issue #1167), with the encoder the payload is
+	// written with, so JSON escaping (which can grow a byte to six) is counted as sent.
+	encoded, _ := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: paths}))
 	if len(encoded) > MaxWatchedPathSetBytes {
-		return fmt.Errorf("%w: the set encodes to %d bytes, at most %d", ErrInvalidWatchedPaths, len(encoded), MaxWatchedPathSetBytes)
+		return fmt.Errorf("%w: the set, with the default paths every host is sent, encodes to %d bytes, at most %d",
+			ErrInvalidWatchedPaths, len(encoded), MaxWatchedPathSetBytes)
 	}
 	return nil
 }

@@ -612,6 +612,9 @@ func TestCategoryIsInert_DecidesFileRulesByTheirPaths(t *testing.T) {
 		{"one search out of reach", "  a: {TargetFilename|startswith: '/Library/StartupItems/'}\n" +
 			"  b: {TargetFilename|startswith: '/Users/'}\n  condition: 1 of *\n", false},
 		{"a regex cannot be proven", "  sel: {TargetFilename|re: '^/Library/StartupItems/.*'}\n  condition: sel\n", false},
+		// Both prefixes are watched, and no single file starts with both, so the conjunction reaches nothing (review on #1179).
+		{"|all of two watched prefixes no path can start with both",
+			"  sel: {TargetFilename|startswith|all: ['/etc/emond.d/rules/', '/Library/StartupItems/']}\n  condition: sel\n", false},
 		{"all values must reach under |all",
 			"  sel: {TargetFilename|contains|all: ['/Library/StartupItems/', '/Users/']}\n  condition: sel\n", false},
 	}

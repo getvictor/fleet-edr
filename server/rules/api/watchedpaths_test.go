@@ -149,12 +149,13 @@ func TestValidateWatchedPaths_LeavesRoomForTheNUL(t *testing.T) {
 // server encodes it, so a path of escapable bytes counts at its escaped size.
 func TestValidateWatchedPaths_BoundsTheEncodedSetSize(t *testing.T) {
 	t.Parallel()
-	// Eight paths of ~1000 bytes encode to just under 8 KiB; one more path of the same size passes it.
+	// Eight paths of ~980 bytes, sent after the default paths every host gets, encode to just under 8 KiB; one more passes it. The
+	// defaults count because the bound is on what a host is sent (issue #1167).
 	entry := func(i int) WatchedPath {
-		return WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: WatchedPathLiteral}
+		return WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 950), Match: WatchedPathLiteral}
 	}
 	fits := []WatchedPath{entry(0), entry(1), entry(2), entry(3), entry(4), entry(5), entry(6), entry(7)}
-	encoded, err := json.Marshal(fits)
+	encoded, err := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: fits}))
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(encoded), MaxWatchedPathSetBytes)
 	require.NoError(t, ValidateWatchedPaths(fits))

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -172,4 +173,50 @@ func TestWatchedPathDefaults_TheConvergeLoopEnsuresThem(t *testing.T) {
 	assert.Equal(t, int64(1), r.get(t).Version)
 	assert.Equal(t, []string{"host-a"}, history.takeQueued())
 	assert.JSONEq(t, `[`+defaultsOnTheWire+`]`, pushedPaths(t, history.latest["host-a"].Payload))
+}
+
+// spec:server-admin-surface/the-server-pushes-default-watched-paths/a-server-from-before-the-defaults-still-reads-the-set
+//
+// During a rolling upgrade old and new replicas share the database (ADR-0011). A server from before defaults decodes the column
+// straight into a list of paths, so what this server writes must still decode that way, or every old replica's watched-path reads,
+// writes and converge passes would fail the moment one new replica wrote the set (review on #1179).
+func TestWatchedPathDefaults_AServerFromBeforeThemStillReadsTheSet(t *testing.T) {
+	t.Parallel()
+	r := newDefaultsRig(t)
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "alice@example.com")}
+	_, err := r.svc.Replace(t.Context(), actor, "watch periodic scripts",
+		[]rulesapi.WatchedPath{{Path: "/etc/periodic/daily/", Match: rulesapi.WatchedPathPrefix}}, nil)
+	require.NoError(t, err)
+
+	var column []byte
+	require.NoError(t, r.db.Get(&column, `SELECT paths FROM watched_path_set WHERE id = 1`))
+	var asTheOldServerReadsIt []rulesapi.WatchedPath
+	require.NoError(t, json.Unmarshal(column, &asTheOldServerReadsIt), "the old decoder, a plain list of paths")
+	assert.Equal(t, append(slices.Clone(rulesapi.DefaultWatchedPaths),
+		rulesapi.WatchedPath{Path: "/etc/periodic/daily/", Match: rulesapi.WatchedPathPrefix}), asTheOldServerReadsIt,
+		"and it sees the defaults as ordinary entries, which it keeps pushing")
+}
+
+// spec:server-admin-surface/the-server-pushes-default-watched-paths/a-set-an-old-server-rewrote-is-restored
+//
+// An old replica that rewrites the set during the upgrade stores the defaults back as ordinary entries, without the marker. The
+// next pass on a new replica must see them as unrecorded, mark them again, and not leave a duplicate of each among the operator's.
+func TestWatchedPathDefaults_ASetAnOldServerRewroteIsRestored(t *testing.T) {
+	t.Parallel()
+	r := newDefaultsRig(t)
+	_, err := r.db.Exec(`UPDATE watched_path_set SET version = 7, updated_at = NOW(6), updated_by = 'usr_1', paths = JSON_ARRAY(
+		JSON_OBJECT('path', '/etc/emond.d/rules/', 'match', 'prefix'),
+		JSON_OBJECT('path', '/private/var/db/emondClients/', 'match', 'prefix'),
+		JSON_OBJECT('path', '/Library/StartupItems/', 'match', 'prefix'),
+		JSON_OBJECT('path', '/etc/periodic/daily/', 'match', 'prefix')) WHERE id = 1`)
+	require.NoError(t, err)
+	require.Empty(t, r.get(t).Defaults, "the markers were lost in the old server's write")
+
+	require.NoError(t, r.svc.EnsureDefaults(t.Context()))
+
+	set := r.get(t)
+	assert.Equal(t, int64(8), set.Version)
+	assert.Equal(t, rulesapi.DefaultWatchedPaths, set.Defaults)
+	assert.Equal(t, []rulesapi.WatchedPath{{Path: "/etc/periodic/daily/", Match: rulesapi.WatchedPathPrefix}}, set.Paths,
+		"the repeats of the defaults are not left among the operator's paths")
 }

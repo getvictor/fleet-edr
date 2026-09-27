@@ -6,6 +6,8 @@ The server SHALL send every host a set of default watched paths on top of the op
 
 The server SHALL record, with each version of the set, the default paths that version was stored with. When the stored set carries no defaults or different ones, including a set stored before defaults existed and one never changed at all, the server SHALL store the operator's same paths again as a change by the system principal, audited with a reason, so the version and epoch move forward and hosts apply the new defaults. That SHALL be a no-op once the set carries the current defaults, and servers running at once SHALL together make that change once.
 
+The stored set SHALL remain readable by a server from before default paths existed, since old and new servers share the database during a rolling upgrade: the defaults SHALL be stored as ordinary entries marked as defaults, which such a server reads, and keeps pushing, as ordinary entries. When such a server rewrites the set without the marks, the server SHALL treat the defaults as unrecorded, restore them, and not keep their unmarked repeats among the operator's paths. The limit on a set's encoded size SHALL apply to what a host is sent, the defaults included.
+
 #### Scenario: A deployment that never configured a set pushes the defaults
 
 - **GIVEN** a watched-path set that was never changed
@@ -25,6 +27,18 @@ The server SHALL record, with each version of the set, the default paths that ve
 - **GIVEN** several servers finding the set without the current defaults at once
 - **WHEN** each brings the set up to its defaults
 - **THEN** the set moves forward by one version and each host is sent it once
+
+#### Scenario: A server from before the defaults still reads the set
+
+- **GIVEN** a set this server stored, with the defaults and an operator path
+- **WHEN** a server from before default paths existed reads the column
+- **THEN** it decodes the set as a list of paths, the defaults among them
+
+#### Scenario: A set an old server rewrote is restored
+
+- **GIVEN** a set rewritten by a server from before default paths existed, holding the defaults as unmarked entries and an operator path
+- **WHEN** the server brings the set up to its defaults
+- **THEN** the set moves to its next version with the defaults recorded and only the operator path among the operator's
 
 #### Scenario: The defaults are reported as always watched
 

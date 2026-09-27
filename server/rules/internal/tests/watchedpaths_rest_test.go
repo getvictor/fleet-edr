@@ -302,7 +302,8 @@ func TestWatchedPathsREST_BodyCapFitsTheLargestValidSet(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 	entry := func(i int) rulesapi.WatchedPath {
-		path := fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970)
+		// 950 rather than the 970 that fit before issue #1167: the bound is on what a host is sent, which begins with the defaults.
+		path := fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 950)
 		return rulesapi.WatchedPath{Path: path, Match: rulesapi.WatchedPathLiteral}
 	}
 	largest := []rulesapi.WatchedPath{entry(0), entry(1), entry(2), entry(3), entry(4), entry(5), entry(6), entry(7)}

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -456,50 +457,35 @@ func searchReaches(search *yaml.Node, watched []api.WatchedPath) bool {
 func mapReaches(m *yaml.Node, watched []api.WatchedPath) bool {
 	pinned := false
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		field, modifiers, _ := strings.Cut(m.Content[i].Value, "|")
+		field, modifier, all, regexp, err := sigma.FieldModifiers(m.Content[i].Value)
+		if err != nil {
+			return false
+		}
 		if field != "TargetFilename" {
 			continue
 		}
-		modifier, all := parseModifiers(modifiers)
-		switch modifier {
-		case "endswith":
+		switch {
+		case modifier == "endswith":
 			continue
-		case "", "startswith", "contains":
-		default:
+		case regexp, all:
+			// A regex cannot be proven, and |all makes the values one conjunction that a single path must satisfy at once, which
+			// checking each value on its own does not establish: startswith|all of two unrelated prefixes reaches both and no
+			// file. No rule this imports needs either.
+			return false
+		case modifier != "" && modifier != "startswith" && modifier != "contains":
 			return false
 		}
 		values := conditionValues(m.Content[i+1])
 		if len(values) == 0 {
 			return false
 		}
-		reached := 0
-		for _, v := range values {
-			if api.ReachesWatchedPath(watched, modifier, v) {
-				reached++
-			}
-		}
-		// Values are alternatives unless |all makes them a conjunction.
-		if (all && reached != len(values)) || reached == 0 {
+		// Values are alternatives, so one that reaches a watched path is enough.
+		if !slices.ContainsFunc(values, func(v string) bool { return api.ReachesWatchedPath(watched, modifier, v) }) {
 			return false
 		}
 		pinned = true
 	}
 	return pinned
-}
-
-// parseModifiers splits a Sigma modifier chain into the one matching modifier and whether |all was given. An unknown or regex
-// modifier comes back as itself, which the caller refuses.
-func parseModifiers(chain string) (modifier string, all bool) {
-	for part := range strings.SplitSeq(chain, "|") {
-		switch part {
-		case "":
-		case "all":
-			all = true
-		default:
-			modifier = part
-		}
-	}
-	return modifier, all
 }
 
 // conditionValues returns a condition's value or values as strings, or nil for anything else.

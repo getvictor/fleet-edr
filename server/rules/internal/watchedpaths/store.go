@@ -3,7 +3,6 @@
 package watchedpaths
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,16 +46,17 @@ func NewStore(db *sqlx.DB) *Store {
 // ErrVersionConflict is returned for a conditional replacement of a set that has changed since the caller read it.
 var ErrVersionConflict = errors.New("the watched paths were changed since they were read")
 
-// document is the stored form of a set: the operator's paths, and the server defaults that version was stored, and so pushed, with.
-type document struct {
-	Paths    []api.WatchedPath `json:"paths"`
-	Defaults []api.WatchedPath `json:"defaults"`
+// storedEntry is one element of the stored array. A server default (issue #1167) is stored as an ordinary entry carrying
+// "default": true, rather than in a separate field, and the reason is the rolling upgrade. A server from before defaults decodes the
+// column straight into []api.WatchedPath, which ignores the unknown key, so while old and new replicas share the database the old
+// ones still read the set, and still push the defaults as ordinary entries. An old replica that rewrites the set drops the marker, and
+// the next converge pass on a new replica finds the defaults unrecorded and marks them again (Service.EnsureDefaults).
+type storedEntry struct {
+	api.WatchedPath
+	Default bool `json:"default,omitempty"`
 }
 
-// decode maps a stored row onto the API's set.
-//
-// A row written before defaults existed (issue #1167) holds a bare array of paths. It decodes with no defaults, which is the truth
-// about what those hosts were sent, and is what makes the next converge pass push the current defaults.
+// decode maps a stored row onto the API's set: the entries marked as defaults become Defaults, and the rest are the operator's.
 func decode(row versionedset.Row) (api.WatchedPathSet, error) {
 	out := api.WatchedPathSet{
 		Version:   row.Version,
@@ -64,22 +64,30 @@ func decode(row versionedset.Row) (api.WatchedPathSet, error) {
 		UpdatedAt: row.UpdatedAtPtr(),
 		Paths:     []api.WatchedPath{},
 	}
-	payload := bytes.TrimSpace(row.Payload)
-	if len(payload) > 0 && payload[0] == '[' {
-		if err := json.Unmarshal(payload, &out.Paths); err != nil {
-			return api.WatchedPathSet{}, fmt.Errorf("decode watched paths: %w", err)
-		}
-		return out, nil
-	}
-	var doc document
-	if err := json.Unmarshal(payload, &doc); err != nil {
+	var entries []storedEntry
+	if err := json.Unmarshal(row.Payload, &entries); err != nil {
 		return api.WatchedPathSet{}, fmt.Errorf("decode watched paths: %w", err)
 	}
-	if doc.Paths != nil {
-		out.Paths = doc.Paths
+	for _, e := range entries {
+		if e.Default {
+			out.Defaults = append(out.Defaults, e.WatchedPath)
+			continue
+		}
+		out.Paths = append(out.Paths, e.WatchedPath)
 	}
-	out.Defaults = doc.Defaults
 	return out, nil
+}
+
+// encode is decode's inverse for a write by this server: this build's defaults, marked, then the operator's paths without an entry
+// that repeats a default. The dropped repeat is what an old replica leaves behind when it rewrites the set with the defaults
+// unmarked, and it is the same entry, so nothing an operator asked for is lost.
+func encode(paths []api.WatchedPath) ([]byte, error) {
+	pushed := api.PushedWatchedPaths(api.WatchedPathSet{Defaults: api.DefaultWatchedPaths, Paths: paths})
+	entries := make([]storedEntry, len(pushed))
+	for i, p := range pushed {
+		entries[i] = storedEntry{WatchedPath: p, Default: i < len(api.DefaultWatchedPaths)}
+	}
+	return json.Marshal(entries)
 }
 
 // Get returns the stored set.
@@ -103,7 +111,7 @@ func (s *Store) Replace(
 	audit func(previous, next api.WatchedPathSet) (auditoutbox.Entry, error),
 ) (previous, next api.WatchedPathSet, auditID int64, err error) {
 	// Every write records the defaults this build pushes, so a set stored by this server is never behind them.
-	encoded, err := json.Marshal(document{Paths: paths, Defaults: api.DefaultWatchedPaths})
+	encoded, err := encode(paths)
 	if err != nil {
 		return api.WatchedPathSet{}, api.WatchedPathSet{}, 0, fmt.Errorf("encode watched paths: %w", err)
 	}
