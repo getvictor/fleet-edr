@@ -28,7 +28,7 @@ func openRule(t *testing.T, id string, fields map[string]any) *importedRule {
 	}
 }
 
-// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-rule-that-read-the-process/a-match-with-no-process-to-name-is-counted
+// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-reader/a-match-with-no-process-to-name-is-counted
 //
 // The detection matched, and the finding was dropped because there is no process to attach it to. That is a detection lost,
 // charged to the rule that matched.
@@ -43,7 +43,7 @@ func TestSigmaAbandon_AMatchWithNoProcessToNameIsCounted(t *testing.T) {
 	assert.Equal(t, 1, scope.MaterializationAbandoned("matches-on-target"))
 }
 
-// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-rule-that-read-the-process/only-the-rule-that-read-the-process-is-charged
+// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-reader/only-the-rule-that-read-the-process-is-charged
 //
 // The core of issue #1169. Rules in a batch share one memoized subject lookup per event, so charging the lookup would charge every
 // rule. Only a rule whose decision read the process (here, Image on a file event, which IS the acting process's path) lost a
@@ -83,7 +83,7 @@ func shellExec(ingestedAtNs int64) api.Event {
 	}
 }
 
-// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-rule-that-read-the-process/a-missing-parent-is-not-an-abandon
+// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-reader/a-missing-parent-is-not-an-abandon
 //
 // On an exec, ParentImage is found from the subject's row. A present subject whose parent is missing is not the rule giving up on
 // its subject: a parent can predate the capture and never materialize.
@@ -97,7 +97,7 @@ func TestSigmaAbandon_AMissingParentIsNotAnAbandon(t *testing.T) {
 	assert.Zero(t, scope.MaterializationAbandoned("parent-reader"))
 }
 
-// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-rule-that-read-the-process/a-missing-subject-hides-the-parent-too
+// spec:server-detection-rules-engine/sigma-abandons-are-charged-to-the-reader/a-missing-subject-hides-the-parent-too
 //
 // With the subject itself missing there is no row to find the parent from, so a detection reading ParentImage decided without it.
 // That is the subject never arriving, and it is charged. Inside the grace it is a retry: the absent ParentImage used to be read as
