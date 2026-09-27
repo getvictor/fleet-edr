@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fleetdm/edr/internal/installerscript"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -57,10 +58,10 @@ func (r *SuspiciousExec) ID() string { return "suspicious_exec" }
 // exec'd its payload in place is still found.
 func (r *SuspiciousExec) AlgorithmName() string { return "ancestor_walk_path_prefix" }
 
-// SupportedExclusionMatchTypes lists the match types parentExcluded consults: the non-shell parent's path glob plus its code-signing
-// identity (team_id / signing_id / cdhash), so an operator can exclude a benign signed parent (e.g. a Developer-ID developer tool) by
-// its team ID rather than a path glob a writable-directory attacker can land inside (issue #520). signing_id is matched on its own,
-// and an ad-hoc signature can claim any identifier, so it does not carry that guarantee.
+// SupportedExclusionMatchTypes lists the match types this rule consults. parentExcluded reads the first four, on the non-shell
+// parent: its path glob plus its code-signing identity (team_id / signing_id / cdhash), so an operator can exclude a benign signed
+// parent (e.g. a Developer-ID developer tool) by its team ID rather than a path glob a writable-directory attacker can land inside
+// (issue #520). installerExcluded reads package_team_id, on the installer PACKAGE, for an installer script's chain only (#1161).
 func (r *SuspiciousExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 	return []api.ExclusionMatchType{
 		api.ExclusionMatchParentPathGlob,
@@ -330,15 +331,10 @@ func (r *SuspiciousExec) makeExecFinding(
 	}
 }
 
-// packageScriptServicePath is Apple's PackageKit service that runs every package's preinstall and postinstall. The agent keys its
-// package-signature enrichment on the same path (agent/enrich.PackageScriptServicePath).
-const packageScriptServicePath = "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/XPCServices/" +
-	"package_script_service.xpc/Contents/MacOS/package_script_service"
-
 // underPackageKit reports whether the chain's non-shell parent is PackageKit's script service, so the trigger is an installer
 // script and a package signature on it describes the package being installed.
 func underPackageKit(parent *api.Process) bool {
-	return parent != nil && parent.Path == packageScriptServicePath
+	return parent != nil && parent.Path == installerscript.ServicePath
 }
 
 // installerExcluded reports whether an installer script's chain is waived by a package_team_id exclusion naming the team that
@@ -363,7 +359,7 @@ func installerPackageNote(p execPayload, parent *api.Process) string {
 	if !underPackageKit(parent) {
 		return ""
 	}
-	pkg := installerPackagePath(p.Args)
+	_, pkg := installerscript.Locate(p.Args)
 	if pkg == "" {
 		return ""
 	}
@@ -375,7 +371,8 @@ func installerPackageNote(p execPayload, parent *api.Process) string {
 	case p.PackageSigning.Signed:
 		return fmt.Sprintf(" (installing %s, signed, %s)", pkg, notarization(p.PackageSigning))
 	default:
-		return fmt.Sprintf(" (installing %s, unsigned)", pkg)
+		// Signed is false for an absent signature and for one macOS rejects (untrusted, expired, revoked) alike.
+		return fmt.Sprintf(" (installing %s, unsigned or untrusted)", pkg)
 	}
 }
 
@@ -387,17 +384,6 @@ func notarization(ps *packageSigning) string {
 		return "notarized"
 	}
 	return "not notarized"
-}
-
-// installerPackagePath is the argument after the installer script, which PackageKit passes as the package's path (Apple's script
-// interface). The same rule the agent uses to find it.
-func installerPackagePath(args []string) string {
-	for i := 1; i < len(args); i++ {
-		if s := args[i-1]; strings.Contains(s, "/PKInstallSandbox.") && strings.Contains(s, "/Scripts/") {
-			return args[i]
-		}
-	}
-	return ""
 }
 
 func isSuspiciousPath(path string) bool {

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/internal/installerscript"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -154,7 +155,7 @@ func TestExclusionMatchTypes_NoUndeclaredConsultation(t *testing.T) {
 
 	// package_team_id is consulted only for an installer script under PackageKit's service with a signed package (issue #1161),
 	// which the chain above is not, so a second store drives that shape through the same recording resolver.
-	installer := installerChain(t, packageScriptServicePath, amazonSigned)
+	installer := installerChain(t, installerscript.ServicePath, amazonSigned)
 	installerStore := openCatalogStore(t)
 	require.NoError(t, installerStore.InsertEvents(ctx, installer))
 	materialize(t, installerStore, installer)

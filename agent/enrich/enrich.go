@@ -13,10 +13,10 @@ package enrich
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/pkgsign"
+	"github.com/fleetdm/edr/internal/installerscript"
 )
 
 // Evaluator computes the on-disk code signing of an executable. Production passes codesign.Evaluate; tests inject a
@@ -66,14 +66,6 @@ type PackageEvaluator func(pkgPath, scriptPath string) (*pkgsign.Result, bool)
 // ParentPath returns the executable path of the process with the given pid, as the agent's process table knows it.
 type ParentPath func(pid int) (string, bool)
 
-// PackageScriptServicePath is Apple's PackageKit service that runs every package's preinstall and postinstall scripts.
-const PackageScriptServicePath = "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/XPCServices/" +
-	"package_script_service.xpc/Contents/MacOS/package_script_service"
-
-// installerSandboxScripts is the part of an installer script's path that PackageKit's sandbox always carries, as in
-// /tmp/PKInstallSandbox.iJ0s6V/Scripts/com.example.pkg.gjgthW/postinstall.
-const installerSandboxScripts = "/Scripts/"
-
 // PackageScriptSigning returns data with an installer script's exec carrying package_signing: the signature of the package the
 // script belongs to. PackageKit runs a package's scripts under its own package_script_service, so the process chain names Apple
 // and never the vendor; the package's path is the script's first argument (Apple's documented script interface), and its
@@ -95,11 +87,11 @@ func PackageScriptSigning(data []byte, parentPath ParentPath, eval PackageEvalua
 		return data
 	}
 	// The argument shape first: it is free, and it spares the parent lookup, which may ask the kernel, on every other exec.
-	script, pkg := installerScript(exec.Args)
+	script, pkg := installerscript.Locate(exec.Args)
 	if pkg == "" {
 		return data
 	}
-	if parent, known := parentPath(exec.PPID); !known || parent != PackageScriptServicePath {
+	if parent, known := parentPath(exec.PPID); !known || parent != installerscript.ServicePath {
 		return data
 	}
 	result, ok := eval(pkg, script)
@@ -107,18 +99,6 @@ func PackageScriptSigning(data []byte, parentPath ParentPath, eval PackageEvalua
 		return data
 	}
 	return encodeEvent(data, envelope, payload, "package_signing", result)
-}
-
-// installerScript returns the installer script in args and the argument that follows it: the package path, per Apple's script
-// interface ($1 is the package, then the target, the volume and its root). The script is argv[0] for a compiled script and
-// argv[1] behind an interpreter, so it is found by its sandbox path rather than by position. Both are "" when there is none.
-func installerScript(args []string) (script, pkg string) {
-	for i := 1; i < len(args); i++ {
-		if s := args[i-1]; strings.Contains(s, "/PKInstallSandbox.") && strings.Contains(s, installerSandboxScripts) {
-			return s, args[i]
-		}
-	}
-	return "", ""
 }
 
 // decodeEvent parses an event envelope of wantType and its payload. ok is false for another type, malformed JSON, or a missing

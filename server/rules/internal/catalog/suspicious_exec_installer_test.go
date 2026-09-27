@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/internal/installerscript"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -54,12 +55,12 @@ func packageTeam(team string) *fakeExclusions {
 // spec:server-detection-rules-engine/an-installer-script-is-waived-by-its-package-signer/a-vendor-s-installer-is-waived-by-its-package-team
 func TestSuspiciousExecInstaller_WaivedByThePackagesTeam(t *testing.T) {
 	t.Parallel()
-	chain := installerChain(t, packageScriptServicePath, amazonSigned)
+	chain := installerChain(t, installerscript.ServicePath, amazonSigned)
 	require.Len(t, evaluateInstaller(t, nil, chain), 1, "the fixture fires with no exclusion")
 	assert.Empty(t, evaluateInstaller(t, packageTeam("94KV3E626L"), chain))
 	// Notarization is context, not a condition: an in-house Developer ID package deployed by MDM is commonly not notarized, and
 	// the operator's team exclusion is the trust decision.
-	unnotarized := installerChain(t, packageScriptServicePath, `{"signed":true,"notarized":false,"team_id":"94KV3E626L"}`)
+	unnotarized := installerChain(t, installerscript.ServicePath, `{"signed":true,"notarized":false,"team_id":"94KV3E626L"}`)
 	assert.Empty(t, evaluateInstaller(t, packageTeam("94KV3E626L"), unnotarized))
 	assert.Len(t, evaluateInstaller(t, packageTeam("OTHERTEAM1"), chain), 1, "another vendor's team waives nothing")
 }
@@ -77,7 +78,7 @@ func TestSuspiciousExecInstaller_OnlyATrustedSignatureCounts(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			assert.Len(t, evaluateInstaller(t, packageTeam("94KV3E626L"), installerChain(t, packageScriptServicePath, signing)), 1)
+			assert.Len(t, evaluateInstaller(t, packageTeam("94KV3E626L"), installerChain(t, installerscript.ServicePath, signing)), 1)
 		})
 	}
 }
@@ -102,13 +103,14 @@ func TestSuspiciousExecInstaller_TheAlertNamesThePackage(t *testing.T) {
 		"signed": {amazonSigned, "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, signed by team 94KV3E626L, notarized)"},
 		"signed, not notarized": {`{"signed":true,"notarized":false,"team_id":"94KV3E626L"}`,
 			"(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, signed by team 94KV3E626L, not notarized)"},
-		"unsigned": {`{"signed":false,"notarized":false,"team_id":""}`, "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, unsigned)"},
-		"unknown":  {"", "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg)"},
+		"unsigned": {`{"signed":false,"notarized":false,"team_id":""}`,
+			"(installing /Users/alice/Downloads/AWS_VPN_Client.pkg, unsigned or untrusted)"},
+		"unknown": {"", "(installing /Users/alice/Downloads/AWS_VPN_Client.pkg)"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			findings := evaluateInstaller(t, nil, installerChain(t, packageScriptServicePath, tc.signing))
+			findings := evaluateInstaller(t, nil, installerChain(t, installerscript.ServicePath, tc.signing))
 			require.Len(t, findings, 1)
 			assert.Contains(t, findings[0].Description, tc.want)
 		})
