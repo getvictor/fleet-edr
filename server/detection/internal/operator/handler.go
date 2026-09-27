@@ -88,7 +88,10 @@ type Handler struct {
 	processSearch ProcessSearchReader
 	eventSearch   EventSearchReader
 	hostTimeline  HostTimelineReader
-	logger        *slog.Logger
+	// processRetentionDays is how many days completed process records are kept, or 0 when retention is disabled. See
+	// SetProcessRetention.
+	processRetentionDays int
+	logger               *slog.Logger
 }
 
 // New creates a detection operator handler. authz is the authorization chokepoint every privileged route gates on; callers also
@@ -107,6 +110,10 @@ func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler
 	}
 	return &Handler{svc: svc, authz: authz, logger: logger}
 }
+
+// SetProcessRetention tells the tree endpoint how long completed process records are kept (EDR_RETENTION_DAYS), so a response
+// can say where the retained records begin. 0 or less means retention is disabled and nothing has aged out.
+func (h *Handler) SetProcessRetention(days int) { h.processRetentionDays = max(days, 0) }
 
 // SetAudit installs the operator audit recorder. Optional: when not set, alert-status changes still apply but no audit row is written.
 // Bootstrap calls this after New so existing tests that pass nil for audit do not need to change.
@@ -199,6 +206,9 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	if res.Roots == nil {
 		// Marshal an empty forest as [] rather than null: the UI iterates roots unconditionally.
 		res.Roots = []api.ProcessNode{}
+	}
+	if h.processRetentionDays > 0 {
+		res.RetainedFromNs = time.Now().AddDate(0, 0, -h.processRetentionDays).UnixNano()
 	}
 	h.writeJSON(w, r, res)
 }

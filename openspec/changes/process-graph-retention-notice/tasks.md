@@ -1,0 +1,4 @@
+- [x] `retained_from_ns` on the process-tree response, from `EDR_RETENTION_DAYS`, omitted when retention is disabled
+- [x] A notice on the process graph when its window starts before it
+- [x] Quickstart default process retention 7 to 30 days, with the stale rationale replaced
+- [x] OpenAPI, changelog (upgrade note for the quickstart default)

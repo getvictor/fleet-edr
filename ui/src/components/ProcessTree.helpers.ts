@@ -400,3 +400,12 @@ export function buildVisibleRoots(roots: ProcessNode[], filters: VisibilityFilte
   };
   return apply(roots);
 }
+
+// agedOutBefore returns the retention boundary when the graph's window starts before it, and null otherwise (issue #1153). Earlier
+// than the boundary, completed process records are gone except those an alert references, so the graph can show a lone alerted
+// process with nothing around it while the timeline beside it is complete. The read is not truncated, so the truncation notice
+// cannot say this; the page needs its own.
+export function agedOutBefore(windowFromNs: number, retainedFromNs: number | undefined): number | null {
+  if (retainedFromNs === undefined || retainedFromNs <= 0) return null;
+  return windowFromNs < retainedFromNs ? retainedFromNs : null;
+}

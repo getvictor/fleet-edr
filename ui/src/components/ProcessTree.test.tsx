@@ -1111,3 +1111,33 @@ describe("ProcessTreeView chain-scoped read", () => {
     expect(tree.mock.calls[0][5]).toBe(false);
   });
 });
+
+// spec:web-ui/the-process-graph-says-when-its-window-predates-retention/an-old-window-is-labelled-as-aged-out
+//
+// The graph of an alert older than process retention shows its process alone, and the read is not truncated, so nothing else
+// on the page explains the missing neighbours (issue #1153).
+describe("ProcessTreeView retention notice", () => {
+  it("says when the window starts before process records were retained", async () => {
+    // Retention starts now, so any window the page picks starts before it.
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest, { retained_from_ns: Date.now() * 1_000_000 }));
+    renderTree("");
+    expect(await screen.findByText(/have been deleted by retention/)).toBeVisible();
+  });
+
+  it("says nothing when the window is inside retention", async () => {
+    // Retention reaches back to the epoch, so no window starts before it.
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest, { retained_from_ns: 1 }));
+    renderTree("");
+    await waitFor(() => { expect(api.getProcessTree).toHaveBeenCalled(); });
+    await waitFor(() => { expect(screen.queryByText("Loading...")).toBeNull(); });
+    expect(screen.queryByText(/have been deleted by retention/)).toBeNull();
+  });
+
+  it("says nothing when retention is disabled", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
+    renderTree("");
+    await waitFor(() => { expect(api.getProcessTree).toHaveBeenCalled(); });
+    await waitFor(() => { expect(screen.queryByText("Loading...")).toBeNull(); });
+    expect(screen.queryByText(/have been deleted by retention/)).toBeNull();
+  });
+});

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { hierarchy } from "d3";
 
 import {
+  agedOutBefore,
   isSystemPath,
   countDescendants,
   wouldSystemToggleReveal,
@@ -627,5 +628,19 @@ describe("resolveAlertEntry", () => {
 
   it("treats a process-optional alert (process_id 0) as processId 0", () => {
     expect(resolveAlertEntry({ ...alert, process_id: 0 }, new URLSearchParams()).processId).toBe(0);
+  });
+});
+
+describe("agedOutBefore", () => {
+  it("returns the boundary for a window that starts before it", () => {
+    expect(agedOutBefore(100, 200)).toBe(200);
+  });
+  it("returns null for a window inside retention, including one starting exactly at the boundary", () => {
+    expect(agedOutBefore(300, 200)).toBeNull();
+    expect(agedOutBefore(200, 200)).toBeNull();
+  });
+  it("returns null when retention is disabled or unreported", () => {
+    expect(agedOutBefore(100, undefined)).toBeNull();
+    expect(agedOutBefore(100, 0)).toBeNull();
   });
 });

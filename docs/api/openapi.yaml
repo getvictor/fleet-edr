@@ -318,6 +318,17 @@ paths:
                       from `returned < total_matched`: the count behind `total_matched` can be capped or give up, and a client
                       that inferred truncation from it would read a partial forest as complete. Key on this flag.
                     example: false
+                  retained_from_ns:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                    maximum: 9007199254740991
+                    description: |
+                      The moment, in nanoseconds since the epoch, before which completed process records have been deleted
+                      by retention (`EDR_RETENTION_DAYS`). A window starting earlier returns the processes an alert references
+                      and not their neighbours, and the read is not truncated, so this is how a client can tell the two apart.
+                      Omitted when retention is disabled.
+                    example: 1789000000000000000
 
   /api/hosts/{host_id}/processes/{pid}:
     get:
