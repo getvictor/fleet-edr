@@ -311,9 +311,8 @@ func parentExcluded(r shellChainRule, parent, child *api.Process, hostID string)
 // process by: pathType applied to its path, and its persisted code-signing identity (team_id, signing_id, cdhash). pathType is the
 // caller's because the same process is a parent to one rule (parent_path_glob) and the subject to another (path_glob).
 //
-// signing_id is matched QUALIFIED by who signed it, never as the bare identifier (issue #1024). An ad-hoc binary can claim any
-// vendor's identifier, so the bare form let a planted binary inherit that vendor's exclusion. A process with no team and no platform
-// flag composes to "" and matches no signing_id exclusion at all.
+// The signature half is signatureExcluded, shared with the BTM persistence rules, which read a signature off a registration rather
+// than a process row.
 func processExcluded(res api.ExclusionResolver, ruleID string, pathType api.ExclusionMatchType, proc *api.Process, hostID string) bool {
 	if res.Excluded(ruleID, pathType, proc.Path, hostID) {
 		return true
@@ -322,14 +321,8 @@ func processExcluded(res api.ExclusionResolver, ruleID string, pathType api.Excl
 		var cs codeSigningJSON
 		// A malformed blob is unexpected (the agent writes it), so a decode error just means "no signature to match on" rather than a
 		// rule failure: fall through to the cdhash check.
-		if err := json.Unmarshal(proc.CodeSigning, &cs); err == nil {
-			if cs.TeamID != "" && res.Excluded(ruleID, api.ExclusionMatchTeamID, cs.TeamID, hostID) {
-				return true
-			}
-			if qualified := api.QualifiedSigningID(cs.TeamID, cs.SigningID, cs.IsPlatformBinary); qualified != "" &&
-				res.Excluded(ruleID, api.ExclusionMatchSigningID, qualified, hostID) {
-				return true
-			}
+		if err := json.Unmarshal(proc.CodeSigning, &cs); err == nil && signatureExcluded(res, ruleID, cs, hostID) {
+			return true
 		}
 	}
 	return proc.CDHash != nil && *proc.CDHash != "" && res.Excluded(ruleID, api.ExclusionMatchCDHash, *proc.CDHash, hostID)

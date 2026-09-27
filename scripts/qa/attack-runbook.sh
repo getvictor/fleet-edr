@@ -110,6 +110,98 @@ step_header() {
   return 0
 }
 
+# build_btm_dropper compiles the synthetic persistence dropper and prints its path. Built locally so the program it registers is
+# ad-hoc signed by the linker, with no team and no Apple platform flag: the untrusted-executable case both BTM persistence rules
+# fire on. Each call builds to its own unique path because BTM keys a launch item's identity on the registered executable path, and
+# re-registering a path BTM already knows emits no fresh NOTIFY_BTM_LAUNCH_ITEM_ADD. So the daemon and agent steps each get their
+# own binary, and every run gets new ones.
+build_btm_dropper() {
+  command -v go >/dev/null 2>&1 || return 1
+  mkdir -p "$WORKDIR"
+  local src="$WORKDIR/synthetic_dropper.go" bin
+  bin="$WORKDIR/synthetic_dropper_$(date +%s)_$$_$RANDOM"
+  cat > "$src" <<'GO'
+package main
+
+// Synthetic persistence dropper for the EDR runbook. `system` registers a LaunchDaemon (needs root) to exercise
+// privilege_launchd_plist_write (T1543.004); `agent` registers a LaunchAgent in the invoking user's GUI domain to exercise
+// persistence_launchagent (T1543.001). Either way the item runs this binary with `noop`, then is booted out and removed.
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+)
+
+func main() {
+	// When launchd actually launches the registered item it runs us with "noop"; return so we never recurse.
+	if len(os.Args) < 2 || os.Args[1] == "noop" {
+		return
+	}
+	// Unique label per run. BTM deduplicates at the source: re-registering a (label, executable) it already knows emits
+	// no fresh ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, so a fixed label fires the rule only on the host's first-ever
+	// run and silently no-ops afterwards. A per-run label also gives a unique alert subject (the item path) so the
+	// server's (source, host, rule, subject) dedup does not collapse this run's alert onto a prior run's row, which
+	// would fall outside the L5 driver's "alerts since scenario start" polling window.
+	label := fmt.Sprintf("com.synthetic.edr-runbook.%d", time.Now().UnixNano())
+	var dir, domain string
+	switch os.Args[1] {
+	case "system":
+		dir, domain = "/Library/LaunchDaemons", "system"
+	case "agent":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("home directory: %v", err)
+		}
+		dir, domain = filepath.Join(home, "Library", "LaunchAgents"), fmt.Sprintf("gui/%d", os.Getuid())
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatalf("create %s: %v", dir, err)
+		}
+	default:
+		log.Fatalf("usage: %s system|agent", os.Args[0])
+	}
+	target := filepath.Join(dir, label+".plist")
+	self, err := os.Executable()
+	if err != nil {
+		log.Fatalf("executable path: %v", err)
+	}
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>` + label + `</string>
+  <key>ProgramArguments</key><array><string>` + self + `</string><string>noop</string></array>
+</dict></plist>
+`
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		log.Fatalf("write plist: %v", err)
+	}
+	// Register with launchd -> emits NOTIFY_BTM_LAUNCH_ITEM_ADD, the persistence signal. A refused bootstrap registers
+	// nothing, so no alert can follow: cleanup still runs, and the exit status tells the runbook to skip the step rather
+	// than count a detection miss.
+	out, bootstrapErr := exec.Command("/bin/launchctl", "bootstrap", domain, target).CombinedOutput()
+	if bootstrapErr != nil {
+		log.Printf("bootstrap failed: %v: %s", bootstrapErr, out)
+	}
+	// BTM delivers NOTIFY_BTM_LAUNCH_ITEM_ADD asynchronously. Booting the item out in the same instant coalesces the
+	// registration away before the kernel emits the ADD, so the extension never sees it (ground-truthed on edr-qa: a
+	// back-to-back bootstrap+bootout produced no event, a bootstrap with a multi-second settle did). Let the ADD land
+	// before cleaning up.
+	time.Sleep(3 * time.Second)
+	// Cleanup: unregister + remove so the host returns to a clean state.
+	_ = exec.Command("/bin/launchctl", "bootout", domain+"/"+label).Run()
+	if err := os.Remove(target); err != nil {
+		log.Printf("cleanup remove: %v", err)
+	}
+	if bootstrapErr != nil {
+		os.Exit(1)
+	}
+}
+GO
+  go build -o "$bin" "$src" >&2 || return 1
+  printf '%s\n' "$bin"
+}
+
 # step_pace pauses for PACE_SECONDS so the live audience can watch the alert
 # land in the UI before the next step fires. No-op when PACE_SECONDS=0.
 step_pace() {
@@ -149,30 +241,21 @@ PAYLOAD
 }
 
 step_persistence_launchagent() {
-  step_header "LaunchAgent persistence drop + launchctl load" "persistence_launchagent"
-  # Rule trigger: exec of `launchctl load <plist>` where plist matches
-  # ~/Library/LaunchAgents/<name>.plist or /Library/LaunchAgents/<name>.plist.
-  # We DO NOT actually persist anything: the plist is a best-effort
-  # placeholder (RunAtLoad is false and it is unloaded and removed right
-  # after), so nothing keeps running. The rule fires on the EXEC of
-  # launchctl load, not on activation success.
-  local plist_dir="$HOME/Library/LaunchAgents"
-  local plist_path="$plist_dir/com.synthetic.edr-runbook.plist"
-  mkdir -p "$plist_dir"
-  cat > "$plist_path" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.synthetic.edr-runbook</string>
-  <key>ProgramArguments</key><array><string>/usr/bin/true</string></array>
-  <key>RunAtLoad</key><false/>
-</dict></plist>
-EOF
-  /bin/launchctl load "$plist_path" >/dev/null 2>&1 || true
-  /bin/launchctl unload "$plist_path" >/dev/null 2>&1 || true
-  rm -f "$plist_path"
-  EXPECTED_ALERTS+=("persistence_launchagent - launchctl load $plist_path")
+  step_header "LaunchAgent registration via BTM" "persistence_launchagent"
+  # Rule trigger: ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD with item_type=agent, surfaced when launchd registers a LaunchAgent.
+  # The rule judges the REGISTERED PROGRAM's signature, so the agent must run something that is not an Apple platform binary:
+  # the locally built dropper (ad-hoc signed by the linker, no team) registers a per-run LaunchAgent in this user's GUI domain
+  # pointing at itself, waits for the ADD to land, then boots it out and removes it. Nothing keeps running.
+  local bin
+  if ! bin="$(build_btm_dropper)"; then
+    skip_step persistence_launchagent "could not build the BTM dropper (no Go toolchain, or the build failed)"
+    return 0
+  fi
+  if ! "$bin" agent; then
+    skip_step persistence_launchagent "launchd refused the LaunchAgent bootstrap (no GUI session for this user?)"
+    return 0
+  fi
+  EXPECTED_ALERTS+=("persistence_launchagent: registered + removed LaunchAgent com.synthetic.edr-runbook via launchctl bootstrap gui/$(id -u)")
   return 0
 }
 
@@ -230,92 +313,32 @@ step_privilege_launchd_plist_write() {
   # Rule trigger (ADR-0008): ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD with item_type=daemon, surfaced when launchd
   # registers a system LaunchDaemon. We write a plist into /Library/LaunchDaemons, `launchctl bootstrap` it (the BTM
   # trigger), then bootout + remove it. The daemon's executable is this locally-built, non-Apple binary, run with a
-  # `daemon` arg that no-ops so launchd launching it cannot recurse.
+  # `noop` arg so launchd launching it cannot recurse.
   #
   # IMPORTANT: BTM fires at REGISTRATION, not at the file write: a plain write+remove (the pre-ADR-0008 behaviour) no
   # longer triggers detection. The rule keys on the REGISTERED EXECUTABLE's code-signing, not the instigator (the BTM
   # instigator for a `launchctl bootstrap` is Apple's smd, ground-truthed on edr-dev), so this locally-built, unsigned
   # daemon executable fires regardless of the platform-binary instigator (see ADR-0008 and its 2026-05-29 amendment).
-  if ! command -v go >/dev/null 2>&1; then
-    skip_step privilege_launchd_plist_write "no Go toolchain on this host"
-    return 0
-  fi
-  local src="$WORKDIR/synthetic_dropper.go"
-  # Unique binary path per run. BTM keys its launch-item identity (and thus whether a registration emits a fresh
-  # NOTIFY_BTM_LAUNCH_ITEM_ADD) on the registered executable path: re-registering an executable path BTM already knows
-  # is silent. A per-run path guarantees a fresh ADD every run, complementing the per-run label in the dropper below.
-  # Declared before assignment so the substitution's exit status is the statement's own, which `local x=$(...)` masks.
   local bin
-  bin="$WORKDIR/synthetic_dropper_$(date +%s)_$$"
-  cat > "$src" <<'GO'
-package main
-
-// Synthetic LaunchDaemon-persistence dropper for the EDR runbook. Writes a plist into /Library/LaunchDaemons and
-// registers it with launchd (Background Task Management) to exercise privilege_launchd_plist_write (T1543.004), then
-// bootouts + removes it. Compiled locally so the daemon's executable lacks Apple's platform-binary flag.
-import (
-	"fmt"
-	"log"
-	"os"
-	"os/exec"
-	"time"
-)
-
-func main() {
-	// When launchd actually launches the registered daemon it runs us with the "daemon" arg; no-op so we never recurse.
-	if len(os.Args) > 1 && os.Args[1] == "daemon" {
-		return
-	}
-	// Unique label per run. BTM deduplicates at the source: re-registering a (label, executable) it already knows emits
-	// no fresh ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, so a fixed label fires the rule only on the host's first-ever
-	// run and silently no-ops afterwards. A per-run label also gives a unique alert subject (the item path) so the
-	// server's (source, host, rule, subject) dedup does not collapse this run's alert onto a prior run's row, which
-	// would fall outside the L5 driver's "alerts since scenario start" polling window.
-	label := fmt.Sprintf("com.synthetic.edr-runbook.%d", time.Now().UnixNano())
-	target := "/Library/LaunchDaemons/" + label + ".plist"
-	self, err := os.Executable()
-	if err != nil {
-		log.Fatalf("executable path: %v", err)
-	}
-	body := `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict>
-  <key>Label</key><string>` + label + `</string>
-  <key>ProgramArguments</key><array><string>` + self + `</string><string>daemon</string></array>
-</dict></plist>
-`
-	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
-		log.Fatalf("write plist: %v", err)
-	}
-	// Register with launchd -> emits NOTIFY_BTM_LAUNCH_ITEM_ADD (item_type=daemon), the persistence signal.
-	if out, e := exec.Command("/bin/launchctl", "bootstrap", "system", target).CombinedOutput(); e != nil {
-		log.Printf("bootstrap (non-fatal): %v: %s", e, out)
-	}
-	// BTM delivers NOTIFY_BTM_LAUNCH_ITEM_ADD asynchronously. Booting the item out in the same instant coalesces the
-	// registration away before the kernel emits the ADD, so the extension never sees it (ground-truthed on edr-qa: a
-	// back-to-back bootstrap+bootout produced no event, a bootstrap with a multi-second settle did). Let the ADD land
-	// before cleaning up.
-	time.Sleep(3 * time.Second)
-	// Cleanup: unregister + remove so the host returns to a clean state.
-	_ = exec.Command("/bin/launchctl", "bootout", "system/"+label).Run()
-	if err := os.Remove(target); err != nil {
-		log.Printf("cleanup remove: %v", err)
-	}
-}
-GO
-  if ! go build -o "$bin" "$src"; then
-    skip_step privilege_launchd_plist_write "go build failed"
+  if ! bin="$(build_btm_dropper)"; then
+    skip_step privilege_launchd_plist_write "could not build the BTM dropper (no Go toolchain, or the build failed)"
     return 0
   fi
   if [[ "$(id -u)" -ne 0 ]]; then
     echo "[runbook] this step needs root to register a LaunchDaemon; trying sudo -n"
     # -n (non-interactive) bails immediately when sudo would otherwise prompt for a password. The runbook runs over SSH
     # (`ssh victor@... 'bash /tmp/attack-runbook.sh'`), so an interactive prompt would deadlock the whole script.
-    if ! sudo -n "$bin"; then
+    if ! sudo -n true 2>/dev/null; then
       skip_step privilege_launchd_plist_write "no NOPASSWD sudo for the dropper (see scripts/uat/README.md)"
       return 0
     fi
-  else
-    "$bin" || echo "[runbook] dropper failed - alert may not have fired"
+    if ! sudo -n "$bin" system; then
+      skip_step privilege_launchd_plist_write "launchd refused the LaunchDaemon bootstrap"
+      return 0
+    fi
+  elif ! "$bin" system; then
+    skip_step privilege_launchd_plist_write "launchd refused the LaunchDaemon bootstrap"
+    return 0
   fi
   EXPECTED_ALERTS+=("privilege_launchd_plist_write: registered + removed LaunchDaemon com.synthetic.edr-runbook via launchctl bootstrap")
   return 0

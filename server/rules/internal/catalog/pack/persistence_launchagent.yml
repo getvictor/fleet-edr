@@ -7,47 +7,35 @@ title: LaunchAgent persistence
 id: ad26e192-079a-56f4-94ce-8aacef94143d
 status: stable
 description: |-
-  Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/LaunchAgents or /Library/LaunchAgents.
+  Flags a LaunchAgent whose registered executable is not an Apple platform binary, not MDM-managed, and not excluded.
 
-  Detects the canonical user-domain persistence step on macOS: an attacker drops a plist into a LaunchAgents directory and then activates it via `launchctl load <plist>` or `launchctl bootstrap gui/<uid> <plist>`. We catch the activation rather than the file write so the alert ties to the moment the persistence becomes effective.
+  Detects user-domain persistence on macOS (T1543.001): a LaunchAgent registered with Background Task Management, which runs its program at every login.
 
-  Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plist path and tolerates flag-like args between `load` and the plist (`-w`, `-F`, etc.).
+  Keyed on the registration rather than on `launchctl`, so a plist that becomes active at the next login without anyone running `launchctl` is caught, as is one loaded by any other means.
+
+  The decision keys on the REGISTERED EXECUTABLE's code signature, not on who registered it. An agent whose program is an Apple platform binary or that MDM manages is skipped; an ad-hoc, unsigned or unknown-vendor program fires. Paired with `privilege_launchd_plist_write` for LaunchDaemons.
 author: Fleet EDR
 level: high
 tags:
   - attack.t1543.001
 logsource:
   product: macos
-  category: process_creation
-detection:
-  # The launchctl binaries whose invocation this rule is about. Matched with |re rather than a plain value or a list because a
-  # plain Sigma value folds case, and the match is meant to be exact.
-  selection_binary:
-    Image|re: '^(/bin/launchctl|/usr/bin/launchctl)$'
-  # The subcommands that actually register a job. `launchctl list` or `print` naming a plist path is not persistence, which is why
-  # this matches the verb rather than the command line: Subcommand is the first non-flag token after argv[0], so the plist path
-  # cannot be mistaken for it and a later mention of `load` cannot stand in for one.
-  selection_subcommand:
-    Subcommand|re: '^(load|bootstrap)$'
-  # The target must be a LaunchAgent plist, and it must be an ARGUMENT rather than anywhere in the command line.
-  # CommandArguments holds the operands after the subcommand, and Sigma matches a list-valued field when any element does, which is
-  # exactly the question the rule asks. Case-insensitive here deliberately: the path is a filesystem path on a case-insensitive
-  # volume.
-  selection_target:
-    CommandArguments|re: '(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$'
-  condition: selection_binary and selection_subcommand and selection_target
+  category: btm_launch_item_add
 falsepositives:
-  - MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Add a path-glob exclusion for their plist paths via the detection-config surface.
-  - Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.
+  - Vendor software that installs its own LaunchAgent (an updater, a sync client, a security tool). Exclude it by `team_id`, or by `signing_id` for one of a vendor's programs rather than all of them. Either survives upgrades and cannot be claimed by a planted binary.
+  - An in-house or unsigned tool. Prefer signing it; failing that, a path-glob exclusion on its plist, with an expiry, since anyone who can write that path inherits the exclusion.
 x-engine:
   rule_id: persistence_launchagent
-  type: sigma
-  portable: mapped
-  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads the fields CommandArguments and Subcommand, which this engine computes rather than taking from Sigma's own taxonomy, so another engine needs them supplied to evaluate the rule. Sigma has no equivalent because it represents a command line as a single string, in which argument position is no longer recoverable.
+  type: graph
+  portable: none
+  portability_note: The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted separately; until a rule's logic lives in its file, this stays the honest answer.
   event_types:
-    - exec
+    - btm_launch_item_add
+  algorithm: btm_item_signing_verdict
   exclusions:
+    - team_id
+    - signing_id
     - path_glob
   limitations:
-    - 'Does not cover `launchctl bootout` or `launchctl unload`: those undo persistence rather than create it.'
-    - Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.
+    - Registration is reported when launchd learns of the item, not when the plist is written. A plist written and never loaded surfaces at the next login.
+    - A registration whose program's code signature cannot be read (absent or unreadable when registered) is skipped to stay high-precision.

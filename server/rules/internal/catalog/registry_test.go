@@ -532,7 +532,8 @@ var triggeringPayloads = func() []string {
 			`,"flags":1537,"query_name":"evil.example.com","response_addresses":["93.184.216.34"],`+
 			`"direction":"outbound","remote_address":"93.184.216.34","remote_port":443,`+
 			`"provider":"content_filter","state":"stopped","item_type":"agent",`+
-			`"item_path":"/Users/x/Library/LaunchAgents/com.evil.plist","executable_path":"/tmp/evil"}`)
+			`"item_path":"/Users/x/Library/LaunchAgents/com.evil.plist","executable_path":"/tmp/evil",`+
+			`"executable_code_signing":{"team_id":"","signing_id":"a.out","flags":0,"is_platform_binary":false}}`)
 	}
 	return out
 }()
@@ -558,12 +559,12 @@ func (resolvingGraph) GetProcessByPID(_ context.Context, _ string, pid int, _ in
 // and no alert to notice.
 //
 // What it does and does not prove, measured rather than assumed. Deliberately mis-declaring each rule's event type, this catches 4
-// of 7: sudoers_tamper, credential_keychain_dump, persistence_launchagent and dyld_insert. It misses three, each for a reason no
-// single synthetic batch can fix:
+// of 7: sudoers_tamper, credential_keychain_dump, persistence_launchagent (on its registration shape) and dyld_insert. It misses
+// three, each for a reason no single synthetic batch can fix:
 //
 //   - dns_c2_beacon needs a periodic BEACON across many events, not one lookup.
 //   - osascript_network_exec needs a correlated ancestry in the process graph.
-//   - privilege_launchd_plist_write needs a code-signing verdict on the launch item.
+//   - privilege_launchd_plist_write needs a daemon registration, and the one payload here registers an agent.
 //
 // Reproducing any of those means writing that rule's fixture, at which point the corpus gate in dispatch_equivalence_test.go covers
 // it properly. So treat this as a tripwire for the common shape, not a proof.

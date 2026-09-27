@@ -9,6 +9,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 - **Detection tuning counts the processes a rule gave up on.** When a rule needs a process record that never arrived, it now counts that process as abandoned, shown in the Cost column beside the undecided evaluations it retried. A rule failing to decide no longer looks the same as a rule with nothing to report. Rules that cannot yet count this, and days before the upgrade, show no figure rather than zero.
 - **A known-good phone-home can be waived.** `dns_c2_beacon` alerts can now be excluded by the domain the program looked up, which covers its subdomains, or by the program's path, team, signing identifier or cdhash. Until now the rule could only be silenced as a whole. See [recommended exclusions](docs/recommended-exclusions.md).
 
+### Changed
+
+- **LaunchAgent persistence is judged on the program it registers.** The rule now watches LaunchAgent registrations rather than `launchctl`, so it also catches a plist that becomes active at the next login, and skips Apple's own and MDM-managed agents. Vendor agents can be excluded by `team_id` or `signing_id`, which a planted file cannot defeat; existing plist path exclusions keep working. If the background items profile is not installed, exclude team `FDG8Q7N4CC` for this rule so the EDR's own LaunchAgent is not reported.
+
 ### Fixed
 
 - **A rule that runs in monitor mode links to what it has matched.** Those records were reachable only from the Observed count in Detection tuning, which needs a permission the analyst role does not hold, so the records were readable in principle and unreachable in practice for the people who investigate. A rule's own page now offers them.

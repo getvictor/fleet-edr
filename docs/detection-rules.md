@@ -184,7 +184,7 @@ The rule fires on the LAST link (the connection) rather than the shell's exec. T
 ## persistence_launchagent
 
 **LaunchAgent persistence**  
-Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/LaunchAgents or /Library/LaunchAgents.
+Flags a LaunchAgent whose registered executable is not an Apple platform binary, not MDM-managed, and not excluded.
 
 | | |
 | --- | --- |
@@ -193,23 +193,25 @@ Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/Launch
 | Default mode | `alert` |
 | Source | Fleet EDR |
 | ATT&CK | [`T1543.001`](https://attack.mitre.org/techniques/T1543/001/) |
-| Event types | `exec` |
+| Event types | `btm_launch_item_add` |
 
 ### Description
 
-Detects the canonical user-domain persistence step on macOS: an attacker drops a plist into a LaunchAgents directory and then activates it via `launchctl load <plist>` or `launchctl bootstrap gui/<uid> <plist>`. We catch the activation rather than the file write so the alert ties to the moment the persistence becomes effective.
+Detects user-domain persistence on macOS (T1543.001): a LaunchAgent registered with Background Task Management, which runs its program at every login.
 
-Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plist path and tolerates flag-like args between `load` and the plist (`-w`, `-F`, etc.).
+Keyed on the registration rather than on `launchctl`, so a plist that becomes active at the next login without anyone running `launchctl` is caught, as is one loaded by any other means.
+
+The decision keys on the REGISTERED EXECUTABLE's code signature, not on who registered it. An agent whose program is an Apple platform binary or that MDM manages is skipped; an ad-hoc, unsigned or unknown-vendor program fires. Paired with `privilege_launchd_plist_write` for LaunchDaemons.
 
 ### Known false-positive sources
 
-- MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Add a path-glob exclusion for their plist paths via the detection-config surface.
-- Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.
+- Vendor software that installs its own LaunchAgent (an updater, a sync client, a security tool). Exclude it by `team_id`, or by `signing_id` for one of a vendor's programs rather than all of them. Either survives upgrades and cannot be claimed by a planted binary.
+- An in-house or unsigned tool. Prefer signing it; failing that, a path-glob exclusion on its plist, with an expiry, since anyone who can write that path inherits the exclusion.
 
 ### Limitations
 
-- Does not cover `launchctl bootout` or `launchctl unload`: those undo persistence rather than create it.
-- Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.
+- Registration is reported when launchd learns of the item, not when the plist is written. A plist written and never loaded surfaces at the next login.
+- A registration whose program's code signature cannot be read (absent or unreadable when registered) is skipped to stay high-precision.
 
 ## dyld_insert
 

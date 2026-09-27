@@ -31,10 +31,9 @@ import (
 // strings would essentially never produce a match, and the test would pass while exercising nothing.
 
 // The generated argv is drawn by CATEGORY first and then by token, rather than uniformly from one flat list. That matters more than
-// it looks: the empty string is the single token the two implementations disagree about, and in a flat 23-token vocabulary the
-// three-token shape that exposes the disagreement turns up about once in 28,000 draws, so a 100-case run passes while never
-// reaching it. Drawing a category first gives the empty string its own sixth of the probability mass, and the property below
-// actually fails without the documented exception.
+// it looks: a disagreement between two implementations usually needs one rare token in one specific position, and in a flat
+// vocabulary such a shape turns up so seldom that a 100-case run passes while never reaching it. Drawing a category first gives
+// each rare kind of token (the empty string among them) its own share of the probability mass.
 var argvCategories = map[string][]string{
 	"flag":       {"-v", "-q", "-w", "-S", "-p"},
 	"subcommand": {"dump-keychain", "help", "list-keychains", "load", "bootstrap", "print", "unload"},
@@ -57,13 +56,13 @@ var envOptionTokens = []string{"-i", "-v", "-u", "PATH", "-uPATH", "--", "-", "-
 // drawArgv models a command INVOCATION rather than emitting token soup, and that distinction decides whether this test is worth
 // anything.
 //
-// A first attempt drew each position independently from a flat vocabulary. It passed, and it was worthless: the shape that exposes
-// the one real divergence between the two launch-agent implementations needs an empty token in one specific position, a verb in the
-// next and a matching plist after that, which independent draws reach about once in 2,600 cases. Against a 100-case run the property
-// passed while never once exercising its own exception, and a mutation that removed the exception entirely still passed.
+// A first attempt drew each position independently from a flat vocabulary. It passed, and it was worthless: the shapes that expose a
+// divergence need particular tokens in particular positions (an env option before a DYLD assignment, for instance), which
+// independent draws reach so rarely that a 100-case run never exercised its own exceptions, and a mutation removing an exception
+// still passed.
 //
-// Modelling the invocation gives each discriminating choice its own draw, so the divergence turns up in roughly a tenth of cases.
-// The mutation now fails, which is the only evidence that the property is testing anything. A quarter of draws stay free-form so
+// Modelling the invocation gives each discriminating choice its own draw, so the divergences turn up regularly and a mutation that
+// removes an exception fails, which is the only evidence that the property is testing anything. A quarter of draws stay free-form so
 // shapes not modelled here still occur.
 func drawArgv(t *rapid.T) []string {
 	if rapid.IntRange(0, 3).Draw(t, "freeform") == 0 {
@@ -123,25 +122,6 @@ func drawArgv(t *rapid.T) []string {
 	return argv
 }
 
-// skipsAnEmptyBeforeItsSubcommand reports the one shape the two launch-agent implementations are known to read differently: an empty
-// token sitting between argv[0] and the first real operand.
-//
-// legacyExtractLaunchctlSubcommand skips it, because the matcher it copies
-// used "" as its not-found sentinel and cannot record an empty verb; the computed
-// field treats it AS the verb, which is what launchctl itself would do, and then declines to fire. The difference is a deliberate
-// correction rather than a regression: `launchctl "" load x.plist` loads nothing, so firing on it is a false positive. It is also in
-// the safe direction, and the shape does not occur in real telemetry (of 59 empty-argument execs on a dev host, every one was
-// `sudo -p ""`, and none was launchctl).
-func skipsAnEmptyBeforeItsSubcommand(argv []string) bool {
-	for i, a := range argv {
-		if i == 0 || strings.HasPrefix(a, "-") {
-			continue
-		}
-		return a == ""
-	}
-	return false
-}
-
 // evalCompiled evaluates an already-compiled detection against an exec event. Used for a rule that has been converted, so the
 // property tests the detection the pack actually ships rather than a copy of it in this file.
 func evalCompiled(t require.TestingT, rule *sigma.Rule, path string, argv []string) bool {
@@ -195,54 +175,18 @@ func legacyKeychainFires(path string, argv []string) bool {
 	return ok
 }
 
-// legacyExtractLaunchctlSubcommand and legacyMatchDyldArg are the launch-agent and DYLD matchers as they stood before conversion,
-// frozen here for the same reason as the keychain one: the gate #761 asks for is only checkable while both implementations exist.
+// legacyMatchDyldArg is the DYLD matcher as it stood before conversion, frozen here for the same reason as the keychain one: the
+// gate #761 asks for is only checkable while both implementations exist.
 //
-// legacyLaunchctlPaths is the binary set the launch-agent rule required. Freezing it matters as much as the argv half. In #793 the
-// property compared only the argv half of the keychain rule and left the binary check outside the gate, so a widening of
-// selection_binary would have passed unnoticed; review caught it. These properties compare the complete conjunction from the start.
-var legacyLaunchctlPaths = map[string]bool{"/bin/launchctl": true, "/usr/bin/launchctl": true}
-
-// Frozen COPIES of the values the pre-conversion rules matched against, deliberately not the live launchAgentPath and
-// dyldPrefixes that production still uses.
+// legacyDyldPrefixes is a frozen COPY of the values the pre-conversion rule matched against, deliberately not the live dyldPrefixes that production still
+// uses.
 //
 // This is the difference between an oracle and a mirror. Review caught that the first version of these helpers read the live
 // symbols: a change to either would have moved both sides of the property together, and it would have kept passing while the
 // rule's meaning changed. Frozen literals mean the property compares the built-in detection against what the rule detected on the
 // day it was converted, which is the only comparison worth making. TestLiveSymbolsStillAgreeWithTheBuiltInDetections ties the live
 // values back to the detection separately, so the two are kept in step without either one being able to hide a drift.
-var legacyLaunchAgentPath = regexp.MustCompile(`(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$`)
-
 var legacyDyldPrefixes = []string{"DYLD_INSERT_LIBRARIES=", "DYLD_LIBRARY_PATH="}
-
-func legacyExtractLaunchctlSubcommand(args []string) (subcommand, plistPath string) {
-	for i := 1; i < len(args); i++ {
-		if args[i] == "" || strings.HasPrefix(args[i], "-") {
-			continue
-		}
-		if subcommand == "" {
-			subcommand = args[i]
-			continue
-		}
-		if legacyLaunchAgentPath.MatchString(args[i]) {
-			return subcommand, args[i]
-		}
-	}
-	return subcommand, ""
-}
-
-// legacyLaunchAgentFires is the COMPLETE pre-conversion predicate: the exact binary, a registering subcommand, and a LaunchAgent
-// plist among the later arguments.
-func legacyLaunchAgentFires(path string, argv []string) bool {
-	if !legacyLaunchctlPaths[path] {
-		return false
-	}
-	sub, plist := legacyExtractLaunchctlSubcommand(argv)
-	if sub != "load" && sub != "bootstrap" {
-		return false
-	}
-	return plist != "" && legacyLaunchAgentPath.MatchString(plist)
-}
 
 // legacyMatchDyldArg is the reference the property compares the built-in detection against.
 //
@@ -316,38 +260,9 @@ func TestEquivalence_KeychainDump(t *testing.T) {
 	})
 }
 
-// TestEquivalence_LaunchAgent: as above, with one documented exception.
-//
-// The exception is asserted rather than excused: where the two differ, the input MUST be the known empty-token shape, and the
-// difference MUST be Go firing where the detection does not. That keeps the carve-out from hiding any other divergence, and pins
-// that the correction only ever removes findings.
-func TestEquivalence_LaunchAgent(t *testing.T) {
-	t.Parallel()
-
-	rapid.Check(t, func(t *rapid.T) {
-		argv := drawArgv(t)
-		path := rapid.SampledFrom([]string{
-			"/bin/launchctl", "/usr/bin/launchctl", "/usr/local/bin/launchctl", "/bin/LAUNCHCTL", "/tmp/launchctl", "/bin/sh",
-		}).Draw(t, "path")
-
-		goFires := legacyLaunchAgentFires(path, argv)
-		sigmaFires := evalCompiled(t, launchAgentDetection(), path, argv)
-
-		if goFires != sigmaFires {
-			require.True(t, skipsAnEmptyBeforeItsSubcommand(argv),
-				"undocumented divergence: path=%q argv=%q go=%v sigma=%v", path, argv, goFires, sigmaFires)
-			require.True(t, goFires && !sigmaFires,
-				"the correction must only ever remove findings, never add them: path=%q argv=%q", path, argv)
-			return
-		}
-		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
-	})
-}
-
 // TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries, with THREE documented exceptions.
 //
-// The exception runs the OPPOSITE way to the launch-agent one, which is why it is stated separately rather than folded into the
-// same helper. That conversion only ever removes findings; this one deliberately ADDS them. #792 fixed a bug in the Go matcher,
+// Unlike the other conversions, which only ever removed findings, this one deliberately ADDS them. #792 fixed a bug in the Go matcher,
 // which stopped its scan at env's first option and so reported nothing for `env -i DYLD_INSERT_LIBRARIES=x prog`, an injection it
 // was written to catch. The frozen oracle in this file still reproduces that bug on purpose, since its job is to say what the Go
 // matcher did rather than what it should have done.
@@ -453,28 +368,11 @@ func hidesAnAssignmentBehindAnEnvOption(path string, argv []string) bool {
 	return false
 }
 
-// spec:server-detection-rules-engine/converting-a-rule-may-narrow-what-it-detects-never-widen-it/a-conversion-removes-a-finding-rather-than-adding-one
-//
-// TestLaunchAgentEmptySubcommandIsTheOneDeliberateChange pins the exception as an example, so the behaviour change is visible in a
-// named test rather than living only inside a property's escape hatch.
-func TestLaunchAgentEmptySubcommandIsTheOneDeliberateChange(t *testing.T) {
-	t.Parallel()
-
-	argv := []string{"launchctl", "", "load", "/Library/LaunchAgents/evil.plist"}
-
-	sub, plist := legacyExtractLaunchctlSubcommand(argv)
-	require.Equal(t, "load", sub, "the Go matcher skipped the empty token and reached load")
-	require.NotEmpty(t, plist)
-
-	require.False(t, evalCompiled(t, launchAgentDetection(), "/bin/launchctl", argv),
-		"the computed field treats the empty token as the verb, which is what launchctl would do, so the rule declines")
-}
-
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
 //
 // TestEnvOptionPrefixIsTheOtherDeliberateChange pins the dyld divergence as an example, so the behaviour change is visible in a
-// named test rather than living only inside a property's escape hatch. Same reason as the launch-agent one above, and the same
-// shape of evidence, but the opposite direction: this conversion ADDS a finding the Go matcher missed.
+// named test rather than living only inside a property's escape hatch. This conversion ADDS a finding the Go matcher missed, the
+// opposite direction to the removal pinned below.
 //
 // It also covers a gap mutation testing exposed in the property. Disabling the generator's env shape leaves the property passing
 // vacuously, because nothing else it draws reaches the divergence, and no assertion inside the property can notice that. This test
@@ -542,12 +440,6 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", lower))
 	require.NotEmpty(t, legacyMatchDyldArg("/usr/bin/env", upper))
 	require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", upper))
-
-	// The binary half of the launch-agent rule, the same trap #793's review found in the keychain one.
-	require.False(t, legacyLaunchAgentFires("/bin/LAUNCHCTL", []string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}))
-	require.False(t, evalCompiled(t, launchAgentDetection(), "/bin/LAUNCHCTL",
-		[]string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}),
-		"the built-in detection must not fold case on Image either")
 }
 
 // TestBuiltInDetectionMatchesTheFrozenTokens ties the frozen oracle to the shipped file. The subcommand set moved out of Go and into
@@ -571,9 +463,8 @@ func TestBuiltInDetectionMatchesTheFrozenTokens(t *testing.T) {
 // TestLiveSymbolsStillAgreeWithTheBuiltInDetections keeps the values production still reads in step with the detection blocks that
 // now decide the rules.
 //
-// Two symbols survived their rules' conversion because a finding has to NAME what fired and the evaluator reports only that some
-// element matched: launchAgentPath re-finds which argument was the plist, and dyldPrefixes re-finds which assignment was the DYLD
-// one. Both therefore restate a criterion the detection block already owns, and review was right that this is a drift path. Until
+// dyldPrefixes survived its rule's conversion because a finding has to NAME what fired and the evaluator reports only that some
+// element matched: it re-finds which assignment was the DYLD one. It therefore restates a criterion the detection block already owns, and review was right that this is a drift path. Until
 // the evaluator can report the matched element (issue #796), these assertions are what stops the two descriptions of one criterion
 // from parting company: a detection widened without the Go symbol would produce findings with an empty variable or path.
 func TestLiveSymbolsStillAgreeWithTheBuiltInDetections(t *testing.T) {
@@ -597,19 +488,6 @@ func TestLiveSymbolsStillAgreeWithTheBuiltInDetections(t *testing.T) {
 			}
 			require.Contains(t, dyldPrefixes, candidate,
 				"the detection fires on %q but dyldPrefixes cannot name it, so the finding would be blank", candidate)
-		}
-	})
-
-	t.Run("launchAgentPath agrees with the detection's target criterion", func(t *testing.T) {
-		t.Parallel()
-		paths := []string{
-			"/Library/LaunchAgents/x.plist", "/Users/victor/Library/LaunchAgents/x.plist",
-			"/tmp/x.plist", "/Library/LaunchDaemons/x.plist", "/Library/LaunchAgents/x.txt",
-		}
-		for _, path := range paths {
-			viaDetection := evalCompiled(t, launchAgentDetection(), "/bin/launchctl", []string{"launchctl", "load", path})
-			require.Equalf(t, launchAgentPath.MatchString(path), viaDetection,
-				"the Go regexp and the detection must agree on %q, or the alert would name a path the rule did not fire on", path)
 		}
 	})
 }
@@ -748,12 +626,14 @@ func isNameSudoSkips(path string) bool {
 	return strings.Contains(base, ".") || strings.HasSuffix(base, "~")
 }
 
+// spec:server-detection-rules-engine/converting-a-rule-may-narrow-what-it-detects-never-widen-it/a-conversion-removes-a-finding-rather-than-adding-one
+//
 // TestEquivalence_SudoersTamper compares the built-in detection against the frozen oracle across paths, flag combinations and
 // writers, with ONE documented exception (#801).
 //
 // The exception is a lock taken by someone other than sudo: write access with no content-changing bits. The oracle fires on it,
 // because its suppression named sudo alone; the adapter now withholds TargetFilename for every such open, so the rule cannot see
-// it. Asserted rather than excused, the way the launch-agent and dyld carve-outs are: where the two differ the input MUST be that
+// it. Asserted rather than excused, the way the dyld carve-outs are: where the two differ the input MUST be that
 // shape, and the difference MUST be the detection declining where Go fired. Any other divergence, in either direction, fails.
 //
 // The flag space is chosen deliberately: read-only, write-without-intent (a lock), and write-with-intent are the three cases the

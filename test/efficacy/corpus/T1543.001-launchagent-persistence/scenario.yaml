@@ -1,25 +1,25 @@
 # T1543.001 Create or Modify System Process: Launch Agent.
 #
-# Synthetic attacker invokes /bin/launchctl load against a plist path. The
-# persistence_launchagent rule matches `path == /bin/launchctl` plus the
-# `load` subcommand argument, fires a high severity alert. Mirrors the rule's
-# positive shape with a single fork+exec pair: no upstream chain required.
-name: "T1543.001 persistence via launchctl load <plist>"
+# A LaunchAgent is registered via Background Task Management (ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, item_type=agent)
+# whose registered program is unsigned. persistence_launchagent fires on the unmanaged registration of a non-Apple,
+# non-excluded program, however the plist became active: no launchctl exec is needed, which is the shape the rule used to
+# miss. Mirrors the positive_untrusted_agent_executable fixture.
+name: "T1543.001 LaunchAgent registration of an unsigned program"
 host:
   id: AAAA1543-0001-0000-0000-000000000001
   hostname: efficacy-t1543-001.local
   os: macOS 26.0
 timeline:
   - at: 0ms
-    type: fork
-    child_pid: 4543
-    parent_pid: 1
-  - at: 10ms
-    type: exec
-    pid: 4543
-    ppid: 1
-    path: /bin/launchctl
-    args: ["launchctl", "load", "/Users/victor/Library/LaunchAgents/com.synth.persist.plist"]
-    cwd: /Users/victor
+    type: btm_launch_item_add
+    item_type: agent
+    item_path: /Users/victor/Library/LaunchAgents/com.acme.persist.plist
+    executable_path: /Users/victor/.local/share/persist
+    executable_code_signing_present: true
+    executable_team_id: ""
+    executable_is_platform_binary: false
+    instigator_pid: 93
+    instigator_team_id: ""
+    instigator_is_platform_binary: true
     uid: 501
     gid: 20

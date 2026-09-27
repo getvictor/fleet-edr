@@ -2,9 +2,6 @@ package catalog
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/fleetdm/edr/server/rules/api"
@@ -128,29 +125,12 @@ func (r *PrivilegeLaunchdPlistWrite) Evaluate(
 func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	_ context.Context, evt api.Event, _ api.GraphReader,
 ) (*api.Finding, error) {
-	if evt.EventType != "btm_launch_item_add" {
+	// System-domain LaunchDaemons only (T1543.004). LaunchAgents are persistence_launchagent's, on the same gate.
+	p, ok := untrustedRegistration(evt, "daemon")
+	if !ok {
 		return nil, nil
 	}
-	var p btmLaunchItemAddPayload
-	if err := json.Unmarshal(evt.Payload, &p); err != nil {
-		// Malformed BTM events are noise from a misbehaving extension build, not a detection signal. Drop and move on.
-		return nil, nil
-	}
-	// System-domain LaunchDaemons only (T1543.004). LaunchAgents / login items are other techniques, handled elsewhere.
-	if p.ItemType != "daemon" {
-		return nil, nil
-	}
-	// MDM-managed daemons are operator-deployed by definition.
-	if p.Managed {
-		return nil, nil
-	}
-	// The decision rides the REGISTERED EXECUTABLE's code-signing, not the instigator (which is Apple's smd for a
-	// launchctl-bootstrap registration; ADR-0008 amendment). No executable signing → we cannot classify the binary →
-	// skip to stay high-precision (the executable is normally present and readable at registration).
-	if p.ExecutableCodeSigning == nil {
-		return nil, nil
-	}
-	if r.allowed(*p.ExecutableCodeSigning, evt.HostID) {
+	if r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchTeamID, p.ExecutableCodeSigning.TeamID, evt.HostID) {
 		return nil, nil
 	}
 
@@ -179,26 +159,6 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 // than the column would fail the INSERT or silently truncate (and then collide), dropping the finding.
 const subjectColumnLimit = 255
 
-// launchDaemonSubject builds the process-less dedup subject for a LaunchDaemon registration. It keeps the human-readable
-// "launchdaemon:<item path>" form for the common case, and falls back to a fixed-length SHA-256 of the path when the
-// readable form would overflow alerts.subject. The hash is stable per item path, so dedup still collapses repeat
-// registrations of the same daemon while keeping distinct daemons distinct.
-func launchDaemonSubject(itemPath string) string {
-	subject := "launchdaemon:" + itemPath
-	if len(subject) <= subjectColumnLimit {
-		return subject
-	}
-	sum := sha256.Sum256([]byte(itemPath))
-	return "launchdaemon:sha256:" + hex.EncodeToString(sum[:])
-}
-
-// allowed returns true when the registered executable's code-signing identity is trusted for hostID: an Apple platform binary, or a
-// binary whose team ID matches a team_id exclusion. Either short-circuits the finding. Notarization is deliberately not a trust
-// signal here (Apple notarizes malware, and it is not checkable network-free on the ES thread); operator trust is the team-ID
-// exclusion list, and any notarization/reputation scoring belongs server-side off the hot path.
-func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON, hostID string) bool {
-	if cs.IsPlatformBinary {
-		return true
-	}
-	return r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchTeamID, cs.TeamID, hostID)
-}
+// launchDaemonSubject is the daemon rule's dedup subject. Its form is unchanged from before the gate was shared, so an alert raised
+// before an upgrade still collapses a repeat registration after it.
+func launchDaemonSubject(itemPath string) string { return btmItemSubject("launchdaemon", itemPath) }

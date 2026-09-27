@@ -22,7 +22,8 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `suspicious_exec` | `parent_path_glob`, `team_id`, `signing_id`, `cdhash` | The chain's non-shell parent |
 | `shell_network_connect` | `parent_path_glob`, `team_id`, `signing_id`, `cdhash` | The chain's non-shell parent |
 | `privilege_launchd_plist_write` | `team_id` | The registered daemon's executable |
-| `persistence_launchagent` | `path_glob` | The plist path as typed on the launchctl command |
+| `persistence_launchagent` | `team_id`, `signing_id` | The program the LaunchAgent registers |
+| `persistence_launchagent` | `path_glob` | The LaunchAgent's plist |
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
 | `dns_c2_beacon` | `domain` | The domain the process looked up before connecting |
@@ -61,10 +62,11 @@ Know what it costs. The 30-second window starts when the login shell starts, so 
 | --- | --- | --- | --- | --- |
 | `shell_network_connect` | `parent_path_glob` | `/usr/bin/login` | Workstations only | Interactive terminal logins spawn a shell that routinely reaches the network. Interim until host-class profiles exist. |
 | `privilege_launchd_plist_write` | `team_id` | `FDG8Q7N4CC` | All hosts | The EDR agent's own LaunchDaemon registration. Signed by the EDR vendor team; allowlist so the agent does not flag its own persistence. |
+| `persistence_launchagent` | `team_id` | `FDG8Q7N4CC` | All hosts | The EDR's own activation LaunchAgent. Not needed where the background items profile is installed, which marks it managed. |
 
 Do not add the `/usr/bin/login` exclusion to `suspicious_exec`: there it only silences temp-directory executions during shell startup, which is the shell-profile persistence case above.
 
-The `FDG8Q7N4CC` entry is the only one keyed on a team ID because `privilege_launchd_plist_write` accepts only team IDs. It should ideally be seeded at install time so a freshly deployed agent does not alert on its own daemon registration. Verify the team on the installed binary with `codesign -dv /usr/local/bin/fleet-edr-agent` before relying on it.
+The `FDG8Q7N4CC` entries are keyed on the team ID because that is what survives an upgrade of the agent. They should ideally be seeded at install time so a freshly deployed agent does not alert on its own registrations. Verify the team on the installed binary with `codesign -dv /usr/local/bin/fleet-edr-agent` before relying on it.
 
 ## Environment-specific exclusions
 
