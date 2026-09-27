@@ -13,8 +13,12 @@ ALTER TABLE detection_exclusions
 -- +goose StatementEnd
 
 -- +goose Down
+-- Two blocks, not one: goose sends a block as a single query, and the connection does not enable multiStatements.
 -- +goose StatementBegin
 DELETE FROM detection_exclusions WHERE match_type = 'package_team_id';
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 ALTER TABLE detection_exclusions
 	MODIFY COLUMN match_type ENUM('path_glob','parent_path_glob','team_id','signing_id','cdhash','sha256','command_substring','domain')
 		NOT NULL;
