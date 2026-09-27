@@ -3,4 +3,4 @@
 - [x] Remove the rule's Sigma detection block and the conversion tests that pinned it; re-home their spec markers on the remaining conversions
 - [x] Replace the fixtures, the L6 efficacy and demo scenarios, and the attack runbook step with agent registrations
 - [x] Operator docs, the generated rule reference and the rule pack
-- [ ] Run the attack runbook's LaunchAgent step on a VM and confirm the alert
+- [x] Run the attack runbook's LaunchAgent step on a VM and confirm the alert (edr-dev, 2026-09-27)
