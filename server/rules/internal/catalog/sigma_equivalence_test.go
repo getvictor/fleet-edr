@@ -31,10 +31,9 @@ import (
 // strings would essentially never produce a match, and the test would pass while exercising nothing.
 
 // The generated argv is drawn by CATEGORY first and then by token, rather than uniformly from one flat list. That matters more than
-// it looks: the empty string is the single token the two implementations disagree about, and in a flat 23-token vocabulary the
-// three-token shape that exposes the disagreement turns up about once in 28,000 draws, so a 100-case run passes while never
-// reaching it. Drawing a category first gives the empty string its own sixth of the probability mass, and the property below
-// actually fails without the documented exception.
+// it looks: a disagreement between two implementations usually needs one rare token in one specific position, and in a flat
+// vocabulary such a shape turns up so seldom that a 100-case run passes while never reaching it. Drawing a category first gives
+// each rare kind of token (the empty string among them) its own share of the probability mass.
 var argvCategories = map[string][]string{
 	"flag":       {"-v", "-q", "-w", "-S", "-p"},
 	"subcommand": {"dump-keychain", "help", "list-keychains", "load", "bootstrap", "print", "unload"},
@@ -57,13 +56,13 @@ var envOptionTokens = []string{"-i", "-v", "-u", "PATH", "-uPATH", "--", "-", "-
 // drawArgv models a command INVOCATION rather than emitting token soup, and that distinction decides whether this test is worth
 // anything.
 //
-// A first attempt drew each position independently from a flat vocabulary. It passed, and it was worthless: the shape that exposes
-// the one real divergence between the two launch-agent implementations needs an empty token in one specific position, a verb in the
-// next and a matching plist after that, which independent draws reach about once in 2,600 cases. Against a 100-case run the property
-// passed while never once exercising its own exception, and a mutation that removed the exception entirely still passed.
+// A first attempt drew each position independently from a flat vocabulary. It passed, and it was worthless: the shapes that expose a
+// divergence need particular tokens in particular positions (an env option before a DYLD assignment, for instance), which
+// independent draws reach so rarely that a 100-case run never exercised its own exceptions, and a mutation removing an exception
+// still passed.
 //
-// Modelling the invocation gives each discriminating choice its own draw, so the divergence turns up in roughly a tenth of cases.
-// The mutation now fails, which is the only evidence that the property is testing anything. A quarter of draws stay free-form so
+// Modelling the invocation gives each discriminating choice its own draw, so the divergences turn up regularly and a mutation that
+// removes an exception fails, which is the only evidence that the property is testing anything. A quarter of draws stay free-form so
 // shapes not modelled here still occur.
 func drawArgv(t *rapid.T) []string {
 	if rapid.IntRange(0, 3).Draw(t, "freeform") == 0 {
@@ -176,10 +175,10 @@ func legacyKeychainFires(path string, argv []string) bool {
 	return ok
 }
 
-// legacyExtractLaunchctlSubcommand and legacyMatchDyldArg are the launch-agent and DYLD matchers as they stood before conversion,
-// frozen here for the same reason as the keychain one: the gate #761 asks for is only checkable while both implementations exist.
+// legacyMatchDyldArg is the DYLD matcher as it stood before conversion, frozen here for the same reason as the keychain one: the
+// gate #761 asks for is only checkable while both implementations exist.
 //
-// A frozen COPY of the values the pre-conversion rule matched against, deliberately not the live dyldPrefixes that production still
+// legacyDyldPrefixes is a frozen COPY of the values the pre-conversion rule matched against, deliberately not the live dyldPrefixes that production still
 // uses.
 //
 // This is the difference between an oracle and a mirror. Review caught that the first version of these helpers read the live
@@ -396,7 +395,6 @@ func TestEnvOptionPrefixIsTheOtherDeliberateChange(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
-// spec:server-detection-rules-engine/converting-a-rule-may-narrow-what-it-detects-never-widen-it/a-conversion-removes-a-finding-rather-than-adding-one
 //
 // TestEnvRefusalRemovesAFindingDeterministically is the removed-finding direction of the same divergence, pinned by name for the
 // same reason as its sibling: mutation testing showed the property reaches this only because the generator draws the shape, and no
@@ -628,12 +626,14 @@ func isNameSudoSkips(path string) bool {
 	return strings.Contains(base, ".") || strings.HasSuffix(base, "~")
 }
 
+// spec:server-detection-rules-engine/converting-a-rule-may-narrow-what-it-detects-never-widen-it/a-conversion-removes-a-finding-rather-than-adding-one
+//
 // TestEquivalence_SudoersTamper compares the built-in detection against the frozen oracle across paths, flag combinations and
 // writers, with ONE documented exception (#801).
 //
 // The exception is a lock taken by someone other than sudo: write access with no content-changing bits. The oracle fires on it,
 // because its suppression named sudo alone; the adapter now withholds TargetFilename for every such open, so the rule cannot see
-// it. Asserted rather than excused, the way the launch-agent and dyld carve-outs are: where the two differ the input MUST be that
+// it. Asserted rather than excused, the way the dyld carve-outs are: where the two differ the input MUST be that
 // shape, and the difference MUST be the detection declining where Go fired. Any other divergence, in either direction, fails.
 //
 // The flag space is chosen deliberately: read-only, write-without-intent (a lock), and write-with-intent are the three cases the
