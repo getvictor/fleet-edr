@@ -168,7 +168,11 @@ enum WatchedPaths {
         var accounts: [(uid: uid_t, directory: String)] = []
         setpwent()
         while let entry = getpwent() {
-            accounts.append((entry.pointee.pw_uid, String(cString: entry.pointee.pw_dir)))
+            // A directory-service account can come without a home, and reading a NULL pw_dir would crash the extension.
+            guard let directory = entry.pointee.pw_dir else {
+                continue
+            }
+            accounts.append((entry.pointee.pw_uid, String(cString: directory)))
         }
         endpwent()
         return homes(of: accounts)
