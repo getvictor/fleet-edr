@@ -13,6 +13,8 @@ package enrich
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
+	"strings"
 
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/pkgsign"
@@ -29,11 +31,20 @@ type Evaluator func(path string) (*codesign.Result, bool)
 const btmEventType = "btm_launch_item_add"
 
 // BtmExecutableSigning returns data with the btm_launch_item_add payload's
-// executable_code_signing filled from eval(executable_path), or data unchanged
-// when there is nothing to do. It is conservative and non-destructive:
+// executable_code_signing filled from the executable the item registers, or
+// data unchanged when there is nothing to do. That executable is
+// executable_path, or for a login item, which BTM reports with none, the
+// helper app bundle the item names (issue #1167).
 //
-//   - non-btm events, malformed JSON, a missing payload, or a missing
-//     executable_path are passed through untouched;
+// It first resolves an item path that BTM reports relative to its app: an
+// SMAppService item is named inside the registering app's bundle
+// (Contents/Library/LoginItems/Helper.app), and app_url is that bundle. The
+// resolved file:// URL replaces item_path, so the server sees where the item is.
+//
+// It is conservative and non-destructive:
+//
+//   - non-btm events, malformed JSON, and a missing payload are passed
+//     through untouched, as is a registration with nothing to sign;
 //   - an already-present, non-null executable_code_signing is left as-is
 //     (the source, e.g. a synthetic test feed, stays authoritative);
 //   - when eval reports the executable is unreadable, the field stays unset so
@@ -43,19 +54,76 @@ const btmEventType = "btm_launch_item_add"
 // round-tripping through map[string]json.RawMessage.
 func BtmExecutableSigning(data []byte, eval Evaluator) []byte {
 	envelope, payload, ok := decodeEvent(data, btmEventType)
-	if !ok || hasField(payload, "executable_code_signing") {
+	if !ok {
 		return data
 	}
-	var executablePath string
-	if err := json.Unmarshal(payload["executable_path"], &executablePath); err != nil || executablePath == "" {
+	itemURL := stringField(payload, "item_path")
+	if resolved, ok := resolveItemURL(itemURL, stringField(payload, "app_url")); ok {
+		itemURL = resolved
+		data = encodeEvent(data, envelope, payload, "item_path", itemURL)
+	}
+	if hasField(payload, "executable_code_signing") {
 		return data
 	}
-	result, ok := eval(executablePath)
+	path := registeredExecutable(payload, itemURL)
+	if path == "" {
+		return data
+	}
+	result, ok := eval(path)
 	if !ok || result == nil {
 		// Unreadable executable: leave executable_code_signing unset. The rule skips a registration it cannot classify.
 		return data
 	}
 	return encodeEvent(data, envelope, payload, "executable_code_signing", result)
+}
+
+// btmLoginItem is the item type BTM reports with no executable_path: the item is a helper app bundle, which is what is signed.
+const btmLoginItem = "login_item"
+
+// resolveItemURL resolves an item URL that is relative to appURL, the registering app's bundle as a file:// URL (BTM reports it
+// with a trailing slash). ok is false for an
+// item URL that is already absolute, or when there is no app to resolve it against.
+func resolveItemURL(itemURL, appURL string) (string, bool) {
+	item, err := url.Parse(itemURL)
+	if err != nil || itemURL == "" || item.IsAbs() {
+		return "", false
+	}
+	app, err := url.Parse(appURL)
+	if err != nil || app.Scheme != "file" {
+		return "", false
+	}
+	// The app is a bundle, so a directory. Without the trailing slash, resolution would replace the bundle's name rather than
+	// descend into it.
+	if !strings.HasSuffix(app.Path, "/") {
+		app.Path += "/"
+		app.RawPath = ""
+	}
+	return app.ResolveReference(item).String(), true
+}
+
+// registeredExecutable is the path whose signature decides a registration: executable_path when BTM reports one, else the bundle a
+// login item names, as a filesystem path. "" when there is neither.
+func registeredExecutable(payload map[string]json.RawMessage, itemURL string) string {
+	if path := stringField(payload, "executable_path"); path != "" {
+		return path
+	}
+	if stringField(payload, "item_type") != btmLoginItem {
+		return ""
+	}
+	item, err := url.Parse(itemURL)
+	if err != nil || item.Scheme != "file" {
+		return ""
+	}
+	return item.Path
+}
+
+// stringField is the payload's string value for key, or "" when it is absent, null, or not a string.
+func stringField(payload map[string]json.RawMessage, key string) string {
+	var v string
+	if err := json.Unmarshal(payload[key], &v); err != nil {
+		return ""
+	}
+	return v
 }
 
 // PackageEvaluator reads the signature of the package at pkgPath for the installer script at scriptPath. Production passes
