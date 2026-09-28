@@ -1,0 +1,27 @@
+{
+  "events": [
+    {
+      "event_id": "li-app",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6400,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "app",
+        "item_path": "file:///Users/victor/Applications/EdrLegacyTest.app/",
+        "executable_path": "",
+        "legacy": false,
+        "managed": false,
+        "uid": 501,
+        "executable_code_signing": {"team_id": "", "signing_id": "com.example.edrlegacytest", "flags": 0, "is_platform_binary": false}
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "persistence_login_item",
+      "severity": "medium",
+      "description_contains": "Untrusted app /Users/victor/Applications/EdrLegacyTest.app registered as a login item",
+      "event_ids": ["li-app"]
+    }
+  ]
+}

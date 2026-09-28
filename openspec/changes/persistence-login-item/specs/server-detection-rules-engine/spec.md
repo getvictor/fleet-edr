@@ -1,14 +1,21 @@
 ## ADDED Requirements
 
-### Requirement: Login item persistence judged on the helper
+### Requirement: Login item persistence judged on its app
 
-The `persistence_login_item` rule SHALL fire on a `btm_launch_item_add` event with `item_type=login_item` that is not MDM-managed and whose `executable_code_signing`, the helper app bundle's code signature, is present and not an Apple platform binary. It SHALL NOT fire on a registration whose helper's signature is absent, or on any other item type. The finding SHALL name the helper by its bundle's filesystem path, carry no process, and deduplicate per helper. An exclusion for the rule SHALL suppress it by the helper's team, by its signing identifier qualified by that team, or by a path glob on the helper bundle's filesystem path.
+The `persistence_login_item` rule SHALL fire on a `btm_launch_item_add` event with `item_type=login_item` (a helper an app registers from inside its bundle) or `item_type=app` (an app added to the user's login items) that is not MDM-managed and whose `executable_code_signing`, the code signature of the app bundle the item names, is present and not an Apple platform binary. It SHALL NOT fire on a registration whose signature is absent, or on any other item type. The finding SHALL name the app by its bundle's filesystem path, without a trailing slash, carry no process, and deduplicate per app. An exclusion for the rule SHALL suppress it by the app's team, by its signing identifier qualified by that team, or by a path glob on the bundle's filesystem path.
 
 #### Scenario: An untrusted login item fires
 
 - **GIVEN** a login-item registration that is not MDM-managed, whose helper is ad-hoc signed
 - **WHEN** detection evaluates the event
 - **THEN** `persistence_login_item` raises a medium-severity finding naming the helper bundle's path, with no process
+
+#### Scenario: An untrusted app added to the login items fires
+
+- **GIVEN** a registration of `item_type=app` naming an app bundle as `file:///Users/alice/Applications/Tool.app/`, whose signature is ad hoc
+- **WHEN** detection evaluates the event
+- **THEN** `persistence_login_item` raises a finding naming `/Users/alice/Applications/Tool.app`
+- **AND** a path-glob exclusion for `/Users/alice/Applications/Tool.app` suppresses it
 
 #### Scenario: An Apple or managed login item does not fire
 

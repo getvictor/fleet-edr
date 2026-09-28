@@ -21,7 +21,7 @@ func evaluateLoginItem(t *testing.T, excl api.ExclusionResolver, events ...api.E
 // agent as a bundle, since BTM reports no executable for a login item.
 const loginItemHelper = "/Users/alice/Applications/Tool.app/Contents/Library/LoginItems/ToolHelper.app"
 
-// spec:server-detection-rules-engine/login-item-persistence-judged-on-the-helper/an-untrusted-login-item-fires
+// spec:server-detection-rules-engine/login-item-persistence-judged-on-its-app/an-untrusted-login-item-fires
 func TestPersistenceLoginItem_AnUntrustedLoginItemFires(t *testing.T) {
 	t.Parallel()
 	evt := btmRegistrationEvent(t, "login_item", loginItemHelper, "", &codeSigningJSON{SigningID: "com.example.toolhelper"}, false)
@@ -42,7 +42,27 @@ func TestPersistenceLoginItem_AnUntrustedLoginItemFires(t *testing.T) {
 	assert.Empty(t, evaluateLoginItem(t, nil, agent), "a LaunchAgent is persistence_launchagent's to judge")
 }
 
-// spec:server-detection-rules-engine/login-item-persistence-judged-on-the-helper/an-apple-or-managed-login-item-does-not-fire
+// spec:server-detection-rules-engine/login-item-persistence-judged-on-its-app/an-untrusted-app-added-to-the-login-items-fires
+//
+// The app shape, captured on a VM from both SMAppService.mainApp and the legacy login-items list: the item is the app bundle,
+// reported with a trailing slash, and the agent signs it. The finding and the subject name it without the slash, the way an operator
+// writes the path.
+func TestPersistenceLoginItem_AnUntrustedAppAddedToTheLoginItemsFires(t *testing.T) {
+	t.Parallel()
+	evt := btmRegistrationEvent(t, "app", "/Users/alice/Applications/Tool.app/", "", &codeSigningJSON{SigningID: "com.example.tool"}, false)
+	findings := evaluateLoginItem(t, nil, evt)
+
+	require.Len(t, findings, 1)
+	assert.Equal(t, "Untrusted app /Users/alice/Applications/Tool.app registered as a login item", findings[0].Description)
+	assert.Equal(t, "loginitem:/Users/alice/Applications/Tool.app", findings[0].Subject)
+
+	excl := &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "persistence_login_item", matchType: api.ExclusionMatchPathGlob, value: "/Users/alice/Applications/Tool.app"},
+	}}
+	assert.Empty(t, evaluateLoginItem(t, excl, evt), "a path exclusion written without the slash matches")
+}
+
+// spec:server-detection-rules-engine/login-item-persistence-judged-on-its-app/an-apple-or-managed-login-item-does-not-fire
 func TestPersistenceLoginItem_AppleAndManagedHelpersDoNotFire(t *testing.T) {
 	t.Parallel()
 	apple := btmRegistrationEvent(t, "login_item", "/System/Applications/Tool.app/Contents/Library/LoginItems/Helper.app", "",
@@ -51,7 +71,7 @@ func TestPersistenceLoginItem_AppleAndManagedHelpersDoNotFire(t *testing.T) {
 	assert.Empty(t, evaluateLoginItem(t, nil, apple, managed))
 }
 
-// spec:server-detection-rules-engine/login-item-persistence-judged-on-the-helper/a-login-item-with-no-signature-is-skipped
+// spec:server-detection-rules-engine/login-item-persistence-judged-on-its-app/a-login-item-with-no-signature-is-skipped
 //
 // An agent from before issue #1167 sends a login item as BTM reports it: relative to its app and with no signature, since there is
 // no executable path to sign. Nothing about it can be judged, and firing on every such registration would be noise.
@@ -65,7 +85,7 @@ func TestPersistenceLoginItem_ALoginItemWithNoSignatureIsSkipped(t *testing.T) {
 	assert.Empty(t, evaluateLoginItem(t, nil, evt))
 }
 
-// spec:server-detection-rules-engine/login-item-persistence-judged-on-the-helper/a-vendor-login-item-is-waived-by-its-signer-or-path
+// spec:server-detection-rules-engine/login-item-persistence-judged-on-its-app/a-vendor-login-item-is-waived-by-its-signer-or-path
 func TestPersistenceLoginItem_Waived(t *testing.T) {
 	t.Parallel()
 	const rule = "persistence_login_item"

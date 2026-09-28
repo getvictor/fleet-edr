@@ -26,8 +26,8 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `privilege_launchd_plist_write` | `team_id` | The registered daemon's executable |
 | `persistence_launchagent` | `team_id`, `signing_id` | The program the LaunchAgent registers |
 | `persistence_launchagent` | `path_glob` | The LaunchAgent's plist |
-| `persistence_login_item` | `team_id`, `signing_id` | The helper app the login item launches |
-| `persistence_login_item` | `path_glob` | The helper app's bundle |
+| `persistence_login_item` | `team_id`, `signing_id` | The app the login item launches |
+| `persistence_login_item` | `path_glob` | The app's bundle |
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
 | `dns_c2_beacon` | `domain` | The domain the process looked up before connecting |
