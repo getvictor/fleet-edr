@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/fleetdm/edr/agent/codesign"
@@ -33,8 +34,8 @@ const btmEventType = "btm_launch_item_add"
 // BtmExecutableSigning returns data with the btm_launch_item_add payload's
 // executable_code_signing filled from the executable the item registers, or
 // data unchanged when there is nothing to do. That executable is
-// executable_path, or for a login item, which BTM reports with none, the
-// helper app bundle the item names (issue #1167).
+// executable_path, or for a login item or an app, which BTM reports with
+// none, the app bundle the item names (issue #1167).
 //
 // It first resolves an item path that BTM reports relative to its app: an
 // SMAppService item is named inside the registering app's bundle
@@ -77,8 +78,10 @@ func BtmExecutableSigning(data []byte, eval Evaluator) []byte {
 	return encodeEvent(data, envelope, payload, "executable_code_signing", result)
 }
 
-// btmLoginItem is the item type BTM reports with no executable_path: the item is a helper app bundle, which is what is signed.
-const btmLoginItem = "login_item"
+// bundleItemTypes are the item types BTM reports with no executable_path, because the item is an app bundle, which is what is
+// signed: a helper an app registers (login_item), and an app added to the user's login items (app), whether by the app itself
+// through SMAppService or through the legacy login-items list. Both shapes were captured on a VM.
+var bundleItemTypes = []string{"login_item", "app"}
 
 // resolveItemURL resolves an item URL that is relative to appURL, the registering app's bundle as a file:// URL (BTM reports it
 // with a trailing slash). ok is false for an
@@ -102,12 +105,12 @@ func resolveItemURL(itemURL, appURL string) (string, bool) {
 }
 
 // registeredExecutable is the path whose signature decides a registration: executable_path when BTM reports one, else the bundle a
-// login item names, as a filesystem path. "" when there is neither.
+// login item or an app names, as a filesystem path. "" when there is neither.
 func registeredExecutable(payload map[string]json.RawMessage, itemURL string) string {
 	if path := stringField(payload, "executable_path"); path != "" {
 		return path
 	}
-	if stringField(payload, "item_type") != btmLoginItem {
+	if !slices.Contains(bundleItemTypes, stringField(payload, "item_type")) {
 		return ""
 	}
 	item, err := url.Parse(itemURL)

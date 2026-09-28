@@ -5,20 +5,21 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/url"
+	"slices"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// untrustedRegistration decodes a Background Task Management registration of itemType and reports whether it is one a persistence
-// rule judges: not MDM-managed, with a readable signature on the executable it registers, and that executable not an Apple
-// platform binary. Three rules make this decision, one per item type (privilege_launchd_plist_write for daemons,
-// persistence_launchagent for agents, persistence_login_item for login items), and differ only in what they call the item and how
-// an operator waives it. For a login item, which BTM reports with no executable, the signature is the helper app bundle's.
+// untrustedRegistration decodes a Background Task Management registration of one of itemTypes and reports whether it is one a
+// persistence rule judges: not MDM-managed, with a readable signature on the executable it registers, and that executable not an
+// Apple platform binary. Three rules make this decision (privilege_launchd_plist_write for daemons, persistence_launchagent for
+// agents, persistence_login_item for login items and apps), and differ only in what they call the item and how an operator waives
+// it. For a login item or an app, which BTM reports with no executable, the signature is the app bundle's.
 //
 // The decision rides the REGISTERED EXECUTABLE's signature, not the registration's instigator, which for a `launchctl` or
 // SMAppService registration is Apple's smd and so cannot discriminate. A registration with no readable signature is skipped to stay
 // high-precision.
-func untrustedRegistration(evt api.Event, itemType string) (btmLaunchItemAddPayload, bool) {
+func untrustedRegistration(evt api.Event, itemTypes ...string) (btmLaunchItemAddPayload, bool) {
 	var p btmLaunchItemAddPayload
 	if evt.EventType != "btm_launch_item_add" {
 		return p, false
@@ -27,7 +28,7 @@ func untrustedRegistration(evt api.Event, itemType string) (btmLaunchItemAddPayl
 		// A malformed BTM event is noise from a misbehaving extension build, not a detection signal.
 		return p, false
 	}
-	if p.ItemType != itemType || p.Managed || p.ExecutableCodeSigning == nil || p.ExecutableCodeSigning.IsPlatformBinary {
+	if !slices.Contains(itemTypes, p.ItemType) || p.Managed || p.ExecutableCodeSigning == nil || p.ExecutableCodeSigning.IsPlatformBinary {
 		return p, false
 	}
 	return p, true

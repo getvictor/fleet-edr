@@ -218,7 +218,7 @@ The decision keys on the REGISTERED EXECUTABLE's code signature, not on who regi
 ## persistence_login_item
 
 **Login item persistence**  
-Flags a login item whose helper is not an Apple platform binary, not MDM-managed, and not excluded.
+Flags a login item whose app is not an Apple platform binary, not MDM-managed, and not excluded.
 
 | | |
 | --- | --- |
@@ -231,19 +231,19 @@ Flags a login item whose helper is not an Apple platform binary, not MDM-managed
 
 ### Description
 
-Detects login-item persistence on macOS (T1547.015): an app registering a helper with Background Task Management, which launches it at every login.
+Detects login-item persistence on macOS (T1547.015): an app that Background Task Management launches at every login. That is either a helper an app registers from inside its own bundle, or an app added to the user's login items, by itself or through the legacy login-items list.
 
-The decision keys on the HELPER's code signature, not on the app that registered it. A helper that is an Apple platform binary or that MDM manages is skipped; an ad-hoc, unsigned or unknown-vendor helper fires. Paired with `persistence_launchagent` and `privilege_launchd_plist_write` for launchd items.
+The decision keys on the code signature of the app that will launch, not on the process that registered it. One that is an Apple platform binary or that MDM manages is skipped; an ad-hoc, unsigned or unknown-vendor app fires. Paired with `persistence_launchagent` and `privilege_launchd_plist_write` for launchd items.
 
 ### Known false-positive sources
 
-- Apps that start a helper at login (a menu-bar utility, a sync client, an updater). Exclude a vendor by `team_id`, or by `signing_id` for one of its helpers rather than all of them. Either survives upgrades and cannot be claimed by a planted helper.
-- An in-house or unsigned app. Prefer signing it; failing that, a path-glob exclusion on its helper's bundle, with an expiry, since anyone who can write that path inherits the exclusion.
+- Apps that start at login, or start a helper at login (a menu-bar utility, a sync client, an updater). Exclude a vendor by `team_id`, or by `signing_id` for one of its apps rather than all of them. Either survives upgrades and cannot be claimed by a planted app.
+- An in-house or unsigned app. Prefer signing it; failing that, a path-glob exclusion on its bundle, with an expiry, since anyone who can write that path inherits the exclusion.
 
 ### Limitations
 
-- Covers login items an app registers through SMAppService. A login item added in System Settings, or by a script through System Events, is a different kind of registration and is not judged.
-- A registration whose helper's code signature cannot be read (absent or unreadable when registered) is skipped to stay high-precision.
+- A registration BTM reports as a user item is not judged. No route to adding a login item that was tested produces one.
+- A registration whose app's code signature cannot be read (absent or unreadable when registered) is skipped to stay high-precision.
 
 ## dyld_insert
 

@@ -159,6 +159,7 @@ func TestBtmExecutableSigningPreservesUnknownFields(t *testing.T) {
 }
 
 // spec:endpoint-event-collection/launch-item-registration-event-capture/a-login-item-is-registered-through-smappservice
+// spec:endpoint-event-collection/launch-item-registration-event-capture/an-app-is-added-to-the-user-s-login-items
 //
 // TestBtmExecutableSigning_LoginItems covers the shape a login item takes, captured on a VM (issue #1167): SMAppService names the
 // item relative to the registering app's bundle and reports no executable_path, so the item path is resolved against app_url and
@@ -211,6 +212,12 @@ func TestBtmExecutableSigning_LoginItems(t *testing.T) {
 				`,"executable_path":"/Users/victor/Applications/EdrLoginTest.app/Contents/MacOS/agent"}`,
 			wantItem:   "file:///Users/victor/Applications/EdrLoginTest.app/Contents/Library/LaunchAgents/com.example.plist",
 			wantSigned: "/Users/victor/Applications/EdrLoginTest.app/Contents/MacOS/agent",
+		},
+		{
+			name:       "an app added to the login items is signed as its bundle",
+			in:         `{"item_type":"app","item_path":"file:///Users/victor/Applications/EdrLegacyTest.app/"}`,
+			wantItem:   "file:///Users/victor/Applications/EdrLegacyTest.app/",
+			wantSigned: "/Users/victor/Applications/EdrLegacyTest.app/",
 		},
 		{
 			name:     "another item type with no executable_path is not signed by its item",

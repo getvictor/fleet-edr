@@ -55,6 +55,10 @@ func TestUntrustedRegistration(t *testing.T) {
 			t.Helper()
 			return btmRegistrationEvent(t, "login_item", "/Applications/T.app/Contents/Library/LoginItems/H.app", "", adHoc, false)
 		}, true},
+		{"an ad-hoc app, asked for a login item or an app", "", func(t *testing.T) api.Event {
+			t.Helper()
+			return btmRegistrationEvent(t, "app", "/Applications/T.app/", "", adHoc, false)
+		}, true},
 		{"a login item, asked for an agent", "agent", func(t *testing.T) api.Event {
 			t.Helper()
 			return btmRegistrationEvent(t, "login_item", "/Applications/T.app/Contents/Library/LoginItems/H.app", "", adHoc, false)
@@ -88,7 +92,11 @@ func TestUntrustedRegistration(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, judged := untrustedRegistration(tc.evt(t), tc.itemType)
+			itemTypes := []string{tc.itemType}
+			if tc.itemType == "" {
+				itemTypes = []string{"login_item", "app"}
+			}
+			_, judged := untrustedRegistration(tc.evt(t), itemTypes...)
 			assert.Equal(t, tc.judged, judged)
 		})
 	}

@@ -10,7 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
-- **Login item persistence is detected.** `persistence_login_item` alerts when an app registers a login item whose helper is not Apple's or MDM-managed (T1547.015). Exclude a vendor by the helper's `team_id` or `signing_id`. Needs this release's agent, which reports the helper's signature.
+- **Login item persistence is detected.** `persistence_login_item` alerts when a login item launches an app that is not Apple's or MDM-managed (T1547.015), whether it is an app's background helper or an app added to the user's login items. Exclude a vendor by the app's `team_id` or `signing_id`. Needs this release's agent, which reports the app's signature.
 - **Emond and startup-item persistence are detected.** Every host now also watches `/etc/emond.d/rules/`, `/private/var/db/emondClients/` and `/Library/StartupItems/`, which lets two SigmaHQ rules the product already carried run: Emond launch rules and new startup items. Like other imported rules they start in monitor mode.
 - **Detection tuning counts the processes a rule gave up on.** When a rule needs a process record that never arrived, it now counts that process as abandoned, shown in the Cost column beside the undecided evaluations it retried. A rule failing to decide no longer looks the same as a rule with nothing to report. Rules that cannot yet count this, and days before the upgrade, show no figure rather than zero.
 - **A known-good phone-home can be waived.** `dns_c2_beacon` alerts can now be excluded by the domain the program looked up, which covers its subdomains, or by the program's path, team, signing identifier or cdhash. Until now the rule could only be silenced as a whole. See [recommended exclusions](docs/recommended-exclusions.md).
@@ -18,7 +18,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Changed
 
 - **Package installs can be excluded by who signed the package.** Installing a `.pkg` raises a suspicious-exec alert for each of its install scripts. Exclude a vendor's installers with a `package_team_id` exclusion, the team that signed the package; an unsigned package cannot be excluded this way. The alert now names the package and its signer.
-- **Login item registrations say where the item is and who signed it.** A login item added by an app's background helper was recorded with a path relative to the app and no signature. Hosts now record the helper's full path, the app that added it, and the helper's signature. Requires the updated agent.
+- **Login item registrations say where the item is and who signed it.** A login item was recorded with no signature, and a background helper with a path relative to its app. Hosts now record the item's full path, the app that added a helper, and the signature of the app that will launch. Requires the updated agent.
 - **LaunchAgent persistence is judged on the program it registers.** The rule now watches LaunchAgent registrations rather than `launchctl`, so it also catches a plist that becomes active at the next login, and skips Apple's own and MDM-managed agents. Vendor agents can be excluded by `team_id` or `signing_id`, which a planted file cannot defeat; existing plist path exclusions keep working. If the background items profile is not installed, exclude team `FDG8Q7N4CC` for this rule so the EDR's own LaunchAgent is not reported.
 
 ### Fixed
