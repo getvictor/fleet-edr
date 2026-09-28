@@ -10,4 +10,4 @@
 
 ## 3. Validation
 
-- [ ] 3.1 Register a login item on the edr-dev VM and confirm the uploaded event carries the resolved path and the bundle's signing
+- [x] 3.1 Register a login item on the edr-dev VM and confirm the uploaded event carries the resolved path and the bundle's signing
