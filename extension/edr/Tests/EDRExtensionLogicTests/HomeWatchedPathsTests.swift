@@ -99,6 +99,6 @@ final class HomeWatchedPathsTests: XCTestCase {
     // The account list the host really has: this runs the directory-service walk the client runs, so a change that broke it (no
     // accounts returned) fails here rather than silently watching nothing. Every host has root.
     func testHomeDirectoriesReadsTheHostsAccounts() {
-        XCTAssertTrue(WatchedPaths.homeDirectories().contains("/var/root"))
+        XCTAssertTrue(WatchedPaths.homeDirectories()?.contains("/var/root") ?? false, "the walk succeeds and finds root")
     }
 }

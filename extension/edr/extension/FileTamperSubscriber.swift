@@ -79,7 +79,7 @@ final class FileTamperSubscriber: Sendable {
         // set becomes the ONLY observed set.
         es_unmute_all_target_paths(client)
         applyQueue.sync {
-            homes = WatchedPaths.homeDirectories()
+            homes = WatchedPaths.homeDirectories() ?? []
             reconcile()
             started = true
             startRefreshingHomes()
@@ -130,25 +130,32 @@ final class FileTamperSubscriber: Sendable {
         }
     }
 
-    /// startRefreshingHomes re-reads the home directories every homesRefreshInterval and, when they changed, re-applies the pushed
-    /// set so its `~/` entries cover the homes as they are now. Runs on applyQueue, as does every tick.
+    /// startRefreshingHomes re-reads the home directories every homesRefreshInterval and re-applies the pushed set when they changed,
+    /// so its `~/` entries cover the homes as they are now, or when a target the set calls for is still not muted, so a mute that
+    /// failed is retried rather than left until the next push. A walk of the accounts that failed keeps the homes already known.
+    /// Runs on applyQueue, as does every tick.
     private func startRefreshingHomes() {
         let timer = DispatchSource.makeTimerSource(queue: applyQueue)
         timer.schedule(deadline: .now() + Self.homesRefreshInterval, repeating: Self.homesRefreshInterval)
         timer.setEventHandler { [weak self] in
-            guard let self else {
-                return
-            }
-            let current = WatchedPaths.homeDirectories()
-            guard current != self.homes else {
-                return
-            }
-            logger.info("file-tamper home directories changed: \(self.homes.count) -> \(current.count)")
-            self.homes = current
-            self.reconcile()
+            self?.refreshHomes()
         }
         timer.resume()
         homesTimer = timer
+    }
+
+    private func refreshHomes() {
+        guard let current = WatchedPaths.homeDirectories() else {
+            logger.error("file-tamper could not read the accounts; keeping \(self.homes.count) known home directories")
+            return
+        }
+        if current != homes {
+            logger.info("file-tamper home directories changed: \(self.homes.count) -> \(current.count)")
+            homes = current
+        } else if Set(applied) == Set(WatchedPaths.targets(pushed: pushed, homes: homes)) {
+            return
+        }
+        reconcile()
     }
 
     /// reconcile mutes and unmutes the difference between the applied targets and those the current pushed set calls for. Runs on

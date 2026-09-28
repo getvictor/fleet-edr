@@ -162,20 +162,24 @@ enum WatchedPaths {
         return seen.sorted()
     }
 
-    /// homeDirectories reads every account from the directory service and returns the homes a `~/` entry expands into. Not
-    /// reentrant (getpwent walks one process-wide cursor), so it is called from the file-tamper client's serial queue only.
-    static func homeDirectories() -> [String] {
+    /// homeDirectories reads every account from the directory service and returns the homes a `~/` entry expands into, or nil when
+    /// the walk failed. getpwent returns nil both at the end of the list and on an error, telling them apart only by errno, and a
+    /// walk cut short must not read as accounts removed: the caller would unmute their homes. Not reentrant (getpwent walks one
+    /// process-wide cursor), so it is called from the file-tamper client's serial queue only.
+    static func homeDirectories() -> [String]? {
         var accounts: [(uid: uid_t, directory: String)] = []
         setpwent()
-        while let entry = getpwent() {
-            // A directory-service account can come without a home, and reading a NULL pw_dir would crash the extension.
-            guard let directory = entry.pointee.pw_dir else {
-                continue
+        defer { endpwent() }
+        while true {
+            errno = 0
+            guard let entry = getpwent() else {
+                return errno == 0 ? homes(of: accounts) : nil
             }
-            accounts.append((entry.pointee.pw_uid, String(cString: directory)))
+            // A directory-service account can come without a home, and reading a NULL pw_dir would crash the extension.
+            if let directory = entry.pointee.pw_dir {
+                accounts.append((entry.pointee.pw_uid, String(cString: directory)))
+            }
         }
-        endpwent()
-        return homes(of: accounts)
     }
 
     /// expanded is an entry as the paths it names: itself, or for a `~/` entry one path in each home. An expansion is judged as the
