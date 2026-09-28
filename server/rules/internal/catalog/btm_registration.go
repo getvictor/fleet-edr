@@ -43,10 +43,10 @@ func btmItemSubject(kind, itemPath string) string {
 	return kind + ":sha256:" + hex.EncodeToString(sum[:])
 }
 
-// plistPath is a registration's item path as a filesystem path. The extension reports the item as a `file://` URL, and an operator
-// writes a path glob as a path, so matching the URL form would leave every path exclusion matching nothing. Anything that is not a
-// file URL is returned unchanged.
-func plistPath(itemPath string) string {
+// btmItemPath is a registration's item path (a launchd item's plist, a login item's helper bundle) as a filesystem path. The
+// extension reports the item as a `file://` URL, and an operator writes a path glob as a path, so matching the URL form would leave
+// every path exclusion matching nothing. Anything that is not a file URL is returned unchanged.
+func btmItemPath(itemPath string) string {
 	u, err := url.Parse(itemPath)
 	if err != nil || u.Scheme != "file" {
 		return itemPath

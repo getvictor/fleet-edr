@@ -86,12 +86,12 @@ func TestUntrustedRegistration(t *testing.T) {
 	}
 }
 
-func TestPlistPath(t *testing.T) {
+func TestBTMItemPath(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "/Library/LaunchAgents/x.plist", plistPath("file:///Library/LaunchAgents/x.plist"))
-	assert.Equal(t, "/Users/jane doe/Library/LaunchAgents/x.plist", plistPath("file:///Users/jane%20doe/Library/LaunchAgents/x.plist"),
+	assert.Equal(t, "/Library/LaunchAgents/x.plist", btmItemPath("file:///Library/LaunchAgents/x.plist"))
+	assert.Equal(t, "/Users/jane doe/Library/LaunchAgents/x.plist", btmItemPath("file:///Users/jane%20doe/Library/LaunchAgents/x.plist"),
 		"a URL escapes a space; the path an operator writes does not")
-	assert.Equal(t, "/Library/LaunchAgents/x.plist", plistPath("/Library/LaunchAgents/x.plist"), "a path is already a path")
+	assert.Equal(t, "/Library/LaunchAgents/x.plist", btmItemPath("/Library/LaunchAgents/x.plist"), "a path is already a path")
 }
 
 func TestBTMItemSubject(t *testing.T) {

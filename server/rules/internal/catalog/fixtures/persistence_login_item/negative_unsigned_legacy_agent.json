@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "event_id": "li-legacy",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6400,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "login_item",
+        "item_path": "Contents/Library/LoginItems/EdrLoginTestHelper.app",
+        "executable_path": "",
+        "legacy": false,
+        "managed": false,
+        "uid": 501,
+        "instigator_pid": 79842,
+        "instigator_code_signing": {"team_id": "", "signing_id": "com.apple.xpc.smd", "flags": 637618689, "is_platform_binary": true}
+      }
+    }
+  ],
+  "expected_findings": []
+}

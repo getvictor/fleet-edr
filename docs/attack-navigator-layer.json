@@ -320,6 +320,12 @@
       "comment": "No rule covering this raises an alert as built in. Covered by: file_event_macos_emond_launch_daemon"
     },
     {
+      "techniqueID": "T1547.015",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: persistence_login_item"
+    },
+    {
       "techniqueID": "T1548.003",
       "score": 1,
       "color": "#31a354",
