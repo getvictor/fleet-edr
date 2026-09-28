@@ -181,6 +181,12 @@ type WatchedPathCommandLister func(ctx context.Context, commandType string, host
 // many times over.
 const MaxWatchedPaths = 32
 
+// HomeWatchedPathPrefix starts a watched path that names a path in every user's home, as `~/.ssh/authorized_keys` does (issue
+// #1167). Endpoint Security mutes only literal paths and prefixes, so each host's extension expands such an entry into one path per
+// home: root's and each person's account, re-read every few minutes so an account added later is covered. An extension that
+// predates it skips the entry and watches the rest of the set.
+const HomeWatchedPathPrefix = "~/"
+
 // MaxWatchedPathBytes bounds one path: the macOS PATH_MAX of 1024 counts the terminating NUL of the C string es_mute_path takes, so the
 // longest path it can mute is one byte shorter.
 const MaxWatchedPathBytes = 1023
@@ -206,12 +212,13 @@ var ErrInvalidWatchedPaths = errors.New("invalid watched paths")
 // ValidateWatchedPaths checks a proposed set. It is the one place the set is validated: the agent checks only the envelope and the
 // extension applies what it is given.
 //
-// A path must be absolute, clean (no empty, "." or ".." segment), within MaxWatchedPathBytes in its /private spelling (the one the
-// extension mutes and the kernel reports for /etc, /tmp and /var), and free of ASCII control characters
-// (NUL included, which would truncate the path the kernel receives). A prefix
-// names a directory, so it ends in "/", and it must lie below a top-level directory: a prefix such as "/Users/" or "/Library/" would
-// put every write under that tree on the wire, which is the firehose ADR-0008 removed. A literal names a file, so it does not end in
-// "/". An entry may appear once, judged by its root-linked form.
+// A path must be absolute, or start with HomeWatchedPathPrefix to name a path in every user's home, which is then judged as the
+// path it would be in a home at the root. It must be clean (no empty, "." or ".." segment), within MaxWatchedPathBytes in its
+// /private spelling (the one the extension mutes and the kernel reports for /etc, /tmp and /var), and free of ASCII control
+// characters (NUL included, which would truncate the path the kernel receives). A prefix names a directory, so it ends in "/", and
+// it must lie below a top-level directory: a prefix such as "/Users/" or "/Library/" would put every write under that tree on the
+// wire, which is the firehose ADR-0008 removed. A literal names a file, so it does not end in "/". An entry may appear once, judged
+// by its root-linked form.
 func ValidateWatchedPaths(paths []WatchedPath) error {
 	if len(paths) > MaxWatchedPaths {
 		return fmt.Errorf("%w: %d paths, at most %d", ErrInvalidWatchedPaths, len(paths), MaxWatchedPaths)
@@ -237,6 +244,14 @@ func ValidateWatchedPaths(paths []WatchedPath) error {
 }
 
 func validateWatchedPath(p WatchedPath) error {
+	if rest, ok := strings.CutPrefix(p.Path, HomeWatchedPathPrefix); ok {
+		// Judged as the path it would be in a home at the top of the filesystem, so every rule below applies, and a prefix's
+		// depth is counted below the home: `~/Library/` would put every write in every user's Library on the wire.
+		if rest == "" {
+			return errors.New("a path in every home must name something inside the home")
+		}
+		return validateWatchedPath(WatchedPath{Path: "/" + rest, Match: p.Match})
+	}
 	switch {
 	case !strings.HasPrefix(p.Path, "/"):
 		return errors.New("the path must be absolute")

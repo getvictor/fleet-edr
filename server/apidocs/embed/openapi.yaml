@@ -2806,7 +2806,7 @@ components:
       properties:
         path:
           type: string
-          description: An absolute path.
+          description: An absolute path, or a path starting with `~/` that names the same path in every user's home folder (root's and each person's account), which each host expands for the accounts it has.
         match:
           type: string
           enum: [literal, prefix]

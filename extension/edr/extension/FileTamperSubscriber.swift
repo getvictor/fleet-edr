@@ -49,6 +49,14 @@ final class FileTamperSubscriber: Sendable {
     /// pushed is the latest server-pushed set. One that arrives before start() is held here and applied when the client starts.
     private nonisolated(unsafe) var pushed: [WatchedPath]
     private nonisolated(unsafe) var started = false
+    /// homes are the home directories a pushed `~/` entry is expanded into (WatchedPaths.homeDirectories), read when the client
+    /// starts and again every homesRefreshInterval, so an account added later is watched without waiting for the server to push.
+    private nonisolated(unsafe) var homes: [String] = []
+    private nonisolated(unsafe) var homesTimer: DispatchSourceTimer?
+    /// homesRefreshInterval is how long an account added to the host goes unwatched at most. Reading the account list is a directory
+    /// service call and cheap, but accounts are added rarely, so minutes is enough.
+    private static let homesRefreshSeconds = 300
+    private static let homesRefreshInterval: DispatchTimeInterval = .seconds(homesRefreshSeconds)
 
     /// pushed is the set persisted by the last push (WatchedPathStore), applied with the built-in paths when the client starts.
     init(pushed: [WatchedPath]) {
@@ -71,8 +79,10 @@ final class FileTamperSubscriber: Sendable {
         // set becomes the ONLY observed set.
         es_unmute_all_target_paths(client)
         applyQueue.sync {
+            homes = WatchedPaths.homeDirectories() ?? []
             reconcile()
             started = true
+            startRefreshingHomes()
         }
         guard es_invert_muting(client, ES_MUTE_INVERSION_TYPE_TARGET_PATH) == ES_RETURN_SUCCESS else {
             logger.error("file-tamper target-path mute inversion failed")
@@ -120,6 +130,34 @@ final class FileTamperSubscriber: Sendable {
         }
     }
 
+    /// startRefreshingHomes re-reads the home directories every homesRefreshInterval and re-applies the pushed set when they changed,
+    /// so its `~/` entries cover the homes as they are now, or when a target the set calls for is still not muted, so a mute that
+    /// failed is retried rather than left until the next push. A walk of the accounts that failed keeps the homes already known.
+    /// Runs on applyQueue, as does every tick.
+    private func startRefreshingHomes() {
+        let timer = DispatchSource.makeTimerSource(queue: applyQueue)
+        timer.schedule(deadline: .now() + Self.homesRefreshInterval, repeating: Self.homesRefreshInterval)
+        timer.setEventHandler { [weak self] in
+            self?.refreshHomes()
+        }
+        timer.resume()
+        homesTimer = timer
+    }
+
+    private func refreshHomes() {
+        guard let current = WatchedPaths.homeDirectories() else {
+            logger.error("file-tamper could not read the accounts; keeping \(self.homes.count) known home directories")
+            return
+        }
+        if current != homes {
+            logger.info("file-tamper home directories changed: \(self.homes.count) -> \(current.count)")
+            homes = current
+        } else if Set(applied) == Set(WatchedPaths.targets(pushed: pushed, homes: homes)) {
+            return
+        }
+        reconcile()
+    }
+
     /// reconcile mutes and unmutes the difference between the applied targets and those the current pushed set calls for. Runs on
     /// applyQueue.
     ///
@@ -132,7 +170,7 @@ final class FileTamperSubscriber: Sendable {
     /// unobserved, and the shipped sudoers rules would go blind with it. A pushed path that fails is logged instead, because the set
     /// persists, and exiting on it would restart the extension into the same failure on every launch.
     private func reconcile() {
-        let next = WatchedPaths.targets(pushed: pushed)
+        let next = WatchedPaths.targets(pushed: pushed, homes: homes)
         let builtIn = Set(WatchedPaths.targets(pushed: []))
         let (mute, unmute) = WatchedPaths.changes(from: applied, to: next)
         var muted = 0
@@ -176,6 +214,7 @@ final class FileTamperSubscriber: Sendable {
     }
 
     func stop() {
+        applyQueue.sync { homesTimer?.cancel() }
         es_unsubscribe_all(client)
         es_delete_client(client)
     }

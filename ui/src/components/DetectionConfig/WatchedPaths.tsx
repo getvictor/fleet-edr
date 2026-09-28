@@ -129,7 +129,8 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
     <>
       <p className="detection-config__note">
         Each host&apos;s file sensor records writes, renames, truncations and deletions of these paths, on top of the ones it always
-        watches: {stored.built_in.map((p) => p.path).join(", ")}. Keep a prefix narrow, because every write under a watched directory is
+        watches: {stored.built_in.map((p) => p.path).join(", ")}. Start a path with <code>~/</code> to watch it in every user&apos;s home
+        folder, such as <code>~/.ssh/authorized_keys</code>. Keep a prefix narrow, because every write under a watched directory is
         sent to the server. A saved change reaches online hosts within seconds, and hosts that are offline or enroll later within minutes of
         connecting.
       </p>
