@@ -80,7 +80,7 @@ func (r *PersistenceLaunchAgent) evalEvent(_ context.Context, evt api.Event, _ a
 	if !ok {
 		return nil, nil
 	}
-	plist := plistPath(p.ItemPath)
+	plist := btmItemPath(p.ItemPath)
 	if r.Exclusions != nil && (signatureExcluded(r.Exclusions, r.ID(), *p.ExecutableCodeSigning, evt.HostID) ||
 		r.Exclusions.Excluded(r.ID(), api.ExclusionMatchPathGlob, plist, evt.HostID)) {
 		return nil, nil

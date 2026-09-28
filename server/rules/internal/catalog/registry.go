@@ -26,6 +26,7 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 		&SuspiciousExec{Exclusions: resolver},
 		&ShellNetworkConnect{Exclusions: resolver},
 		&PersistenceLaunchAgent{Exclusions: resolver},
+		&PersistenceLoginItem{Exclusions: resolver},
 		&DyldInsert{},
 		&ShellFromOffice{},
 		&OsascriptNetworkExec{},

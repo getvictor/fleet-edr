@@ -28,6 +28,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`suspicious_exec`](#suspicious_exec) | Suspicious exec chain | high | alert | T1059.004 |
 | [`shell_network_connect`](#shell_network_connect) | Shell outbound connection | high | monitor | T1059.004 |
 | [`persistence_launchagent`](#persistence_launchagent) | LaunchAgent persistence | high | alert | T1543.001 |
+| [`persistence_login_item`](#persistence_login_item) | Login item persistence | medium | alert | T1547.015 |
 | [`dyld_insert`](#dyld_insert) | DYLD injection on exec | high | alert | T1574.006 |
 | [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | alert | T1059.004 |
 | [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002 |
@@ -213,6 +214,36 @@ The decision keys on the REGISTERED EXECUTABLE's code signature, not on who regi
 
 - Registration is reported when launchd learns of the item, not when the plist is written. A plist written and never loaded surfaces at the next login.
 - A registration whose program's code signature cannot be read (absent or unreadable when registered) is skipped to stay high-precision.
+
+## persistence_login_item
+
+**Login item persistence**  
+Flags a login item whose helper is not an Apple platform binary, not MDM-managed, and not excluded.
+
+| | |
+| --- | --- |
+| Rule ID | `persistence_login_item` |
+| Severity | `medium` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1547.015`](https://attack.mitre.org/techniques/T1547/015/) |
+| Event types | `btm_launch_item_add` |
+
+### Description
+
+Detects login-item persistence on macOS (T1547.015): an app registering a helper with Background Task Management, which launches it at every login.
+
+The decision keys on the HELPER's code signature, not on the app that registered it. A helper that is an Apple platform binary or that MDM manages is skipped; an ad-hoc, unsigned or unknown-vendor helper fires. Paired with `persistence_launchagent` and `privilege_launchd_plist_write` for launchd items.
+
+### Known false-positive sources
+
+- Apps that start a helper at login (a menu-bar utility, a sync client, an updater). Exclude a vendor by `team_id`, or by `signing_id` for one of its helpers rather than all of them. Either survives upgrades and cannot be claimed by a planted helper.
+- An in-house or unsigned app. Prefer signing it; failing that, a path-glob exclusion on its helper's bundle, with an expiry, since anyone who can write that path inherits the exclusion.
+
+### Limitations
+
+- Covers login items an app registers through SMAppService. A login item added in System Settings, or by a script through System Events, is a different kind of registration and is not judged.
+- A registration whose helper's code signature cannot be read (absent or unreadable when registered) is skipped to stay high-precision.
 
 ## dyld_insert
 

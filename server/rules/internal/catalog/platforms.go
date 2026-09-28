@@ -10,6 +10,7 @@ import "github.com/fleetdm/edr/server/rules/api"
 
 func (*SuspiciousExec) Platforms() []api.Platform         { return []api.Platform{api.PlatformDarwin} }
 func (*PersistenceLaunchAgent) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
+func (*PersistenceLoginItem) Platforms() []api.Platform   { return []api.Platform{api.PlatformDarwin} }
 func (*DyldInsert) Platforms() []api.Platform             { return []api.Platform{api.PlatformDarwin} }
 func (*ShellFromOffice) Platforms() []api.Platform        { return []api.Platform{api.PlatformDarwin} }
 func (*OsascriptNetworkExec) Platforms() []api.Platform   { return []api.Platform{api.PlatformDarwin} }

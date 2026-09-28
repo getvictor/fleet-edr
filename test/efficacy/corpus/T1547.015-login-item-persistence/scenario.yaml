@@ -1,0 +1,24 @@
+# T1547.015 Boot or Logon Autostart Execution: Login Items.
+#
+# An app registers a helper in its Contents/Library/LoginItems/ with Background Task Management through SMAppService
+# (ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD, item_type=login_item). BTM reports no executable for a login item, so the agent
+# signs the helper bundle itself. persistence_login_item fires on the unmanaged registration of an ad-hoc helper. Mirrors the
+# positive_untrusted_helper fixture, which is the shape captured on edr-dev.
+name: "T1547.015 login item registration of an ad-hoc helper"
+host:
+  id: AAAA1547-0015-0000-0000-000000000001
+  hostname: efficacy-t1547-015.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: btm_launch_item_add
+    item_type: login_item
+    item_path: /Users/victor/Applications/EdrLoginTest.app/Contents/Library/LoginItems/EdrLoginTestHelper.app
+    executable_code_signing_present: true
+    executable_team_id: ""
+    executable_is_platform_binary: false
+    instigator_pid: 93
+    instigator_team_id: ""
+    instigator_is_platform_binary: true
+    uid: 501
+    gid: 20

@@ -31,8 +31,8 @@ func btmRegistrationEvent(t *testing.T, itemType, plist, executable string, cs *
 	return api.Event{EventID: "btm-" + itemType, HostID: "fixture-host", TimestampNs: 1, EventType: "btm_launch_item_add", Payload: raw}
 }
 
-// The gate both persistence rules share. Each case is one reason a registration is not judged, plus the one that is, for each item
-// type, so a gate that confused the two domains or dropped a skip fails here rather than in only one of the rules.
+// The gate the three persistence rules share. Each case is one reason a registration is not judged, plus the one that is, for each
+// item type, so a gate that confused two item types or dropped a skip fails here rather than in only one of the rules.
 func TestUntrustedRegistration(t *testing.T) {
 	t.Parallel()
 	adHoc := &codeSigningJSON{SigningID: "a.out"}
@@ -51,6 +51,14 @@ func TestUntrustedRegistration(t *testing.T) {
 			t.Helper()
 			return btmRegistrationEvent(t, "daemon", "/Library/LaunchDaemons/x.plist", "/tmp/x", adHoc, false)
 		}, true},
+		{"an ad-hoc login item's helper", "login_item", func(t *testing.T) api.Event {
+			t.Helper()
+			return btmRegistrationEvent(t, "login_item", "/Applications/T.app/Contents/Library/LoginItems/H.app", "", adHoc, false)
+		}, true},
+		{"a login item, asked for an agent", "agent", func(t *testing.T) api.Event {
+			t.Helper()
+			return btmRegistrationEvent(t, "login_item", "/Applications/T.app/Contents/Library/LoginItems/H.app", "", adHoc, false)
+		}, false},
 		{"a daemon, asked for an agent", "agent", func(t *testing.T) api.Event {
 			t.Helper()
 			return btmRegistrationEvent(t, "daemon", "/Library/LaunchDaemons/x.plist", "/tmp/x", adHoc, false)
@@ -86,12 +94,12 @@ func TestUntrustedRegistration(t *testing.T) {
 	}
 }
 
-func TestPlistPath(t *testing.T) {
+func TestBTMItemPath(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "/Library/LaunchAgents/x.plist", plistPath("file:///Library/LaunchAgents/x.plist"))
-	assert.Equal(t, "/Users/jane doe/Library/LaunchAgents/x.plist", plistPath("file:///Users/jane%20doe/Library/LaunchAgents/x.plist"),
+	assert.Equal(t, "/Library/LaunchAgents/x.plist", btmItemPath("file:///Library/LaunchAgents/x.plist"))
+	assert.Equal(t, "/Users/jane doe/Library/LaunchAgents/x.plist", btmItemPath("file:///Users/jane%20doe/Library/LaunchAgents/x.plist"),
 		"a URL escapes a space; the path an operator writes does not")
-	assert.Equal(t, "/Library/LaunchAgents/x.plist", plistPath("/Library/LaunchAgents/x.plist"), "a path is already a path")
+	assert.Equal(t, "/Library/LaunchAgents/x.plist", btmItemPath("/Library/LaunchAgents/x.plist"), "a path is already a path")
 }
 
 func TestBTMItemSubject(t *testing.T) {

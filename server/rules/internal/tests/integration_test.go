@@ -161,6 +161,7 @@ func TestCatalog_ListShape(t *testing.T) {
 		// Registered immediately after the rule it was split from (issue #776), which is also the order the catalog reports.
 		"shell_network_connect",
 		"persistence_launchagent",
+		"persistence_login_item",
 		"dyld_insert",
 		"shell_from_office",
 		"osascript_network_exec",

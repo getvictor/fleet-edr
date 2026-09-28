@@ -39,7 +39,9 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		// The registered program by its signer, and the plist by its path so exclusions saved against the launchctl-based rule
 		// keep their meaning (issue #1156).
 		"persistence_launchagent": {api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchPathGlob},
-		"sudoers_tamper":          {api.ExclusionMatchPathGlob},
+		// The helper by its signer, as for a LaunchAgent's program, and by its bundle's path for an unsigned in-house app.
+		"persistence_login_item": {api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchPathGlob},
+		"sudoers_tamper":         {api.ExclusionMatchPathGlob},
 		// Same surface as sudoers_tamper and for the same reason: the tunable subject is the acting process, since a
 		// configuration manager that rewrites a fragment by deleting and recreating it is the shape an operator excludes.
 		"sudoers_destroyed":               {api.ExclusionMatchPathGlob},

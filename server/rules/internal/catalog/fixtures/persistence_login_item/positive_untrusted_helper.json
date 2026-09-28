@@ -1,0 +1,30 @@
+{
+  "events": [
+    {
+      "event_id": "li-pos",
+      "host_id": "fixture-host",
+      "timestamp_ns": 6400,
+      "event_type": "btm_launch_item_add",
+      "payload": {
+        "item_type": "login_item",
+        "item_path": "file:///Users/victor/Applications/EdrLoginTest.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+        "app_url": "file:///Users/victor/Applications/EdrLoginTest.app/",
+        "executable_path": "",
+        "legacy": false,
+        "managed": false,
+        "uid": 501,
+        "executable_code_signing": {"team_id": "", "signing_id": "com.example.edrlogintest.helper", "flags": 0, "is_platform_binary": false},
+        "instigator_pid": 86830,
+        "instigator_code_signing": {"team_id": "", "signing_id": "com.apple.xpc.smd", "flags": 637618689, "is_platform_binary": true}
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "persistence_login_item",
+      "severity": "medium",
+      "description_contains": "/Users/victor/Applications/EdrLoginTest.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+      "event_ids": ["li-pos"]
+    }
+  ]
+}
