@@ -49,6 +49,14 @@ final class FileTamperSubscriber: Sendable {
     /// pushed is the latest server-pushed set. One that arrives before start() is held here and applied when the client starts.
     private nonisolated(unsafe) var pushed: [WatchedPath]
     private nonisolated(unsafe) var started = false
+    /// homes are the home directories a pushed `~/` entry is expanded into (WatchedPaths.homeDirectories), read when the client
+    /// starts and again every homesRefreshInterval, so an account added later is watched without waiting for the server to push.
+    private nonisolated(unsafe) var homes: [String] = []
+    private nonisolated(unsafe) var homesTimer: DispatchSourceTimer?
+    /// homesRefreshInterval is how long an account added to the host goes unwatched at most. Reading the account list is a directory
+    /// service call and cheap, but accounts are added rarely, so minutes is enough.
+    private static let homesRefreshSeconds = 300
+    private static let homesRefreshInterval: DispatchTimeInterval = .seconds(homesRefreshSeconds)
 
     /// pushed is the set persisted by the last push (WatchedPathStore), applied with the built-in paths when the client starts.
     init(pushed: [WatchedPath]) {
@@ -71,8 +79,10 @@ final class FileTamperSubscriber: Sendable {
         // set becomes the ONLY observed set.
         es_unmute_all_target_paths(client)
         applyQueue.sync {
+            homes = WatchedPaths.homeDirectories()
             reconcile()
             started = true
+            startRefreshingHomes()
         }
         guard es_invert_muting(client, ES_MUTE_INVERSION_TYPE_TARGET_PATH) == ES_RETURN_SUCCESS else {
             logger.error("file-tamper target-path mute inversion failed")
@@ -120,6 +130,27 @@ final class FileTamperSubscriber: Sendable {
         }
     }
 
+    /// startRefreshingHomes re-reads the home directories every homesRefreshInterval and, when they changed, re-applies the pushed
+    /// set so its `~/` entries cover the homes as they are now. Runs on applyQueue, as does every tick.
+    private func startRefreshingHomes() {
+        let timer = DispatchSource.makeTimerSource(queue: applyQueue)
+        timer.schedule(deadline: .now() + Self.homesRefreshInterval, repeating: Self.homesRefreshInterval)
+        timer.setEventHandler { [weak self] in
+            guard let self else {
+                return
+            }
+            let current = WatchedPaths.homeDirectories()
+            guard current != self.homes else {
+                return
+            }
+            logger.info("file-tamper home directories changed: \(self.homes.count) -> \(current.count)")
+            self.homes = current
+            self.reconcile()
+        }
+        timer.resume()
+        homesTimer = timer
+    }
+
     /// reconcile mutes and unmutes the difference between the applied targets and those the current pushed set calls for. Runs on
     /// applyQueue.
     ///
@@ -132,7 +163,7 @@ final class FileTamperSubscriber: Sendable {
     /// unobserved, and the shipped sudoers rules would go blind with it. A pushed path that fails is logged instead, because the set
     /// persists, and exiting on it would restart the extension into the same failure on every launch.
     private func reconcile() {
-        let next = WatchedPaths.targets(pushed: pushed)
+        let next = WatchedPaths.targets(pushed: pushed, homes: homes)
         let builtIn = Set(WatchedPaths.targets(pushed: []))
         let (mute, unmute) = WatchedPaths.changes(from: applied, to: next)
         var muted = 0
@@ -176,6 +207,7 @@ final class FileTamperSubscriber: Sendable {
     }
 
     func stop() {
+        applyQueue.sync { homesTimer?.cancel() }
         es_unsubscribe_all(client)
         es_delete_client(client)
     }

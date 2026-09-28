@@ -79,6 +79,7 @@ describe("WatchedPaths", () => {
       expect.stringContaining("/Users/alice/.ssh/authorized_keysThis file"),
     ]);
     expect(screen.getByText(/on top of the ones it always watches: \/etc\/sudoers, \/etc\/sudoers\.d\//)).toBeVisible();
+    expect(screen.getByText("~/.ssh/authorized_keys")).toBeVisible();
     expect(screen.getByText(/2 of 32 paths\. Last saved .* by alice@example\.com\./)).toBeVisible();
     expect(screen.getByRole("button", { name: "Save and push to hosts" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Discard changes" })).toBeDisabled();

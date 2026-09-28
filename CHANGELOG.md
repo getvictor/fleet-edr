@@ -10,6 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
+- **Watched file paths can name every user's home folder.** Start a path with `~/`, such as `~/.ssh/authorized_keys`, and each host watches it for root and every user account, including accounts added later. Needs this release's agent; older hosts skip the path.
 - **Unsigned installer packages are detected.** `installer_unsigned_package` alerts once per package when a package that is unsigned, or whose signature macOS does not trust, runs an install script (T1546.016). Exclude an in-house package by its path.
 - **Login item persistence is detected.** `persistence_login_item` alerts when a login item launches an app that is not Apple's or MDM-managed (T1547.015), whether it is an app's background helper or an app added to the user's login items. Exclude a vendor by the app's `team_id` or `signing_id`. Needs this release's agent, which reports the app's signature.
 - **Emond and startup-item persistence are detected.** Every host now also watches `/etc/emond.d/rules/`, `/private/var/db/emondClients/` and `/Library/StartupItems/`, which lets two SigmaHQ rules the product already carried run: Emond launch rules and new startup items. Like other imported rules they start in monitor mode.

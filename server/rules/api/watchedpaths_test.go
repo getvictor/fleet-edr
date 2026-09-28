@@ -311,3 +311,38 @@ func TestDefaultWatchedPathsFitTheirAllowance(t *testing.T) {
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(pushed), MaxWatchedPathSetBytes)
 }
+
+// spec:server-admin-surface/a-watched-path-can-name-every-user-s-home/a-path-in-every-home-is-judged-below-the-home
+//
+// A `~/` entry is judged as the path it would be in a home at the root, so the rules an absolute path meets apply below the home,
+// and a prefix needs two components there: `~/Library/` would put every write in every user's Library on the wire, as `/Library/`
+// would for the root. The extension holds the same rule (WatchedPaths.isAcceptable).
+func TestValidateWatchedPaths_JudgesAPathInEveryHomeBelowTheHome(t *testing.T) {
+	t.Parallel()
+	accepted := []WatchedPath{
+		{Path: "~/.ssh/authorized_keys", Match: WatchedPathLiteral},
+		{Path: "~/Library/LaunchAgents/", Match: WatchedPathPrefix},
+	}
+	require.NoError(t, ValidateWatchedPaths(accepted))
+
+	cases := []struct {
+		name   string
+		path   WatchedPath
+		reason string
+	}{
+		{"the whole home", WatchedPath{Path: "~/", Match: WatchedPathPrefix}, "inside the home"},
+		{"a top-level directory of the home", WatchedPath{Path: "~/Library/", Match: WatchedPathPrefix}, "below a top-level directory"},
+		{"dot-dot out of the home", WatchedPath{Path: "~/../etc/", Match: WatchedPathPrefix}, "segment"},
+		{"empty segment", WatchedPath{Path: "~//.ssh/authorized_keys", Match: WatchedPathLiteral}, "segment"},
+		{"literal ending in a slash", WatchedPath{Path: "~/.ssh/", Match: WatchedPathLiteral}, `must not end in "/"`},
+		{"another user's home by name", WatchedPath{Path: "~alice/.ssh/authorized_keys", Match: WatchedPathLiteral}, "absolute"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateWatchedPaths([]WatchedPath{tc.path})
+			require.ErrorIs(t, err, ErrInvalidWatchedPaths)
+			assert.Contains(t, err.Error(), tc.reason)
+		})
+	}
+}

@@ -99,7 +99,15 @@ enum WatchedPaths {
     /// /private spelling fits within maxPathBytes, free of ASCII control characters (NUL included), with no empty, `.` or `..` segment;
     /// a literal that does not end in "/"; and a prefix that ends in "/" and lies below a top-level directory, judged through /private
     /// for /etc, /tmp and /var.
+    ///
+    /// An entry starting with homePrefix names a path in every user's home directory, and is judged as the path it would be in a home
+    /// at the top of the filesystem: the same rules, with a prefix's depth counted below the home, so `~/Library/LaunchAgents/` is
+    /// watched and `~/Library/` is not. Each expansion is judged again as the absolute path it becomes (targets).
     static func isAcceptable(_ path: String, _ match: WatchedPathMatch) -> Bool {
+        if path.hasPrefix(homePrefix) {
+            let rest = path.dropFirst(homePrefix.count)
+            return !rest.isEmpty && isAcceptable("/" + rest, match)
+        }
         // Every spelling the client mutes must fit, and the /private one of a firmlinked path is the longer.
         guard path.hasPrefix("/"), spellings(of: path).allSatisfy({ $0.utf8.count <= maxPathBytes }),
               !path.unicodeScalars.contains(where: { $0.value < firstPrintable || $0.value == deleteCharacter }) else {
@@ -130,12 +138,61 @@ enum WatchedPaths {
     /// inside one.
     private static let minimumPrefixDepth = 2
 
-    /// targets is every path the client mutes for a pushed set: the built-in paths, then the pushed ones, each in both spellings of a
-    /// firmlinked root, without duplicates and in a stable order.
-    static func targets(pushed: [WatchedPath]) -> [WatchedPath] {
+    /// homePrefix starts an entry that names a path in every user's home directory, as `~/.ssh/authorized_keys` does (issue #1167).
+    /// Endpoint Security mutes only literal paths and prefixes, so such an entry is expanded here into one path per home.
+    static let homePrefix = "~/"
+
+    /// minimumUserID is the first user ID macOS gives a person's account; below it are the system's own accounts (`_www` and the
+    /// like), whose homes hold nothing a person could be tricked into persisting through.
+    private static let minimumUserID: uid_t = 500
+
+    /// homes picks, from every account's user ID and home directory, the homes a `~/` entry expands into: root's and each person's,
+    /// once each and in a stable order. An account whose home is not an absolute path, or is the placeholder a system account is
+    /// given, has none.
+    static func homes(of accounts: [(uid: uid_t, directory: String)]) -> [String] {
+        let placeholders: Set = ["/var/empty", "/dev/null", "/"]
+        var seen = Set<String>()
+        for account in accounts where account.uid == 0 || account.uid >= minimumUserID {
+            let directory = account.directory.hasSuffix("/") && account.directory.count > 1
+                ? String(account.directory.dropLast()) : account.directory
+            if directory.hasPrefix("/"), !placeholders.contains(directory) {
+                seen.insert(directory)
+            }
+        }
+        return seen.sorted()
+    }
+
+    /// homeDirectories reads every account from the directory service and returns the homes a `~/` entry expands into. Not
+    /// reentrant (getpwent walks one process-wide cursor), so it is called from the file-tamper client's serial queue only.
+    static func homeDirectories() -> [String] {
+        var accounts: [(uid: uid_t, directory: String)] = []
+        setpwent()
+        while let entry = getpwent() {
+            accounts.append((entry.pointee.pw_uid, String(cString: entry.pointee.pw_dir)))
+        }
+        endpwent()
+        return homes(of: accounts)
+    }
+
+    /// expanded is an entry as the paths it names: itself, or for a `~/` entry one path in each home. An expansion is judged as the
+    /// absolute path it becomes and dropped if it would not be watched, which is what catches one too long for es_mute_path.
+    static func expanded(_ entry: WatchedPath, homes: [String]) -> [WatchedPath] {
+        guard entry.path.hasPrefix(homePrefix) else {
+            return [entry]
+        }
+        let rest = entry.path.dropFirst(homePrefix.count)
+        return homes.compactMap { home in
+            let path = home + "/" + rest
+            return isAcceptable(path, entry.match) ? WatchedPath(path: path, match: entry.match) : nil
+        }
+    }
+
+    /// targets is every path the client mutes for a pushed set: the built-in paths, then the pushed ones with each `~/` entry expanded
+    /// into the given homes, each in both spellings of a firmlinked root, without duplicates and in a stable order.
+    static func targets(pushed: [WatchedPath], homes: [String] = []) -> [WatchedPath] {
         var seen = Set<WatchedPath>()
         var out: [WatchedPath] = []
-        for entry in builtIn + pushed {
+        for entry in builtIn + pushed.flatMap({ expanded($0, homes: homes) }) {
             for path in spellings(of: entry.path) {
                 let target = WatchedPath(path: path, match: entry.match)
                 if seen.insert(target).inserted {
