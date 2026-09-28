@@ -5,8 +5,10 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -113,6 +115,38 @@ func TestWatchedPathDefaults_ALegacySetKeepsItsPathsAndGainsThem(t *testing.T) {
 	assert.Equal(t, rulesapi.DefaultWatchedPaths, set.Defaults)
 	for _, c := range r.inserter.snapshot() {
 		assert.JSONEq(t, `[`+defaultsOnTheWire+`,{"path":"/etc/periodic/daily/","match":"prefix"}]`, pushedPaths(t, c.Payload))
+	}
+}
+
+// spec:server-admin-surface/the-server-pushes-default-watched-paths/a-stored-set-at-the-size-limit-still-gains-the-defaults
+//
+// The size limit is measured on the operator's paths alone, so the largest set the server accepted before the defaults existed still
+// validates when the defaults are added to it. Were the defaults counted against it, this set's hosts would never be sent them.
+func TestWatchedPathDefaults_AStoredSetAtTheSizeLimitStillGainsThem(t *testing.T) {
+	t.Parallel()
+	r := newDefaultsRig(t)
+	atTheLimit := make([]rulesapi.WatchedPath, 0, 8)
+	for i := range 8 {
+		atTheLimit = append(atTheLimit, rulesapi.WatchedPath{
+			Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: rulesapi.WatchedPathLiteral})
+	}
+	stored, err := json.Marshal(atTheLimit)
+	require.NoError(t, err)
+	require.Greater(t, len(stored), rulesapi.MaxOperatorWatchedPathSetBytes-100, "the stored set is at the limit")
+	_, err = r.db.Exec(`UPDATE watched_path_set SET version = 2, updated_at = NOW(6), updated_by = 'usr_1', paths = CAST(? AS JSON)
+		WHERE id = 1`, string(stored))
+	require.NoError(t, err)
+
+	require.NoError(t, r.svc.EnsureDefaults(t.Context()))
+
+	set := r.get(t)
+	assert.Equal(t, int64(3), set.Version)
+	assert.Equal(t, rulesapi.DefaultWatchedPaths, set.Defaults)
+	assert.Equal(t, atTheLimit, set.Paths)
+	commands := r.inserter.snapshot()
+	require.NotEmpty(t, commands)
+	for _, c := range commands {
+		assert.LessOrEqual(t, len(pushedPaths(t, c.Payload)), rulesapi.MaxWatchedPathSetBytes)
 	}
 }
 

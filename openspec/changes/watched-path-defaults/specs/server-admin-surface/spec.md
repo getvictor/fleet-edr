@@ -6,7 +6,7 @@ The server SHALL send every host a set of default watched paths on top of the op
 
 The server SHALL record, with each version of the set, the default paths that version was stored with. When the stored set carries no defaults or different ones, including a set stored before defaults existed and one never changed at all, the server SHALL store the operator's same paths again as a change by the system principal, audited with a reason, so the version and epoch move forward and hosts apply the new defaults. That SHALL be a no-op once the set carries the current defaults, and servers running at once SHALL together make that change once.
 
-The stored set SHALL remain readable by a server from before default paths existed, since old and new servers share the database during a rolling upgrade: the defaults SHALL be stored as ordinary entries marked as defaults, which such a server reads, and keeps pushing, as ordinary entries. When such a server rewrites the set without the marks, the server SHALL treat the defaults as unrecorded, restore them, and not keep their unmarked repeats among the operator's paths. The limit on a set's encoded size SHALL apply to what a host is sent, the defaults included.
+The stored set SHALL remain readable by a server from before default paths existed, since old and new servers share the database during a rolling upgrade: the defaults SHALL be stored as ordinary entries marked as defaults, which such a server reads, and keeps pushing, as ordinary entries. When such a server rewrites the set without the marks, the server SHALL treat the defaults as unrecorded, restore them, and not keep their unmarked repeats among the operator's paths. The limit on a set's encoded size SHALL be measured on the operator's paths alone, as it was before the defaults existed, so a set the server accepted then still validates and can always gain the defaults; what a host is sent SHALL exceed that limit by no more than a fixed allowance for the defaults, which the fan-out's batched insert budgets for.
 
 #### Scenario: A deployment that never configured a set pushes the defaults
 
@@ -21,6 +21,13 @@ The stored set SHALL remain readable by a server from before default paths exist
 - **WHEN** the server brings the set up to its defaults
 - **THEN** the set moves to its next version with the same operator paths
 - **AND** hosts are sent the default paths followed by the operator's
+
+#### Scenario: A stored set at the size limit still gains the defaults
+
+- **GIVEN** a stored set whose operator paths encode to just under 8 KiB, written before the defaults existed
+- **WHEN** a server ensures the defaults
+- **THEN** the set keeps every operator path and records the defaults, at the next version
+- **AND** what each host is sent, the defaults included, is within the fixed allowance above the limit
 
 #### Scenario: Replicas racing add the defaults once
 

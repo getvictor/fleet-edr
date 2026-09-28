@@ -149,15 +149,18 @@ func TestValidateWatchedPaths_LeavesRoomForTheNUL(t *testing.T) {
 // server encodes it, so a path of escapable bytes counts at its escaped size.
 func TestValidateWatchedPaths_BoundsTheEncodedSetSize(t *testing.T) {
 	t.Parallel()
-	// Eight paths of ~980 bytes, sent after the default paths every host gets, encode to just under 8 KiB; one more passes it. The
-	// defaults count because the bound is on what a host is sent (issue #1167).
+	// Eight paths of ~1000 bytes encode to just under 8 KiB; one more path of the same size passes it. The bound is the one set before
+	// the default paths existed (issue #1167), so a set that fitted then still fits.
 	entry := func(i int) WatchedPath {
-		return WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 950), Match: WatchedPathLiteral}
+		return WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: WatchedPathLiteral}
 	}
 	fits := []WatchedPath{entry(0), entry(1), entry(2), entry(3), entry(4), entry(5), entry(6), entry(7)}
-	encoded, err := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: fits}))
+	encoded, err := json.Marshal(fits)
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(encoded), MaxWatchedPathSetBytes)
+	require.LessOrEqual(t, len(encoded), MaxOperatorWatchedPathSetBytes)
+	pushed, err := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: fits}))
+	require.NoError(t, err)
+	require.Greater(t, len(pushed), MaxOperatorWatchedPathSetBytes, "with the defaults it is over the operator's bound, and still valid")
 	require.NoError(t, ValidateWatchedPaths(fits))
 
 	require.ErrorContains(t, ValidateWatchedPaths(append(slices.Clone(fits), entry(8))), "at most 8192")
@@ -288,4 +291,23 @@ func TestDefaultWatchedPathsAreValid(t *testing.T) {
 	t.Parallel()
 	require.NoError(t, ValidateWatchedPaths(DefaultWatchedPaths))
 	require.NoError(t, ValidateWatchedPaths(AlwaysWatchedPaths()), "and none repeats a built-in path")
+}
+
+// What a host is sent is the defaults followed by the operator's paths, so the defaults must fit the room MaxWatchedPathSetBytes
+// leaves them: a list that outgrew it would let the largest valid set push past the fan-out's budget.
+func TestDefaultWatchedPathsFitTheirAllowance(t *testing.T) {
+	t.Parallel()
+	encoded, err := json.Marshal(DefaultWatchedPaths)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), defaultWatchedPathsAllowance)
+
+	// A set at the operator's bound, pushed with the defaults, is within the pushed bound.
+	atTheBound := make([]WatchedPath, 0, 8)
+	for i := range 8 {
+		atTheBound = append(atTheBound, WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: WatchedPathLiteral})
+	}
+	require.NoError(t, ValidateWatchedPaths(atTheBound))
+	pushed, err := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: atTheBound}))
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(pushed), MaxWatchedPathSetBytes)
 }

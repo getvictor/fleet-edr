@@ -77,6 +77,9 @@ var BuiltInWatchedPaths = []WatchedPath{
 // rather than by the extension, which is what lets a server release add one without an extension release.
 //
 // Low-traffic system directories only: every write under a watched path is an event on the wire.
+//
+// Changing this list: servers compare their list with the stored defaults for equality, so two builds with different lists running
+// at once (a rolling upgrade) each restore their own on every converge pass until the older one is gone.
 var DefaultWatchedPaths = []WatchedPath{
 	// Emond event-monitor rules and client registrations: persistence and privilege escalation (T1546.014).
 	{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix},
@@ -182,11 +185,19 @@ const MaxWatchedPaths = 32
 // longest path it can mute is one byte shorter.
 const MaxWatchedPathBytes = 1023
 
-// MaxWatchedPathSetBytes bounds the whole set as the server encodes it into a command payload. The fan-out repeats that payload on
-// every row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet the
-// server is designed to work under. Real watched paths are short; the bound only bites on a set of many maximum-length paths, which
-// MaxWatchedPaths and MaxWatchedPathBytes alone would allow at over 30 KiB.
-const MaxWatchedPathSetBytes = 8 * 1024
+// MaxOperatorWatchedPathSetBytes bounds the operator's paths as the server encodes them. The bound predates the default paths and
+// still measures the operator's paths alone, so a set accepted before the defaults existed still validates and can always gain them.
+// Real watched paths are short; the bound only bites on a set of many maximum-length paths, which MaxWatchedPaths and
+// MaxWatchedPathBytes alone would allow at over 30 KiB.
+const MaxOperatorWatchedPathSetBytes = 8 * 1024
+
+// defaultWatchedPathsAllowance is the room MaxWatchedPathSetBytes leaves for DefaultWatchedPaths, which a test holds to it.
+const defaultWatchedPathsAllowance = 512
+
+// MaxWatchedPathSetBytes bounds what a host is sent: the defaults followed by the operator's paths. The fan-out repeats that payload
+// on every row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet
+// the server is designed to work under.
+const MaxWatchedPathSetBytes = MaxOperatorWatchedPathSetBytes + defaultWatchedPathsAllowance
 
 // ErrInvalidWatchedPaths is returned for a set the server refuses. The wrapped message names the entry and the reason, and the REST
 // handler returns it to the operator.
@@ -217,12 +228,10 @@ func ValidateWatchedPaths(paths []WatchedPath) error {
 		}
 		seen[key] = struct{}{}
 	}
-	// Measured on what a host is actually sent, the defaults followed by these paths (issue #1167), with the encoder the payload is
-	// written with, so JSON escaping (which can grow a byte to six) is counted as sent.
-	encoded, _ := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: paths}))
-	if len(encoded) > MaxWatchedPathSetBytes {
-		return fmt.Errorf("%w: the set, with the default paths every host is sent, encodes to %d bytes, at most %d",
-			ErrInvalidWatchedPaths, len(encoded), MaxWatchedPathSetBytes)
+	// Measured with the encoder the payload is written with, so JSON escaping (which can grow a byte to six) is counted as sent.
+	encoded, _ := json.Marshal(paths)
+	if len(encoded) > MaxOperatorWatchedPathSetBytes {
+		return fmt.Errorf("%w: the set encodes to %d bytes, at most %d", ErrInvalidWatchedPaths, len(encoded), MaxOperatorWatchedPathSetBytes)
 	}
 	return nil
 }

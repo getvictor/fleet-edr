@@ -12,4 +12,4 @@ The agent emits file events only for paths it is told to watch: the extension's 
 
 ## Not changed
 
-Operator paths, the set's limits, and the push and catch-up mechanics are unchanged. A stored set written before this change decodes as it was.
+Operator paths, the push and catch-up mechanics, and the set's limits are unchanged: at most 32 paths, and 8 KiB measured on the operator's paths alone. What a host is sent can be larger by the defaults, within a fixed allowance. A stored set written before this change decodes as it was.
