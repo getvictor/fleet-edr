@@ -107,6 +107,7 @@ final class EventSerializerTests: XCTestCase {
         let payload = BtmLaunchItemAddPayload(
             itemType: "daemon",
             itemPath: "/Library/LaunchDaemons/com.evil.persistence.plist",
+            appURL: nil,
             executablePath: "/tmp/dropper",
             legacy: true,
             managed: false,

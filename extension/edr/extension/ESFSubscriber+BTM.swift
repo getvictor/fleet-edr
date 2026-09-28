@@ -35,6 +35,8 @@ extension ESFSubscriber {
         }
 
         let itemPath = esTokenString(item.item_url)
+        // An SMAppService item is reported relative to the app that registered it; the agent resolves it against this.
+        let appURL = esTokenString(item.app_url)
 
         // The instigator process is forensic context only (it is Apple's smd for a launchctl-bootstrap registration, so
         // it cannot discriminate). Build its signing inline when present so the wire record is complete; the server rule
@@ -59,6 +61,7 @@ extension ESFSubscriber {
         let payload = BtmLaunchItemAddPayload(
             itemType: itemType,
             itemPath: itemPath,
+            appURL: appURL.isEmpty ? nil : appURL,
             executablePath: executablePath,
             legacy: item.legacy,
             managed: item.managed,

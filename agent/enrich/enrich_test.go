@@ -157,3 +157,96 @@ func TestBtmExecutableSigningPreservesUnknownFields(t *testing.T) {
 		t.Errorf("future_field corrupted: %s", payload["future_field"])
 	}
 }
+
+// spec:endpoint-event-collection/launch-item-registration-event-capture/a-login-item-is-registered-through-smappservice
+//
+// TestBtmExecutableSigning_LoginItems covers the shape a login item takes, captured on a VM (issue #1167): SMAppService names the
+// item relative to the registering app's bundle and reports no executable_path, so the item path is resolved against app_url and
+// the helper bundle it names is what is signed.
+func TestBtmExecutableSigning_LoginItems(t *testing.T) {
+	t.Parallel()
+	const app = `"app_url":"file:///Users/victor/Applications/EdrLoginTest.app/"`
+	cases := []struct {
+		name string
+		in   string
+		// wantItem is the item_path the output carries.
+		wantItem string
+		// wantSigned is the path the evaluator is asked about, or "" when it must not be asked.
+		wantSigned string
+	}{
+		{
+			name:       "a login item is resolved against its app and its bundle signed",
+			in:         `{"item_type":"login_item","item_path":"Contents/Library/LoginItems/EdrLoginTestHelper.app",` + app + `}`,
+			wantItem:   "file:///Users/victor/Applications/EdrLoginTest.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+			wantSigned: "/Users/victor/Applications/EdrLoginTest.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+		},
+		{
+			name: "an escaped space is a space in the path signed",
+			in: `{"item_type":"login_item","item_path":"Contents/Library/LoginItems/My%20Helper.app",` +
+				`"app_url":"file:///Applications/My%20App.app/"}`,
+			wantItem:   "file:///Applications/My%20App.app/Contents/Library/LoginItems/My%20Helper.app",
+			wantSigned: "/Applications/My App.app/Contents/Library/LoginItems/My Helper.app",
+		},
+		{
+			name:     "a login item with no app to resolve against is left as reported, and not signed",
+			in:       `{"item_type":"login_item","item_path":"Contents/Library/LoginItems/EdrLoginTestHelper.app"}`,
+			wantItem: "Contents/Library/LoginItems/EdrLoginTestHelper.app",
+		},
+		{
+			name:       "an absolute item keeps its path, and a login item's bundle is signed",
+			in:         `{"item_type":"login_item","item_path":"file:///Applications/Helper.app",` + app + `}`,
+			wantItem:   "file:///Applications/Helper.app",
+			wantSigned: "/Applications/Helper.app",
+		},
+		{
+			name: "another item type is resolved, and signed by its executable_path",
+			in: `{"item_type":"agent","item_path":"Contents/Library/LaunchAgents/com.example.plist",` + app +
+				`,"executable_path":"/Users/victor/Applications/EdrLoginTest.app/Contents/MacOS/agent"}`,
+			wantItem:   "file:///Users/victor/Applications/EdrLoginTest.app/Contents/Library/LaunchAgents/com.example.plist",
+			wantSigned: "/Users/victor/Applications/EdrLoginTest.app/Contents/MacOS/agent",
+		},
+		{
+			name:     "another item type with no executable_path is not signed by its item",
+			in:       `{"item_type":"agent","item_path":"Contents/Library/LaunchAgents/com.example.plist",` + app + `}`,
+			wantItem: "file:///Users/victor/Applications/EdrLoginTest.app/Contents/Library/LaunchAgents/com.example.plist",
+		},
+		{
+			name: "a signature already present is kept, and the item still resolved",
+			in: `{"item_type":"login_item","item_path":"Contents/Library/LoginItems/EdrLoginTestHelper.app",` + app +
+				`,"executable_code_signing":{"team_id":"KEEPME0000","signing_id":"x","flags":0,"is_platform_binary":false}}`,
+			wantItem: "file:///Users/victor/Applications/EdrLoginTest.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var asked []string
+			eval := func(path string) (*codesign.Result, bool) {
+				asked = append(asked, path)
+				return &codesign.Result{TeamID: "ABCDE12345"}, true
+			}
+			got := BtmExecutableSigning([]byte(`{"event_type":"btm_launch_item_add","payload":`+tc.in+`}`), eval)
+
+			var env struct {
+				Payload struct {
+					ItemPath string          `json:"item_path"`
+					Signing  json.RawMessage `json:"executable_code_signing"`
+				} `json:"payload"`
+			}
+			if err := json.Unmarshal(got, &env); err != nil {
+				t.Fatalf("output is not valid JSON: %v (%s)", err, got)
+			}
+			if env.Payload.ItemPath != tc.wantItem {
+				t.Errorf("item_path\n got: %s\nwant: %s", env.Payload.ItemPath, tc.wantItem)
+			}
+			switch {
+			case tc.wantSigned == "" && len(asked) != 0:
+				t.Errorf("the evaluator was asked about %q and should not have been", asked)
+			case tc.wantSigned != "" && (len(asked) != 1 || asked[0] != tc.wantSigned):
+				t.Errorf("the evaluator was asked about %q, want [%s]", asked, tc.wantSigned)
+			case tc.wantSigned != "" && len(env.Payload.Signing) == 0:
+				t.Errorf("executable_code_signing was not filled")
+			}
+		})
+	}
+}

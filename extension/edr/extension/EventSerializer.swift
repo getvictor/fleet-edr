@@ -290,6 +290,10 @@ struct ApplicationControlResyncPayload: Codable, Sendable {
 struct BtmLaunchItemAddPayload: Codable, Sendable {
     let itemType: String
     let itemPath: String
+    // appURL is the registering app's bundle as a file:// URL, which BTM reports for an SMAppService item. Such an item's itemPath
+    // is relative to it (Contents/Library/LoginItems/Helper.app), and the agent resolves it before upload. nil (and omitted) when
+    // BTM reports no app, as for a legacy plist registration.
+    let appURL: String?
     let executablePath: String
     let legacy: Bool
     let managed: Bool
@@ -304,6 +308,7 @@ struct BtmLaunchItemAddPayload: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case itemType = "item_type"
         case itemPath = "item_path"
+        case appURL = "app_url"
         case executablePath = "executable_path"
         case legacy
         case managed
