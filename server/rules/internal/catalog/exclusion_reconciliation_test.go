@@ -52,6 +52,7 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"shell_from_office":               {},
 		"osascript_network_exec":          {},
 		"credential_keychain_dump":        {},
+		"trusted_root_certificate":        {},
 		"application_control_block":       {},
 		"application_control_would_block": {},
 		// The destination by the domain the process looked up, or the process by what suspicious_exec names a parent by, through the

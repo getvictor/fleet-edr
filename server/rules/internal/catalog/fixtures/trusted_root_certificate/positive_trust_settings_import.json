@@ -1,0 +1,43 @@
+{
+  "events": [
+    {
+      "event_id": "trc-import-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 7700,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "trc-import",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 7700,
+        "ppid": 1,
+        "path": "/usr/bin/security",
+        "args": [
+          "security",
+          "trust-settings-import",
+          "-d",
+          "/tmp/trust.plist"
+        ],
+        "uid": 0,
+        "gid": 0
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "trusted_root_certificate",
+      "severity": "high",
+      "description_contains": "invoked with \"trust-settings-import\"",
+      "event_ids": [
+        "trc-import"
+      ]
+    }
+  ]
+}

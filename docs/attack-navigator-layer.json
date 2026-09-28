@@ -362,6 +362,12 @@
       "comment": "No rule covering this raises an alert as built in. Covered by: proc_creation_macos_xattr_gatekeeper_bypass"
     },
     {
+      "techniqueID": "T1553.004",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: trusted_root_certificate"
+    },
+    {
       "techniqueID": "T1555.001",
       "score": 1,
       "color": "#31a354",

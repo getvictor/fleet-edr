@@ -166,6 +166,7 @@ func TestCatalog_ListShape(t *testing.T) {
 		"shell_from_office",
 		"osascript_network_exec",
 		"credential_keychain_dump",
+		"trusted_root_certificate",
 		"privilege_launchd_plist_write",
 		"installer_unsigned_package",
 		"sudoers_tamper",

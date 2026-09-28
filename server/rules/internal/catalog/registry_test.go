@@ -44,6 +44,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"shell_from_office",
 		"osascript_network_exec",
 		"credential_keychain_dump",
+		"trusted_root_certificate",
 		"privilege_launchd_plist_write",
 		"installer_unsigned_package",
 		"sudoers_tamper",
@@ -285,6 +286,8 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 	want := map[string][]string{
 		// Matches `security dump-keychain` by path and argument: the technique IS the command.
 		"credential_keychain_dump": {"T1555.001"},
+		// Observes the command that writes trust settings, which is exactly the sub-technique.
+		"trusted_root_certificate": {"T1553.004"},
 		// Observes a DYLD_INSERT_LIBRARIES assignment, which is literally the technique.
 		"dyld_insert": {"T1574.006"},
 		// The one rule that narrows per finding, so this list is the union it CAN claim rather than what every alert carries:
