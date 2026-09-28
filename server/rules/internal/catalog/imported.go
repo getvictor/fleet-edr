@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -334,7 +335,7 @@ func parseImported(name string, raw []byte, authored bool) (*importedRule, error
 	if !ok {
 		return nil, unmappable("logsource category %q maps to no event type this agent collects", f.LogSource.Category)
 	}
-	if reason, inert := categoryIsInert(f.LogSource.Category); inert {
+	if reason, inert := categoryIsInert(f.LogSource.Category, f.Detection); inert {
 		return nil, unmappable("%s", reason)
 	}
 	platforms, err := platformsFor(f.LogSource.Product)
@@ -383,46 +384,127 @@ func parseImported(name string, raw []byte, authored bool) (*importedRule, error
 	}, nil
 }
 
-// categoryIsInert reports whether a category maps to an event type the agent emits too narrowly for the category's rules to fire.
+// categoryIsInert reports whether a file rule can never fire because it watches no path the agent watches.
 //
-// `file_event` is the case. It maps to `open`, but since #301 the agent's file client inverts target-path muting, so it observes only
-// the paths it is told to watch: /etc/sudoers and /etc/sudoers.d/ always (WatchedPaths.builtIn in the extension), plus any set the
-// server pushes (#998). An upstream file_event rule watching launch daemons or startup items fires only on a host watching those
-// paths, and the loader cannot know that any host is, so importing the rule would register a detection that may never fire.
+// `file_event`, `file_rename` and `file_delete` map to events the agent's file client emits only for the paths it is told to watch
+// (the inverted target-path muting of #301): the always-watched set, which is the extension's built-in sudoers paths plus this
+// server's defaults (api.AlwaysWatchedPaths, issue #1167), and whatever an operator adds. A file rule for any other path would
+// register a detection that never matches, indistinguishable from the behaviour never occurring, which is what the refusal
+// contract exists to prevent.
 //
-// That is exactly the outcome the refusal contract exists to prevent: a rule that can never match is indistinguishable from the
-// behaviour never occurring. Refusing it says so, where importing it would look like coverage we do not have.
-//
-// This is a statement about the AGENT, not about Sigma. Widening the watched set, or subscribing to NOTIFY_WRITE more broadly,
-// is what makes these rules importable; the refusal should be revisited then and not before.
-//
-// It is deliberately COARSER than the contract allows, and the gap is worth naming. A file_event rule watching /etc/sudoers WOULD
-// run, and this refuses it along with the rest. Narrowing to path scope means reading each rule's TargetFilename values and
-// comparing them against the agent's watched prefixes, which is guesswork the moment a rule matches on a fragment with |contains
-// rather than a whole path. No macOS rule in the corpus targets those paths, so the finer check would today be machinery for a
-// rule that does not exist. TestCategoryIsInert_RefusesEvenASudoersRule pins the false refusal so it is a known trade rather than
-// a surprise, and it is the test to delete when a sudoers-watching rule appears.
-func categoryIsInert(category string) (string, bool) {
+// So such a rule is imported only when its detection is provably inside the always-watched set: every search constrains
+// TargetFilename, and each directory-constraining condition in it can be met by a watched path (api.ReachesWatchedPath). The check
+// is conservative, since a wrong yes is a rule that looks like coverage and cannot fire. A search with no TargetFilename, a regex,
+// or a keyword list is refused, and paths only an operator's own set would watch do not count, because the loader cannot know that
+// any host watches them.
+func categoryIsInert(category string, detection yaml.Node) (string, bool) {
 	switch category {
-	case "file_event":
-		return "category file_event maps to open, but this agent emits open only for /etc/sudoers paths, " +
-			"so a file_event rule watching anything else could never fire", true
-	case "file_rename":
-		// Same client, same watched set, same conclusion. The rename subscription added by #917 lives on
-		// FileTamperSubscriber alongside CREATE/WRITE and inherits its inverted target-path muting, so a rename event
-		// exists for no path outside /etc/sudoers*. Adding file_rename to the export mapping made these rules loadable,
-		// which is what makes this refusal necessary rather than theoretical.
-		return "category file_rename maps to file_rename, but this agent emits renames only for /etc/sudoers paths, " +
-			"so a file_rename rule watching anything else could never fire", true
-	case "file_delete":
-		// And again for deletion (#934). The pattern is now three deep, and it is the same pattern every time: adding an
-		// event type to the export mapping makes imported rules in that category LOADABLE, and this client emits that
-		// event type for the sudoers set alone. Any category added to sigmaCategory whose events come from
-		// FileTamperSubscriber belongs here in the same commit.
-		return "category file_delete maps to file_delete, but this agent emits deletions only for /etc/sudoers paths, " +
-			"so a file_delete rule watching anything else could never fire", true
+	case "file_event", "file_rename", "file_delete":
+	default:
+		return "", false
 	}
-	return "", false
+	if detectionReachesWatchedPaths(detection, api.AlwaysWatchedPaths()) {
+		return "", false
+	}
+	always := api.AlwaysWatchedPaths()
+	paths := make([]string, len(always))
+	for i, p := range always {
+		paths[i] = p.Path
+	}
+	return fmt.Sprintf("category %s maps to an event the agent emits only for watched paths, and every host watches only %s, "+
+		"none of which this rule matches, so it could never fire", category, strings.Join(paths, ", ")), true
+}
+
+// detectionReachesWatchedPaths reports whether every search in a Sigma detection block can match a file under watched.
+func detectionReachesWatchedPaths(detection yaml.Node, watched []api.WatchedPath) bool {
+	if detection.Kind != yaml.MappingNode {
+		return false
+	}
+	searches := 0
+	for i := 0; i+1 < len(detection.Content); i += 2 {
+		if detection.Content[i].Value == "condition" {
+			continue
+		}
+		searches++
+		if !searchReaches(detection.Content[i+1], watched) {
+			return false
+		}
+	}
+	return searches > 0
+}
+
+// searchReaches reports whether one search can match a watched file: a map of field conditions, all of which hold together, or a
+// list of such maps, any of which may.
+func searchReaches(search *yaml.Node, watched []api.WatchedPath) bool {
+	switch search.Kind {
+	case yaml.MappingNode:
+		return mapReaches(search, watched)
+	case yaml.SequenceNode:
+		for _, item := range search.Content {
+			if item.Kind == yaml.MappingNode && mapReaches(item, watched) {
+				return true
+			}
+		}
+	case yaml.ScalarNode, yaml.DocumentNode, yaml.AliasNode:
+		// A keyword search, or anything else that is not field conditions, pins no path.
+	}
+	return false
+}
+
+// mapReaches reports whether a map of field conditions, which all hold together, can match a watched file. It needs at least one
+// TargetFilename condition that pins a directory (equality, startswith or contains), and every such condition must reach a watched
+// path; an endswith condition says nothing about the directory and is neither required nor counted.
+func mapReaches(m *yaml.Node, watched []api.WatchedPath) bool {
+	pinned := false
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		field, modifier, all, regexp, err := sigma.FieldModifiers(m.Content[i].Value)
+		if err != nil {
+			return false
+		}
+		if field != "TargetFilename" {
+			continue
+		}
+		switch {
+		case modifier == "endswith":
+			continue
+		case regexp, all:
+			// A regex cannot be proven, and |all makes the values one conjunction that a single path must satisfy at once, which
+			// checking each value on its own does not establish: startswith|all of two unrelated prefixes reaches both and no
+			// file. No rule this imports needs either.
+			return false
+		case modifier != "" && modifier != "startswith" && modifier != "contains":
+			return false
+		}
+		values := conditionValues(m.Content[i+1])
+		if len(values) == 0 {
+			return false
+		}
+		// Values are alternatives, so one that reaches a watched path is enough.
+		if !slices.ContainsFunc(values, func(v string) bool { return api.ReachesWatchedPath(watched, modifier, v) }) {
+			return false
+		}
+		pinned = true
+	}
+	return pinned
+}
+
+// conditionValues returns a condition's value or values as strings, or nil for anything else.
+func conditionValues(n *yaml.Node) []string {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		return []string{n.Value}
+	case yaml.SequenceNode:
+		out := make([]string, 0, len(n.Content))
+		for _, v := range n.Content {
+			if v.Kind != yaml.ScalarNode {
+				return nil
+			}
+			out = append(out, v.Value)
+		}
+		return out
+	case yaml.MappingNode, yaml.DocumentNode, yaml.AliasNode:
+	}
+	return nil
 }
 
 // platformsFor maps a Sigma logsource product onto the platforms this engine scopes rules by.

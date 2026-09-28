@@ -56,6 +56,12 @@
       "comment": "No rule covering this raises an alert as built in. Covered by: proc_creation_macos_space_after_filename"
     },
     {
+      "techniqueID": "T1037.005",
+      "score": 0.5,
+      "color": "#fdae6b",
+      "comment": "No rule covering this raises an alert as built in. Covered by: file_event_macos_susp_startup_item_created"
+    },
+    {
       "techniqueID": "T1040",
       "score": 0.5,
       "color": "#fdae6b",
@@ -306,6 +312,12 @@
       "score": 1,
       "color": "#31a354",
       "comment": "Covered by: privilege_launchd_plist_write, proc_creation_macos_launchctl_execution, proc_creation_macos_persistence_via_plistbuddy"
+    },
+    {
+      "techniqueID": "T1546.014",
+      "score": 0.5,
+      "color": "#fdae6b",
+      "comment": "No rule covering this raises an alert as built in. Covered by: file_event_macos_emond_launch_daemon"
     },
     {
       "techniqueID": "T1548.003",

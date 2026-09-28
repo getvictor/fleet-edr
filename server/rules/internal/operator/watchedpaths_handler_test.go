@@ -76,9 +76,14 @@ func TestWatchedPathsHandler_GetReportsTheSetBuiltInPathsAndBound(t *testing.T) 
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.EqualValues(t, 2, body["version"])
 	assert.Equal(t, []any{map[string]any{"path": "/Library/StartupItems/", "match": "prefix"}}, body["paths"])
+	// spec:server-admin-surface/the-server-pushes-default-watched-paths/the-defaults-are-reported-as-always-watched
+	// The extension's built-ins, then the server's defaults (issue #1167), written out so a change to either shows here.
 	assert.Equal(t, []any{
 		map[string]any{"path": "/etc/sudoers", "match": "literal"},
 		map[string]any{"path": "/etc/sudoers.d/", "match": "prefix"},
+		map[string]any{"path": "/etc/emond.d/rules/", "match": "prefix"},
+		map[string]any{"path": "/private/var/db/emondClients/", "match": "prefix"},
+		map[string]any{"path": "/Library/StartupItems/", "match": "prefix"},
 	}, body["built_in"])
 	assert.EqualValues(t, api.MaxWatchedPaths, body["max_paths"])
 }

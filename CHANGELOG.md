@@ -10,6 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
+- **Emond and startup-item persistence are detected.** Every host now also watches `/etc/emond.d/rules/`, `/private/var/db/emondClients/` and `/Library/StartupItems/`, which lets two SigmaHQ rules the product already carried run: Emond launch rules and new startup items. Like other imported rules they start in monitor mode.
 - **Detection tuning counts the processes a rule gave up on.** When a rule needs a process record that never arrived, it now counts that process as abandoned, shown in the Cost column beside the undecided evaluations it retried. A rule failing to decide no longer looks the same as a rule with nothing to report. Rules that cannot yet count this, and days before the upgrade, show no figure rather than zero.
 - **A known-good phone-home can be waived.** `dns_c2_beacon` alerts can now be excluded by the domain the program looked up, which covers its subdomains, or by the program's path, team, signing identifier or cdhash. Until now the rule could only be silenced as a whole. See [recommended exclusions](docs/recommended-exclusions.md).
 

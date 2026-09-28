@@ -1,0 +1,5 @@
+- [x] `DefaultWatchedPaths`, `AlwaysWatchedPaths`, `PushedWatchedPaths`, and the stored document records the defaults (legacy arrays still decode)
+- [x] `Service.EnsureDefaults`, run by the converge loop before each pass
+- [x] The importer's path-scope check (`api.ReachesWatchedPath`), replacing the category-wide refusal
+- [x] Fixtures for the two newly live rules; tests for the defaults, the legacy row, the race, the converge loop and the reach table; mutation-tested
+- [x] Operator docs, changelog, generated rule reference

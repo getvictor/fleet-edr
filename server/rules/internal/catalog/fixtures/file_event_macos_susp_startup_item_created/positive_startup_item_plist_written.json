@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"event_id": "file_event_macos_susp_startup_item_created-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":5200,"parent_pid":1}},
+    {"event_id": "file_event_macos_susp_startup_item_created-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":5200,"ppid":1,"path":"/bin/cp","args":["cp","/tmp/p.plist","/Library/StartupItems/Evil/StartupParameters.plist"],"uid":0,"gid":0}},
+    {"event_id": "file_event_macos_susp_startup_item_created-open", "host_id": "fixture-host", "timestamp_ns": 1040000000, "event_type": "open",
+     "payload": {"pid":5200,"path":"/Library/StartupItems/Evil/StartupParameters.plist","flags":1537}}
+  ],
+  "expected_findings": [
+    {"rule_id": "file_event_macos_susp_startup_item_created", "severity": "low", "event_ids": ["file_event_macos_susp_startup_item_created-open"]}
+  ]
+}

@@ -149,14 +149,18 @@ func TestValidateWatchedPaths_LeavesRoomForTheNUL(t *testing.T) {
 // server encodes it, so a path of escapable bytes counts at its escaped size.
 func TestValidateWatchedPaths_BoundsTheEncodedSetSize(t *testing.T) {
 	t.Parallel()
-	// Eight paths of ~1000 bytes encode to just under 8 KiB; one more path of the same size passes it.
+	// Eight paths of ~1000 bytes encode to just under 8 KiB; one more path of the same size passes it. The bound is the one set before
+	// the default paths existed (issue #1167), so a set that fitted then still fits.
 	entry := func(i int) WatchedPath {
 		return WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: WatchedPathLiteral}
 	}
 	fits := []WatchedPath{entry(0), entry(1), entry(2), entry(3), entry(4), entry(5), entry(6), entry(7)}
 	encoded, err := json.Marshal(fits)
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(encoded), MaxWatchedPathSetBytes)
+	require.LessOrEqual(t, len(encoded), MaxOperatorWatchedPathSetBytes)
+	pushed, err := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: fits}))
+	require.NoError(t, err)
+	require.Greater(t, len(pushed), MaxOperatorWatchedPathSetBytes, "with the defaults it is over the operator's bound, and still valid")
 	require.NoError(t, ValidateWatchedPaths(fits))
 
 	require.ErrorContains(t, ValidateWatchedPaths(append(slices.Clone(fits), entry(8))), "at most 8192")
@@ -226,4 +230,84 @@ func FuzzValidateWatchedPaths(f *testing.F) {
 		assert.False(t, strings.ContainsFunc(path, func(r rune) bool { return r < 0x20 || r == 0x7f }))
 		assert.Contains(t, []WatchedPathMatch{WatchedPathLiteral, WatchedPathPrefix}, entry.Match)
 	})
+}
+
+// ReachesWatchedPath is the loader's proof that a file rule can see an event (issue #1167). Each case is one shape of condition
+// against one kind of watched entry, with the /private aliasing a macOS path carries.
+func TestReachesWatchedPath(t *testing.T) {
+	t.Parallel()
+	prefix := []WatchedPath{{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix}}
+	literal := []WatchedPath{{Path: "/etc/sudoers", Match: WatchedPathLiteral}}
+	cases := []struct {
+		name     string
+		watched  []WatchedPath
+		modifier string
+		value    string
+		want     bool
+	}{
+		{"a path inside a watched prefix", prefix, "", "/etc/emond.d/rules/x.plist", true},
+		{"a path outside it", prefix, "", "/etc/other/x.plist", false},
+		{"a narrower startswith", prefix, "startswith", "/etc/emond.d/rules/sub/", true},
+		{"a broader startswith", prefix, "startswith", "/etc/", true},
+		{"an unrelated startswith", prefix, "startswith", "/Library/", false},
+		{"contains the prefix itself", prefix, "contains", "/etc/emond.d/rules/", true},
+		{"contains a fragment of the prefix", prefix, "contains", "emond.d", true},
+		{"contains an unrelated fragment", prefix, "contains", "/Users/", false},
+		{"the /private spelling of a watched prefix", prefix, "startswith", "/private/etc/emond.d/rules/", true},
+		{"endswith reaches nothing", prefix, "endswith", ".plist", false},
+		{"an unknown modifier reaches nothing", prefix, "re", "/etc/emond.d/rules/.*", false},
+		{"equality with a watched file", literal, "", "/etc/sudoers", true},
+		{"equality with another file", literal, "", "/etc/sudoers.bak", false},
+		{"equality with a path the watched file only starts with", literal, "", "/etc/sudo", false},
+		{"startswith a watched file", literal, "startswith", "/etc/sudo", true},
+		{"contains within a watched file", literal, "contains", "sudoers", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, ReachesWatchedPath(tc.watched, tc.modifier, tc.value))
+		})
+	}
+}
+
+// A host is sent the defaults first and then the operator's paths, without an operator entry that repeats a default, which would
+// otherwise mute one directory twice.
+func TestPushedWatchedPaths(t *testing.T) {
+	t.Parallel()
+	defaults := []WatchedPath{{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix}}
+	set := WatchedPathSet{Defaults: defaults, Paths: []WatchedPath{
+		{Path: "/private/etc/emond.d/rules/", Match: WatchedPathPrefix},
+		{Path: "/etc/periodic/daily/", Match: WatchedPathPrefix},
+	}}
+	assert.Equal(t, []WatchedPath{
+		{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix},
+		{Path: "/etc/periodic/daily/", Match: WatchedPathPrefix},
+	}, PushedWatchedPaths(set))
+	assert.Empty(t, PushedWatchedPaths(WatchedPathSet{}), "no defaults recorded and no paths is nothing")
+}
+
+// Every default must be a set entry the extension accepts, or the push carrying it would be refused on every host.
+func TestDefaultWatchedPathsAreValid(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, ValidateWatchedPaths(DefaultWatchedPaths))
+	require.NoError(t, ValidateWatchedPaths(AlwaysWatchedPaths()), "and none repeats a built-in path")
+}
+
+// What a host is sent is the defaults followed by the operator's paths, so the defaults must fit the room MaxWatchedPathSetBytes
+// leaves them: a list that outgrew it would let the largest valid set push past the fan-out's budget.
+func TestDefaultWatchedPathsFitTheirAllowance(t *testing.T) {
+	t.Parallel()
+	encoded, err := json.Marshal(DefaultWatchedPaths)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), defaultWatchedPathsAllowance)
+
+	// A set at the operator's bound, pushed with the defaults, is within the pushed bound.
+	atTheBound := make([]WatchedPath, 0, 8)
+	for i := range 8 {
+		atTheBound = append(atTheBound, WatchedPath{Path: fmt.Sprintf("/Library/Watched/%02d-", i) + strings.Repeat("a", 970), Match: WatchedPathLiteral})
+	}
+	require.NoError(t, ValidateWatchedPaths(atTheBound))
+	pushed, err := json.Marshal(PushedWatchedPaths(WatchedPathSet{Defaults: DefaultWatchedPaths, Paths: atTheBound}))
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(pushed), MaxWatchedPathSetBytes)
 }

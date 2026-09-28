@@ -19,9 +19,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 
 | File | Why not |
 | --- | --- |
-| `imported/file_event/file_event_macos_emond_launch_daemon.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
-| `imported/file_event/file_event_macos_python_path_configuration_files.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
-| `imported/file_event/file_event_macos_susp_startup_item_created.yml` | category file_event maps to open, but this agent emits open only for /etc/sudoers paths, so a file_event rule watching anything else could never fire |
+| `imported/file_event/file_event_macos_python_path_configuration_files.yml` | category file_event maps to an event the agent emits only for watched paths, and every host watches only /etc/sudoers, /etc/sudoers.d/, /etc/emond.d/rules/, /private/var/db/emondClients/, /Library/StartupItems/, none of which this rule matches, so it could never fire |
 
 ## Index
 
@@ -39,6 +37,8 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`sudoers_destroyed`](#sudoers_destroyed) | Sudoers policy destroyed | high | alert | T1070.004, T1531 |
 | [`dns_c2_beacon`](#dns_c2_beacon) | Suspicious process phoning home | high | alert | T1071.004, T1568.002 |
 | [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | alert |  |
+| [`file_event_macos_emond_launch_daemon`](#file_event_macos_emond_launch_daemon) | MacOS Emond Launch Daemon | medium | monitor | T1546.014 |
+| [`file_event_macos_susp_startup_item_created`](#file_event_macos_susp_startup_item_created) | Startup Item File Created - MacOS | low | monitor | T1037.005 |
 | [`proc_creation_macos_applescript`](#proc_creation_macos_applescript) | MacOS Scripting Interpreter AppleScript | medium | monitor | T1059.002 |
 | [`proc_creation_macos_base64_decode`](#proc_creation_macos_base64_decode) | Decode Base64 Encoded Text -MacOs | low | monitor | T1027 |
 | [`proc_creation_macos_binary_padding`](#proc_creation_macos_binary_padding) | Binary Padding - MacOS | high | monitor | T1027.001 |
@@ -495,6 +495,65 @@ A provider an operator has deliberately turned off (the DNS proxy is optional) i
 
 - Reports that capture stopped, not whether it was restored. The repair (or its failure) is carried by the following transition events on the host's timeline rather than by the alert.
 - An attacker who stops a provider and prevents the agent from reporting it at all (killing the agent, or blocking upload) produces no transition event and so no alert. That absence is covered by host health going stale, not by this rule.
+
+## file_event_macos_emond_launch_daemon
+
+**MacOS Emond Launch Daemon**  
+MacOS Emond Launch Daemon
+
+| | |
+| --- | --- |
+| Rule ID | `file_event_macos_emond_launch_daemon` |
+| Severity | `medium` |
+| Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
+| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
+| ATT&CK | [`T1546.014`](https://attack.mitre.org/techniques/T1546/014/) |
+| Event types | `open` |
+
+### Description
+
+Detects additions to the Emond Launch Daemon that adversaries may use to gain persistence and elevate privileges.
+
+### Known false-positive sources
+
+- Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1546.014/T1546.014.md>
+- <https://posts.specterops.io/leveraging-emond-on-macos-for-persistence-a040a2785124>
+
+## file_event_macos_susp_startup_item_created
+
+**Startup Item File Created - MacOS**  
+Startup Item File Created - MacOS
+
+| | |
+| --- | --- |
+| Rule ID | `file_event_macos_susp_startup_item_created` |
+| Severity | `low` |
+| Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
+| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
+| ATT&CK | [`T1037.005`](https://attack.mitre.org/techniques/T1037/005/) |
+| Event types | `open` |
+
+### Description
+
+Detects the creation of a startup item plist file, that automatically get executed at boot initialization to establish persistence.
+Adversaries may use startup items automatically executed at boot initialization to establish persistence.
+Startup items execute during the final phase of the boot process and contain shell scripts or other executable files along with configuration information used by the system to determine the execution order for all startup items.
+
+
+### Known false-positive sources
+
+- Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1037.005/T1037.005.md>
+- <https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/StartupItems.html>
 
 ## proc_creation_macos_applescript
 

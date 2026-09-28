@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ func TestWatchedPathsConverge_QueuesTheSetForHostsThatMissedIt(t *testing.T) {
 	stored := r.watchedPaths(t)
 	assert.Equal(t, stored.Version, sent.Version)
 	assert.Equal(t, stored.UpdatedAt.UnixMicro(), sent.Epoch, "a caught-up host gets the same set, epoch included, as the push")
-	assert.Equal(t, []rulesapi.WatchedPath{startupItems}, sent.Paths)
+	assert.Equal(t, append(slices.Clone(rulesapi.DefaultWatchedPaths), startupItems), sent.Paths, "the defaults, then the operator's")
 
 	queued, err = converger.Converge(t.Context())
 	require.NoError(t, err)

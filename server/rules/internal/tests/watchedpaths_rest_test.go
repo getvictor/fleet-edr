@@ -50,7 +50,14 @@ func (r *appControlRig) watchedPaths(t *testing.T) watchedPathsBody {
 	return body
 }
 
-var startupItems = rulesapi.WatchedPath{Path: "/Library/StartupItems/", Match: rulesapi.WatchedPathPrefix}
+// defaultsOnTheWire is rulesapi.DefaultWatchedPaths as a push sends them, first and in order (issue #1167). Written out rather than
+// derived, so a change to the defaults or to where the push puts them shows up here.
+const defaultsOnTheWire = `{"path":"/etc/emond.d/rules/","match":"prefix"},` +
+	`{"path":"/private/var/db/emondClients/","match":"prefix"},{"path":"/Library/StartupItems/","match":"prefix"}`
+
+// startupItems and emond name paths an operator adds. Kept apart from rulesapi.DefaultWatchedPaths, which a push always carries
+// and dedups an operator entry against, so each test can see its own paths on the wire.
+var startupItems = rulesapi.WatchedPath{Path: "/Library/Security/SecurityAgentPlugins/", Match: rulesapi.WatchedPathPrefix}
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/an-operator-reads-the-watched-path-set
 func TestWatchedPathsREST_ReadsTheEmptySetAndWhatIsAlwaysWatched(t *testing.T) {
@@ -63,7 +70,8 @@ func TestWatchedPathsREST_ReadsTheEmptySetAndWhatIsAlwaysWatched(t *testing.T) {
 	assert.Empty(t, body.Paths)
 	assert.NotNil(t, body.Paths, "an empty set is an empty list, so a client need not handle null")
 	assert.Nil(t, body.UpdatedAt, "nobody has changed the seeded set")
-	assert.Equal(t, rulesapi.BuiltInWatchedPaths, body.BuiltIn)
+	// The extension's built-ins, then the paths this server pushes to every host (issue #1167): both are always watched.
+	assert.Equal(t, rulesapi.AlwaysWatchedPaths(), body.BuiltIn)
 	assert.Equal(t, rulesapi.MaxWatchedPaths, body.MaxPaths)
 }
 
@@ -72,7 +80,7 @@ func TestWatchedPathsREST_ReplacesTheSetPushesItAndAuditsIt(t *testing.T) {
 	t.Parallel()
 	hosts := []string{"host-c", "host-a", "host-b"}
 	r := newAppControlRig(t, hosts)
-	emond := rulesapi.WatchedPath{Path: "/etc/emond.d/rules/", Match: rulesapi.WatchedPathPrefix}
+	emond := rulesapi.WatchedPath{Path: "/etc/periodic/daily/", Match: rulesapi.WatchedPathPrefix}
 
 	first := r.do(t, http.MethodPut, watchedPathsRoute,
 		map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "watch startup items"})
@@ -102,8 +110,8 @@ func TestWatchedPathsREST_ReplacesTheSetPushesItAndAuditsIt(t *testing.T) {
 	// decode.
 	commands := r.inserter.snapshot()
 	require.Len(t, commands, 6, "two changes, three hosts each")
-	wantPayload := fmt.Sprintf(`{"version":2,"epoch":%d,"paths":[`+
-		`{"path":"/etc/emond.d/rules/","match":"prefix"},{"path":"/Library/StartupItems/","match":"prefix"}]}`,
+	wantPayload := fmt.Sprintf(`{"version":2,"epoch":%d,"paths":[`+defaultsOnTheWire+`,`+
+		`{"path":"/etc/periodic/daily/","match":"prefix"},{"path":"/Library/Security/SecurityAgentPlugins/","match":"prefix"}]}`,
 		stored.UpdatedAt.UnixMicro())
 	gotHosts := make([]string, 0, 3)
 	for _, c := range commands[3:] {
@@ -150,8 +158,8 @@ func TestWatchedPathsREST_ClearsTheSet(t *testing.T) {
 	var pushed rulesapi.SetWatchedPathsPayload
 	require.NoError(t, json.Unmarshal(commands[1].Payload, &pushed))
 	assert.Equal(t, int64(2), pushed.Version)
-	assert.Empty(t, pushed.Paths)
-	assert.JSONEq(t, `[]`, string(mustField(t, commands[1].Payload, "paths")), "an empty set is sent as an empty list, not null")
+	// Clearing the operator's set leaves the defaults, which are not the operator's to clear.
+	assert.JSONEq(t, `[`+defaultsOnTheWire+`]`, string(mustField(t, commands[1].Payload, "paths")))
 }
 
 // spec:server-admin-surface/watched-file-paths-are-configured-over-the-api/a-change-without-a-list-is-refused
@@ -191,7 +199,7 @@ func TestWatchedPathsREST_RefusesARequestWithoutAList(t *testing.T) {
 func TestWatchedPathsREST_RefusesAReplacementOfAnOutdatedSet(t *testing.T) {
 	t.Parallel()
 	r := newAppControlRig(t, []string{"host-a"})
-	emond := rulesapi.WatchedPath{Path: "/etc/emond.d/rules/", Match: rulesapi.WatchedPathPrefix}
+	emond := rulesapi.WatchedPath{Path: "/etc/periodic/daily/", Match: rulesapi.WatchedPathPrefix}
 	first := r.do(t, http.MethodPut, watchedPathsRoute,
 		map[string]any{"paths": []rulesapi.WatchedPath{startupItems}, "reason": "add", "expected_version": 0})
 	first.Body.Close()

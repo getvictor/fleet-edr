@@ -26,7 +26,7 @@ import (
 //
 // TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
 // description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and each rule this sensor cannot run is refused BY NAME with a
-// reason. 68 of the 71 import; the other three are refused for one reason, which is the contract working.
+// reason. 70 of the 71 import; the other one is refused for one reason, which is the contract working.
 //
 // The corpus is every macOS rule across SigmaHQ's rule trees: 69 from rules/ and two from rules-threat-hunting/ (issue #1003). Of
 // the latter, the pbpaste rule imports and the Python path configuration rule is a third file_event refusal. All three refusals
@@ -41,7 +41,7 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	rules, rejected, err := loadImported(importedCorpus, "imported", nil)
 	require.NoError(t, err)
 
-	assert.Len(t, rules, 68, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
+	assert.Len(t, rules, 70, "the rest read only fields this sensor supplies, on paths it watches")
 
 	// Three refusals, one reason, and the reason is the refusal contract working rather than a gap.
 	reasons := map[string]string{}
@@ -49,17 +49,12 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 		reasons[path.Base(r.File)] = r.Reason
 		assert.NotContains(t, r.Reason, r.File, "the reason does not repeat the file, which the rejection already carries")
 	}
-	require.Len(t, rejected, 3, "three rules in a category this agent collects too narrowly")
+	require.Len(t, rejected, 1, "one file rule watches a path no host watches")
 
 	assert.NotContains(t, reasons, "proc_creation_macos_remote_access_tools_renamed_meshagent_execution.yml",
 		"it reads OriginalFileName, which is now supplied from the code-signing identifier, so it imports")
-	for _, f := range []string{
-		"file_event_macos_emond_launch_daemon.yml", "file_event_macos_susp_startup_item_created.yml",
-		"file_event_macos_python_path_configuration_files.yml",
-	} {
-		assert.Contains(t, reasons[f], "/etc/sudoers",
-			"a file_event rule cannot fire on this agent, and the reason says which telemetry is missing")
-	}
+	assert.Contains(t, reasons["file_event_macos_python_path_configuration_files.yml"], "/etc/sudoers",
+		"it watches Python's site-packages, which no host watches, and the reason says what every host does watch")
 
 	byID := make(map[string]api.Rule, len(rules))
 	for _, r := range rules {
@@ -75,10 +70,14 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 		assert.Equal(t, []string{"exec"}, r.Doc().EventTypes, "process_creation maps to exec")
 	})
 
-	t.Run("a file_event rule is not imported", func(t *testing.T) {
+	t.Run("a file_event rule inside the watched set is imported", func(t *testing.T) {
 		t.Parallel()
-		assert.NotContains(t, byID, "file_event_macos_emond_launch_daemon",
-			"it watches /etc/emond.d, which this agent emits no open event for, so importing it would be coverage we do not have")
+		// Both watch paths this server pushes to every host (rulesapi.DefaultWatchedPaths, issue #1167).
+		for _, id := range []string{"file_event_macos_emond_launch_daemon", "file_event_macos_susp_startup_item_created"} {
+			r := byID[id]
+			require.NotNilf(t, r, "%s is imported", id)
+			assert.Equal(t, []string{"open"}, r.Doc().EventTypes, "file_event maps to open")
+		}
 	})
 
 	t.Run("metadata comes from the file", func(t *testing.T) {
@@ -583,23 +582,54 @@ func TestImportedRule_TechniquesMayBeEmpty(t *testing.T) {
 	assert.Empty(t, rule.Techniques(), "and it claims no technique, because its file names none")
 }
 
-// TestCategoryIsInert_RefusesEvenASudoersRule pins the known false refusal in the file_event decision.
+// spec:server-detection-rules-engine/a-file-rule-is-imported-when-hosts-watch-its-paths/a-file-rule-inside-the-watched-set-is-imported
+// spec:server-detection-rules-engine/a-file-rule-is-imported-when-hosts-watch-its-paths/a-file-rule-it-cannot-prove-is-refused
 //
-// The refusal is at CATEGORY granularity, so it also refuses a file_event rule watching /etc/sudoers, which the agent does collect
-// and which would therefore run. That is coarser than the refusal contract allows, and it is a deliberate trade: narrowing to path
-// scope means comparing each rule's TargetFilename values against the agent's watched prefixes, which is guesswork as soon as a
-// rule matches a fragment with |contains, and no rule in the corpus needs it.
-//
-// This test exists to make the trade visible. Delete it, and narrow categoryIsInert, when a sudoers-watching file_event rule
-// actually appears.
-func TestCategoryIsInert_RefusesEvenASudoersRule(t *testing.T) {
+// The file-rule decision is by path, not by category (issue #1167): a rule is imported when every search pins TargetFilename inside
+// the always-watched set, and refused whenever that cannot be proven. The refused cases are the ones a wrong yes would turn into a
+// rule that looks like coverage and cannot fire.
+func TestCategoryIsInert_DecidesFileRulesByTheirPaths(t *testing.T) {
 	t.Parallel()
-
-	body := []byte("title: Sudoers write\nlevel: high\nlogsource: {category: file_event, product: macos}\n" +
-		"detection: {sel: {TargetFilename|startswith: '/etc/sudoers'}, condition: sel}\n")
-	_, err := parseImported("sudoers.yml", body, false)
-	require.Error(t, err, "known false refusal: this rule WOULD run, and the category refusal does not look at its paths")
-	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the trade auditable")
+	rule := func(detection string) []byte {
+		return []byte("title: T\nlevel: high\nlogsource: {category: file_event, product: macos}\ndetection:\n" + detection)
+	}
+	cases := []struct {
+		name      string
+		detection string
+		imported  bool
+	}{
+		{"startswith a built-in path", "  sel: {TargetFilename|startswith: '/etc/sudoers'}\n  condition: sel\n", true},
+		{"startswith a default prefix", "  sel: {TargetFilename|startswith: '/Library/StartupItems/'}\n  condition: sel\n", true},
+		{"contains a default prefix, spelled through /private",
+			"  sel: {TargetFilename|contains: '/private/etc/emond.d/rules/'}\n  condition: sel\n", true},
+		{"one watched alternative is enough",
+			"  sel: {TargetFilename|startswith: ['/System/Library/StartupItems', '/Library/StartupItems/']}\n  condition: sel\n", true},
+		{"endswith beside a pinned directory", "  sel:\n    TargetFilename|startswith: '/Library/StartupItems/'\n" +
+			"    TargetFilename|endswith: '.plist'\n  condition: sel\n", true},
+		{"an unwatched directory", "  sel: {TargetFilename|startswith: '/Library/LaunchDaemons/'}\n  condition: sel\n", false},
+		{"endswith alone pins no directory", "  sel: {TargetFilename|endswith: '.plist'}\n  condition: sel\n", false},
+		{"a search with no TargetFilename", "  sel: {Image|endswith: '/tee'}\n  condition: sel\n", false},
+		{"one search out of reach", "  a: {TargetFilename|startswith: '/Library/StartupItems/'}\n" +
+			"  b: {TargetFilename|startswith: '/Users/'}\n  condition: 1 of *\n", false},
+		{"a regex cannot be proven", "  sel: {TargetFilename|re: '^/Library/StartupItems/.*'}\n  condition: sel\n", false},
+		// Both prefixes are watched, and no single file starts with both, so the conjunction reaches nothing (review on #1179).
+		{"|all of two watched prefixes no path can start with both",
+			"  sel: {TargetFilename|startswith|all: ['/etc/emond.d/rules/', '/Library/StartupItems/']}\n  condition: sel\n", false},
+		{"all values must reach under |all",
+			"  sel: {TargetFilename|contains|all: ['/Library/StartupItems/', '/Users/']}\n  condition: sel\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseImported("t.yml", rule(tc.detection), false)
+			if tc.imported {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "/Library/StartupItems/", "the reason names what every host watches, which makes it auditable")
+		})
+	}
 }
 
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-rule-using-an-unimplemented-sigma-feature-is-refused-not-a-failed-import

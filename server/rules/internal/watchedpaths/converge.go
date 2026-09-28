@@ -26,7 +26,13 @@ type Converger struct {
 	latest      api.WatchedPathCommandLister
 	logger      *slog.Logger
 	now         func() time.Time
+	// ensureDefaults, when set, puts the built-in paths in the stored set before each pass (Service.EnsureDefaults), so a deployment
+	// that never configured a set still pushes them, and one restored from a backup regains them. See SetEnsureDefaults.
+	ensureDefaults func(context.Context) error
 }
+
+// SetEnsureDefaults makes each Converge pass first ensure the built-in watched paths are in the stored set.
+func (c *Converger) SetEnsureDefaults(ensure func(context.Context) error) { c.ensureDefaults = ensure }
 
 // NewConverger builds a Converger. Every dependency is required.
 func NewConverger(store *Store, commands func(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error),
@@ -52,6 +58,13 @@ func (c *Converger) Loop(ctx context.Context, interval time.Duration) {
 // Converge queues the current set for every enrolled host that needs it and returns how many hosts it queued it for. Nothing is queued
 // while the set has never been changed, since every host already watches the empty set.
 func (c *Converger) Converge(ctx context.Context) (int, error) {
+	if c.ensureDefaults != nil {
+		// Logged and not fatal: a pass that could not add the defaults still converges hosts onto the set as it stands, and the
+		// next pass tries again.
+		if err := c.ensureDefaults(ctx); err != nil {
+			c.logger.WarnContext(ctx, "watchedpaths: could not add the built-in paths to the set", "err", err)
+		}
+	}
 	set, err := c.store.Get(ctx)
 	if err != nil || set.Version == 0 {
 		return 0, err

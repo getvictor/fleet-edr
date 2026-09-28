@@ -130,6 +130,19 @@ type modifiers struct {
 	all       bool
 }
 
+// FieldModifiers classifies a detection field key such as `TargetFilename|startswith` by the same rules the matcher compiles it
+// with, for a caller that has to reason about a condition without evaluating it (the importer's file-rule path check, issue #1167).
+// It returns the field, the substring modifier ("" for plain equality), and whether |all or |re was given, or the error the
+// matcher would refuse the key with. One classification, so the check and the matcher cannot disagree about what a key means.
+func FieldModifiers(key string) (field, substring string, all, regexp bool, err error) {
+	parts := strings.Split(key, "|")
+	m, err := parseModifiers(parts[0], parts[1:])
+	if err != nil {
+		return "", "", false, false, err
+	}
+	return parts[0], m.wrapName, m.all, m.useRegexp, nil
+}
+
 // parseModifiers decodes and validates the modifier list, rejecting every combination without a defined meaning. Split out from
 // compileFieldTest so each function does one job: this one decides what the modifiers mean, the caller applies them to values.
 func parseModifiers(field string, mods []string) (modifiers, error) {

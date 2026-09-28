@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/fleetdm/edr/server/catchup"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/fleetdm/edr/server/catchup"
 )
 
 // CommandTypeSetWatchedPaths is the command that carries the watched-path set to a host (issue #998). The agent forwards its payload
@@ -55,6 +57,10 @@ type WatchedPathSet struct {
 	// UpdatedByLabel is the display label the REST handler resolves from UpdatedBy at read time: a user's email, a service
 	// account's name, or "system". Empty when it could not be resolved, and never stored.
 	UpdatedByLabel string `json:"updated_by_label,omitempty"`
+	// Defaults are the DefaultWatchedPaths this version of the set was stored with, and so pushed with (issue #1167). Recorded so
+	// a server whose build carries a different list knows the hosts do not have it yet; not part of the operator's set, and not on
+	// the wire.
+	Defaults []WatchedPath `json:"-"`
 }
 
 // BuiltInWatchedPaths are the paths the extension watches whatever the set holds, mirroring WatchedPaths.builtIn in the extension.
@@ -63,6 +69,84 @@ type WatchedPathSet struct {
 var BuiltInWatchedPaths = []WatchedPath{
 	{Path: "/etc/sudoers", Match: WatchedPathLiteral},
 	{Path: "/etc/sudoers.d/", Match: WatchedPathPrefix},
+}
+
+// DefaultWatchedPaths are pushed to every host on top of the operator's set (issue #1167), because shipped file rules watch them:
+// the extension emits a file event only for a path it is told to watch, so a rule for any other path could never fire. They are
+// not the operator's to remove, the same as BuiltInWatchedPaths, and differ from those only in being enforced by this server's push
+// rather than by the extension, which is what lets a server release add one without an extension release.
+//
+// Low-traffic system directories only: every write under a watched path is an event on the wire.
+//
+// Changing this list: servers compare their list with the stored defaults for equality, so two builds with different lists running
+// at once (a rolling upgrade) each restore their own on every converge pass until the older one is gone.
+var DefaultWatchedPaths = []WatchedPath{
+	// Emond event-monitor rules and client registrations: persistence and privilege escalation (T1546.014).
+	{Path: "/etc/emond.d/rules/", Match: WatchedPathPrefix},
+	{Path: "/private/var/db/emondClients/", Match: WatchedPathPrefix},
+	// Startup items, a legacy boot-time persistence location (T1037.005).
+	{Path: "/Library/StartupItems/", Match: WatchedPathPrefix},
+}
+
+// AlwaysWatchedPaths is every path a host watches whatever the operator's set holds: the extension's built-ins, then this server's
+// defaults. What the console reports as always watched, and what the rule loader judges a file rule's reach against.
+func AlwaysWatchedPaths() []WatchedPath {
+	return append(slices.Clone(BuiltInWatchedPaths), DefaultWatchedPaths...)
+}
+
+// PushedWatchedPaths is what a host is sent for set: the defaults the set was stored with, then the operator's paths, dropping an
+// operator entry that repeats a default (compared through /private, as ValidateWatchedPaths does).
+func PushedWatchedPaths(set WatchedPathSet) []WatchedPath {
+	seen := make(map[WatchedPath]struct{}, len(set.Defaults))
+	out := make([]WatchedPath, 0, len(set.Defaults)+len(set.Paths))
+	for _, p := range set.Defaults {
+		seen[WatchedPath{Path: rootLinked(p.Path), Match: p.Match}] = struct{}{}
+		out = append(out, p)
+	}
+	for _, p := range set.Paths {
+		if _, dup := seen[WatchedPath{Path: rootLinked(p.Path), Match: p.Match}]; !dup {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ReachesWatchedPath reports whether a Sigma TargetFilename condition (modifier "" for equality, or "startswith" or "contains") can
+// be met by a path some entry of watched covers, so that a file rule carrying it could ever see an event (issue #1167). The agent
+// emits file events for watched paths only, so a condition no watched path can meet is one the rule can never match.
+//
+// Conservative, since the cost of a wrong yes is a rule that looks like coverage and cannot fire. "endswith" alone reaches nothing,
+// because it says nothing about the directory. Paths compare through /private, the way the extension mutes them.
+func ReachesWatchedPath(watched []WatchedPath, modifier, value string) bool {
+	v := rootLinked(value)
+	for _, w := range watched {
+		if reaches(w.Match, rootLinked(w.Path), modifier, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// reaches is ReachesWatchedPath for one entry, p being the watched path and v the condition's value, both through /private.
+func reaches(match WatchedPathMatch, p, modifier, v string) bool {
+	switch {
+	case match == WatchedPathLiteral && modifier == "":
+		return p == v
+	case match == WatchedPathLiteral && modifier == "startswith":
+		return strings.HasPrefix(p, v)
+	case match == WatchedPathLiteral && modifier == "contains":
+		return strings.Contains(p, v)
+	case match == WatchedPathPrefix && modifier == "":
+		// A path inside the watched tree.
+		return strings.HasPrefix(v, p)
+	case match == WatchedPathPrefix && modifier == "startswith":
+		// A narrower prefix inside the tree, or a broader one every path in the tree starts with.
+		return strings.HasPrefix(v, p) || strings.HasPrefix(p, v)
+	case match == WatchedPathPrefix && modifier == "contains":
+		// A fragment that begins inside the tree, or one the tree's own path contains.
+		return strings.HasPrefix(v, p) || strings.Contains(p, v)
+	}
+	return false
 }
 
 // WatchedPathEnrollment is a host with an active enrollment and when it last enrolled, as the watched-path catch-up reads it. A
@@ -101,11 +185,19 @@ const MaxWatchedPaths = 32
 // longest path it can mute is one byte shorter.
 const MaxWatchedPathBytes = 1023
 
-// MaxWatchedPathSetBytes bounds the whole set as the server encodes it into a command payload. The fan-out repeats that payload on
-// every row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet the
-// server is designed to work under. Real watched paths are short; the bound only bites on a set of many maximum-length paths, which
-// MaxWatchedPaths and MaxWatchedPathBytes alone would allow at over 30 KiB.
-const MaxWatchedPathSetBytes = 8 * 1024
+// MaxOperatorWatchedPathSetBytes bounds the operator's paths as the server encodes them. The bound predates the default paths and
+// still measures the operator's paths alone, so a set accepted before the defaults existed still validates and can always gain them.
+// Real watched paths are short; the bound only bites on a set of many maximum-length paths, which MaxWatchedPaths and
+// MaxWatchedPathBytes alone would allow at over 30 KiB.
+const MaxOperatorWatchedPathSetBytes = 8 * 1024
+
+// defaultWatchedPathsAllowance is the room MaxWatchedPathSetBytes leaves for DefaultWatchedPaths, which a test holds to it.
+const defaultWatchedPathsAllowance = 512
+
+// MaxWatchedPathSetBytes bounds what a host is sent: the defaults followed by the operator's paths. The fan-out repeats that payload
+// on every row of a batched insert of up to 256 hosts, so this keeps one statement near 2 MiB, inside the 4 MiB max_allowed_packet
+// the server is designed to work under.
+const MaxWatchedPathSetBytes = MaxOperatorWatchedPathSetBytes + defaultWatchedPathsAllowance
 
 // ErrInvalidWatchedPaths is returned for a set the server refuses. The wrapped message names the entry and the reason, and the REST
 // handler returns it to the operator.
@@ -138,8 +230,8 @@ func ValidateWatchedPaths(paths []WatchedPath) error {
 	}
 	// Measured with the encoder the payload is written with, so JSON escaping (which can grow a byte to six) is counted as sent.
 	encoded, _ := json.Marshal(paths)
-	if len(encoded) > MaxWatchedPathSetBytes {
-		return fmt.Errorf("%w: the set encodes to %d bytes, at most %d", ErrInvalidWatchedPaths, len(encoded), MaxWatchedPathSetBytes)
+	if len(encoded) > MaxOperatorWatchedPathSetBytes {
+		return fmt.Errorf("%w: the set encodes to %d bytes, at most %d", ErrInvalidWatchedPaths, len(encoded), MaxOperatorWatchedPathSetBytes)
 	}
 	return nil
 }
