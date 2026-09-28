@@ -213,12 +213,12 @@ var ErrInvalidWatchedPaths = errors.New("invalid watched paths")
 // extension applies what it is given.
 //
 // A path must be absolute, or start with HomeWatchedPathPrefix to name a path in every user's home, which is then judged as the
-// path it would be in a home at the root. It must be clean (no empty, "." or ".." segment), within MaxWatchedPathBytes in its /private spelling (the one the
-// extension mutes and the kernel reports for /etc, /tmp and /var), and free of ASCII control characters
-// (NUL included, which would truncate the path the kernel receives). A prefix
-// names a directory, so it ends in "/", and it must lie below a top-level directory: a prefix such as "/Users/" or "/Library/" would
-// put every write under that tree on the wire, which is the firehose ADR-0008 removed. A literal names a file, so it does not end in
-// "/". An entry may appear once, judged by its root-linked form.
+// path it would be in a home at the root. It must be clean (no empty, "." or ".." segment), within MaxWatchedPathBytes in its
+// /private spelling (the one the extension mutes and the kernel reports for /etc, /tmp and /var), and free of ASCII control
+// characters (NUL included, which would truncate the path the kernel receives). A prefix names a directory, so it ends in "/", and
+// it must lie below a top-level directory: a prefix such as "/Users/" or "/Library/" would put every write under that tree on the
+// wire, which is the firehose ADR-0008 removed. A literal names a file, so it does not end in "/". An entry may appear once, judged
+// by its root-linked form.
 func ValidateWatchedPaths(paths []WatchedPath) error {
 	if len(paths) > MaxWatchedPaths {
 		return fmt.Errorf("%w: %d paths, at most %d", ErrInvalidWatchedPaths, len(paths), MaxWatchedPaths)
