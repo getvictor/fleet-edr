@@ -165,6 +165,7 @@ func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
 		in := btmLaunchItemAddPayload{
 			ItemType:       rapid.SampledFrom([]string{"daemon", "agent", "login_item", "app", "user_item"}).Draw(rt, "item_type"),
 			ItemPath:       rapid.String().Draw(rt, "item_path"),
+			AppURL:         rapid.String().Draw(rt, "app_url"),
 			ExecutablePath: rapid.String().Draw(rt, "executable_path"),
 			Managed:        rapid.Bool().Draw(rt, "managed"),
 			InstigatorPID:  rapid.Int().Draw(rt, "instigator_pid"),

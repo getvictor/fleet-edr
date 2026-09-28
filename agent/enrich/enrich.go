@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/url"
+	"strings"
 
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/pkgsign"
@@ -79,7 +80,8 @@ func BtmExecutableSigning(data []byte, eval Evaluator) []byte {
 // btmLoginItem is the item type BTM reports with no executable_path: the item is a helper app bundle, which is what is signed.
 const btmLoginItem = "login_item"
 
-// resolveItemURL resolves an item URL that is relative to appURL, the registering app's bundle as a file:// URL. ok is false for an
+// resolveItemURL resolves an item URL that is relative to appURL, the registering app's bundle as a file:// URL (BTM reports it
+// with a trailing slash). ok is false for an
 // item URL that is already absolute, or when there is no app to resolve it against.
 func resolveItemURL(itemURL, appURL string) (string, bool) {
 	item, err := url.Parse(itemURL)
@@ -89,6 +91,12 @@ func resolveItemURL(itemURL, appURL string) (string, bool) {
 	app, err := url.Parse(appURL)
 	if err != nil || app.Scheme != "file" {
 		return "", false
+	}
+	// The app is a bundle, so a directory. Without the trailing slash, resolution would replace the bundle's name rather than
+	// descend into it.
+	if !strings.HasSuffix(app.Path, "/") {
+		app.Path += "/"
+		app.RawPath = ""
 	}
 	return app.ResolveReference(item).String(), true
 }

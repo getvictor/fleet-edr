@@ -94,9 +94,11 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 // btmLaunchItemAddPayload mirrors the extension's btm_launch_item_add wire shape (schema/events.json). The rule reads item_type +
 // managed (the gate) and the REGISTERED EXECUTABLE's code-signing (the precision filter). instigator_pid / instigator_code_signing
 // are forensic context only (the instigator is Apple's smd for launchctl-bootstrap registrations, so they cannot discriminate).
+// app_url is the app that registered an SMAppService item, absent for a legacy plist registration.
 type btmLaunchItemAddPayload struct {
 	ItemType              string           `json:"item_type"`
 	ItemPath              string           `json:"item_path"`
+	AppURL                string           `json:"app_url,omitempty"`
 	ExecutablePath        string           `json:"executable_path"`
 	Managed               bool             `json:"managed"`
 	ExecutableCodeSigning *codeSigningJSON `json:"executable_code_signing"`

@@ -188,6 +188,13 @@ func TestBtmExecutableSigning_LoginItems(t *testing.T) {
 			wantSigned: "/Applications/My App.app/Contents/Library/LoginItems/My Helper.app",
 		},
 		{
+			name: "an app without its trailing slash is still descended into",
+			in: `{"item_type":"login_item","item_path":"Contents/Library/LoginItems/EdrLoginTestHelper.app",` +
+				`"app_url":"file:///Applications/My%20App.app"}`,
+			wantItem:   "file:///Applications/My%20App.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+			wantSigned: "/Applications/My App.app/Contents/Library/LoginItems/EdrLoginTestHelper.app",
+		},
+		{
 			name:     "a login item with no app to resolve against is left as reported, and not signed",
 			in:       `{"item_type":"login_item","item_path":"Contents/Library/LoginItems/EdrLoginTestHelper.app"}`,
 			wantItem: "Contents/Library/LoginItems/EdrLoginTestHelper.app",
