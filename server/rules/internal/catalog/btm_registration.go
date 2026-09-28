@@ -34,10 +34,11 @@ func untrustedRegistration(evt api.Event, itemTypes ...string) (btmLaunchItemAdd
 	return p, true
 }
 
-// btmItemSubject builds the process-less dedup subject for a registration: "<kind>:<item path>" when that fits alerts.subject, and
-// a fixed-length SHA-256 of the path when it would not. The hash is stable per path, so repeat registrations of one item still
-// collapse while distinct items stay distinct.
-func btmItemSubject(kind, itemPath string) string {
+// pathSubject builds the dedup subject for a finding about a file rather than a process run: "<kind>:<path>" when that fits
+// alerts.subject, and a fixed-length SHA-256 of the path when it would not. The hash is stable per path, so repeats of one item
+// still collapse while distinct items stay distinct. The BTM persistence rules name their item by it, and the installer rule its
+// package.
+func pathSubject(kind, itemPath string) string {
 	subject := kind + ":" + itemPath
 	if len(subject) <= subjectColumnLimit {
 		return subject

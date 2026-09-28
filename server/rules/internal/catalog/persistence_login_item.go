@@ -91,7 +91,7 @@ func (r *PersistenceLoginItem) evalEvent(_ context.Context, evt api.Event, _ api
 		Severity:    api.SeverityMedium,
 		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("Untrusted app %s registered as a login item", app),
-		Subject:     btmItemSubject("loginitem", app),
+		Subject:     pathSubject("loginitem", app),
 		EventIDs:    []string{evt.EventID},
 	}, nil
 }

@@ -45,6 +45,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"osascript_network_exec",
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
+		"installer_unsigned_package",
 		"sudoers_tamper",
 		"sudoers_destroyed",
 		"application_control_block",
@@ -172,6 +173,7 @@ func TestAll_ThreadsExclusionResolver(t *testing.T) {
 	assert.Same(t, res, byID["persistence_launchagent"].(*PersistenceLaunchAgent).Exclusions)
 	assert.Same(t, res, byID["persistence_login_item"].(*PersistenceLoginItem).Exclusions)
 	assert.Same(t, res, byID["privilege_launchd_plist_write"].(*PrivilegeLaunchdPlistWrite).Exclusions)
+	assert.Same(t, res, byID["installer_unsigned_package"].(*InstallerUnsignedPackage).Exclusions)
 	assert.Same(t, res, byID["sudoers_tamper"].(*SudoersTamper).Exclusions)
 	assert.Same(t, res, byID["sudoers_destroyed"].(*SudoersDestroyed).Exclusions)
 	assert.Same(t, res, byID["shell_network_connect"].(*ShellNetworkConnect).Exclusions)
@@ -298,6 +300,8 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 		"persistence_login_item": {"T1547.015"},
 		// Observes a BTM daemon registration, which is exactly the sub-technique.
 		"privilege_launchd_plist_write": {"T1543.004"},
+		// Observes an installer script from an unsigned package running, which is exactly the sub-technique.
+		"installer_unsigned_package": {"T1546.016"},
 		// Observes a capture provider stopping and not returning. That is a state, not an actor: a crash produces it exactly,
 		// and Impair Defenses names somebody doing something. The empty entry is the decision #755 asked for, not an omission.
 		"sensor_tamper": {},
@@ -433,6 +437,7 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 		"dns_resolve_then_connect":       {},
 		"absence_within_window":          {},
 		"btm_item_signing_verdict":       {},
+		"installer_package_signature":    {},
 	}
 
 	seen := map[string]struct{}{}

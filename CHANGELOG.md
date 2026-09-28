@@ -10,6 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
+- **Unsigned installer packages are detected.** `installer_unsigned_package` alerts once per package when a package that is unsigned, or whose signature macOS does not trust, runs an install script (T1546.016). Exclude an in-house package by its path.
 - **Login item persistence is detected.** `persistence_login_item` alerts when a login item launches an app that is not Apple's or MDM-managed (T1547.015), whether it is an app's background helper or an app added to the user's login items. Exclude a vendor by the app's `team_id` or `signing_id`. Needs this release's agent, which reports the app's signature.
 - **Emond and startup-item persistence are detected.** Every host now also watches `/etc/emond.d/rules/`, `/private/var/db/emondClients/` and `/Library/StartupItems/`, which lets two SigmaHQ rules the product already carried run: Emond launch rules and new startup items. Like other imported rules they start in monitor mode.
 - **Detection tuning counts the processes a rule gave up on.** When a rule needs a process record that never arrived, it now counts that process as abandoned, shown in the Cost column beside the undecided evaluations it retried. A rule failing to decide no longer looks the same as a rule with nothing to report. Rules that cannot yet count this, and days before the upgrade, show no figure rather than zero.

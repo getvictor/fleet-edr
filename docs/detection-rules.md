@@ -34,6 +34,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002 |
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
+| [`installer_unsigned_package`](#installer_unsigned_package) | Unsigned installer package | high | alert | T1546.016 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | alert | T1548.003 |
 | [`sudoers_destroyed`](#sudoers_destroyed) | Sudoers policy destroyed | high | alert | T1070.004, T1531 |
 | [`dns_c2_beacon`](#dns_c2_beacon) | Suspicious process phoning home | high | alert | T1071.004, T1568.002 |
@@ -398,6 +399,38 @@ Notarization is deliberately NOT a trust signal: it is an automated Apple scan, 
 
 - BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).
 - Registrations whose executable code-signing cannot be read (executable absent or unreadable at registration) are skipped to stay high-precision.
+
+## installer_unsigned_package
+
+**Unsigned installer package**  
+Flags an installer script run from a package that is unsigned or whose signature macOS does not trust.
+
+| | |
+| --- | --- |
+| Rule ID | `installer_unsigned_package` |
+| Severity | `high` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1546.016`](https://attack.mitre.org/techniques/T1546/016/) |
+| Event types | `exec` |
+
+### Description
+
+Detects malicious installer packages on macOS (T1546.016): a package's preinstall and postinstall scripts run as root, so a package a user is talked into opening can run anything with full privilege.
+
+Keyed on the package's signature, which the agent reads when macOS's installer runs one of its scripts. Vendors sign their packages, and macOS refuses an unsigned one unless the user overrides it, so an unsigned or untrusted package running a script is rare. One alert is raised per package, however many scripts it runs.
+
+`suspicious_exec` also reports each of a package's scripts, signed or not, and is excluded by the team that signed the package. This rule is what still reports a package that names no team to exclude.
+
+### Known false-positive sources
+
+- An in-house package that was never signed. Prefer signing it with a Developer ID Installer certificate; failing that, a path-glob exclusion on where it is installed from, with an expiry, since anyone who can write that path inherits the exclusion.
+
+### Limitations
+
+- A package with no scripts runs nothing at install time and is not reported, although its files still land.
+- A package whose file is gone by the time its script is read (one that deletes itself, say) cannot be classified and is not reported. `suspicious_exec` still reports its scripts.
+- A package signed by a certificate macOS has revoked or does not trust is reported alongside an unsigned one; the alert does not tell them apart.
 
 ## sudoers_tamper
 

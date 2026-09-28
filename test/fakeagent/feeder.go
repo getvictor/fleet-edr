@@ -194,14 +194,15 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 	switch ev.Type {
 	case "exec":
 		return json.Marshal(struct {
-			PID  int      `json:"pid"`
-			PPID int      `json:"ppid"`
-			Path string   `json:"path"`
-			Args []string `json:"args"`
-			CWD  string   `json:"cwd"`
-			UID  int      `json:"uid"`
-			GID  int      `json:"gid"`
-		}{ev.PID, ev.PPID, ev.Path, ev.Args, ev.CWD, ev.UID, ev.GID})
+			PID            int             `json:"pid"`
+			PPID           int             `json:"ppid"`
+			Path           string          `json:"path"`
+			Args           []string        `json:"args"`
+			CWD            string          `json:"cwd"`
+			UID            int             `json:"uid"`
+			GID            int             `json:"gid"`
+			PackageSigning *PackageSigning `json:"package_signing,omitempty"`
+		}{ev.PID, ev.PPID, ev.Path, ev.Args, ev.CWD, ev.UID, ev.GID, ev.PackageSigning})
 	case "fork":
 		return json.Marshal(struct {
 			ChildPID  int `json:"child_pid"`

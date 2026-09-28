@@ -95,7 +95,7 @@ func (r *PersistenceLaunchAgent) evalEvent(_ context.Context, evt api.Event, _ a
 		Severity:    api.SeverityHigh,
 		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("Untrusted executable %s registered as LaunchAgent %s", executable, plist),
-		Subject:     btmItemSubject("launchagent", plist),
+		Subject:     pathSubject("launchagent", plist),
 		EventIDs:    []string{evt.EventID},
 	}, nil
 }

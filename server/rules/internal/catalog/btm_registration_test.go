@@ -110,12 +110,12 @@ func TestBTMItemPath(t *testing.T) {
 	assert.Equal(t, "/Library/LaunchAgents/x.plist", btmItemPath("/Library/LaunchAgents/x.plist"), "a path is already a path")
 }
 
-func TestBTMItemSubject(t *testing.T) {
+func TestPathSubject(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "launchagent:/Library/LaunchAgents/x.plist", btmItemSubject("launchagent", "/Library/LaunchAgents/x.plist"))
+	assert.Equal(t, "launchagent:/Library/LaunchAgents/x.plist", pathSubject("launchagent", "/Library/LaunchAgents/x.plist"))
 	long := "/Library/LaunchAgents/" + strings.Repeat("a", 300) + ".plist"
-	got := btmItemSubject("launchagent", long)
+	got := pathSubject("launchagent", long)
 	assert.LessOrEqual(t, len(got), subjectColumnLimit)
-	assert.Equal(t, got, btmItemSubject("launchagent", long), "stable for one path")
-	assert.NotEqual(t, got, btmItemSubject("launchagent", long+"x"), "distinct for another")
+	assert.Equal(t, got, pathSubject("launchagent", long), "stable for one path")
+	assert.NotEqual(t, got, pathSubject("launchagent", long+"x"), "distinct for another")
 }

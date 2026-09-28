@@ -230,3 +230,18 @@ func TestPostDirect_PropagatesNon2xx(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 401")
 }
+
+// An installer script's exec carries the package's signature, which the installer-package rule decides on; any other exec omits
+// the key, the way the production agent does, rather than sending null.
+func TestBuildPayload_ExecCarriesAPackageSignatureOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+	script := Event{Type: "exec", PID: 6100, PPID: 6000, Path: "/bin/sh",
+		PackageSigning: &PackageSigning{Signed: false, Notarized: false, TeamID: ""}}
+	payload, err := buildPayload(script)
+	require.NoError(t, err)
+	assert.Contains(t, string(payload), `"package_signing":{"signed":false,"notarized":false,"team_id":""}`)
+
+	payload, err = buildPayload(Event{Type: "exec", PID: 6100, PPID: 6000, Path: "/bin/sh"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "package_signing")
+}
