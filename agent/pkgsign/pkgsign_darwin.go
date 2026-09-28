@@ -65,7 +65,12 @@ func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 		return nil, false
 	}
 	key := cacheKey{path: pkgPath, dev: uint64(pkg.Dev), ino: pkg.Ino, ctime: pkg.Ctimespec.Nano(), size: pkg.Size} //nolint:gosec // a device number is not negative
-	if res, hit := results.get(key); hit && vouchable(res, sandboxErr) {
+	if res, hit := results.get(key); hit {
+		// A hit is pkgutil's answer for this exact file, so running it again could only repeat it: an answer that cannot be
+		// given now is refused at once rather than checked again.
+		if !vouchable(res, sandboxErr) {
+			return nil, false
+		}
 		return &res, true
 	}
 	res, ok := Parse(checkSignature(pkgPath))

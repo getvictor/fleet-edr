@@ -78,18 +78,7 @@ func (r *InstallerUnsignedPackage) CountsMaterializationAbandons() {}
 func (r *InstallerUnsignedPackage) EvaluateScoped(
 	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
 ) ([]api.Finding, error) {
-	var findings []api.Finding
-	var miss pendingMiss
-	for _, evt := range events {
-		f, err := r.evalExec(ctx, scope, evt, s)
-		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fatal)
-		}
-		if f != nil {
-			findings = append(findings, *f)
-		}
-	}
-	return findings, miss.err
+	return evalEachScopedEvent(ctx, scope, events, s, r.evalExec)
 }
 
 func (r *InstallerUnsignedPackage) evalExec(

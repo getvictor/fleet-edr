@@ -80,13 +80,17 @@ func TestEvaluate_AnUnsignedPackageReadAfterItsInstallEndedIsStillReported(t *te
 
 // spec:endpoint-event-collection/an-installer-script-names-its-package-s-signature/a-late-read-reports-only-an-untrusted-package
 //
-// The same package read as trusted is not reported once the sandbox is gone, whether pkgutil answers now or its answer is cached:
+// The same package read as trusted is not reported once the sandbox is gone, and its cached answer is refused without pkgutil:
 // without the sandbox nothing shows the package is the one PackageKit installed. While the sandbox stands the answer is reported.
 func TestEvaluate_ATrustedPackageReadAfterItsInstallEndedIsNotReported(t *testing.T) { //nolint:paralleltest // swaps a package variable
 	pkg, script := buildPackage(t)
 	original := checkSignature
 	t.Cleanup(func() { checkSignature = original })
-	checkSignature = func(string) string { return notarizedDeveloperID }
+	checks := 0
+	checkSignature = func(string) string {
+		checks++
+		return notarizedDeveloperID
+	}
 
 	res, ok := Evaluate(pkg, script)
 	require.True(t, ok, "while the sandbox stands a trusted answer is given")
@@ -96,6 +100,7 @@ func TestEvaluate_ATrustedPackageReadAfterItsInstallEndedIsNotReported(t *testin
 	res, ok = Evaluate(pkg, script)
 	assert.False(t, ok, "the cached trusted answer is not given without the sandbox")
 	assert.Nil(t, res)
+	assert.Equal(t, 1, checks, "the refused cache hit does not run pkgutil again")
 }
 
 // The same path holding a different file for a later install is checked again, not answered from the cache: a stale answer would
