@@ -19,7 +19,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 
 | File | Why not |
 | --- | --- |
-| `imported/file_event/file_event_macos_python_path_configuration_files.yml` | category file_event maps to an event the agent emits only for watched paths, and every host watches only /etc/sudoers, /etc/sudoers.d/, /etc/emond.d/rules/, /private/var/db/emondClients/, /Library/StartupItems/, none of which this rule matches, so it could never fire |
+| `imported/file_event/file_event_macos_python_path_configuration_files.yml` | category file_event maps to an event the agent emits only for watched paths, and every host watches only /etc/sudoers, /etc/sudoers.d/, /etc/emond.d/rules/, /private/var/db/emondClients/, /Library/StartupItems/, ~/.ssh/authorized_keys, ~/.ssh/authorized_keys2, none of which this rule matches, so it could never fire |
 
 ## Index
 
@@ -38,6 +38,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`installer_unsigned_package`](#installer_unsigned_package) | Unsigned installer package | high | alert | T1546.016 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | alert | T1548.003 |
 | [`sudoers_destroyed`](#sudoers_destroyed) | Sudoers policy destroyed | high | alert | T1070.004, T1531 |
+| [`persistence_ssh_authorized_keys`](#persistence_ssh_authorized_keys) | SSH authorized keys changed | medium | alert | T1098.004 |
 | [`dns_c2_beacon`](#dns_c2_beacon) | Suspicious process phoning home | high | alert | T1071.004, T1568.002 |
 | [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | alert |  |
 | [`file_event_macos_emond_launch_daemon`](#file_event_macos_emond_launch_daemon) | MacOS Emond Launch Daemon | medium | monitor | T1546.014 |
@@ -524,6 +525,36 @@ Only files sudo would actually load are considered: sudoers(5) skips names in /e
 
 - Destruction of /etc/sudoers.d itself, rather than of a file within it, is not detected: the watched set is the files, not the directory.
 - A file sudo already ignores (a name containing a `.` or ending in `~`) is deliberately not reported, so an attacker removing their own `.tmp` staging file leaves no finding from this rule.
+
+## persistence_ssh_authorized_keys
+
+**SSH authorized keys changed**  
+Flags a write to, or a rename onto, a user's SSH authorized_keys file.
+
+| | |
+| --- | --- |
+| Rule ID | `persistence_ssh_authorized_keys` |
+| Severity | `medium` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1098.004`](https://attack.mitre.org/techniques/T1098/004/) |
+| Event types | `open`, `file_rename` |
+
+### Description
+
+Detects SSH key persistence on macOS (T1098.004): a public key added to `~/.ssh/authorized_keys` (or `authorized_keys2`) lets whoever holds the private key log in as that user, and keeps working after the user's password changes. Every home is watched, root's included.
+
+The rule reads renames as well as writes, so a key file prepared elsewhere and moved into place is caught. It does not filter on Apple-signed tools, because keys are added with `cat`, `tee` and `ssh-copy-id`'s remote shell.
+
+### Known false-positive sources
+
+- A person adding their own key, by hand or with `ssh-copy-id` from another machine. Confirm with them; the writer is their shell or editor.
+- Configuration management that distributes keys (Ansible, Chef, Puppet, an MDM script). Add a path-glob exclusion for the agent's absolute path.
+
+### Limitations
+
+- A key file named by a custom `AuthorizedKeysFile` in sshd_config is not watched unless an operator adds its path.
+- Removing a key, or deleting the file, is not reported: removal takes access away rather than granting it.
 
 ## dns_c2_beacon
 

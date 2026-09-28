@@ -173,6 +173,7 @@ func TestCatalog_ListShape(t *testing.T) {
 		// Registered immediately after the rule it complements: sudoers_tamper covers a policy file being written or renamed
 		// into place, this one covers the same file being emptied or removed (issue #934).
 		"sudoers_destroyed",
+		"persistence_ssh_authorized_keys",
 		"dns_c2_beacon",
 		"sensor_tamper",
 	}

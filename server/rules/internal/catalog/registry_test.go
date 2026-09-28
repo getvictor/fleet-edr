@@ -49,6 +49,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"installer_unsigned_package",
 		"sudoers_tamper",
 		"sudoers_destroyed",
+		"persistence_ssh_authorized_keys",
 		"application_control_block",
 		"application_control_would_block",
 		"dns_c2_beacon",
@@ -177,6 +178,7 @@ func TestAll_ThreadsExclusionResolver(t *testing.T) {
 	assert.Same(t, res, byID["installer_unsigned_package"].(*InstallerUnsignedPackage).Exclusions)
 	assert.Same(t, res, byID["sudoers_tamper"].(*SudoersTamper).Exclusions)
 	assert.Same(t, res, byID["sudoers_destroyed"].(*SudoersDestroyed).Exclusions)
+	assert.Same(t, res, byID["persistence_ssh_authorized_keys"].(*PersistenceSSHAuthorizedKeys).Exclusions)
 	assert.Same(t, res, byID["shell_network_connect"].(*ShellNetworkConnect).Exclusions)
 	assert.Same(t, res, byID["dns_c2_beacon"].(*DNSC2Beacon).Exclusions)
 }
@@ -320,6 +322,8 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 		// Observes sudoers being modified.
 		"sudoers_tamper":    {"T1548.003"},
 		"sudoers_destroyed": {"T1070.004", "T1531"},
+		// Observes an authorized_keys file being written, which is exactly the sub-technique.
+		"persistence_ssh_authorized_keys": {"T1098.004"},
 	}
 
 	got := make(map[string][]string)

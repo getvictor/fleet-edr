@@ -86,6 +86,9 @@ var DefaultWatchedPaths = []WatchedPath{
 	{Path: "/private/var/db/emondClients/", Match: WatchedPathPrefix},
 	// Startup items, a legacy boot-time persistence location (T1037.005).
 	{Path: "/Library/StartupItems/", Match: WatchedPathPrefix},
+	// The files sshd reads a user's authorized keys from, in every home (T1098.004). Written when a key is added, which is rare.
+	{Path: HomeWatchedPathPrefix + ".ssh/authorized_keys", Match: WatchedPathLiteral},
+	{Path: HomeWatchedPathPrefix + ".ssh/authorized_keys2", Match: WatchedPathLiteral},
 }
 
 // AlwaysWatchedPaths is every path a host watches whatever the operator's set holds: the extension's built-ins, then this server's

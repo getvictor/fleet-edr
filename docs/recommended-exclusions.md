@@ -29,6 +29,7 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `persistence_login_item` | `team_id`, `signing_id` | The app the login item launches |
 | `persistence_login_item` | `path_glob` | The app's bundle |
 | `installer_unsigned_package` | `path_glob` | The package being installed |
+| `persistence_ssh_authorized_keys` | `path_glob` | The process that wrote the key file |
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
 | `dns_c2_beacon` | `domain` | The domain the process looked up before connecting |

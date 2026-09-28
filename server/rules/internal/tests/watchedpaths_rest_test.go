@@ -53,7 +53,8 @@ func (r *appControlRig) watchedPaths(t *testing.T) watchedPathsBody {
 // defaultsOnTheWire is rulesapi.DefaultWatchedPaths as a push sends them, first and in order (issue #1167). Written out rather than
 // derived, so a change to the defaults or to where the push puts them shows up here.
 const defaultsOnTheWire = `{"path":"/etc/emond.d/rules/","match":"prefix"},` +
-	`{"path":"/private/var/db/emondClients/","match":"prefix"},{"path":"/Library/StartupItems/","match":"prefix"}`
+	`{"path":"/private/var/db/emondClients/","match":"prefix"},{"path":"/Library/StartupItems/","match":"prefix"},` +
+	`{"path":"~/.ssh/authorized_keys","match":"literal"},{"path":"~/.ssh/authorized_keys2","match":"literal"}`
 
 // startupItems and emond name paths an operator adds. Kept apart from rulesapi.DefaultWatchedPaths, which a push always carries
 // and dedups an operator entry against, so each test can see its own paths on the wire.

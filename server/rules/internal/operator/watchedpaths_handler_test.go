@@ -84,6 +84,8 @@ func TestWatchedPathsHandler_GetReportsTheSetBuiltInPathsAndBound(t *testing.T) 
 		map[string]any{"path": "/etc/emond.d/rules/", "match": "prefix"},
 		map[string]any{"path": "/private/var/db/emondClients/", "match": "prefix"},
 		map[string]any{"path": "/Library/StartupItems/", "match": "prefix"},
+		map[string]any{"path": "~/.ssh/authorized_keys", "match": "literal"},
+		map[string]any{"path": "~/.ssh/authorized_keys2", "match": "literal"},
 	}, body["built_in"])
 	assert.EqualValues(t, api.MaxWatchedPaths, body["max_paths"])
 }

@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "event_id": "ak-12500-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 12500,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "ak-12500-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 12500,
+        "ppid": 1,
+        "path": "/bin/zsh",
+        "args": [
+          "zsh"
+        ],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "ak-known",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2200,
+      "event_type": "open",
+      "payload": {
+        "pid": 12500,
+        "path": "/Users/victor/.ssh/known_hosts",
+        "flags": 1537
+      }
+    }
+  ],
+  "expected_findings": []
+}
