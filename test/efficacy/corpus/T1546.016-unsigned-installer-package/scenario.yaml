@@ -1,0 +1,42 @@
+# T1546.016 Event Triggered Execution: Installer Packages.
+#
+# macOS's installer runs an unsigned package's postinstall as root: PackageKit's package_script_service execs /bin/sh with the
+# script from its sandbox as argv[1] and the package as argv[2]. The agent reads the package's signature and attaches it to the
+# script's exec; installer_unsigned_package fires on a package that is unsigned or untrusted. Mirrors the
+# positive_unsigned_package_script fixture.
+name: "T1546.016 postinstall from an unsigned package"
+host:
+  id: AAAA1546-0016-0000-0000-000000000001
+  hostname: efficacy-t1546-016.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 6000
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 6000
+    ppid: 1
+    path: /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/XPCServices/package_script_service.xpc/Contents/MacOS/package_script_service
+    args: ["package_script_service"]
+    cwd: /
+    uid: 0
+    gid: 0
+  - at: 50ms
+    type: fork
+    child_pid: 6100
+    parent_pid: 6000
+  - at: 60ms
+    type: exec
+    pid: 6100
+    ppid: 6000
+    path: /bin/sh
+    args: ["/bin/sh", "/tmp/PKInstallSandbox.iJ0s6V/Scripts/com.example.pkg.gjgthW/postinstall", "/Users/victor/Downloads/Evil Tool.pkg", "/", "/", "/"]
+    cwd: /
+    uid: 0
+    gid: 0
+    package_signing:
+      signed: false
+      notarized: false
+      team_id: ""

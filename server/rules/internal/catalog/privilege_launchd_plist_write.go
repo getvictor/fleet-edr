@@ -163,4 +163,4 @@ const subjectColumnLimit = 255
 
 // launchDaemonSubject is the daemon rule's dedup subject. Its form is unchanged from before the gate was shared, so an alert raised
 // before an upgrade still collapses a repeat registration after it.
-func launchDaemonSubject(itemPath string) string { return btmItemSubject("launchdaemon", itemPath) }
+func launchDaemonSubject(itemPath string) string { return pathSubject("launchdaemon", itemPath) }

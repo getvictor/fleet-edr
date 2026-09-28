@@ -320,6 +320,12 @@
       "comment": "No rule covering this raises an alert as built in. Covered by: file_event_macos_emond_launch_daemon"
     },
     {
+      "techniqueID": "T1546.016",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: installer_unsigned_package"
+    },
+    {
       "techniqueID": "T1547.015",
       "score": 1,
       "color": "#31a354",

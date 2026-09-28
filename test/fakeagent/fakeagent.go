@@ -79,6 +79,9 @@ type Event struct {
 	Path string   `json:"path,omitempty"`
 	Args []string `json:"args,omitempty"`
 	CWD  string   `json:"cwd,omitempty"`
+	// PackageSigning is the signature of the package an installer script belongs to, which the production agent attaches to the
+	// script's exec. Nil for any other exec, and emitted only when set.
+	PackageSigning *PackageSigning `json:"package_signing,omitempty"`
 
 	// exit specifics.
 	ExitCode   int    `json:"exit_code,omitempty"`
@@ -242,4 +245,11 @@ var knownEventTypes = map[string]bool{
 	// transition above because the provider has not changed state: it is still stopped, and what changed is that the agent
 	// stopped trying.
 	"sensor_recovery_failed": true,
+}
+
+// PackageSigning mirrors schema/events.json's `package_signing`.
+type PackageSigning struct {
+	Signed    bool   `json:"signed"`
+	Notarized bool   `json:"notarized"`
+	TeamID    string `json:"team_id"`
 }

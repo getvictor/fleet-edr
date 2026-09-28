@@ -63,6 +63,41 @@ func TestEvaluate_APackageChangedDuringTheInstallIsNotClassified(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+// spec:endpoint-event-collection/an-installer-script-names-its-package-s-signature/a-late-read-reports-only-an-untrusted-package
+//
+// A script that exits at once is often read after PackageKit has removed the sandbox (captured on edr-dev, issue #1167). An
+// unsigned package is still reported as unsigned: that answer cannot lend trust, and refusing it would let a package escape being
+// reported unsigned by having quick scripts.
+func TestEvaluate_AnUnsignedPackageReadAfterItsInstallEndedIsStillReported(t *testing.T) {
+	t.Parallel()
+	pkg, script := buildPackage(t)
+	require.NoError(t, os.RemoveAll(filepath.Dir(filepath.Dir(filepath.Dir(script)))), "the install ended and took its sandbox")
+
+	res, ok := Evaluate(pkg, script)
+	require.True(t, ok)
+	assert.Equal(t, Result{}, *res)
+}
+
+// spec:endpoint-event-collection/an-installer-script-names-its-package-s-signature/a-late-read-reports-only-an-untrusted-package
+//
+// The same package read as trusted is not reported once the sandbox is gone, whether pkgutil answers now or its answer is cached:
+// without the sandbox nothing shows the package is the one PackageKit installed. While the sandbox stands the answer is reported.
+func TestEvaluate_ATrustedPackageReadAfterItsInstallEndedIsNotReported(t *testing.T) { //nolint:paralleltest // swaps a package variable
+	pkg, script := buildPackage(t)
+	original := checkSignature
+	t.Cleanup(func() { checkSignature = original })
+	checkSignature = func(string) string { return notarizedDeveloperID }
+
+	res, ok := Evaluate(pkg, script)
+	require.True(t, ok, "while the sandbox stands a trusted answer is given")
+	assert.Equal(t, Result{Signed: true, Notarized: true, TeamID: "FDG8Q7N4CC"}, *res)
+
+	require.NoError(t, os.RemoveAll(filepath.Dir(filepath.Dir(filepath.Dir(script)))))
+	res, ok = Evaluate(pkg, script)
+	assert.False(t, ok, "the cached trusted answer is not given without the sandbox")
+	assert.Nil(t, res)
+}
+
 // The same path holding a different file for a later install is checked again, not answered from the cache: a stale answer would
 // describe the previous package. The second file is not a package at all, so a cached "unsigned" would be visibly wrong.
 func TestEvaluate_ALaterFileAtTheSamePathIsCheckedAgain(t *testing.T) {

@@ -18,6 +18,9 @@ func (*CredentialKeychainDump) Platforms() []api.Platform { return []api.Platfor
 func (*PrivilegeLaunchdPlistWrite) Platforms() []api.Platform {
 	return []api.Platform{api.PlatformDarwin}
 }
+func (*InstallerUnsignedPackage) Platforms() []api.Platform {
+	return []api.Platform{api.PlatformDarwin}
+}
 func (*SudoersTamper) Platforms() []api.Platform           { return []api.Platform{api.PlatformDarwin} }
 func (*SudoersDestroyed) Platforms() []api.Platform        { return []api.Platform{api.PlatformDarwin} }
 func (*ApplicationControlBlock) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }

@@ -4,6 +4,7 @@ package pkgsign
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,11 @@ const checkTimeout = 2 * time.Second
 //     the same ctime and size, so a swap between the check above and pkgutil's open cannot lend the answer a different package.
 //     Swapping the original back afterwards does not help either, since that is itself a change and moves the ctime again;
 //   - the path no longer resolves to itself. PackageKit hands a script the package's canonical path (a package installed from
-//     /tmp arrives as /private/tmp/...), so a symlink anywhere in it was put there after the install began.
+//     /tmp arrives as /private/tmp/...), so a symlink anywhere in it was put there after the install began;
+//   - the sandbox is already gone and the package reads as trusted. PackageKit removes the sandbox when the install ends, and a
+//     script that exits at once is often read after that (issue #1167). Without the sandbox there is nothing to prove the package
+//     unchanged, so only an answer that cannot lend trust is given: untrusted or unsigned. Refusing that too would let a package
+//     escape being reported unsigned by having quick scripts.
 //
 // Not closed: a root-run preinstall renaming a DIRECTORY in the path so it leads to an older, genuinely signed package, whose own
 // ctime predates the sandbox. Catching that would mean rejecting any ancestor changed after the sandbox, and a directory's ctime
@@ -50,14 +55,17 @@ func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 		return nil, false
 	}
 	var box syscall.Stat_t
-	if err := syscall.Stat(sandbox, &box); err != nil {
-		return nil, false
-	}
-	if !before(pkg.Ctimespec, box.Birthtimespec) {
+	sandboxErr := syscall.Stat(sandbox, &box)
+	switch {
+	case sandboxErr == nil:
+		if !before(pkg.Ctimespec, box.Birthtimespec) {
+			return nil, false
+		}
+	case !errors.Is(sandboxErr, syscall.ENOENT):
 		return nil, false
 	}
 	key := cacheKey{path: pkgPath, dev: uint64(pkg.Dev), ino: pkg.Ino, ctime: pkg.Ctimespec.Nano(), size: pkg.Size} //nolint:gosec // a device number is not negative
-	if res, hit := results.get(key); hit {
+	if res, hit := results.get(key); hit && vouchable(res, sandboxErr) {
 		return &res, true
 	}
 	res, ok := Parse(checkSignature(pkgPath))
@@ -69,7 +77,17 @@ func Evaluate(pkgPath, scriptPath string) (*Result, bool) {
 		return nil, false
 	}
 	results.put(key, res)
+	if !vouchable(res, sandboxErr) {
+		return nil, false
+	}
 	return &res, true
+}
+
+// vouchable reports whether res may be given for the install. With the sandbox gone (sandboxErr set) nothing shows the package is
+// the one PackageKit installed, and a trusted answer is the one a swap would be after. An untrusted answer needs no such proof: it
+// can only keep an alert, never waive one.
+func vouchable(res Result, sandboxErr error) bool {
+	return sandboxErr == nil || !res.Signed
 }
 
 // checkSignature runs pkgutil on the package and returns its output. A variable so a test can change the file mid-read, which is

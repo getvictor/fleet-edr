@@ -167,6 +167,7 @@ func TestCatalog_ListShape(t *testing.T) {
 		"osascript_network_exec",
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
+		"installer_unsigned_package",
 		"sudoers_tamper",
 		// Registered immediately after the rule it complements: sudoers_tamper covers a policy file being written or renamed
 		// into place, this one covers the same file being emptied or removed (issue #934).

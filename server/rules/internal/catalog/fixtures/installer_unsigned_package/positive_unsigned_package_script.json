@@ -1,0 +1,76 @@
+{
+  "events": [
+    {
+      "event_id": "pkg-svc-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 6000,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "pkg-svc-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1050,
+      "event_type": "exec",
+      "payload": {
+        "pid": 6000,
+        "ppid": 1,
+        "path": "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/XPCServices/package_script_service.xpc/Contents/MacOS/package_script_service",
+        "args": [
+          "package_script_service"
+        ],
+        "uid": 0,
+        "gid": 0
+      }
+    },
+    {
+      "event_id": "pkg-script-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 6100,
+        "parent_pid": 6000
+      }
+    },
+    {
+      "event_id": "pkg-script",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "exec",
+      "payload": {
+        "pid": 6100,
+        "ppid": 6000,
+        "path": "/bin/sh",
+        "args": [
+          "/bin/sh",
+          "/tmp/PKInstallSandbox.iJ0s6V/Scripts/com.example.pkg.gjgthW/postinstall",
+          "/Users/victor/Downloads/Evil Tool.pkg",
+          "/",
+          "/",
+          "/"
+        ],
+        "uid": 0,
+        "gid": 0,
+        "package_signing": {
+          "signed": false,
+          "notarized": false,
+          "team_id": ""
+        }
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "installer_unsigned_package",
+      "severity": "high",
+      "description_contains": "ran from unsigned or untrusted package /Users/victor/Downloads/Evil Tool.pkg",
+      "event_ids": [
+        "pkg-script"
+      ]
+    }
+  ]
+}

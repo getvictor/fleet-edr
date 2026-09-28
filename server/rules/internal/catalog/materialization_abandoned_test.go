@@ -69,6 +69,21 @@ func abandonedCases() []abandonedCase {
 				}
 			},
 		},
+		{
+			name: "installer_unsigned_package",
+			rule: &InstallerUnsignedPackage{},
+			event: func(ingestedAtNs int64) api.Event {
+				return api.Event{
+					EventID:      "abandon-installer-package",
+					HostID:       "fixture-host",
+					TimestampNs:  1,
+					IngestedAtNs: ingestedAtNs,
+					EventType:    "exec",
+					Payload: json.RawMessage(`{"pid":4545,"path":"/bin/sh","args":["/bin/sh",` +
+						`"/tmp/PKInstallSandbox.a/Scripts/p/postinstall","/tmp/x.pkg"],"package_signing":{"signed":false,"notarized":false,"team_id":""}}`),
+				}
+			},
+		},
 		{name: "application_control_block", rule: &ApplicationControlBlock{}, event: appControl(applicationControlBlockEventType)},
 		{name: "application_control_would_block", rule: &ApplicationControlWouldBlock{}, event: appControl(applicationControlWouldBlockEventType)},
 	}

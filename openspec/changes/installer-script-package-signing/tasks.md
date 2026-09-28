@@ -2,3 +2,4 @@
 - [x] `enrich.PackageScriptSigning`: attach it to an installer script's exec, only under `package_script_service`, sharing the envelope handling with the BTM enrichment
 - [x] `package_signing` in `schema/events.json`, with a round-trip property and a literal wire-shape pin
 - [x] Exercise on a live VM (edr-dev, 2026-09-27): an unsigned package's postinstall carried `package_signing`, with the parent resolved through the kernel
+- [x] Report an untrusted package read after the install sandbox is gone (edr-dev, 2026-09-28: a postinstall that exits at once was read after the sandbox was removed and carried nothing)
