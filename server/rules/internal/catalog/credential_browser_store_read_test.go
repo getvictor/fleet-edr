@@ -41,6 +41,8 @@ func openers() *perPIDGraphReader {
 			CodeSigning: sig("43AQ936H96", "org.mozilla.firefox", false)},
 		600: {ID: 6, PID: 600, Path: "/Applications/Backblaze.app/Contents/MacOS/bztransmit",
 			CodeSigning: sig("QSNG5JS6FG", "com.backblaze.bztransmit", false)},
+		// A signature whose team decodes before a later field fails to: the whole blob must be discarded, not half of it.
+		700: {ID: 7, PID: 700, Path: "/tmp/stealer", CodeSigning: api.NullRawJSON(`{"team_id":"EQHXZ8M8AV","is_platform_binary":"yes"}`)},
 	}}
 }
 
@@ -113,4 +115,61 @@ func TestCredentialBrowserStoreRead_AnOpenerIsWaivedBySignerOrPath(t *testing.T)
 			assert.Equal(t, tc.fires, len(findings) == 1)
 		})
 	}
+}
+
+// Every browser in the table, each against the team written out here rather than read back from the rule's own table, so a typo in
+// a row's directory or team fails: the directory would stop the store being recognized, and the team would either silence another
+// program or report the browser itself.
+func TestCredentialBrowserStoreRead_EveryBrowserIsRecognizedAndTrustsOnlyItsOwnTeam(t *testing.T) {
+	t.Parallel()
+	browsers := []struct {
+		name, root, team, file string
+	}{
+		{"Chrome", "/Library/Application Support/Google/Chrome/Default/", "EQHXZ8M8AV", "Login Data"},
+		{"Brave", "/Library/Application Support/BraveSoftware/Brave-Browser/Default/", "KL8N8XSYF4", "Login Data"},
+		{"Edge", "/Library/Application Support/Microsoft Edge/Profile 2/", "UBF8T346G9", "Web Data"},
+		{"Arc", "/Library/Application Support/Arc/User Data/Default/", "S6N382Y83G", "Cookies"},
+		{"Vivaldi", "/Library/Application Support/Vivaldi/Default/", "4XF3XNRN6Y", "Login Data For Account"},
+		{"Firefox", "/Library/Application Support/Firefox/Profiles/x1.default/", "43AQ936H96", "logins.json"},
+	}
+	for _, b := range browsers {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+			path := "/Users/alice" + b.root + b.file
+			raw, err := json.Marshal(map[string]any{"team_id": b.team, "signing_id": "x", "flags": 0, "is_platform_binary": false})
+			require.NoError(t, err)
+			graph := &perPIDGraphReader{procByPID: map[int]*api.Process{
+				100: {ID: 1, PID: 100, Path: "/bin/cp"},
+				200: {ID: 2, PID: 200, Path: "/Applications/" + b.name + ".app/Contents/MacOS/" + b.name, CodeSigning: api.NullRawJSON(raw)},
+			}}
+			findings, err := (&CredentialBrowserStoreRead{}).Evaluate(t.Context(), []api.Event{credentialOpen(t, 100, path)}, graph)
+			require.NoError(t, err)
+			require.Len(t, findings, 1, "another program opening %s's %s", b.name, b.file)
+			assert.Contains(t, findings[0].Description, b.name+"'s "+b.file)
+
+			own, err := (&CredentialBrowserStoreRead{}).Evaluate(t.Context(), []api.Event{credentialOpen(t, 200, path)}, graph)
+			require.NoError(t, err)
+			assert.Empty(t, own, "%s reading its own store", b.name)
+		})
+	}
+}
+
+// A signature blob that fails to decode names no team, however much of it decoded before the failure, so it cannot pass the
+// owner check.
+func TestCredentialBrowserStoreRead_AHalfDecodedSignatureTrustsNothing(t *testing.T) {
+	t.Parallel()
+	assert.Len(t, evaluateCredentialRead(t, nil, credentialOpen(t, 700, chromeProfile+"Login Data")), 1)
+}
+
+// The rule reports each open it judges, and the engine keeps one open alert per process: two stores opened by one process are one
+// alert because their findings share the process they are linked to, which is the dedup key when a finding sets no subject.
+func TestCredentialBrowserStoreRead_OneProcessOpeningSeveralStoresIsOneAlert(t *testing.T) {
+	t.Parallel()
+	findings := evaluateCredentialRead(t, nil,
+		credentialOpen(t, 100, chromeProfile+"Login Data"),
+		credentialOpen(t, 100, chromeProfile+"Network/Cookies"),
+	)
+	require.Len(t, findings, 2)
+	assert.Equal(t, findings[0].ProcessID, findings[1].ProcessID)
+	assert.Empty(t, findings[0].Subject, "no subject, so the engine dedups on the process")
 }

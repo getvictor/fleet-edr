@@ -175,10 +175,12 @@ func credentialFile(path string) (credentialStore, string, bool) {
 }
 
 // processSignature is a process's persisted code signature, or the zero value when it has none or it does not decode.
+// A blob that fails to decode is discarded whole: json.Unmarshal can fill earlier fields before failing on a later one, and a
+// half-decoded team would reach the owner check and could suppress the alert.
 func processSignature(proc *api.Process) codeSigningJSON {
 	var cs codeSigningJSON
-	if len(proc.CodeSigning) > 0 {
-		_ = json.Unmarshal(proc.CodeSigning, &cs)
+	if len(proc.CodeSigning) == 0 || json.Unmarshal(proc.CodeSigning, &cs) != nil {
+		return codeSigningJSON{}
 	}
 	return cs
 }
