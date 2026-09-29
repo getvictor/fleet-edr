@@ -1,0 +1,29 @@
+# T1098.004 Account Manipulation: SSH Authorized Keys.
+#
+# A shell appends a public key to a user's ~/.ssh/authorized_keys, which every host watches in every home. The extension reports the
+# write as a write-mode open, and persistence_ssh_authorized_keys fires on the writer. Mirrors the positive_shell_append fixture,
+# in the shape captured on edr-dev.
+name: "T1098.004 key appended to authorized_keys"
+host:
+  id: AAAA1098-0004-0000-0000-000000000001
+  hostname: efficacy-t1098-004.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 12100
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 12100
+    ppid: 1
+    path: /bin/zsh
+    args: ["zsh", "-c", "echo ssh-ed25519 AAAA attacker >> ~/.ssh/authorized_keys"]
+    cwd: /Users/victor
+    uid: 501
+    gid: 20
+  - at: 60ms
+    type: open
+    pid: 12100
+    path: /Users/victor/.ssh/authorized_keys
+    flags: 1537

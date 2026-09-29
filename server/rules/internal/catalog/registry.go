@@ -36,6 +36,7 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 		&InstallerUnsignedPackage{Exclusions: resolver},
 		&SudoersTamper{Exclusions: resolver},
 		&SudoersDestroyed{Exclusions: resolver},
+		&PersistenceSSHAuthorizedKeys{Exclusions: resolver},
 		&ApplicationControlBlock{},
 		&ApplicationControlWouldBlock{},
 		&DNSC2Beacon{Exclusions: resolver},

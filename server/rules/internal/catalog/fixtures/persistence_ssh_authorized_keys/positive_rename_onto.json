@@ -1,0 +1,53 @@
+{
+  "events": [
+    {
+      "event_id": "ak-12300-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 12300,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "ak-12300-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 12300,
+        "ppid": 1,
+        "path": "/bin/mv",
+        "args": [
+          "mv",
+          "/tmp/k",
+          "/Users/victor/.ssh/authorized_keys"
+        ],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "ak-rename",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2200,
+      "event_type": "file_rename",
+      "payload": {
+        "pid": 12300,
+        "source_path": "/tmp/k",
+        "path": "/Users/victor/.ssh/authorized_keys"
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "persistence_ssh_authorized_keys",
+      "severity": "medium",
+      "description_contains": "renamed a file onto /Users/victor/.ssh/authorized_keys",
+      "event_ids": [
+        "ak-rename"
+      ]
+    }
+  ]
+}

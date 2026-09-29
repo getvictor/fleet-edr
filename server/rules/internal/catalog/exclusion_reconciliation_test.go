@@ -43,7 +43,9 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		// The package's path: an unsigned package names no team to trust it by.
 		"installer_unsigned_package": {api.ExclusionMatchPathGlob},
 		"persistence_login_item":     {api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchPathGlob},
-		"sudoers_tamper":             {api.ExclusionMatchPathGlob},
+		// The writer, as for the sudoers rules: the tools that add keys are Apple's own, so there is no signer to trust.
+		"persistence_ssh_authorized_keys": {api.ExclusionMatchPathGlob},
+		"sudoers_tamper":                  {api.ExclusionMatchPathGlob},
 		// Same surface as sudoers_tamper and for the same reason: the tunable subject is the acting process, since a
 		// configuration manager that rewrites a fragment by deleting and recreating it is the shape an operator excludes.
 		"sudoers_destroyed":               {api.ExclusionMatchPathGlob},

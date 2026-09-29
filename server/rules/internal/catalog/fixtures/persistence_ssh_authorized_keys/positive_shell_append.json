@@ -1,0 +1,53 @@
+{
+  "events": [
+    {
+      "event_id": "ak-12100-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 12100,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "ak-12100-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 12100,
+        "ppid": 1,
+        "path": "/bin/zsh",
+        "args": [
+          "zsh",
+          "-c",
+          "echo ssh-ed25519 AAAA attacker >> ~/.ssh/authorized_keys"
+        ],
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "ak-write",
+      "host_id": "fixture-host",
+      "timestamp_ns": 2200,
+      "event_type": "open",
+      "payload": {
+        "pid": 12100,
+        "path": "/Users/victor/.ssh/authorized_keys",
+        "flags": 1537
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "persistence_ssh_authorized_keys",
+      "severity": "medium",
+      "description_contains": "/bin/zsh wrote /Users/victor/.ssh/authorized_keys",
+      "event_ids": [
+        "ak-write"
+      ]
+    }
+  ]
+}

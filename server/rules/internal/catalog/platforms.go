@@ -22,8 +22,11 @@ func (*PrivilegeLaunchdPlistWrite) Platforms() []api.Platform {
 func (*InstallerUnsignedPackage) Platforms() []api.Platform {
 	return []api.Platform{api.PlatformDarwin}
 }
-func (*SudoersTamper) Platforms() []api.Platform           { return []api.Platform{api.PlatformDarwin} }
-func (*SudoersDestroyed) Platforms() []api.Platform        { return []api.Platform{api.PlatformDarwin} }
+func (*SudoersTamper) Platforms() []api.Platform    { return []api.Platform{api.PlatformDarwin} }
+func (*SudoersDestroyed) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
+func (*PersistenceSSHAuthorizedKeys) Platforms() []api.Platform {
+	return []api.Platform{api.PlatformDarwin}
+}
 func (*ApplicationControlBlock) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
 func (*ApplicationControlWouldBlock) Platforms() []api.Platform {
 	return []api.Platform{api.PlatformDarwin}

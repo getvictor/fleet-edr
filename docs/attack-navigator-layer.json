@@ -188,6 +188,12 @@
       "comment": "No rule covering this raises an alert as built in. Covered by: proc_creation_macos_local_account"
     },
     {
+      "techniqueID": "T1098.004",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: persistence_ssh_authorized_keys"
+    },
+    {
       "techniqueID": "T1105",
       "score": 0.5,
       "color": "#fdae6b",

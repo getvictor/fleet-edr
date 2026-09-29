@@ -10,6 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
+- **SSH key persistence is detected.** `persistence_ssh_authorized_keys` alerts when a user's or root's `~/.ssh/authorized_keys` is written or replaced (T1098.004). Every host now watches those files in every home. Exclude a configuration-management agent by its path.
 - **Watched file paths can name every user's home folder.** Start a path with `~/`, such as `~/.ssh/authorized_keys`, and each host watches it for root and every user account, including accounts added later. Needs this release's agent; older hosts skip the path.
 - **Root certificates trusted from the command line are detected.** `trusted_root_certificate` alerts when `security add-trusted-cert` or `trust-settings-import` makes a host trust a certificate (T1553.004). Certificates deployed by MDM profiles are not reported.
 - **Unsigned installer packages are detected.** `installer_unsigned_package` alerts once per package when a package that is unsigned, or whose signature macOS does not trust, runs an install script (T1546.016). Exclude an in-house package by its path.
