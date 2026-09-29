@@ -1,0 +1,48 @@
+{
+  "events": [
+    {
+      "event_id": "cbr-8300-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 8300,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "cbr-8300-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 8300,
+        "ppid": 1,
+        "path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "args": [
+          "Google Chrome"
+        ],
+        "uid": 501,
+        "gid": 20,
+        "code_signing": {
+          "team_id": "EQHXZ8M8AV",
+          "signing_id": "com.google.Chrome",
+          "flags": 0,
+          "is_platform_binary": false
+        }
+      }
+    },
+    {
+      "event_id": "cbr-8300-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 8300,
+        "path": "/Users/victor/Library/Application Support/Google/Chrome/Default/Login Data",
+        "flags": 2
+      }
+    }
+  ],
+  "expected_findings": []
+}

@@ -15,6 +15,9 @@ func (*DyldInsert) Platforms() []api.Platform             { return []api.Platfor
 func (*ShellFromOffice) Platforms() []api.Platform        { return []api.Platform{api.PlatformDarwin} }
 func (*OsascriptNetworkExec) Platforms() []api.Platform   { return []api.Platform{api.PlatformDarwin} }
 func (*TrustedRootCertificate) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
+func (*CredentialBrowserStoreRead) Platforms() []api.Platform {
+	return []api.Platform{api.PlatformDarwin}
+}
 func (*CredentialKeychainDump) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
 func (*PrivilegeLaunchdPlistWrite) Platforms() []api.Platform {
 	return []api.Platform{api.PlatformDarwin}

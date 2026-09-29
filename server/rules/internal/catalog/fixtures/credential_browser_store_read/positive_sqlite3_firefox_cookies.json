@@ -1,0 +1,59 @@
+{
+  "events": [
+    {
+      "event_id": "cbr-8200-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 8200,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "cbr-8200-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 8200,
+        "ppid": 1,
+        "path": "/usr/bin/sqlite3",
+        "args": [
+          "sqlite3",
+          "/Users/victor/Library/Application Support/Firefox/Profiles/0mf3tag4.default-release/cookies.sqlite",
+          "select * from moz_cookies"
+        ],
+        "uid": 501,
+        "gid": 20,
+        "code_signing": {
+          "team_id": "",
+          "signing_id": "com.apple.sqlite3",
+          "flags": 0,
+          "is_platform_binary": true
+        }
+      }
+    },
+    {
+      "event_id": "cbr-8200-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 8200,
+        "path": "/Users/victor/Library/Application Support/Firefox/Profiles/0mf3tag4.default-release/cookies.sqlite",
+        "flags": 2
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "credential_browser_store_read",
+      "severity": "high",
+      "description_contains": "/usr/bin/sqlite3 opened Firefox's cookies.sqlite",
+      "event_ids": [
+        "cbr-8200-open"
+      ]
+    }
+  ]
+}
