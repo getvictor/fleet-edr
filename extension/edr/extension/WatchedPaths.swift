@@ -164,9 +164,12 @@ enum WatchedPaths {
 
     /// homeDirectories reads every account from the directory service and returns the homes a `~/` entry expands into, or nil when
     /// the walk failed. getpwent returns nil both at the end of the list and on an error, telling them apart only by errno, and a
-    /// walk cut short must not read as accounts removed: the caller would unmute their homes. Not reentrant (getpwent walks one
-    /// process-wide cursor), so it is called from the file-tamper client's serial queue only.
+    /// walk cut short must not read as accounts removed: the caller would unmute their homes. getpwent walks one process-wide
+    /// cursor, and both the file-tamper and credential-store clients read the accounts from their own queues, so each walk holds
+    /// accountsLock.
     static func homeDirectories() -> [String]? {
+        accountsLock.lock()
+        defer { accountsLock.unlock() }
         var accounts: [(uid: uid_t, directory: String)] = []
         setpwent()
         defer { endpwent() }
@@ -181,6 +184,9 @@ enum WatchedPaths {
             }
         }
     }
+
+    /// accountsLock serializes homeDirectories' walks of getpwent's process-wide cursor.
+    private static let accountsLock = NSLock()
 
     /// expanded is an entry as the paths it names: itself, or for a `~/` entry one path in each home. An expansion is judged as the
     /// absolute path it becomes and dropped if it would not be watched, which is what catches one too long for es_mute_path.

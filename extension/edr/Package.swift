@@ -118,6 +118,9 @@ let package = Package(
                 // built-in sudoers paths, and the mute/unmute difference between two sets. Pure Foundation, so it is unit-testable;
                 // FileTamperSubscriber applies the result.
                 "extension/WatchedPaths.swift",
+                // CredentialStores.swift is the credential-store client's watched set and its filter of a browser's own reads
+                // (#1187). Pure Foundation; CredentialStoreSubscriber applies it.
+                "extension/CredentialStores.swift",
                 "networkextension/DNSParser.swift",
                 // DNSProxyHealth.swift is the DNS proxy's forwarding-health REPORTER: a sliding-window failure
                 // accumulator that says degraded/recovered once per change and decides nothing (issue #673). Pure
