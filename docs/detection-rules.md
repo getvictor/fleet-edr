@@ -385,7 +385,7 @@ Flags `security add-trusted-cert` or `security trust-settings-import`, which mak
 
 Detects a root certificate being installed on macOS (T1553.004). A certificate the host trusts as a root lets whoever holds its key intercept the host's TLS connections, or sign code the host will accept.
 
-Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out.
+Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out, as are `security -h`, which prints help, and a result type of `deny` or `unspecified`, which records a certificate as not trusted.
 
 ### Known false-positive sources
 

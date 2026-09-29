@@ -40,7 +40,9 @@ func (r *TrustedRootCertificate) Doc() api.Documentation {
 		Description: "Detects a root certificate being installed on macOS (T1553.004). A certificate the host trusts as a root lets " +
 			"whoever holds its key intercept the host's TLS connections, or sign code the host will accept.\n\n" +
 			"Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both " +
-			"of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out.",
+			"of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out, as are " +
+			"`security -h`, which prints help, and a result type of `deny` or `unspecified`, which records a certificate as not " +
+			"trusted.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
@@ -92,15 +94,20 @@ func (r *TrustedRootCertificate) evalEvent(
 	if err != nil || proc == nil {
 		return nil, err
 	}
-	// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired.
+	// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired. An import
+	// applies whatever the file holds, deny entries included, so it is reported as a change to trust rather than as a trusted root.
+	sub := firstField(se, "Subcommand")
+	effect := "makes the host trust a certificate"
+	if sub == "trust-settings-import" {
+		effect = "imports certificate trust settings, which can make the host trust a certificate"
+	}
 	return &api.Finding{
-		HostID:   evt.HostID,
-		RuleID:   r.ID(),
-		Severity: api.SeverityHigh,
-		Title:    r.DisplayName(),
-		Description: fmt.Sprintf("%s invoked with %q: makes the host trust a certificate (MITRE T1553.004)",
-			firstField(se, "Image"), firstField(se, "Subcommand")),
-		ProcessID: proc.ID,
-		EventIDs:  []string{evt.EventID},
+		HostID:      evt.HostID,
+		RuleID:      r.ID(),
+		Severity:    api.SeverityHigh,
+		Title:       r.DisplayName(),
+		Description: fmt.Sprintf("%s invoked with %q: %s (MITRE T1553.004)", firstField(se, "Image"), sub, effect),
+		ProcessID:   proc.ID,
+		EventIDs:    []string{evt.EventID},
 	}, nil
 }
