@@ -6,4 +6,4 @@
 
 ## 2. Validation
 
-- [ ] 2.1 On edr-dev with the credential-store extension, copy a Firefox profile's cookies and confirm the alert
+- [x] 2.1 On edr-dev with the credential-store extension, copy a Firefox profile's cookies and confirm the alert
