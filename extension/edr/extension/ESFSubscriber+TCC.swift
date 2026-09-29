@@ -23,22 +23,13 @@ extension ESFSubscriber {
             right: TccNames.right(event.right.rawValue),
             reason: TccNames.reason(event.reason.rawValue),
             instigatorPid: audit_token_to_pid(event.instigator_token),
-            instigatorCodeSigning: instigator.map(Self.codeSigning),
+            instigatorCodeSigning: instigator.map { Self.codeSigning(of: $0) },
             responsiblePid: event.responsible_token.map { audit_token_to_pid($0.pointee) },
-            responsibleCodeSigning: responsible.map(Self.codeSigning)
+            responsibleCodeSigning: responsible.map { Self.codeSigning(of: $0) }
         )
         if let data = serializer.serialize(eventType: "tcc_modify", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("tcc_modify service=\(payload.service, privacy: .public) update=\(payload.updateType, privacy: .public)")
             onEvent?(data)
         }
-    }
-
-    private static func codeSigning(_ proc: es_process_t) -> CodeSigning {
-        CodeSigning(
-            teamID: esTokenString(proc.team_id),
-            signingID: esTokenString(proc.signing_id),
-            flags: proc.codesigning_flags,
-            isPlatformBinary: proc.is_platform_binary
-        )
     }
 }

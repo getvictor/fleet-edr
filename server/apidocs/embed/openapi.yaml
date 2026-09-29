@@ -2044,6 +2044,7 @@ components:
             - btm_launch_item_add
             - sensor_provider_transition
             - sensor_recovery_failed
+            - tcc_modify
         payload:
           type: object
           description: Event-type-specific body; see schema/events.json in the repo

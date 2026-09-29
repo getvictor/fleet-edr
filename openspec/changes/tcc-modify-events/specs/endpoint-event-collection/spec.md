@@ -2,7 +2,7 @@
 
 ### Requirement: TCC permission changes are reported
 
-The security extension SHALL emit a `tcc_modify` event when macOS reports that a TCC permission record was created, modified or deleted. The payload SHALL carry the service, the identity of the app the permission is about and its identity type, the update type, the resulting right, the reason, and the instigating process's pid and code signing, with the responsible process's pid and code signing when macOS reports one. The identity type, update type, right and reason SHALL be sent as names, and a value the extension does not know SHALL be sent as `unknown`.
+The security extension SHALL emit a `tcc_modify` event when macOS reports that a TCC permission record was created, modified or deleted. The payload SHALL carry the service, the identity of the app the permission is about and its identity type, the update type, the resulting right, the reason, and the instigating process's pid. It SHALL carry the instigating process's code signing when macOS reports that process, the responsible process's pid when macOS reports a responsible audit token, and the responsible process's code signing when macOS reports that process; each is omitted, not sent as null, when absent. The identity type, update type, right and reason SHALL be sent as names, and a value the extension does not know SHALL be sent as `unknown`.
 
 #### Scenario: The change is named in words
 

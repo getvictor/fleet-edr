@@ -428,17 +428,22 @@ final class ESFSubscriber: Sendable {
         return args
     }
 
+    /// extractCodeSigning is an exec's signing, or nil when the process carries neither a team nor a signing identifier: an unsigned
+    /// binary's exec omits the object rather than sending an empty one.
     private func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
-        let teamID = process.team_id.data.map { String(cString: $0) }
-        let signingID = process.signing_id.data.map { String(cString: $0) }
-
-        guard teamID != nil || signingID != nil else {
+        guard process.team_id.data != nil || process.signing_id.data != nil else {
             return nil
         }
+        return Self.codeSigning(of: process)
+    }
 
-        return CodeSigning(
-            teamID: teamID ?? "",
-            signingID: signingID ?? "",
+    /// codeSigning is the one mapping of an ES process's signing onto the wire's CodeSigning, shared by every event that carries a
+    /// process's signing so the fields cannot drift between them. Callers decide separately whether a missing signature means an
+    /// absent object.
+    static func codeSigning(of process: es_process_t) -> CodeSigning {
+        CodeSigning(
+            teamID: esTokenString(process.team_id),
+            signingID: esTokenString(process.signing_id),
             flags: process.codesigning_flags,
             isPlatformBinary: process.is_platform_binary
         )

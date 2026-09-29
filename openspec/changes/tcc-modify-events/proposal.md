@@ -4,7 +4,7 @@ Infostealers and remote-access tools need TCC permissions (Full Disk Access, Acc
 
 ## What changes
 
-- The security extension's primary client subscribes to `NOTIFY_TCC_MODIFY` and emits a `tcc_modify` event for every permission record tccd creates, modifies or deletes: the service, the app it is about and how that app is named, the resulting right, the reason (a prompt answered, a switch changed, an MDM profile), and the instigating and responsible processes with their code signing.
+- The security extension's primary client subscribes to `NOTIFY_TCC_MODIFY` and emits a `tcc_modify` event for every permission record tccd creates, modifies or deletes: the service, the app it is about and how that app is named, the resulting right, the reason (a prompt answered, a switch changed, an MDM profile), and the instigating process's pid. The instigating process's code signing, and the responsible process's pid and code signing, are included when macOS reports them.
 - The SDK's enums are sent as names, with `unknown` for a value this build does not know.
 
 ## Not changed
