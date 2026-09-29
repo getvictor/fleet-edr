@@ -1,0 +1,23 @@
+# T1553.004 Subvert Trust Controls: Install Root Certificate.
+#
+# `security add-trusted-cert -d -r trustRoot` writes an admin trust setting for a certificate, making the host trust it as a root.
+# trusted_root_certificate fires on the exec's subcommand. Mirrors the positive_add_trusted_root fixture.
+name: "T1553.004 security add-trusted-cert as a root"
+host:
+  id: AAAA1553-0004-0000-0000-000000000001
+  hostname: efficacy-t1553-004.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 7700
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 7700
+    ppid: 1
+    path: /usr/bin/security
+    args: ["security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", "/tmp/evil-root.pem"]
+    cwd: /
+    uid: 0
+    gid: 0

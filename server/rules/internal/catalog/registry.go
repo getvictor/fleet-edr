@@ -31,6 +31,7 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 		&ShellFromOffice{},
 		&OsascriptNetworkExec{},
 		&CredentialKeychainDump{},
+		&TrustedRootCertificate{},
 		&PrivilegeLaunchdPlistWrite{Exclusions: resolver},
 		&InstallerUnsignedPackage{Exclusions: resolver},
 		&SudoersTamper{Exclusions: resolver},

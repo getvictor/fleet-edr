@@ -1,0 +1,47 @@
+{
+  "events": [
+    {
+      "event_id": "trc-add-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 7700,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "trc-add",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 7700,
+        "ppid": 1,
+        "path": "/usr/bin/security",
+        "args": [
+          "security",
+          "add-trusted-cert",
+          "-d",
+          "-r",
+          "trustRoot",
+          "-k",
+          "/Library/Keychains/System.keychain",
+          "/tmp/evil-root.pem"
+        ],
+        "uid": 0,
+        "gid": 0
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "trusted_root_certificate",
+      "severity": "high",
+      "description_contains": "invoked with \"add-trusted-cert\"",
+      "event_ids": [
+        "trc-add"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "events": [
+    {
+      "event_id": "trc-help-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 7700,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "trc-help",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 7700,
+        "ppid": 1,
+        "path": "/usr/bin/security",
+        "args": [
+          "security",
+          "help",
+          "add-trusted-cert"
+        ],
+        "uid": 0,
+        "gid": 0
+      }
+    }
+  ],
+  "expected_findings": []
+}

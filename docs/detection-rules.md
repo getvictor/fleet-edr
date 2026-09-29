@@ -33,6 +33,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | alert | T1059.004 |
 | [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002 |
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
+| [`trusted_root_certificate`](#trusted_root_certificate) | Certificate trusted from the command line | high | alert | T1553.004 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
 | [`installer_unsigned_package`](#installer_unsigned_package) | Unsigned installer package | high | alert | T1546.016 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | alert | T1548.003 |
@@ -365,6 +366,35 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 
 - Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.
 - Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to the detection block in the rule's pack file if a pilot fleet surfaces real abuse.
+
+## trusted_root_certificate
+
+**Certificate trusted from the command line**  
+Flags `security add-trusted-cert` or `security trust-settings-import`, which make macOS trust a certificate.
+
+| | |
+| --- | --- |
+| Rule ID | `trusted_root_certificate` |
+| Severity | `high` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1553.004`](https://attack.mitre.org/techniques/T1553/004/) |
+| Event types | `exec` |
+
+### Description
+
+Detects a root certificate being installed on macOS (T1553.004). A certificate the host trusts as a root lets whoever holds its key intercept the host's TLS connections, or sign code the host will accept.
+
+Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out, as are a `-h`, which prints help, a result type of `deny` or `unspecified`, which records a certificate as not trusted, and `-o`, which writes the trust settings to a file instead of the host.
+
+### Known false-positive sources
+
+- An administrator or an IT script deploying an internal root by hand. Prefer a configuration profile pushed by MDM, which is not reported; where a script is how it is done, set this rule to monitor on the hosts it runs on.
+
+### Limitations
+
+- A trust setting written through the Security framework by a program of its own runs no `security` exec and is not reported.
+- A certificate installed by a configuration profile is not reported, whoever pushed the profile.
 
 ## privilege_launchd_plist_write
 

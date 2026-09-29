@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1553.004-trusted-root-certificate technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1553.004-trusted-root-certificate
+mitre: T1553.004
+within_seconds: 30
+rules:
+  - rule_id: trusted_root_certificate
+    severity: high
+    expect: alert
