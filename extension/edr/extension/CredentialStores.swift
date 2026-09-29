@@ -45,23 +45,59 @@ enum CredentialStores {
     /// firefoxProfileFiles are a Firefox profile's saved logins, the key database that decrypts them, and its cookies.
     static let firefoxProfileFiles = ["logins.json", "key4.db", "cookies.sqlite"]
 
+    /// DirectoryListing is what listing a browser's profile directory found. A missing directory is a browser that is not installed
+    /// and contributes nothing; an unreadable one says nothing about what is there, so the files already watched under it are kept.
+    enum DirectoryListing: Equatable {
+        case entries([String])
+        case missing
+        case unreadable
+    }
+
+    /// Targets is the result of a scan: the credential files to watch, and the browser directories that could not be read.
+    struct Targets: Equatable {
+        let paths: [String]
+        let unreadableRoots: [String]
+    }
+
     /// targets is every credential file path to watch in the given homes: each browser's files in each of its profiles, in both
-    /// spellings of a firmlinked root, sorted and without duplicates. listDirectory names a directory's entries, or nil when it
-    /// does not exist, which is how a browser that is not installed contributes nothing.
-    static func targets(homes: [String], listDirectory: (String) -> [String]?) -> [String] {
+    /// spellings of a firmlinked root, sorted and without duplicates, along with the browser directories whose listing failed.
+    static func targets(homes: [String], listDirectory: (String) -> DirectoryListing) -> Targets {
         var out = Set<String>()
+        var unreadable: [String] = []
         for home in homes {
             for browser in browsers {
                 let root = home + "/" + browser.root
-                guard let entries = listDirectory(root) else {
+                switch listDirectory(root) {
+                case .missing:
                     continue
-                }
-                for path in files(in: root, entries: entries, layout: browser.layout) {
-                    out.formUnion(WatchedPaths.spellings(of: path))
+                case .unreadable:
+                    unreadable.append(contentsOf: WatchedPaths.spellings(of: root))
+                case .entries(let entries):
+                    for path in files(in: root, entries: entries, layout: browser.layout) {
+                        out.formUnion(WatchedPaths.spellings(of: path))
+                    }
                 }
             }
         }
-        return out.sorted()
+        return Targets(paths: out.sorted(), unreadableRoots: unreadable.sorted())
+    }
+
+    /// next is the set a refresh applies: the scanned paths, and every path already applied under a directory the scan could not
+    /// read, so a directory that fails to list for a moment does not stop its files being watched.
+    static func next(applied: [String], scanned: Targets) -> [String] {
+        let kept = applied.filter { path in scanned.unreadableRoots.contains { path.hasPrefix($0) } }
+        return Array(Set(scanned.paths).union(kept)).sorted()
+    }
+
+    /// listing lists a directory with the file manager, telling a directory that does not exist from one that could not be read.
+    static func listing(_ path: String) -> DirectoryListing {
+        do {
+            return .entries(try FileManager.default.contentsOfDirectory(atPath: path))
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+            return .missing
+        } catch {
+            return .unreadable
+        }
     }
 
     private static func files(in root: String, entries: [String], layout: CredentialBrowser.Layout) -> [String] {

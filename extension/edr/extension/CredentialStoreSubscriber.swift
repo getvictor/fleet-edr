@@ -72,14 +72,22 @@ final class CredentialStoreSubscriber: Sendable {
         queue.sync { applied.count }
     }
 
-    /// refresh mutes the credential files the homes and profiles hold now and unmutes the ones that are gone. Runs on queue. A mute
-    /// that fails is not recorded, so the next refresh tries it again; an account walk that fails keeps the files already watched.
+    /// refresh mutes the credential files the homes and profiles hold now and unmutes the ones that are gone. Runs on queue.
+    ///
+    /// The same discipline as the file-tamper client's reconcile: mutes first, and unmutes only when every mute succeeded, so a
+    /// partial update never drops watches before their replacements are in. A mute that fails is not recorded, so the next refresh
+    /// tries it again. An account walk that fails keeps every file already watched, and a browser directory that could not be
+    /// listed keeps the files already watched under it.
     private func refresh() {
         guard let homes = WatchedPaths.homeDirectories() else {
             logger.error("credential-store client could not read the accounts; keeping \(self.applied.count) watched files")
             return
         }
-        let next = CredentialStores.targets(homes: homes) { try? FileManager.default.contentsOfDirectory(atPath: $0) }
+        let scanned = CredentialStores.targets(homes: homes, listDirectory: CredentialStores.listing)
+        if !scanned.unreadableRoots.isEmpty {
+            logger.error("credential-store client could not list \(scanned.unreadableRoots.count, privacy: .public) browser directories")
+        }
+        let next = CredentialStores.next(applied: applied, scanned: scanned)
         let appliedSet = Set(applied)
         let nextSet = Set(next)
         var failed = 0
@@ -90,14 +98,15 @@ final class CredentialStoreSubscriber: Sendable {
             }
             applied.append(path)
         }
+        guard failed == 0 else {
+            logger.error("credential-store client could not mute \(failed, privacy: .public) credential files; nothing unmuted")
+            return
+        }
         for path in applied where !nextSet.contains(path) {
             // Still muted, so still observed, when the unmute fails: it stays applied and the next refresh tries again.
             if es_unmute_path(client, path, ES_MUTE_PATH_TYPE_TARGET_LITERAL) == ES_RETURN_SUCCESS {
                 applied.removeAll { $0 == path }
             }
-        }
-        if failed > 0 {
-            logger.error("credential-store client could not mute \(failed, privacy: .public) credential files")
         }
     }
 
