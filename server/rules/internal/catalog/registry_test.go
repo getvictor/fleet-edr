@@ -44,6 +44,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"shell_from_office",
 		"osascript_network_exec",
 		"credential_keychain_dump",
+		"credential_browser_store_read",
 		"trusted_root_certificate",
 		"privilege_launchd_plist_write",
 		"installer_unsigned_package",
@@ -172,6 +173,7 @@ func TestAll_ThreadsExclusionResolver(t *testing.T) {
 		byID[r.ID()] = r
 	}
 	assert.Same(t, res, byID["suspicious_exec"].(*SuspiciousExec).Exclusions)
+	assert.Same(t, res, byID["credential_browser_store_read"].(*CredentialBrowserStoreRead).Exclusions)
 	assert.Same(t, res, byID["persistence_launchagent"].(*PersistenceLaunchAgent).Exclusions)
 	assert.Same(t, res, byID["persistence_login_item"].(*PersistenceLoginItem).Exclusions)
 	assert.Same(t, res, byID["privilege_launchd_plist_write"].(*PrivilegeLaunchdPlistWrite).Exclusions)
@@ -288,6 +290,8 @@ func TestAll_AuthoredTechniquesArePinned(t *testing.T) {
 	want := map[string][]string{
 		// Matches `security dump-keychain` by path and argument: the technique IS the command.
 		"credential_keychain_dump": {"T1555.001"},
+		// Observes a browser credential store being opened by another program, which is exactly the sub-technique.
+		"credential_browser_store_read": {"T1555.003"},
 		// Observes the command that writes trust settings, which is exactly the sub-technique.
 		"trusted_root_certificate": {"T1553.004"},
 		// Observes a DYLD_INSERT_LIBRARIES assignment, which is literally the technique.
@@ -439,12 +443,13 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 		"ancestor_walk_path_prefix": {},
 		// The connect half of the split (issue #776). A distinct name, not a reuse: the walk is shared but the trigger and the
 		// match are not, and a rule whose algorithm name lies about what decides it is exactly what this table exists to catch.
-		"ancestor_walk_outbound_connect": {},
-		"descendant_within_window":       {},
-		"dns_resolve_then_connect":       {},
-		"absence_within_window":          {},
-		"btm_item_signing_verdict":       {},
-		"installer_package_signature":    {},
+		"ancestor_walk_outbound_connect":  {},
+		"descendant_within_window":        {},
+		"dns_resolve_then_connect":        {},
+		"absence_within_window":           {},
+		"btm_item_signing_verdict":        {},
+		"credential_store_opener_verdict": {},
+		"installer_package_signature":     {},
 	}
 
 	seen := map[string]struct{}{}

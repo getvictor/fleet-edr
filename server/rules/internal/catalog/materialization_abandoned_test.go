@@ -84,6 +84,20 @@ func abandonedCases() []abandonedCase {
 				}
 			},
 		},
+		{
+			name: "credential_browser_store_read",
+			rule: &CredentialBrowserStoreRead{},
+			event: func(ingestedAtNs int64) api.Event {
+				return api.Event{
+					EventID:      "abandon-credential-read",
+					HostID:       "fixture-host",
+					TimestampNs:  1,
+					IngestedAtNs: ingestedAtNs,
+					EventType:    "open",
+					Payload:      json.RawMessage(`{"pid":4646,"path":"/Users/a/Library/Application Support/Google/Chrome/Default/Login Data","flags":0}`),
+				}
+			},
+		},
 		{name: "application_control_block", rule: &ApplicationControlBlock{}, event: appControl(applicationControlBlockEventType)},
 		{name: "application_control_would_block", rule: &ApplicationControlWouldBlock{}, event: appControl(applicationControlWouldBlockEventType)},
 	}

@@ -1,0 +1,11 @@
+# Expected detection assertions for the T1555.003-browser-credential-read technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+scenario_id: T1555.003-browser-credential-read
+mitre: T1555.003
+within_seconds: 30
+rules:
+  - rule_id: credential_browser_store_read
+    severity: high
+    expect: alert

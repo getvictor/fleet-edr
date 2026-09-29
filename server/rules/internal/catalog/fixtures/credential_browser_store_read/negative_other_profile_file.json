@@ -1,0 +1,50 @@
+{
+  "events": [
+    {
+      "event_id": "cbr-8500-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 8500,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "cbr-8500-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 8500,
+        "ppid": 1,
+        "path": "/bin/cp",
+        "args": [
+          "cp",
+          "/Users/victor/Library/Application Support/Google/Chrome/Default/Preferences",
+          "/tmp/p"
+        ],
+        "uid": 501,
+        "gid": 20,
+        "code_signing": {
+          "team_id": "",
+          "signing_id": "com.apple.cp",
+          "flags": 0,
+          "is_platform_binary": true
+        }
+      }
+    },
+    {
+      "event_id": "cbr-8500-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 8500,
+        "path": "/Users/victor/Library/Application Support/Google/Chrome/Default/Preferences",
+        "flags": 0
+      }
+    }
+  ],
+  "expected_findings": []
+}

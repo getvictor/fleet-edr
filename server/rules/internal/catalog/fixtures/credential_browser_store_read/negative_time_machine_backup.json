@@ -1,0 +1,48 @@
+{
+  "events": [
+    {
+      "event_id": "cbr-8400-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 8400,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "cbr-8400-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 8400,
+        "ppid": 1,
+        "path": "/System/Library/CoreServices/TimeMachine/backupd",
+        "args": [
+          "backupd"
+        ],
+        "uid": 501,
+        "gid": 20,
+        "code_signing": {
+          "team_id": "",
+          "signing_id": "com.apple.backupd",
+          "flags": 0,
+          "is_platform_binary": true
+        }
+      }
+    },
+    {
+      "event_id": "cbr-8400-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 8400,
+        "path": "/Users/victor/Library/Application Support/Google/Chrome/Default/Network/Cookies",
+        "flags": 0
+      }
+    }
+  ],
+  "expected_findings": []
+}

@@ -380,6 +380,12 @@
       "comment": "Covered by: credential_keychain_dump, proc_creation_macos_creds_from_keychain"
     },
     {
+      "techniqueID": "T1555.003",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: credential_browser_store_read"
+    },
+    {
       "techniqueID": "T1560.001",
       "score": 0.5,
       "color": "#fdae6b",

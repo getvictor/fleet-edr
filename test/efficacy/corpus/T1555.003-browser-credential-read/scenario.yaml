@@ -1,0 +1,29 @@
+# T1555.003 Credentials from Password Stores: Credentials from Web Browsers.
+#
+# An infostealer copies Chrome's saved logins out of the user's profile with cp. The extension's credential-store client reports the
+# open of Login Data, and credential_browser_store_read fires on the reading process. Mirrors the positive_cp_chrome_login_data
+# fixture.
+name: "T1555.003 cp copies Chrome's Login Data"
+host:
+  id: AAAA1555-0003-0000-0000-000000000001
+  hostname: efficacy-t1555-003.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 8100
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 8100
+    ppid: 1
+    path: /bin/cp
+    args: ["cp", "/Users/victor/Library/Application Support/Google/Chrome/Default/Login Data", "/tmp/ld"]
+    cwd: /Users/victor
+    uid: 501
+    gid: 20
+  - at: 60ms
+    type: open
+    pid: 8100
+    path: /Users/victor/Library/Application Support/Google/Chrome/Default/Login Data
+    flags: 0

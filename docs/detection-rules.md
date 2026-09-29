@@ -33,6 +33,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | alert | T1059.004 |
 | [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002 |
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
+| [`credential_browser_store_read`](#credential_browser_store_read) | Browser credential store read | high | alert | T1555.003 |
 | [`trusted_root_certificate`](#trusted_root_certificate) | Certificate trusted from the command line | high | alert | T1553.004 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
 | [`installer_unsigned_package`](#installer_unsigned_package) | Unsigned installer package | high | alert | T1546.016 |
@@ -367,6 +368,38 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 
 - Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.
 - Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to the detection block in the rule's pack file if a pilot fleet surfaces real abuse.
+
+## credential_browser_store_read
+
+**Browser credential store read**  
+Flags a program other than the browser opening a browser's saved passwords, cookies or their key material.
+
+| | |
+| --- | --- |
+| Rule ID | `credential_browser_store_read` |
+| Severity | `high` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1555.003`](https://attack.mitre.org/techniques/T1555/003/) |
+| Event types | `open` |
+
+### Description
+
+Detects credential theft from web browsers on macOS (T1555.003), the core behavior of infostealers: a program opening Chrome's, Brave's, Edge's, Arc's, Vivaldi's or Firefox's saved logins, cookies, form data or the key material that decrypts them.
+
+The browser's own reads are not reported, judged by the team that signs it, and neither are Time Machine's and Spotlight's. Apple's command-line tools are reported, since `cp`, `sqlite3` and `ditto` are what these files are read with. One alert is raised per process, however many files it opens.
+
+### Known false-positive sources
+
+- A backup, sync or security tool that reads the whole home folder (Backblaze, Arq, an antivirus scanner). Exclude it by `team_id`, which survives upgrades and cannot be claimed by another program.
+- A person or script exporting their own browser data by hand. Confirm with them; the opener is their shell or tool.
+- A password manager importing from a browser. Exclude it by `team_id`.
+
+### Limitations
+
+- Safari's cookies are not watched.
+- A browser at a custom profile location, or a Chromium browser not listed here, is not watched.
+- Needs an agent whose extension reports reads of these files.
 
 ## trusted_root_certificate
 

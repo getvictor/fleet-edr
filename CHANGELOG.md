@@ -10,6 +10,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
+- **Browser credential theft is detected.** `credential_browser_store_read` alerts when a program other than the browser opens Chrome's, Brave's, Edge's, Arc's, Vivaldi's or Firefox's saved passwords, cookies or their key material, the core behavior of infostealers (T1555.003). Exclude a backup or security tool by its `team_id`. Needs this release's agent.
 - **SSH key persistence is detected.** `persistence_ssh_authorized_keys` alerts when a user's or root's `~/.ssh/authorized_keys` is written or replaced (T1098.004). Every host now watches those files in every home. Exclude a configuration-management agent by its path.
 - **Watched file paths can name every user's home folder.** Start a path with `~/`, such as `~/.ssh/authorized_keys`, and each host watches it for root and every user account, including accounts added later. Needs this release's agent; older hosts skip the path.
 - **Root certificates trusted from the command line are detected.** `trusted_root_certificate` alerts when `security add-trusted-cert` or `trust-settings-import` makes a host trust a certificate (T1553.004). Certificates deployed by MDM profiles are not reported.

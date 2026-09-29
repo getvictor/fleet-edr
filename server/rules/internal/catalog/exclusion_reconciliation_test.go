@@ -48,12 +48,16 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"sudoers_tamper":                  {api.ExclusionMatchPathGlob},
 		// Same surface as sudoers_tamper and for the same reason: the tunable subject is the acting process, since a
 		// configuration manager that rewrites a fragment by deleting and recreating it is the shape an operator excludes.
-		"sudoers_destroyed":               {api.ExclusionMatchPathGlob},
-		"privilege_launchd_plist_write":   {api.ExclusionMatchTeamID},
-		"dyld_insert":                     {},
-		"shell_from_office":               {},
-		"osascript_network_exec":          {},
-		"credential_keychain_dump":        {},
+		"sudoers_destroyed":             {api.ExclusionMatchPathGlob},
+		"privilege_launchd_plist_write": {api.ExclusionMatchTeamID},
+		"dyld_insert":                   {},
+		"shell_from_office":             {},
+		"osascript_network_exec":        {},
+		"credential_keychain_dump":      {},
+		// The opener, by every dimension a process is named by: the tools that read these files are anyone's.
+		"credential_browser_store_read": {
+			api.ExclusionMatchPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
+		},
 		"trusted_root_certificate":        {},
 		"application_control_block":       {},
 		"application_control_would_block": {},

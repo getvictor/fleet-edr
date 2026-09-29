@@ -1,0 +1,59 @@
+{
+  "events": [
+    {
+      "event_id": "cbr-8100-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 8100,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "cbr-8100-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 8100,
+        "ppid": 1,
+        "path": "/bin/cp",
+        "args": [
+          "cp",
+          "/Users/victor/Library/Application Support/Google/Chrome/Default/Login Data",
+          "/tmp/ld"
+        ],
+        "uid": 501,
+        "gid": 20,
+        "code_signing": {
+          "team_id": "",
+          "signing_id": "com.apple.cp",
+          "flags": 0,
+          "is_platform_binary": true
+        }
+      }
+    },
+    {
+      "event_id": "cbr-8100-open",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1200,
+      "event_type": "open",
+      "payload": {
+        "pid": 8100,
+        "path": "/Users/victor/Library/Application Support/Google/Chrome/Default/Login Data",
+        "flags": 0
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "credential_browser_store_read",
+      "severity": "high",
+      "description_contains": "/bin/cp opened Chrome's Login Data",
+      "event_ids": [
+        "cbr-8100-open"
+      ]
+    }
+  ]
+}

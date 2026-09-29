@@ -30,6 +30,7 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `persistence_login_item` | `path_glob` | The app's bundle |
 | `installer_unsigned_package` | `path_glob` | The package being installed |
 | `persistence_ssh_authorized_keys` | `path_glob` | The process that wrote the key file |
+| `credential_browser_store_read` | `path_glob`, `team_id`, `signing_id`, `cdhash` | The program that opened the browser's credential file |
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
 | `dns_c2_beacon` | `domain` | The domain the process looked up before connecting |
