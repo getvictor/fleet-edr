@@ -51,17 +51,19 @@ func envelopeJSON(t *testing.T, eventType, payload string) []byte {
 // payloadFixtures carries one minimally-valid payload per event_type. TestEventSchema_EveryEventTypeValidates asserts the key set
 // equals the schema's event_type enum, so a new event type without a fixture fails rather than going unexercised.
 var payloadFixtures = map[string]string{
-	"exec":                       `{"pid":100,"ppid":1,"path":"/bin/zsh","args":["zsh","-c","id"],"cwd":"/","uid":501,"gid":20}`,
-	"fork":                       `{"child_pid":101,"parent_pid":100}`,
-	"exit":                       `{"pid":101,"exit_code":0}`,
-	"open":                       `{"pid":101,"path":"/etc/sudoers","flags":1}`,
-	"file_rename":                `{"pid":101,"source_path":"/tmp/staged","path":"/etc/sudoers"}`,
-	"file_truncate":              `{"pid":101,"path":"/etc/sudoers"}`,
-	"file_delete":                `{"pid":101,"path":"/etc/sudoers.d/admins"}`,
-	"network_connect":            `{"pid":101,"protocol":"tcp","direction":"outbound","remote_address":"93.184.216.34","remote_port":443}`,
-	"dns_query":                  `{"pid":101,"query_name":"example.com","query_type":"A"}`,
-	"snapshot_heartbeat":         `{"pid":101}`,
-	"btm_launch_item_add":        `{"item_type":"agent","item_path":"/Library/LaunchAgents/com.example.plist"}`,
+	"exec":                `{"pid":100,"ppid":1,"path":"/bin/zsh","args":["zsh","-c","id"],"cwd":"/","uid":501,"gid":20}`,
+	"fork":                `{"child_pid":101,"parent_pid":100}`,
+	"exit":                `{"pid":101,"exit_code":0}`,
+	"open":                `{"pid":101,"path":"/etc/sudoers","flags":1}`,
+	"file_rename":         `{"pid":101,"source_path":"/tmp/staged","path":"/etc/sudoers"}`,
+	"file_truncate":       `{"pid":101,"path":"/etc/sudoers"}`,
+	"file_delete":         `{"pid":101,"path":"/etc/sudoers.d/admins"}`,
+	"network_connect":     `{"pid":101,"protocol":"tcp","direction":"outbound","remote_address":"93.184.216.34","remote_port":443}`,
+	"dns_query":           `{"pid":101,"query_name":"example.com","query_type":"A"}`,
+	"snapshot_heartbeat":  `{"pid":101}`,
+	"btm_launch_item_add": `{"item_type":"agent","item_path":"/Library/LaunchAgents/com.example.plist"}`,
+	"tcc_modify": `{"service":"SystemPolicyAllFiles","identity":"com.example.app","identity_type":"bundle_id",` +
+		`"update_type":"create","right":"allowed","reason":"user_consent","instigator_pid":812}`,
 	"sensor_provider_transition": `{"provider":"network_extension","state":"stopped"}`,
 	"sensor_recovery_failed":     `{"provider":"network_extension","outcome":"attempts_exhausted","attempts":3}`,
 	"application_control_block": `{"pid":101,"path":"/tmp/tool","rule_id":"r-1","rule_type":"CDHASH","identifier":"abc",` +

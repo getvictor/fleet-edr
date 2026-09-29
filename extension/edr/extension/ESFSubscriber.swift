@@ -112,7 +112,10 @@ final class ESFSubscriber: Sendable {
             // be muted per-event-type and was the open/create firehose. Sensitive-path file writes (sudoers) are now
             // watched by the dedicated, target-muted FileTamperSubscriber client, which keeps target-path mute inversion
             // off this exec-authorization client.
-            ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD
+            ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD,
+            // TCC permission changes (#1185): an app being handed Full Disk Access, Accessibility or Screen Recording. Low volume,
+            // one event per record tccd changes.
+            ES_EVENT_TYPE_NOTIFY_TCC_MODIFY
         ]
 
         let subResult = es_subscribe(client, events, UInt32(events.count))
@@ -166,6 +169,8 @@ final class ESFSubscriber: Sendable {
             handleExit(msg)
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
             handleBtmLaunchItemAdd(msg)
+        case ES_EVENT_TYPE_NOTIFY_TCC_MODIFY:
+            handleTccModify(msg)
         default:
             break
         }
@@ -354,7 +359,7 @@ final class ESFSubscriber: Sendable {
         let gid = audit_token_to_egid(target.audit_token)
         let fileStat = target.executable.pointee.stat
 
-        let codeSigning = extractCodeSigning(from: target)
+        let codeSigning = Self.extractCodeSigning(from: target)
         // NOTIFY_EXEC has no kernel deadline, so the sync compute is the
         // right call here: every event carries a real hash for downstream
         // telemetry. The AUTH callback (which has a deadline) already
@@ -423,17 +428,22 @@ final class ESFSubscriber: Sendable {
         return args
     }
 
-    private func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
-        let teamID = process.team_id.data.map { String(cString: $0) }
-        let signingID = process.signing_id.data.map { String(cString: $0) }
-
-        guard teamID != nil || signingID != nil else {
+    /// extractCodeSigning is a process's signing, or nil when the process carries neither a team nor a signing identifier: an
+    /// unsigned binary's event omits the object rather than sending an empty one. Used by exec and by TCC changes.
+    static func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
+        guard process.team_id.data != nil || process.signing_id.data != nil else {
             return nil
         }
+        return Self.codeSigning(of: process)
+    }
 
-        return CodeSigning(
-            teamID: teamID ?? "",
-            signingID: signingID ?? "",
+    /// codeSigning is the one mapping of an ES process's signing onto the wire's CodeSigning, shared by every event that carries a
+    /// process's signing so the fields cannot drift between them. Callers decide separately whether a missing signature means an
+    /// absent object.
+    static func codeSigning(of process: es_process_t) -> CodeSigning {
+        CodeSigning(
+            teamID: esTokenString(process.team_id),
+            signingID: esTokenString(process.signing_id),
             flags: process.codesigning_flags,
             isPlatformBinary: process.is_platform_binary
         )

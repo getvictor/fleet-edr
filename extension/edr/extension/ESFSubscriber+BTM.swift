@@ -46,12 +46,7 @@ extension ESFSubscriber {
         if let instigator = event.instigator {
             let proc = instigator.pointee
             instigatorPID = audit_token_to_pid(proc.audit_token)
-            instigatorCodeSigning = CodeSigning(
-                teamID: esTokenString(proc.team_id),
-                signingID: esTokenString(proc.signing_id),
-                flags: proc.codesigning_flags,
-                isPlatformBinary: proc.is_platform_binary
-            )
+            instigatorCodeSigning = Self.codeSigning(of: proc)
         }
 
         // executable_path is the DECISION input's anchor: the agent reads this binary's on-disk code-signing and fills

@@ -6,7 +6,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 
 // MARK: Payload types
 
-struct CodeSigning: Codable, Sendable {
+struct CodeSigning: Codable, Sendable, Equatable {
     let teamID: String
     let signingID: String
     let flags: UInt32
@@ -316,6 +316,32 @@ struct BtmLaunchItemAddPayload: Codable, Sendable {
         case executableCodeSigning = "executable_code_signing"
         case instigatorPid = "instigator_pid"
         case instigatorCodeSigning = "instigator_code_signing"
+    }
+}
+
+/// TccModifyPayload is the wire shape of `tcc_modify` (issue #1185): a TCC permission record created, modified or deleted, for the
+/// app `identity` names, with the process that made the change and the one responsible for it. The enums are TccNames' spellings.
+/// The instigator and responsible processes are forensic context; which app gained a permission, and how, is what a rule judges.
+struct TccModifyPayload: Codable, Sendable, Equatable {
+    let service: String
+    let identity: String
+    let identityType: String
+    let updateType: String
+    let right: String
+    let reason: String
+    let instigatorPid: pid_t
+    let instigatorCodeSigning: CodeSigning?
+    let responsiblePid: pid_t?
+    let responsibleCodeSigning: CodeSigning?
+
+    enum CodingKeys: String, CodingKey {
+        case service, identity, right, reason
+        case identityType = "identity_type"
+        case updateType = "update_type"
+        case instigatorPid = "instigator_pid"
+        case instigatorCodeSigning = "instigator_code_signing"
+        case responsiblePid = "responsible_pid"
+        case responsibleCodeSigning = "responsible_code_signing"
     }
 }
 

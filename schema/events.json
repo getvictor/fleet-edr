@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "file_rename", "file_truncate", "file_delete", "network_connect", "dns_query", "application_control_block", "application_control_would_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
+      "enum": ["exec", "fork", "exit", "open", "file_rename", "file_truncate", "file_delete", "network_connect", "dns_query", "application_control_block", "application_control_would_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed", "tcc_modify"],
       "description": "Type of endpoint security event"
     },
     "platform": {
@@ -100,6 +100,10 @@
     {
       "if": { "properties": { "event_type": { "const": "sensor_recovery_failed" } }, "required": ["event_type"] },
       "then": { "properties": { "payload": { "$ref": "#/definitions/sensor_recovery_failed_payload" } } }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "tcc_modify" } }, "required": ["event_type"] },
+      "then": { "properties": { "payload": { "$ref": "#/definitions/tcc_modify_payload" } } }
     }
   ],
   "definitions": {
@@ -408,6 +412,43 @@
         "previous_epoch": { "type": "integer", "description": "The policy_epoch (updated_at microseconds) the host held before the re-sync." },
         "new_epoch": { "type": "integer", "description": "The advanced policy_epoch that drove acceptance despite the version regression." },
         "reason": { "type": "string", "enum": ["version_regression"], "description": "Why the re-sync fired. \"version_regression\" is the only cause today: a lower version accepted because the epoch advanced." }
+      }
+    },
+    "tcc_modify_payload": {
+      "type": "object",
+      "required": ["service", "identity", "identity_type", "update_type", "right", "reason", "instigator_pid"],
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "The TCC service whose permission changed, as tccd names it without the kTCCService prefix (for example SystemPolicyAllFiles for Full Disk Access, Accessibility, ScreenCapture, ListenEvent for Input Monitoring)."
+        },
+        "identity": {
+          "type": "string",
+          "description": "The app the permission is about, as identity_type says: a bundle identifier or an executable path, usually."
+        },
+        "identity_type": {
+          "type": "string",
+          "enum": ["bundle_id", "executable_path", "policy_id", "file_provider_domain_id", "unknown"]
+        },
+        "update_type": {
+          "type": "string",
+          "enum": ["create", "modify", "delete", "unknown"],
+          "description": "Whether the permission record was created, modified or deleted."
+        },
+        "right": {
+          "type": "string",
+          "enum": ["denied", "unknown", "allowed", "limited", "add_modify_added", "session_pid", "learn_more"],
+          "description": "The permission the record holds after the change."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["none", "error", "user_consent", "user_set", "system_set", "service_policy", "mdm_policy", "service_override_policy", "missing_usage_string", "prompt_timeout", "preflight_unknown", "entitled", "app_type_policy", "prompt_cancel", "unknown"],
+          "description": "Why the record changed: user_consent is a prompt answered, user_set a switch changed in System Settings, mdm_policy a configuration profile."
+        },
+        "instigator_pid": { "type": "integer", "description": "The process that made the change (tccd's client)." },
+        "instigator_code_signing": { "$ref": "#/definitions/code_signing" },
+        "responsible_pid": { "type": "integer", "description": "Optional. The process responsible for the change, when macOS reports one." },
+        "responsible_code_signing": { "$ref": "#/definitions/code_signing" }
       }
     }
   }
