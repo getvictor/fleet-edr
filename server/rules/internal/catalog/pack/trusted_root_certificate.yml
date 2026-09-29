@@ -11,7 +11,7 @@ description: |-
 
   Detects a root certificate being installed on macOS (T1553.004). A certificate the host trusts as a root lets whoever holds its key intercept the host's TLS connections, or sign code the host will accept.
 
-  Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out, as are `security -h`, which prints help, and a result type of `deny` or `unspecified`, which records a certificate as not trusted.
+  Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out, as are a `-h`, which prints help, a result type of `deny` or `unspecified`, which records a certificate as not trusted, and `-o`, which writes the trust settings to a file instead of the host.
 author: Fleet EDR
 level: high
 tags:
@@ -27,15 +27,19 @@ detection:
   # `security help add-trusted-cert` does not match. add-certificates adds a certificate without trusting it, and is left out.
   selection_subcommand:
     Subcommand|re: '^(?:add-trusted-cert|trust-settings-import)$'
-  # `security -h <subcommand>` prints that subcommand's help and changes nothing. Subcommand skips leading flags, so the help
-  # form yields the same subcommand; this catches a -h among the global flags, the only place security reads it.
+  # A -h anywhere asks for help and changes nothing: among security's global flags it prints the subcommand's help, and after
+  # add-trusted-cert it is that handler's usage request (Apple's trusted_cert_add.c). Subcommand skips leading flags, so both
+  # help forms yield the same subcommand as a real invocation.
   filter_help:
-    CommandLine|re: '^\S+(?:\s+-\S+)*\s+-h(?:\s|$)'
+    CommandLine|re: '\s-h(?:\s|$)'
   # A result type of deny or unspecified records a certificate as NOT trusted, the opposite of what this rule reports. The default
   # (trustRoot for a self-signed certificate, trustAsRoot otherwise) and an explicit trustRoot or trustAsRoot are what trust it.
   filter_distrust:
     CommandLine|re: '\s-r\s*(?:deny|unspecified)(?:\s|$)'
-  condition: selection_binary and selection_subcommand and not filter_help and not filter_distrust
+  # add-trusted-cert -o <file> writes the resulting trust settings to that file instead of applying them to the host.
+  filter_settings_file:
+    CommandLine|re: '\s-o(?:\s|$)'
+  condition: selection_binary and selection_subcommand and not filter_help and not filter_distrust and not filter_settings_file
 falsepositives:
   - An administrator or an IT script deploying an internal root by hand. Prefer a configuration profile pushed by MDM, which is not reported; where a script is how it is done, set this rule to monitor on the hosts it runs on.
 x-engine:

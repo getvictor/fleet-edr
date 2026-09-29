@@ -59,6 +59,8 @@ func TestTrustedRootCertificate_OtherUsesOfSecurityDoNotFire(t *testing.T) {
 		securityExec(t, "/tmp/security", "security", "add-trusted-cert", "/tmp/r.pem"),
 		securityExec(t, "/usr/bin/security", "security", "-h", "add-trusted-cert"),
 		securityExec(t, "/usr/bin/security", "security", "-q", "-h", "trust-settings-import"),
+		securityExec(t, "/usr/bin/security", "security", "add-trusted-cert", "-h"),
+		securityExec(t, "/usr/bin/security", "security", "add-trusted-cert", "-o", "/tmp/settings.plist", "/tmp/r.pem"),
 		securityExec(t, "/usr/bin/security", "security", "add-trusted-cert", "-d", "-r", "deny", "/tmp/r.pem"),
 		securityExec(t, "/usr/bin/security", "security", "add-trusted-cert", "-r", "unspecified", "/tmp/r.pem"),
 	))

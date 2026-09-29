@@ -41,8 +41,8 @@ func (r *TrustedRootCertificate) Doc() api.Documentation {
 			"whoever holds its key intercept the host's TLS connections, or sign code the host will accept.\n\n" +
 			"Fires on an invocation of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, both " +
 			"of which write trust settings. `add-certificates`, which adds a certificate without trusting it, is left out, as are " +
-			"`security -h`, which prints help, and a result type of `deny` or `unspecified`, which records a certificate as not " +
-			"trusted.",
+			"a `-h`, which prints help, a result type of `deny` or `unspecified`, which records a certificate as not trusted, and " +
+			"`-o`, which writes the trust settings to a file instead of the host.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
