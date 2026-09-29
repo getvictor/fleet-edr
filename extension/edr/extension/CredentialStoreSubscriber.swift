@@ -49,7 +49,11 @@ final class CredentialStoreSubscriber: Sendable {
         }
         // The same order as the file-tamper client: clear the default mute set, mute the targets, THEN invert and subscribe, so there
         // is never a window in which every open on the host reaches this client.
-        es_unmute_all_target_paths(client)
+        guard es_unmute_all_target_paths(client) == ES_RETURN_SUCCESS else {
+            // Inverting with the default mute set still in place would observe those paths too; stay unsubscribed instead.
+            logger.error("credential-store client could not clear the default target-path mutes; the client stays unsubscribed")
+            return
+        }
         queue.sync { refresh() }
         guard es_invert_muting(client, ES_MUTE_INVERSION_TYPE_TARGET_PATH) == ES_RETURN_SUCCESS else {
             logger.error("credential-store target-path mute inversion failed; the client stays unsubscribed")
@@ -116,7 +120,10 @@ final class CredentialStoreSubscriber: Sendable {
         }
         let path = esTokenString(msg.event.open.file.pointee.path)
         let opener = msg.process.pointee
-        guard !path.isEmpty, !CredentialStores.isOwnRead(path: path, openerTeamID: esTokenString(opener.team_id)) else {
+        // Only a browser's credential store is reported, whatever reached the client: an open of any other path is dropped here, so
+        // a mute set that is not exactly the targets cannot put unrelated reads on the wire.
+        guard CredentialStores.owner(of: path) != nil,
+              !CredentialStores.isOwnRead(path: path, openerTeamID: esTokenString(opener.team_id)) else {
             return
         }
         let pid = audit_token_to_pid(opener.audit_token)
