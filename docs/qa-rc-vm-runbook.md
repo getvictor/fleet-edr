@@ -95,7 +95,7 @@ U=<login-user>   # the VM's GUI/login user (e.g. victor); asuser needs its uid, 
 sudo launchctl asuser "$(id -u "$U")" sudo -u "$U" "/Applications/Fleet EDR.app/Contents/MacOS/edr" activate &
 ```
 
-A same-team version bump auto-approves (no Allow click). The request succeeds from that `user/<uid>` context; `systemextensionsctl list` then shows the new version `activated enabled` and the old one `terminated waiting to uninstall on reboot`. The `activate` subcommand also re-enables the content filter and DNS proxy, so the new Network Extension takes over its Mach service immediately and telemetry stays continuous (no stranding). The SSH session may briefly drop while the filter re-enables; reconnect, the box is fine. Reboot to finish the cutover (old version uninstalls); the activated extension comes back enabled headless.
+A same-team version bump auto-approves (no Allow click). The request succeeds from that `user/<uid>` context; `systemextensionsctl list` then shows the new version `activated enabled` and the old one `terminated waiting to uninstall on reboot`. The `activate` subcommand also re-enables the content filter and DNS proxy, so the new Network Extension takes over its Mach service immediately and telemetry stays continuous (no stranding). The SSH session may briefly drop while the filter re-enables; reconnect, the box is fine. Before any reboot, confirm the cutover worked: the agent log shows `receiver connected` for `group.com.fleetdm.edr.networkextension`, and the host's `dns_query` and `network_connect` events resume within a minute. A reboot afterwards only removes the inactive old-version entry; the activated extension comes back enabled headless.
 
 ## 5. App-control exec enforcement needs a notarized binary
 
