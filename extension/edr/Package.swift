@@ -121,6 +121,8 @@ let package = Package(
                 // CredentialStores.swift is the credential-store client's watched set and its filter of a browser's own reads
                 // (#1187). Pure Foundation; CredentialStoreSubscriber applies it.
                 "extension/CredentialStores.swift",
+                // TccNames.swift spells a TCC modification's ES enums as wire names (#1185). Pure Foundation over raw values.
+                "extension/TccNames.swift",
                 "networkextension/DNSParser.swift",
                 // DNSProxyHealth.swift is the DNS proxy's forwarding-health REPORTER: a sliding-window failure
                 // accumulator that says degraded/recovered once per change and decides nothing (issue #673). Pure

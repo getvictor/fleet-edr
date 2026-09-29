@@ -112,7 +112,10 @@ final class ESFSubscriber: Sendable {
             // be muted per-event-type and was the open/create firehose. Sensitive-path file writes (sudoers) are now
             // watched by the dedicated, target-muted FileTamperSubscriber client, which keeps target-path mute inversion
             // off this exec-authorization client.
-            ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD
+            ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD,
+            // TCC permission changes (#1185): an app being handed Full Disk Access, Accessibility or Screen Recording. Low volume,
+            // one event per record tccd changes.
+            ES_EVENT_TYPE_NOTIFY_TCC_MODIFY
         ]
 
         let subResult = es_subscribe(client, events, UInt32(events.count))
@@ -166,6 +169,8 @@ final class ESFSubscriber: Sendable {
             handleExit(msg)
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
             handleBtmLaunchItemAdd(msg)
+        case ES_EVENT_TYPE_NOTIFY_TCC_MODIFY:
+            handleTccModify(msg)
         default:
             break
         }
