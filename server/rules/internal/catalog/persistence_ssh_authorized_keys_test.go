@@ -19,7 +19,8 @@ func authorizedKeysEvent(t *testing.T, eventType, path string) api.Event {
 	}
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return api.Event{EventID: "ak", HostID: "fixture-host", TimestampNs: 1, EventType: eventType, Payload: raw}
+	// Each event its own ID: a batch decodes an event once per ID, so events sharing one would all be judged as the first.
+	return api.Event{EventID: eventType + ":" + path, HostID: "fixture-host", TimestampNs: 1, EventType: eventType, Payload: raw}
 }
 
 func evaluateAuthorizedKeys(t *testing.T, excl api.ExclusionResolver, events ...api.Event) []api.Finding {

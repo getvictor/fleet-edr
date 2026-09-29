@@ -57,7 +57,8 @@ func (r *PersistenceSSHAuthorizedKeys) Doc() api.Documentation {
 				"for the agent's absolute path.",
 		},
 		Limitations: []string{
-			"A key file named by a custom `AuthorizedKeysFile` in sshd_config is not watched unless an operator adds its path.",
+			"A key file sshd_config names with a custom `AuthorizedKeysFile` is not detected: the rule matches only the default " +
+				"`authorized_keys` and `authorized_keys2` names, and watching another name only records its writes.",
 			"Removing a key, or deleting the file, is not reported: removal takes access away rather than granting it.",
 		},
 	}

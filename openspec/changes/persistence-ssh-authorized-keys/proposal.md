@@ -10,4 +10,4 @@ SSH authorized keys (MITRE T1098.004) are one of the macOS techniques issue #116
 
 ## Not changed
 
-A key file named by a custom `AuthorizedKeysFile` is not watched unless an operator adds it. Removing a key is not reported. A host whose extension cannot expand `~/` entries watches neither file and reports nothing to this rule.
+A key file named by a custom `AuthorizedKeysFile` is not detected, since the rule matches only the default names. Removing a key is not reported. A host whose extension cannot expand `~/` entries watches neither file and reports nothing to this rule.
