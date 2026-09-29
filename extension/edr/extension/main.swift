@@ -68,6 +68,12 @@ subscriber.start()
 fileTamper.onEvent = { data in server.send(data: data) }
 fileTamper.start()
 
+// The credential-store client (#1187) reports a program other than the browser opening a browser's saved passwords or cookies,
+// as `open` events carrying the real access mode.
+let credentialStores = CredentialStoreSubscriber()
+credentialStores.onEvent = { data in server.send(data: data) }
+credentialStores.start()
+
 // Issue #11: ESF is a pure event stream that only delivers events occurring
 // after es_subscribe. Anything already running (Safari, Slack, Finder, user
 // LaunchAgents, every long-lived daemon) is invisible to the tree until it
