@@ -23,9 +23,9 @@ extension ESFSubscriber {
             right: TccNames.right(event.right.rawValue),
             reason: TccNames.reason(event.reason.rawValue),
             instigatorPid: audit_token_to_pid(event.instigator_token),
-            instigatorCodeSigning: instigator.map { Self.codeSigning(of: $0) },
+            instigatorCodeSigning: instigator.flatMap { Self.extractCodeSigning(from: $0) },
             responsiblePid: event.responsible_token.map { audit_token_to_pid($0.pointee) },
-            responsibleCodeSigning: responsible.map { Self.codeSigning(of: $0) }
+            responsibleCodeSigning: responsible.flatMap { Self.extractCodeSigning(from: $0) }
         )
         if let data = serializer.serialize(eventType: "tcc_modify", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("tcc_modify service=\(payload.service, privacy: .public) update=\(payload.updateType, privacy: .public)")

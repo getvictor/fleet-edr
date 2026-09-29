@@ -359,7 +359,7 @@ final class ESFSubscriber: Sendable {
         let gid = audit_token_to_egid(target.audit_token)
         let fileStat = target.executable.pointee.stat
 
-        let codeSigning = extractCodeSigning(from: target)
+        let codeSigning = Self.extractCodeSigning(from: target)
         // NOTIFY_EXEC has no kernel deadline, so the sync compute is the
         // right call here: every event carries a real hash for downstream
         // telemetry. The AUTH callback (which has a deadline) already
@@ -428,9 +428,9 @@ final class ESFSubscriber: Sendable {
         return args
     }
 
-    /// extractCodeSigning is an exec's signing, or nil when the process carries neither a team nor a signing identifier: an unsigned
-    /// binary's exec omits the object rather than sending an empty one.
-    private func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
+    /// extractCodeSigning is a process's signing, or nil when the process carries neither a team nor a signing identifier: an
+    /// unsigned binary's event omits the object rather than sending an empty one. Used by exec and by TCC changes.
+    static func extractCodeSigning(from process: es_process_t) -> CodeSigning? {
         guard process.team_id.data != nil || process.signing_id.data != nil else {
             return nil
         }
