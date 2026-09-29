@@ -106,7 +106,9 @@ func (r *CredentialBrowserStoreRead) Evaluate(ctx context.Context, events []api.
 }
 
 // CountsMaterializationAbandons declares that every abandon this rule makes is recorded, so its zero is a measurement.
-func (r *CredentialBrowserStoreRead) CountsMaterializationAbandons() {}
+func (r *CredentialBrowserStoreRead) CountsMaterializationAbandons() {
+	// A marker: the method's existence is the declaration (api.AbandonCounter), and evalEvent records each abandon itself.
+}
 
 // EvaluateScoped implements api.ScopedRule.
 func (r *CredentialBrowserStoreRead) EvaluateScoped(
@@ -158,11 +160,13 @@ func (r *CredentialBrowserStoreRead) evalEvent(
 	}, nil
 }
 
-// credentialFile names the browser and the credential file a path is, or ok is false for any other path. The path must lie in the
-// browser's directory below a home and end in one of its credential file names.
+// credentialFile names the browser and the credential file a path is, or ok is false for any other path. The path must be the
+// browser's directory in a home, root's or a person's under /Users, and end in one of its credential file names: the same
+// directory under any other path is not the browser's, however it is named.
 func credentialFile(path string) (credentialStore, string, bool) {
 	for _, store := range credentialStores {
-		if !strings.Contains(path, store.root) {
+		i := strings.Index(path, store.root)
+		if i < 0 || !isHome(path[:i]) {
 			continue
 		}
 		for _, name := range store.files {
@@ -183,4 +187,13 @@ func processSignature(proc *api.Process) codeSigningJSON {
 		return codeSigningJSON{}
 	}
 	return cs
+}
+
+// isHome reports whether dir is a home the extension watches: root's, in either spelling, or one directory directly under /Users.
+func isHome(dir string) bool {
+	if dir == "/var/root" || dir == "/private/var/root" {
+		return true
+	}
+	name, ok := strings.CutPrefix(dir, "/Users/")
+	return ok && name != "" && !strings.Contains(name, "/")
 }

@@ -86,7 +86,12 @@ func TestCredentialBrowserStoreRead_TheBrowserAndApplesServicesDoNotFire(t *test
 		credentialOpen(t, 100, chromeProfile+"Preferences"),
 		credentialOpen(t, 100, "/Users/alice/Documents/Login Data"),
 		credentialOpen(t, 100, chromeProfile+"Login Data-journal"),
+		credentialOpen(t, 100, "/tmp/Library/Application Support/Google/Chrome/Default/Login Data"),
+		credentialOpen(t, 100, "/Users/alice/backup/Library/Application Support/Google/Chrome/Default/Login Data"),
 	))
+	// Root's home, in the /private spelling the kernel reports, is a home.
+	assert.Len(t, evaluateCredentialRead(t, nil,
+		credentialOpen(t, 100, "/private/var/root/Library/Application Support/Firefox/Profiles/a.default/logins.json")), 1)
 	// The owner check is by the store's browser: Chrome's team reading Firefox's store is not Firefox reading its own.
 	assert.Len(t, evaluateCredentialRead(t, nil, credentialOpen(t, 200, firefoxProfile+"logins.json")), 1)
 	// Apple's services are judged by the platform-qualified identifier, which a planted binary cannot claim.
