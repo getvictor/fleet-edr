@@ -129,6 +129,44 @@ func stringField(payload map[string]json.RawMessage, key string) string {
 	return v
 }
 
+// AppResolver finds an installed app's path by its bundle identifier. Production passes appbundle.Path; tests inject a fake.
+type AppResolver func(bundleID string) (string, bool)
+
+// tccEventType is the TCC permission change enrichment acts on.
+const tccEventType = "tcc_modify"
+
+// TccSubjectSigning returns data with a tcc_modify payload's identity_path and identity_code_signing filled: the app the permission
+// is about, and its on-disk code signature (issue #1185). The event names the app as TCC does, by bundle identifier or executable
+// path, and whether a permission was handed to Apple's own software or to something else can only be told from the app's
+// signature. A bundle identifier is resolved through LaunchServices; an executable path is signed as it is.
+//
+// Anything else passes through unchanged, as does an event whose app cannot be found or read, which the rule then cannot judge.
+// Fields already present are left as the source set them.
+func TccSubjectSigning(data []byte, resolve AppResolver, eval Evaluator) []byte {
+	envelope, payload, ok := decodeEvent(data, tccEventType)
+	if !ok || hasField(payload, "identity_code_signing") {
+		return data
+	}
+	identity := stringField(payload, "identity")
+	var path string
+	switch stringField(payload, "identity_type") {
+	case "bundle_id":
+		if path, ok = resolve(identity); !ok {
+			return data
+		}
+	case "executable_path":
+		path = identity
+	default:
+		return data
+	}
+	result, ok := eval(path)
+	if !ok || result == nil {
+		return data
+	}
+	data = encodeEvent(data, envelope, payload, "identity_path", path)
+	return encodeEvent(data, envelope, payload, "identity_code_signing", result)
+}
+
 // PackageEvaluator reads the signature of the package at pkgPath for the installer script at scriptPath. Production passes
 // pkgsign.Evaluate; tests inject a fake. A false return means no trustworthy answer (unreadable, or changed during the install),
 // and the event is left without a package signature.

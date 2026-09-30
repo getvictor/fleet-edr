@@ -1,0 +1,27 @@
+# T1548.006 Abuse Elevation Control Mechanism: TCC Manipulation.
+#
+# Full Disk Access is granted to an app that is not Apple's, in the shape captured on edr-dev when Firefox was added in System
+# Settings: a modify, right allowed, reason user_set, with the app's signature the agent reads from its bundle.
+# tcc_sensitive_grant fires. Mirrors the positive_full_disk_access_in_system_settings fixture.
+name: "T1548.006 Full Disk Access granted to a third-party app"
+host:
+  id: AAAA1548-0006-0000-0000-000000000001
+  hostname: efficacy-t1548-006.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: tcc_modify
+    tcc:
+      service: SystemPolicyAllFiles
+      identity: org.mozilla.firefox
+      identity_type: bundle_id
+      update_type: modify
+      right: allowed
+      reason: user_set
+      instigator_pid: 85293
+      identity_path: /Applications/Firefox.app
+      identity_code_signing:
+        team_id: 43AQ936H96
+        signing_id: org.mozilla.firefox
+        flags: 0
+        is_platform_binary: false

@@ -58,6 +58,8 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"credential_browser_store_read": {
 			api.ExclusionMatchPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
 		},
+		// The granted app by its signer, and by its path for an unsigned in-house tool.
+		"tcc_sensitive_grant":             {api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchPathGlob},
 		"trusted_root_certificate":        {},
 		"application_control_block":       {},
 		"application_control_would_block": {},

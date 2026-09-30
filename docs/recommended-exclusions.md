@@ -31,6 +31,8 @@ Which rule consumes which match type is fixed by the rule, and the console offer
 | `installer_unsigned_package` | `path_glob` | The package being installed |
 | `persistence_ssh_authorized_keys` | `path_glob` | The process that wrote the key file |
 | `credential_browser_store_read` | `path_glob`, `team_id`, `signing_id`, `cdhash` | The program that opened the browser's credential file |
+| `tcc_sensitive_grant` | `team_id`, `signing_id` | The app granted the permission |
+| `tcc_sensitive_grant` | `path_glob` | The app's path |
 | `sudoers_tamper` | `path_glob` | The process that wrote the sudoers file |
 | `sudoers_destroyed` | `path_glob` | The process that removed or replaced the file |
 | `dns_c2_beacon` | `domain` | The domain the process looked up before connecting |
@@ -70,6 +72,7 @@ Know what it costs. The 30-second window starts when the login shell starts, so 
 | `shell_network_connect` | `parent_path_glob` | `/usr/bin/login` | Workstations only | Interactive terminal logins spawn a shell that routinely reaches the network. Interim until host-class profiles exist. |
 | `privilege_launchd_plist_write` | `team_id` | `FDG8Q7N4CC` | All hosts | The EDR agent's own LaunchDaemon registration. Signed by the EDR vendor team; allowlist so the agent does not flag its own persistence. |
 | `persistence_launchagent` | `team_id` | `FDG8Q7N4CC` | All hosts | The EDR's own activation LaunchAgent. Not needed where the background items profile is installed, which marks it managed. |
+| `tcc_sensitive_grant` | `team_id` | `FDG8Q7N4CC` | All hosts | The EDR's own security extension being granted Full Disk Access. Not needed where the TCC profile is installed, since a profile's grant is not reported. |
 
 Do not add the `/usr/bin/login` exclusion to `suspicious_exec`: there it only silences temp-directory executions during shell startup, which is the shell-profile persistence case above.
 

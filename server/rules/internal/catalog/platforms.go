@@ -18,6 +18,7 @@ func (*TrustedRootCertificate) Platforms() []api.Platform { return []api.Platfor
 func (*CredentialBrowserStoreRead) Platforms() []api.Platform {
 	return []api.Platform{api.PlatformDarwin}
 }
+func (*TccSensitiveGrant) Platforms() []api.Platform      { return []api.Platform{api.PlatformDarwin} }
 func (*CredentialKeychainDump) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
 func (*PrivilegeLaunchdPlistWrite) Platforms() []api.Platform {
 	return []api.Platform{api.PlatformDarwin}

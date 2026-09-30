@@ -344,6 +344,12 @@
       "comment": "Covered by: sudoers_tamper"
     },
     {
+      "techniqueID": "T1548.006",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: tcc_sensitive_grant"
+    },
+    {
       "techniqueID": "T1552.001",
       "score": 0.5,
       "color": "#fdae6b",

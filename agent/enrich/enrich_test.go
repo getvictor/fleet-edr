@@ -264,3 +264,70 @@ func TestBtmExecutableSigning_LoginItems(t *testing.T) {
 		})
 	}
 }
+
+// spec:endpoint-event-collection/tcc-permission-changes-are-reported/the-app-a-permission-is-about-carries-its-signature
+//
+// A TCC change names its app by bundle identifier or path. The agent finds a bundle's app through LaunchServices and signs it, so
+// the rule can tell a permission handed to Apple's software from one handed to anything else.
+func TestTccSubjectSigning(t *testing.T) {
+	t.Parallel()
+	resolve := func(id string) (string, bool) {
+		if id == "org.mozilla.firefox" {
+			return "/Applications/Firefox.app", true
+		}
+		return "", false
+	}
+	cases := []struct {
+		name       string
+		payload    string
+		wantPath   string
+		wantSigned string
+	}{
+		{"a bundle identifier is resolved and its app signed",
+			`{"service":"SystemPolicyAllFiles","identity":"org.mozilla.firefox","identity_type":"bundle_id"}`,
+			"/Applications/Firefox.app", "/Applications/Firefox.app"},
+		{"an executable path is signed as it is",
+			`{"service":"Accessibility","identity":"/usr/local/bin/tool","identity_type":"executable_path"}`,
+			"/usr/local/bin/tool", "/usr/local/bin/tool"},
+		{"an app LaunchServices does not know is left unsigned",
+			`{"service":"ScreenCapture","identity":"com.example.gone","identity_type":"bundle_id"}`, "", ""},
+		{"a policy identity is not an app",
+			`{"service":"SystemPolicyAllFiles","identity":"policy-7","identity_type":"policy_id"}`, "", ""},
+		{"a signature already present is kept",
+			`{"identity":"org.mozilla.firefox","identity_type":"bundle_id",` +
+				`"identity_code_signing":{"team_id":"KEEP","signing_id":"x","flags":0,"is_platform_binary":false}}`, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var asked []string
+			eval := func(path string) (*codesign.Result, bool) {
+				asked = append(asked, path)
+				return &codesign.Result{TeamID: "43AQ936H96", SigningID: "org.mozilla.firefox"}, true
+			}
+			got := TccSubjectSigning([]byte(`{"event_type":"tcc_modify","payload":`+tc.payload+`}`), resolve, eval)
+			var env struct {
+				Payload struct {
+					IdentityPath string          `json:"identity_path"`
+					Signing      json.RawMessage `json:"identity_code_signing"`
+				} `json:"payload"`
+			}
+			if err := json.Unmarshal(got, &env); err != nil {
+				t.Fatalf("output is not valid JSON: %v (%s)", err, got)
+			}
+			if env.Payload.IdentityPath != tc.wantPath {
+				t.Errorf("identity_path = %q, want %q", env.Payload.IdentityPath, tc.wantPath)
+			}
+			switch {
+			case tc.wantSigned == "" && len(asked) != 0:
+				t.Errorf("signed %q and should not have", asked)
+			case tc.wantSigned != "" && (len(asked) != 1 || asked[0] != tc.wantSigned):
+				t.Errorf("signed %q, want [%s]", asked, tc.wantSigned)
+			}
+		})
+	}
+	exec := `{"event_type":"exec","payload":{"path":"/bin/ls"}}`
+	if got := TccSubjectSigning([]byte(exec), resolve, nil); string(got) != exec {
+		t.Errorf("another event type changed: %s", got)
+	}
+}

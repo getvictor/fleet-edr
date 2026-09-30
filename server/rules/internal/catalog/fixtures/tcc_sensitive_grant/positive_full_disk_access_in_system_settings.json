@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "event_id": "tcc-fda",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "tcc_modify",
+      "payload": {
+        "identity": "org.mozilla.firefox",
+        "identity_type": "bundle_id",
+        "instigator_code_signing": {
+          "flags": 637626881,
+          "is_platform_binary": true,
+          "signing_id": "com.apple.settings.PrivacySecurity.extension",
+          "team_id": ""
+        },
+        "instigator_pid": 85293,
+        "reason": "user_set",
+        "right": "allowed",
+        "service": "SystemPolicyAllFiles",
+        "update_type": "modify",
+        "identity_path": "/Applications/Firefox.app",
+        "identity_code_signing": {
+          "team_id": "43AQ936H96",
+          "signing_id": "org.mozilla.firefox",
+          "flags": 0,
+          "is_platform_binary": false
+        }
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "tcc_sensitive_grant",
+      "severity": "medium",
+      "description_contains": "org.mozilla.firefox (/Applications/Firefox.app) was granted Full Disk Access",
+      "event_ids": [
+        "tcc-fda"
+      ]
+    }
+  ]
+}

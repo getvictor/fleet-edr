@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
+	"github.com/fleetdm/edr/agent/appbundle"
 	"github.com/fleetdm/edr/agent/coalesce"
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/commander"
@@ -747,6 +748,8 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 			// computes them here. No-op for every other event and on the linux headless build.
 			data := enrich.BtmExecutableSigning(evt.Data, codesign.Evaluate)
 			data = enrich.PackageScriptSigning(data, p.parentPath, pkgsign.Evaluate)
+			// And a TCC permission change with the signature of the app it is about (issue #1185), found by its bundle ID.
+			data = enrich.TccSubjectSigning(data, appbundle.Path, codesign.Evaluate)
 			if p.updateTable {
 				updateProcTable(p.pt, data)
 			}
