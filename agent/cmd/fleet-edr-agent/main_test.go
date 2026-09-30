@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 )
 
 // TestNewAgentHTTPClient builds the shared agent HTTP client (fingerprint/insecure TLS policy + HTTP/2 keep-alive PING config) and
-// asserts it constructs cleanly. This covers the http2.ConfigureTransports wiring, which has no other unit coverage.
+// asserts it constructs cleanly. This covers the HTTP/2 protocol and PING wiring, which has no other unit coverage.
 func TestNewAgentHTTPClient(t *testing.T) {
 	t.Parallel()
 	var dialed atomic.Value
@@ -39,6 +40,25 @@ func TestNewAgentHTTPClient(t *testing.T) {
 	}
 	require.ErrorContains(t, err, "dial recorded")
 	assert.Equal(t, "edr.example.com:8089", dialed.Load())
+}
+
+// TestNewAgentHTTPClientNegotiatesHTTP2 pins that the agent client speaks HTTP/2 to a TLS server that offers it: the keep-alive PINGs
+// that detect a half-open link only exist on an h2 connection, so a client that silently fell back to HTTP/1.1 would lose them.
+func TestNewAgentHTTPClientNegotiatesHTTP2(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	var dialer net.Dialer
+	_, client, err := newAgentHTTPClient(&config.Config{AllowInsecure: true}, dialer.DialContext, slog.Default())
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, 2, resp.ProtoMajor, "the agent client negotiates h2 via ALPN")
 }
 
 // TestControlDialTarget pins how the control-channel dial endpoint and transport credentials are derived from EDR_SERVER_URL (issue
