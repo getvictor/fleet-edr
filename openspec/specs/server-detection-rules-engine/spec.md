@@ -2417,36 +2417,36 @@ A watched-path replacement's audit row SHALL report how many hosts the set was q
 
 ### Requirement: An exclusion covers only what it names
 
-A rule whose detection matches on a command argument SHALL evaluate EVERY argument the detection matched, not the first. It SHALL suppress the finding only when an operator exclusion covers all of them, and the finding's description SHALL name the candidates that were not excluded.
+A persistence rule SHALL judge each registered item on its own. An exclusion SHALL suppress the finding only for the item it names, and a finding's description SHALL name the item it was raised for.
 
-`launchctl` accepts several plist paths in one invocation, and `persistence_launchagent` read back only the first. An exclusion for a benign plist therefore suppressed whatever was registered alongside it:
+`launchctl` accepts several plist paths in one invocation, and the rule once read back only the first, so an exclusion for a benign plist suppressed whatever was registered alongside it:
 
 ```sh
 launchctl load /Library/LaunchAgents/com.logi.ghub.plist ~/Library/LaunchAgents/evil.plist
 ```
 
-Planting a plist under `/Library/LaunchAgents` needs root; this needs none, because the first argument only has to NAME an excluded plist and the second is the user's own LaunchAgent. The description had the same shape of fault with no exclusion at all: it named the first argument, so an analyst reading the alert never learned the second plist had been registered.
+Planting a plist under `/Library/LaunchAgents` needs root; this needed none, because the first argument only had to NAME an excluded plist and the second was the user's own LaunchAgent. Each plist is now its own registration, judged and reported separately, so what an exclusion names is exactly what it covers.
 
-#### Scenario: An excluded candidate does not cover its neighbour
+#### Scenario: An excluded registration does not cover its neighbour
 
 - **GIVEN** an exclusion for a benign LaunchAgent plist
-- **AND** a `launchctl load` naming that plist and a second plist the exclusion does not cover
+- **AND** registrations of that plist and of a second plist the exclusion does not cover
 - **WHEN** the engine evaluates the rule
-- **THEN** a finding is produced
+- **THEN** one finding is produced
 - **AND** its description names the second plist and not the excluded one
 
-#### Scenario: Every candidate excluded suppresses the finding
+#### Scenario: Every registration excluded suppresses every finding
 
 - **GIVEN** exclusions covering each of several LaunchAgent plists
-- **AND** a `launchctl load` naming exactly those plists
+- **AND** registrations of exactly those plists
 - **WHEN** the engine evaluates the rule
 - **THEN** no finding is produced
 
-#### Scenario: Several candidates are all named
+#### Scenario: Several registrations are each reported
 
-- **GIVEN** a `launchctl load` naming several LaunchAgent plists and no exclusion for any of them
+- **GIVEN** registrations of several LaunchAgent plists and no exclusion for any of them
 - **WHEN** the engine evaluates the rule
-- **THEN** the finding's description names every one of them
+- **THEN** one finding is produced for each, naming its plist
 
 ### Requirement: Monitor-mode matches are kept as records
 
@@ -2589,3 +2589,378 @@ A scheduled job SHALL compare the vendored corpus with upstream every week, and 
 - **GIVEN** an upstream change that makes the rule reference fail to regenerate or the catalog tests fail
 - **WHEN** the weekly job runs
 - **THEN** the review branch is still pushed, without a generated file the failure truncated, and the pull request carries the failing output
+
+### Requirement: Browser credential theft is reported
+
+The `credential_browser_store_read` rule SHALL fire on an `open` event whose path lies in the profile directory of Chrome, Brave, Edge, Arc, Vivaldi or Firefox within a home (root's, or one directly under `/Users`) and ends in one of that browser's credential file names (for a Chromium browser `Login Data`, `Login Data For Account`, `Web Data`, `Cookies` or `Local State`; for Firefox `logins.json`, `key4.db` or `cookies.sqlite`), naming the opening process, the browser and the file, and linking the finding to the process. It SHALL NOT fire when the opening process is signed by the team that signs that browser, or when its platform-qualified signing identifier is one of Time Machine's or Spotlight's. An exclusion for the rule SHALL suppress it by the opener's path, team, team-qualified signing identifier or cdhash.
+
+#### Scenario: Another program opening a credential store fires
+
+- **GIVEN** `cp` opening Chrome's `Login Data`, `Network/Cookies` or `Local State`, Firefox's `key4.db`, or Arc's `Web Data`
+- **WHEN** detection evaluates each event
+- **THEN** `credential_browser_store_read` raises a high-severity finding naming the process, the browser and the file
+
+#### Scenario: The browser and Apple's backup and indexing services do not fire
+
+- **GIVEN** Chrome opening its own `Login Data`, Firefox its own `logins.json`, Time Machine a Chrome cookie store, and `cp` opening a profile file that is not a credential store, a journal file beside one, a `Login Data` outside a browser directory, or a copy of a browser directory outside a home
+- **WHEN** detection evaluates the events
+- **THEN** no finding is raised
+- **AND** Chrome opening Firefox's store, and a non-Apple binary claiming Time Machine's signing identifier, each still fire
+
+#### Scenario: An opener is waived by its signer or path
+
+- **GIVEN** an exclusion for the rule naming a backup tool's team, its team-qualified signing identifier, or a path glob over its bundle
+- **WHEN** detection evaluates the tool opening a credential store
+- **THEN** no finding is raised
+- **AND** the same team excluded only for another rule does not suppress it
+
+### Requirement: Evaluations a rule abandons are counted
+
+When a rule needs the process record an event names and that record is still absent once the materialization grace has passed, the rule evaluates the event as if nothing matched. That decision is correct, since a record that has not arrived by then may never arrive, but it is also a detection that did not happen. The engine SHALL count each such abandon against the rule that made it, in the rule's durable evaluation counters, beside the count of retryable misses.
+
+The two counts SHALL remain distinct. A miss inside the grace is a retry: the batch is re-evaluated and the event may yet be decided, so it SHALL NOT be counted as abandoned. Only a miss past the grace is. A rule whose record did materialize SHALL NOT record an abandon however old its event.
+
+An abandon SHALL be counted once per rule and process within a batch, matching how those rules deduplicate their findings, so that the count is not inflated against at most one lost finding per process. The same process under a second rule SHALL count as that rule's own abandon.
+
+Like the other evaluation counters, abandons SHALL be recorded per attempt, so a replayed batch counts its abandons again, and a reader SHALL interpret them as a rate against evaluations. Abandons SHALL NOT be bounded by the evaluation count: a miss is at most one per attempt, but one attempt over a batch can give up on several processes.
+
+A rule that does not record its abandons SHALL have its abandon count reported as not measured rather than as zero, since its zero would be the same whether or not it gave up on anything. Days recorded before the count existed were not measured either, and SHALL NOT be reported as having no abandons. A read over a window in which any evaluation was made without counting abandons, including the day the count began and evaluations an older server made during a rolling upgrade, SHALL report the abandon count as not measured rather than as a total over the measured part alone.
+
+A rule whose decision depends on the process only after an earlier graph read, such that a missing record ends its evaluation before the materialization decision is reached, is outside this requirement; the count covers only the point at which a rule chooses between waiting and giving up.
+
+#### Scenario: A rule that gives up on a missing process record is counted
+
+- **GIVEN** an event whose process record is still absent after the materialization grace has passed
+- **WHEN** a rule that needs that record evaluates the event
+- **THEN** the rule raises no finding and does not raise the retryable sentinel
+- **AND** one abandon is recorded against that rule
+
+#### Scenario: A miss inside the grace is a retry, not an abandon
+
+- **GIVEN** an event whose process record is absent and which is still inside the materialization grace
+- **WHEN** a rule that needs that record evaluates the event
+- **THEN** the rule raises the retryable sentinel
+- **AND** no abandon is recorded against that rule
+
+#### Scenario: The count reaches the rule's durable evaluation counters
+
+- **GIVEN** a batch in which one rule abandons several distinct processes and another rule abandons none
+- **WHEN** the batch is evaluated and its statistics are written and read back
+- **THEN** the first rule's evaluation counters carry its abandons, accumulated across writes
+- **AND** the second rule's counters carry none
+- **AND** the retryable-miss count is unaffected by the abandons
+
+#### Scenario: Abandons are not bounded by evaluations
+
+- **GIVEN** a rule's evaluation statistics in which the abandon count exceeds the evaluation count
+- **WHEN** a client reads those statistics
+- **THEN** the row is accepted as well formed
+
+#### Scenario: Days before the count existed are not reported as zero
+
+- **GIVEN** a rule whose evaluation counters include a day recorded before the abandon count existed
+- **WHEN** its statistics are read over a window that includes that day
+- **THEN** the abandon count is reported as not measured, while its other counters are reported as usual
+- **AND** a read over a window that excludes that day reports the abandon count
+
+#### Scenario: An uncounting rule is not reported as having none
+
+- **GIVEN** a rule that does not record the abandons it makes
+- **WHEN** its statistics are written and read back
+- **THEN** its abandon count is reported as not measured rather than as zero
+
+### Requirement: Beacon exclusions by domain or program
+
+The `dns_c2_beacon` rule SHALL consult exclusions of match types `domain`, `path_glob`, `team_id`, `signing_id` and `cdhash`, and SHALL declare exactly that set as the match types it supports. A `domain` exclusion MUST be matched against the domain whose lookup the connection is attributed to, as that name or any subdomain of it. The other four MUST be matched against the connecting process: `path_glob` against its executable path, `team_id` and `cdhash` against its recorded code signature, and `signing_id` against its signing identifier qualified by the team that signed it (or by `platform` for an operating-system binary), so a binary without that team's signature cannot match a vendor's `signing_id` exclusion. A matching exclusion SHALL suppress the finding for that connection and nothing else: it MUST NOT suppress a finding for a connection whose attributed domain and process it does not match.
+
+#### Scenario: A domain exclusion waives that domain and its subdomains
+
+- **GIVEN** a `domain` exclusion for `example.com` on `dns_c2_beacon`
+- **AND** a process exec'd from a temporary path that looked up `api.example.com` and connected to an address that lookup returned
+- **WHEN** the `network_connect` event is evaluated
+- **THEN** the engine produces no `dns_c2_beacon` finding
+
+#### Scenario: A domain exclusion does not waive a different domain
+
+- **GIVEN** a `domain` exclusion for `example.com` on `dns_c2_beacon`
+- **AND** a process exec'd from a temporary path that looked up `notexample.com` and connected to an address that lookup returned
+- **WHEN** the `network_connect` event is evaluated
+- **THEN** the engine produces one `dns_c2_beacon` finding
+
+#### Scenario: A program is waived by path or code signature
+
+- **GIVEN** a `path_glob`, `team_id`, `signing_id` or `cdhash` exclusion on `dns_c2_beacon` naming the connecting process
+- **WHEN** that process's resolve-then-connect is evaluated
+- **THEN** the engine produces no `dns_c2_beacon` finding
+
+#### Scenario: An ad-hoc binary cannot claim a vendor signing id
+
+- **GIVEN** a `signing_id` exclusion `Q6L2SF6YDW:com.example.tool` on `dns_c2_beacon`
+- **AND** a process exec'd from a temporary path whose signature claims the identifier `com.example.tool` with no team
+- **WHEN** its resolve-then-connect is evaluated
+- **THEN** the engine produces one `dns_c2_beacon` finding
+
+### Requirement: An installer script is waived by its package signer
+
+The `suspicious_exec` rule SHALL consult exclusions of match type `package_team_id` for an installer script: a chain whose non-shell parent is PackageKit's `package_script_service`, whose trigger exec carries the signature of the package the script belongs to. Such an exclusion SHALL suppress the finding only when the package is signed by a certificate macOS trusts and its Developer ID team equals the exclusion's value. It SHALL NOT suppress anything for an unsigned or untrusted package, or for a chain under any other parent, whatever package signature the event carries. The detection configuration SHALL store the match type, and a finding for an installer script SHALL name the package being installed and its signer when known.
+
+#### Scenario: A vendor's installer is waived by its package team
+
+- **GIVEN** a `package_team_id` exclusion for a vendor's team
+- **AND** an installer script chain under `package_script_service` whose package that team signed
+- **WHEN** the rule evaluates it
+- **THEN** no finding is produced
+- **AND** an exclusion for another team produces the finding
+
+#### Scenario: Only a trusted package signature counts
+
+- **GIVEN** a `package_team_id` exclusion for a vendor's team
+- **AND** an installer script whose package is unsigned, untrusted though naming that team, or carries no reported signature
+- **WHEN** the rule evaluates it
+- **THEN** a finding is produced
+
+#### Scenario: A signature outside PackageKit counts for nothing
+
+- **GIVEN** a `package_team_id` exclusion for a vendor's team
+- **AND** a chain whose parent is not `package_script_service` but whose trigger carries that vendor's package signature
+- **WHEN** the rule evaluates it
+- **THEN** a finding is produced
+
+#### Scenario: The package team is a storable match type
+
+- **GIVEN** an operator creating a `package_team_id` exclusion
+- **WHEN** it is stored and the configuration is loaded
+- **THEN** it applies to that match type and not to `team_id`
+
+### Requirement: An unsigned installer package is reported
+
+The `installer_unsigned_package` rule SHALL fire on an `exec` event whose `package_signing` is present and not `signed`: an installer script run from a package that is unsigned or whose signature macOS does not trust. It SHALL NOT fire on an exec whose package is signed, or on an exec without `package_signing`, which the agent attaches only to an installer script. The finding SHALL name the script and the package, link to the script's process, and deduplicate per package, so a package's several scripts raise one alert. An exclusion for the rule SHALL suppress it by a path glob on the package's path.
+
+#### Scenario: An unsigned package's script fires
+
+- **GIVEN** an installer script's exec whose `package_signing` says the package is not signed
+- **WHEN** detection evaluates the event
+- **THEN** `installer_unsigned_package` raises a high-severity finding naming the script and the package, linked to the script's process
+
+#### Scenario: A signed package or an ordinary exec does not fire
+
+- **GIVEN** an installer script's exec from a signed package, and the same exec with no `package_signing`
+- **WHEN** detection evaluates the events
+- **THEN** no finding is raised
+
+#### Scenario: One alert per package
+
+- **GIVEN** a package's preinstall and postinstall execs, and a script from another package, all unsigned
+- **WHEN** detection evaluates the events
+- **THEN** the first package's two findings share one dedup subject, and the other package's finding has its own
+
+#### Scenario: An unsigned package is waived by its path
+
+- **GIVEN** an exclusion for `installer_unsigned_package` with a path glob matching the package's path
+- **WHEN** detection evaluates the package's script
+- **THEN** no finding is raised
+- **AND** the same glob saved for another rule does not suppress it
+
+### Requirement: LaunchAgent persistence judged on the program
+
+The `persistence_launchagent` rule SHALL consume Background Task Management registrations of LaunchAgents and SHALL judge each on the code signature of the program it registers, not on how the item became active and not on the process that registered it. It SHALL NOT fire for an item that is managed by MDM, whose program is an Apple platform binary, or whose program's signature could not be read.
+
+The rule SHALL consult exclusions of match types `team_id` and `signing_id` against the registered program, the latter qualified by the team that signed it (or by `platform`), and `path_glob` against the plist's filesystem path. A plist reported as a `file://` URL SHALL be matched as the path it names. A finding SHALL name the program and the plist, and SHALL deduplicate on the plist.
+
+#### Scenario: An untrusted agent fires without launchctl
+
+- **GIVEN** a LaunchAgent registration whose program is ad-hoc signed and not MDM-managed, with no `launchctl` execution in the batch
+- **WHEN** the rule evaluates it
+- **THEN** one finding is produced naming the program and the plist as a path
+
+#### Scenario: An Apple or managed agent does not fire
+
+- **GIVEN** a LaunchAgent registration whose program is an Apple platform binary, and another that MDM manages
+- **WHEN** the rule evaluates them
+- **THEN** no finding is produced
+
+#### Scenario: A vendor agent is waived by its signer
+
+- **GIVEN** a `team_id` exclusion for a vendor, or a `signing_id` exclusion naming that vendor's team and identifier
+- **WHEN** a LaunchAgent registration whose program that vendor signed is evaluated
+- **THEN** no finding is produced
+
+#### Scenario: An ad-hoc binary cannot claim a signer
+
+- **GIVEN** a `signing_id` exclusion for a vendor's identifier, qualified or bare
+- **WHEN** a LaunchAgent registration whose ad-hoc signed program claims that identifier with no team is evaluated
+- **THEN** a finding is produced
+
+#### Scenario: A plist path exclusion keeps working
+
+- **GIVEN** a `path_glob` exclusion naming a plist by its path
+- **WHEN** a registration reporting that plist as a `file://` URL is evaluated
+- **THEN** no finding is produced
+
+### Requirement: osascript waits for the temp exec it judges
+
+The `osascript_network_exec` rule SHALL resolve the process record of the temp exec it evaluates before walking to an osascript ancestor, and SHALL treat a missing record as every process-resolving rule does: inside the materialization grace the evaluation SHALL fail with the retryable not-yet-materialized error so the batch is re-evaluated, and past it the rule SHALL count the abandon against itself. Its ancestors SHALL still be looked up without a retry, since a parent may predate the capture and never materialize.
+
+#### Scenario: A young temp exec is retried, then decided
+
+- **GIVEN** an osascript chain with a download and a temp exec, whose temp exec's record has not materialized and whose event is inside the grace
+- **WHEN** the rule evaluates the temp exec
+- **THEN** the evaluation fails with the retryable not-yet-materialized error
+- **AND** once the record materializes, the same event produces the finding
+
+#### Scenario: A temp exec whose record never arrives is counted
+
+- **GIVEN** a temp exec whose record is still missing once the grace has passed
+- **WHEN** the rule evaluates it
+- **THEN** no finding is produced and one abandon is recorded against the rule
+
+### Requirement: Login item persistence judged on its app
+
+The `persistence_login_item` rule SHALL fire on a `btm_launch_item_add` event with `item_type=login_item` (a helper an app registers from inside its bundle) or `item_type=app` (an app added to the user's login items) that is not MDM-managed and whose `executable_code_signing`, the code signature of the app bundle the item names, is present and not an Apple platform binary. It SHALL NOT fire on a registration whose signature is absent, or on any other item type. The finding SHALL name the app by its bundle's filesystem path, without a trailing slash, carry no process, and deduplicate per app. An exclusion for the rule SHALL suppress it by the app's team, by its signing identifier qualified by that team, or by a path glob on the bundle's filesystem path.
+
+#### Scenario: An untrusted login item fires
+
+- **GIVEN** a login-item registration that is not MDM-managed, whose helper is ad-hoc signed
+- **WHEN** detection evaluates the event
+- **THEN** `persistence_login_item` raises a medium-severity finding naming the helper bundle's path, with no process
+
+#### Scenario: An untrusted app added to the login items fires
+
+- **GIVEN** a registration of `item_type=app` naming an app bundle as `file:///Users/alice/Applications/Tool.app/`, whose signature is ad hoc
+- **WHEN** detection evaluates the event
+- **THEN** `persistence_login_item` raises a finding naming `/Users/alice/Applications/Tool.app`
+- **AND** a path-glob exclusion for `/Users/alice/Applications/Tool.app` suppresses it
+
+#### Scenario: An Apple or managed login item does not fire
+
+- **GIVEN** a login-item registration whose helper is an Apple platform binary, and another that MDM manages
+- **WHEN** detection evaluates the events
+- **THEN** no finding is raised
+
+#### Scenario: A login item with no signature is skipped
+
+- **GIVEN** a login-item registration that carries no helper signature, as an agent that does not sign login items sends it
+- **WHEN** detection evaluates the event
+- **THEN** no finding is raised
+
+#### Scenario: A vendor login item is waived by its signer or path
+
+- **GIVEN** an exclusion for `persistence_login_item` naming the helper's team, its team-qualified signing identifier, or a path glob matching its bundle
+- **WHEN** detection evaluates the helper's registration
+- **THEN** no finding is raised
+- **AND** an ad-hoc helper claiming the vendor's signing identifier still fires, as does the helper when the team is excluded only for another rule
+
+### Requirement: SSH authorized keys changes are reported
+
+The server SHALL include `~/.ssh/authorized_keys` and `~/.ssh/authorized_keys2` in the default watched paths every host is sent. The `persistence_ssh_authorized_keys` rule SHALL fire on a write-mode `open` of, or a `file_rename` onto, a path ending in `/.ssh/authorized_keys` or `/.ssh/authorized_keys2`, naming the process that wrote it and linking the finding to that process. It SHALL NOT fire on any other file, including a copy of a key file under another name. An exclusion for the rule SHALL suppress it by a path glob on the writer's path.
+
+#### Scenario: A key file written in any home fires
+
+- **GIVEN** a write-mode open of `authorized_keys` in a person's home, in root's home in its `/private` spelling, and of `authorized_keys2`
+- **WHEN** detection evaluates each event
+- **THEN** `persistence_ssh_authorized_keys` raises a medium-severity finding naming the writer and the file
+
+#### Scenario: A key file renamed into place fires
+
+- **GIVEN** a rename whose destination is a user's `~/.ssh/authorized_keys`
+- **WHEN** detection evaluates the event
+- **THEN** the rule raises a finding saying a file was renamed onto the key file
+
+#### Scenario: Another file does not fire
+
+- **GIVEN** writes to `~/.ssh/known_hosts`, to `~/.ssh/authorized_keys.bak`, and to an `authorized_keys` outside `.ssh`
+- **WHEN** detection evaluates the events
+- **THEN** no finding is raised
+
+#### Scenario: A writer is waived by its path
+
+- **GIVEN** an exclusion for `persistence_ssh_authorized_keys` with a path glob matching the writer
+- **WHEN** detection evaluates the writer's change to a key file
+- **THEN** no finding is raised
+- **AND** the same glob saved for another rule does not suppress it
+
+### Requirement: Sigma abandons are charged to the reader
+
+A Sigma-backed rule SHALL record an abandon when the process record of the event's subject is still missing past the materialization grace and the rule's decision depended on it: its detection matched, so there is no process to name in the finding, or its detection read the field the engine resolves from the process graph (`Image` on a file event, `ParentImage` on an exec) and did not match. A rule whose detection decided on the event's own fields SHALL NOT be charged, even when another rule in the same batch read the same event's process. A subject that materialized, whose parent did not, SHALL NOT be charged, since a parent may predate the capture.
+
+The parent of an exec's subject SHALL be found from the subject's own record, read through the same grace as the subject: inside the grace a missing subject SHALL make the evaluation retryable rather than leave the parent's image absent.
+
+#### Scenario: A match with no process to name is counted
+
+- **GIVEN** a Sigma rule whose detection matches an event whose subject never materialized
+- **WHEN** the rule evaluates the event past the grace
+- **THEN** no finding is produced and one abandon is recorded against the rule
+
+#### Scenario: Only the rule that read the process is charged
+
+- **GIVEN** two Sigma rules evaluating the same file event whose subject never materialized, one whose detection reads `Image` and one whose detection reads only the file path
+- **WHEN** both evaluate the event past the grace
+- **THEN** an abandon is recorded against the rule that read `Image` and none against the other
+
+#### Scenario: A missing parent is not an abandon
+
+- **GIVEN** an exec whose subject materialized and whose parent did not
+- **WHEN** a Sigma rule reading `ParentImage` evaluates it
+- **THEN** no abandon is recorded
+
+#### Scenario: A missing subject hides the parent too
+
+- **GIVEN** an exec whose subject never materialized
+- **WHEN** a Sigma rule reading `ParentImage` evaluates it
+- **THEN** past the grace an abandon is recorded against the rule
+- **AND** inside the grace the evaluation fails with the retryable not-yet-materialized error
+
+### Requirement: A sensitive TCC grant is reported
+
+The `tcc_sensitive_grant` rule SHALL fire on a `tcc_modify` event whose update type is `create` or `modify`, whose right is `allowed`, and whose service is `SystemPolicyAllFiles`, `Accessibility`, `ScreenCapture`, `ListenEvent` or `PostEvent`, when the event carries the app's code signing and the app is not an Apple platform binary. It SHALL NOT fire when the reason is `mdm_policy`, or when the event carries no code signing for the app. The finding SHALL name the app and the permission in the words System Settings uses, carry no process, and deduplicate per app and service. An exclusion for the rule SHALL suppress it by the app's team, its team-qualified signing identifier, or a path glob on its path.
+
+#### Scenario: A sensitive permission granted to another vendor's app fires
+
+- **GIVEN** Full Disk Access, Accessibility, Screen Recording, Input Monitoring or input-event posting granted to Firefox, signed by Mozilla's team, as System Settings records it (a modify, right `allowed`, reason `user_set`), and Full Disk Access created for an executable path
+- **WHEN** detection evaluates each event
+- **THEN** `tcc_sensitive_grant` raises a medium-severity finding naming the app and the permission, with no process
+
+#### Scenario: Other changes do not fire
+
+- **GIVEN** a denial, a deletion, a grant of a service that is not sensitive, a grant made by an MDM profile, a grant to an Apple platform binary, and a grant to an app whose signature could not be read
+- **WHEN** detection evaluates the events
+- **THEN** no finding is raised
+
+#### Scenario: A granted app is waived by its signer or path
+
+- **GIVEN** an exclusion for the rule naming the app's team, its team-qualified signing identifier, or its path
+- **WHEN** detection evaluates the grant
+- **THEN** no finding is raised
+- **AND** the same team excluded only for another rule does not suppress it
+
+### Requirement: A certificate trusted from the command line is reported
+
+The `trusted_root_certificate` rule SHALL fire on an `exec` of `/usr/bin/security` whose subcommand is `add-trusted-cert` or `trust-settings-import`, naming the subcommand and linking the finding to the process. It SHALL NOT fire on another subcommand, including `add-certificates`, on `security help` naming one of those subcommands, on an invocation carrying `-h`, on an `add-trusted-cert` whose result type is `deny` or `unspecified` or that writes its settings to a file with `-o`, or on a binary at another path. The finding for `trust-settings-import` SHALL say it imports trust settings rather than that it trusted a certificate, since the imported file may hold deny entries.
+
+#### Scenario: Security writing trust settings fires
+
+- **GIVEN** an exec of `/usr/bin/security add-trusted-cert -d -r trustRoot ...`, and one of `/usr/bin/security trust-settings-import ...`
+- **WHEN** detection evaluates each event
+- **THEN** `trusted_root_certificate` raises a high-severity finding naming the subcommand, linked to the process
+
+#### Scenario: Other uses of security do not fire
+
+- **GIVEN** execs of `security add-certificates`, `security help add-trusted-cert`, `security -h add-trusted-cert`, `security add-trusted-cert -h`, `security add-trusted-cert -r deny ...`, `security add-trusted-cert -o <file> ...`, `security find-certificate`, and a `security` binary at `/tmp/security`
+- **WHEN** detection evaluates the events
+- **THEN** no finding is raised
+
+### Requirement: A file rule is imported when hosts watch its paths
+
+An imported Sigma rule in a file category (`file_event`, `file_rename`, `file_delete`) SHALL be imported only when every search in its detection constrains `TargetFilename`, and each condition in it that pins a directory (equality, `startswith` or `contains`) can be met by a path every host watches: the extension's built-in paths and the server's default watched paths, compared through `/private`. A rule the check cannot prove, including one with a search that does not constrain `TargetFilename`, a regular expression, or only `endswith`, SHALL be refused with a reason naming the paths every host watches, since the agent emits file events only for watched paths and such a rule could never fire.
+
+#### Scenario: A file rule inside the watched set is imported
+
+- **GIVEN** a file rule whose every search pins `TargetFilename` inside a path every host watches
+- **WHEN** the corpus loads
+- **THEN** the rule is imported
+
+#### Scenario: A file rule it cannot prove is refused
+
+- **GIVEN** a file rule with a search outside every watched path, with no `TargetFilename`, with a regular expression, or with only `endswith`
+- **WHEN** the corpus loads
+- **THEN** the rule is refused, and the reason names the paths every host watches

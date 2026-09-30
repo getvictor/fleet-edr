@@ -1050,6 +1050,8 @@ The total SHALL be summed from the same stored per-day durations the mean is der
 
 The worst case SHALL remain reachable from the cell without being its leading figure, and the undecided count SHALL continue to be shown only when it is not zero. The column's explanatory note SHALL name which figure is the total and which is the mean, since two durations in one cell are otherwise ambiguous.
 
+The cell SHALL show the number of processes the rule abandoned, as a figure separate from the undecided count, and only when it is not zero. Undecided is waiting and abandoned is failing to decide at all, and an operator acts on them differently, so they SHALL NOT be summed into one figure. Where the server does not report abandons, the cell SHALL say nothing about them rather than show zero: a server that predates the figure has measured nothing, and a zero would state the one reassuring thing the data does not support.
+
 #### Scenario: The cell leads with the total and keeps the mean
 
 - **GIVEN** a rule evaluated 24 times over the window, averaging 2.5ms per attempt
@@ -1070,6 +1072,13 @@ The worst case SHALL remain reachable from the cell without being its leading fi
 - **WHEN** the Cost column reports its total for the window
 - **THEN** the total equals the sum of the stored per-day durations
 - **AND** it is not the product of the reported mean and the attempt count
+
+#### Scenario: Abandoned evaluations are shown apart from undecided ones
+
+- **GIVEN** a rule with both undecided and abandoned evaluations over the window
+- **WHEN** an operator opens the detection tuning view
+- **THEN** the rule's Cost cell shows the abandoned count and the undecided count as separate figures
+- **AND** a rule whose server does not report abandons shows no abandoned figure, rather than zero
 
 ### Requirement: The detection tuning view presents the most recent load
 
@@ -1278,6 +1287,8 @@ A value SHALL be laid out as wide as it is up to the cap, so a long value wraps 
 
 The detection-tuning view SHALL offer, beside each rule's Observed count, a way to open that rule's monitor records. The count tells an operator how often a rule matched, and the records show what it matched, which is what promoting a rule turns on. A rule with no recorded matches, or whose counts could not be read, SHALL NOT offer the link, because it would open onto records the count gives no reason to expect.
 
+A rule's detail view SHALL offer the same destination for a rule running in monitor mode, to any operator who may open that view. The records and the rule detail are gated on the same action, while detection tuning is gated on another that the investigating role does not hold, so without this the records are readable and unreachable for that role. This entry point SHALL NOT carry the Observed count's "only when matches were recorded" condition, because that condition is derived from the match counts, which are served behind the detection-tuning action and are not available here; the records view states its own empty case instead. It SHALL be offered only where the mode in force was actually resolved: a response that cannot report the mode in force reports the rule's own declaration, and a rule declaring monitor may be disabled by a setting that response knows nothing about, so offering its records there would contradict the view beside them.
+
 The records view SHALL list the rule's monitor records newest first, each opening the same investigation surface an alert opens. It SHALL state that monitor records are not alerts, and SHALL explain that records collapse repeat matches on the same process and are kept on their own retention window, so there can be fewer records than the Observed count. Where the two numbers meet, an unexplained difference reads as lost data.
 
 A monitor record's investigation surface SHALL NOT offer triage controls, because a monitor record has no lifecycle and the server refuses a status change on one. It SHALL say that it is a monitor record where those controls would be, and its way back SHALL lead to the rule's monitor records rather than to the alert queue, which does not list it.
@@ -1288,6 +1299,14 @@ A monitor record's investigation surface SHALL NOT offer triage controls, becaus
 - **WHEN** the operator follows its records link
 - **THEN** the view lists that rule's monitor records, newest first, each linking to its investigation surface
 - **AND** a rule that has no count, or whose counts could not be read, offers no records link
+
+#### Scenario: A monitor rule offers its records from its own page
+
+- **GIVEN** an operator holding `alert.read` and not `detection_config.read`
+- **WHEN** they open the detail of a rule running in monitor mode
+- **THEN** that rule's monitor records are offered from the detail view
+- **AND** a rule that alerts, or that is disabled, offers no records link
+- **AND** a rule whose mode in force the server cannot report offers no records link
 
 #### Scenario: The records view explains why it can show fewer than the count
 
@@ -1530,3 +1549,14 @@ Where a technique identifier is carried to the authoring surface, it SHALL be ac
 - **GIVEN** a request to the authoring surface carrying a technique identifier that is not in ATT&CK's form
 - **WHEN** the starting document is prepared
 - **THEN** the identifier is not placed into it
+
+### Requirement: The process graph says when its window predates retention
+
+The process graph SHALL tell the operator when the window it shows starts before the moment the server reports process records are retained from: that processes from earlier in the window are missing unless an alert references them, and that the event timeline is kept separately. It SHALL say nothing when the window is inside retention or the server reports no boundary.
+
+#### Scenario: An old window is labelled as aged out
+
+- **GIVEN** a process graph whose window starts before the server's retention boundary
+- **WHEN** the graph loads
+- **THEN** a notice says process records from before the boundary have been deleted
+- **AND** no notice appears for a window inside retention or when no boundary is reported

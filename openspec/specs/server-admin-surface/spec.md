@@ -273,7 +273,7 @@ The server SHALL periodically queue the current watched-path set, as a `set_watc
 
 A pending, acknowledged, or completed command at the current version, queued since the host's latest enrollment, SHALL count as delivered, so a host that is offline is not sent a new copy every time the server checks. A failed command SHALL count as delivered for six hours before the set is queued again, so a host whose agent cannot run the command does not accumulate a failed command every check. A failed command with no recorded completion time SHALL count as delivered rather than being queued again immediately, since nothing says how long ago it failed and retrying on every check is what the six-hour wait exists to prevent.
 
-While the set has never been changed, the server SHALL queue nothing.
+Before each check the server SHALL bring the stored set up to its default watched paths, as the requirement on default watched paths states, so a deployment that never configured a set is still sent them. While the set has never been changed and the server has no default paths to push, it SHALL queue nothing.
 
 #### Scenario: A failure with no completion time is not retried at once
 
@@ -293,6 +293,12 @@ While the set has never been changed, the server SHALL queue nothing.
 - **GIVEN** a host whose command for the current set expired undelivered, and a host that took the set and then enrolled again after a reinstall
 - **WHEN** the server next checks
 - **THEN** the current set is queued for both hosts
+
+#### Scenario: A never-configured deployment is sent the defaults
+
+- **GIVEN** a deployment whose watched-path set was never changed, and a host enrolled in it
+- **WHEN** the server next checks
+- **THEN** the set is brought up to the default paths and queued for the host, carrying them
 
 ### Requirement: Watched file paths are configured over the API
 
@@ -355,3 +361,67 @@ A top-level prefix is refused because its cost is not bounded by the set's size:
 - **THEN** the set is stored as the next version
 - **AND** the response and the audit row report how many hosts the command was not queued for
 - **AND** when the enrolled hosts could not be listed, they say the push was skipped for that reason rather than reporting no hosts
+
+### Requirement: The server pushes default watched paths
+
+The server SHALL send every host a set of default watched paths on top of the operator's set: low-traffic system directories that rules shipped with the product watch. They SHALL be reported with the extension's built-in paths as always watched, SHALL NOT be part of the set an operator edits, and SHALL be sent first in every `set_watched_paths` command, without an operator entry that repeats one.
+
+The server SHALL record, with each version of the set, the default paths that version was stored with. When the stored set carries no defaults or different ones, including a set stored before defaults existed and one never changed at all, the server SHALL store the operator's same paths again as a change by the system principal, audited with a reason, so the version and epoch move forward and hosts apply the new defaults. That SHALL be a no-op once the set carries the current defaults, and servers running at once SHALL together make that change once.
+
+The stored set SHALL remain readable by a server from before default paths existed, since old and new servers share the database during a rolling upgrade: the defaults SHALL be stored as ordinary entries marked as defaults, which such a server reads, and keeps pushing, as ordinary entries. When such a server rewrites the set without the marks, the server SHALL treat the defaults as unrecorded, restore them, and not keep their unmarked repeats among the operator's paths. The limit on a set's encoded size SHALL be measured on the operator's paths alone, as it was before the defaults existed, so a set the server accepted then still validates and can always gain the defaults; what a host is sent SHALL exceed that limit by no more than a fixed allowance for the defaults, which the fan-out's batched insert budgets for.
+
+#### Scenario: A deployment that never configured a set pushes the defaults
+
+- **GIVEN** a watched-path set that was never changed
+- **WHEN** the server brings the set up to its defaults
+- **THEN** the set moves to version 1 as a change by the system, keeping no operator paths
+- **AND** every enrolled host is sent the default paths
+
+#### Scenario: A set stored before the defaults keeps its paths and gains them
+
+- **GIVEN** a set stored before default paths existed, holding operator paths
+- **WHEN** the server brings the set up to its defaults
+- **THEN** the set moves to its next version with the same operator paths
+- **AND** hosts are sent the default paths followed by the operator's
+
+#### Scenario: A stored set at the size limit still gains the defaults
+
+- **GIVEN** a stored set whose operator paths encode to just under 8 KiB, written before the defaults existed
+- **WHEN** a server ensures the defaults
+- **THEN** the set keeps every operator path and records the defaults, at the next version
+- **AND** what each host is sent, the defaults included, is within the fixed allowance above the limit
+
+#### Scenario: Replicas racing add the defaults once
+
+- **GIVEN** several servers finding the set without the current defaults at once
+- **WHEN** each brings the set up to its defaults
+- **THEN** the set moves forward by one version and each host is sent it once
+
+#### Scenario: A server from before the defaults still reads the set
+
+- **GIVEN** a set this server stored, with the defaults and an operator path
+- **WHEN** a server from before default paths existed reads the column
+- **THEN** it decodes the set as a list of paths, the defaults among them
+
+#### Scenario: A set an old server rewrote is restored
+
+- **GIVEN** a set rewritten by a server from before default paths existed, holding the defaults as unmarked entries and an operator path
+- **WHEN** the server brings the set up to its defaults
+- **THEN** the set moves to its next version with the defaults recorded and only the operator path among the operator's
+
+#### Scenario: The defaults are reported as always watched
+
+- **GIVEN** an operator reading the watched-path set
+- **WHEN** the server answers
+- **THEN** the paths every host watches whatever the set holds include the default paths as well as the extension's built-in ones
+
+### Requirement: A watched path can name every user's home
+
+The server SHALL accept in the watched-path set an entry whose path starts with `~/`, which names the same path in every user's home folder, and SHALL judge it as the path it would be in a home at the root: every rule an absolute path meets applies, with a prefix's depth counted below the home. It SHALL refuse `~/` alone, and a `~/` prefix naming a top-level directory of the home.
+
+#### Scenario: A path in every home is judged below the home
+
+- **GIVEN** a proposed set with `~/.ssh/authorized_keys` as a literal and `~/Library/LaunchAgents/` as a prefix
+- **WHEN** the operator saves it
+- **THEN** the server accepts it
+- **AND** it refuses a set holding `~/` or `~/Library/` as a prefix, or a `~/` entry with an empty or `..` segment
