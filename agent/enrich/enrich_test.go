@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/fleetdm/edr/agent/codesign"
@@ -262,5 +263,93 @@ func TestBtmExecutableSigning_LoginItems(t *testing.T) {
 				t.Errorf("executable_code_signing was not filled")
 			}
 		})
+	}
+}
+
+// spec:endpoint-event-collection/tcc-permission-changes-are-reported/the-app-a-permission-is-about-carries-its-signature
+//
+// A TCC change names its app by bundle identifier or path. The agent finds a bundle's app through LaunchServices and signs it, so
+// the rule can tell a permission handed to Apple's software from one handed to anything else.
+func TestTccSubjectSigning(t *testing.T) {
+	t.Parallel()
+	const (
+		mozilla  = `{"team_id":"43AQ936H96","signing_id":"org.mozilla.firefox","flags":0,"is_platform_binary":false}`
+		apple    = `{"team_id":"","signing_id":"com.apple.Terminal","flags":0,"is_platform_binary":true}`
+		imposter = `{"team_id":"","signing_id":"com.apple.Terminal","flags":0,"is_platform_binary":false}`
+	)
+	signatures := map[string]*codesign.Result{
+		"/Applications/Firefox.app":                   {TeamID: "43AQ936H96", SigningID: "org.mozilla.firefox"},
+		"/usr/local/bin/tool":                         {TeamID: "43AQ936H96", SigningID: "org.mozilla.firefox"},
+		"/System/Applications/Utilities/Terminal.app": {SigningID: "com.apple.Terminal", IsPlatformBinary: true},
+		"/Users/alice/Applications/Terminal.app":      {SigningID: "com.apple.Terminal"},
+	}
+	eval := func(path string) (*codesign.Result, bool) {
+		r, ok := signatures[path]
+		return r, ok
+	}
+	resolve := func(id string) []string {
+		switch id {
+		case "org.mozilla.firefox":
+			return []string{"/Applications/Firefox.app"}
+		case "com.apple.Terminal":
+			// Apple's copy first, then an ad-hoc app claiming the same identifier.
+			return []string{"/System/Applications/Utilities/Terminal.app", "/Users/alice/Applications/Terminal.app"}
+		case "com.example.unreadable":
+			return []string{"/Applications/Unreadable.app"}
+		}
+		return nil
+	}
+	cases := []struct {
+		name        string
+		payload     string
+		wantPath    string
+		wantSigning string
+	}{
+		{"a bundle identifier is resolved and its app signed",
+			`{"identity":"org.mozilla.firefox","identity_type":"bundle_id"}`, "/Applications/Firefox.app", mozilla},
+		{"an executable path is signed as it is",
+			`{"identity":"/usr/local/bin/tool","identity_type":"executable_path"}`, "/usr/local/bin/tool", mozilla},
+		{"of two copies sharing an identifier, the one that is not Apple's is reported",
+			`{"identity":"com.apple.Terminal","identity_type":"bundle_id"}`, "/Users/alice/Applications/Terminal.app", imposter},
+		{"an app LaunchServices does not know is left unsigned",
+			`{"identity":"com.example.gone","identity_type":"bundle_id"}`, "", ""},
+		{"an app that cannot be read is left unsigned",
+			`{"identity":"com.example.unreadable","identity_type":"bundle_id"}`, "", ""},
+		{"a policy identity is not an app",
+			`{"identity":"policy-7","identity_type":"policy_id"}`, "", ""},
+		{"a signature already present is kept",
+			`{"identity":"org.mozilla.firefox","identity_type":"bundle_id","identity_code_signing":` + apple + `}`, "", apple},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := TccSubjectSigning([]byte(`{"event_type":"tcc_modify","payload":`+tc.payload+`}`), resolve, eval)
+			var env struct {
+				Payload struct {
+					IdentityPath string          `json:"identity_path"`
+					Signing      json.RawMessage `json:"identity_code_signing"`
+				} `json:"payload"`
+			}
+			if err := json.Unmarshal(got, &env); err != nil {
+				t.Fatalf("output is not valid JSON: %v (%s)", err, got)
+			}
+			if env.Payload.IdentityPath != tc.wantPath {
+				t.Errorf("identity_path = %q, want %q", env.Payload.IdentityPath, tc.wantPath)
+			}
+			if string(env.Payload.Signing) != tc.wantSigning {
+				t.Errorf("identity_code_signing = %s, want %s", env.Payload.Signing, tc.wantSigning)
+			}
+		})
+	}
+	// Only Apple's copy readable: Apple's signature is reported, since nothing says the record is about anything else.
+	onlyApple := func(string) []string { return []string{"/System/Applications/Utilities/Terminal.app"} }
+	got := TccSubjectSigning([]byte(`{"event_type":"tcc_modify","payload":{"identity":"com.apple.Terminal","identity_type":"bundle_id"}}`),
+		onlyApple, eval)
+	if !strings.Contains(string(got), `"is_platform_binary":true`) {
+		t.Errorf("Apple's only copy should be reported as Apple's: %s", got)
+	}
+	exec := `{"event_type":"exec","payload":{"path":"/bin/ls"}}`
+	if got := TccSubjectSigning([]byte(exec), resolve, eval); string(got) != exec {
+		t.Errorf("another event type changed: %s", got)
 	}
 }

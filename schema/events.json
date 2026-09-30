@@ -448,7 +448,15 @@
         "instigator_pid": { "type": "integer", "description": "The process that made the change (tccd's client)." },
         "instigator_code_signing": { "$ref": "#/definitions/code_signing" },
         "responsible_pid": { "type": "integer", "description": "Optional. The process responsible for the change, when macOS reports one." },
-        "responsible_code_signing": { "$ref": "#/definitions/code_signing" }
+        "responsible_code_signing": { "$ref": "#/definitions/code_signing" },
+        "identity_path": {
+          "type": "string",
+          "description": "Optional. The app's path, added by the agent: the identity itself when it is an executable path, or the application LaunchServices has for it when it is a bundle identifier."
+        },
+        "identity_code_signing": {
+          "$ref": "#/definitions/code_signing",
+          "description": "Optional. The app's on-disk code signing, read by the agent from identity_path. Whether a permission went to Apple's software or to something else is judged from this."
+        }
       }
     }
   }

@@ -34,6 +34,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | alert | T1059.002 |
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | alert | T1555.001 |
 | [`credential_browser_store_read`](#credential_browser_store_read) | Browser credential store read | high | alert | T1555.003 |
+| [`tcc_sensitive_grant`](#tcc_sensitive_grant) | Sensitive permission granted | medium | alert | T1548.006 |
 | [`trusted_root_certificate`](#trusted_root_certificate) | Certificate trusted from the command line | high | alert | T1553.004 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | alert | T1543.004 |
 | [`installer_unsigned_package`](#installer_unsigned_package) | Unsigned installer package | high | alert | T1546.016 |
@@ -400,6 +401,35 @@ The browser's own reads are not reported, judged by the team that signs it, and 
 - Safari's cookies are not watched.
 - A browser at a custom profile location, or a Chromium browser not listed here, is not watched.
 - Needs an agent whose extension reports reads of these files.
+
+## tcc_sensitive_grant
+
+**Sensitive permission granted**  
+Flags an app that is not Apple's being granted Full Disk Access, Accessibility, Screen Recording or Input Monitoring.
+
+| | |
+| --- | --- |
+| Rule ID | `tcc_sensitive_grant` |
+| Severity | `medium` |
+| Default mode | `alert` |
+| Source | Fleet EDR |
+| ATT&CK | [`T1548.006`](https://attack.mitre.org/techniques/T1548/006/) |
+| Event types | `tcc_modify` |
+
+### Description
+
+Detects abuse of macOS privacy permissions (T1548.006). Full Disk Access, Accessibility, Screen Recording, Input Monitoring and the right to post input events let an app read every file, control other apps, watch the screen or log keystrokes. Infostealers and remote-access tools need one to work, and a user talked into granting it is the usual way they get it.
+
+Fires when one of these permissions is granted to an app that is not an Apple platform binary, whether through a prompt or System Settings. A grant made by an MDM configuration profile is the managed way to deploy these permissions and is not reported.
+
+### Known false-positive sources
+
+- Legitimate tools that need these permissions: backup and security software (Full Disk Access), window managers and automation tools (Accessibility), screen sharing and recording (Screen Recording). Exclude a vendor by `team_id`, or deploy the permission through an MDM configuration profile, which is not reported.
+
+### Limitations
+
+- A grant to an app whose code signature cannot be read when the grant is made is not reported.
+- A permission granted by writing the TCC database directly, bypassing tccd, raises no TCC event and is not reported.
 
 ## trusted_root_certificate
 

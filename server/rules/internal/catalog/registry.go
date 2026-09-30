@@ -32,6 +32,7 @@ func NewWithCorpus(resolver api.ExclusionResolver, corpus []api.Rule) []api.Rule
 		&OsascriptNetworkExec{},
 		&CredentialKeychainDump{},
 		&CredentialBrowserStoreRead{Exclusions: resolver},
+		&TccSensitiveGrant{Exclusions: resolver},
 		&TrustedRootCertificate{},
 		&PrivilegeLaunchdPlistWrite{Exclusions: resolver},
 		&InstallerUnsignedPackage{Exclusions: resolver},

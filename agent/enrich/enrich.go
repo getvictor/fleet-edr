@@ -129,6 +129,64 @@ func stringField(payload map[string]json.RawMessage, key string) string {
 	return v
 }
 
+// AppResolver finds every installed copy of an app by its bundle identifier. Production passes appbundle.Paths; tests inject a fake.
+type AppResolver func(bundleID string) []string
+
+// tccEventType is the TCC permission change enrichment acts on.
+const tccEventType = "tcc_modify"
+
+// TccSubjectSigning returns data with a tcc_modify payload's identity_path and identity_code_signing filled: the app the permission
+// is about, and its on-disk code signature (issue #1185). The event names the app as TCC does, by bundle identifier or executable
+// path, and whether a permission was handed to Apple's own software or to something else can only be told from the app's
+// signature. A bundle identifier is resolved through LaunchServices; an executable path is signed as it is.
+//
+// Two installed copies can share a bundle identifier, and nothing says which one the record is about, so every copy is signed and
+// the least trusted one is reported: the first that is not an Apple platform binary, or Apple's only when every readable copy is.
+// Reporting the trusted copy would let a planted app hide a grant behind a real one.
+//
+// Anything else passes through unchanged, as does an event whose app cannot be found or read, which the rule then cannot judge.
+// Fields already present are left as the source set them.
+func TccSubjectSigning(data []byte, resolve AppResolver, eval Evaluator) []byte {
+	envelope, payload, ok := decodeEvent(data, tccEventType)
+	if !ok || hasField(payload, "identity_code_signing") {
+		return data
+	}
+	identity := stringField(payload, "identity")
+	var candidates []string
+	switch stringField(payload, "identity_type") {
+	case "bundle_id":
+		candidates = resolve(identity)
+	case "executable_path":
+		candidates = []string{identity}
+	}
+	path, result := leastTrusted(candidates, eval)
+	if result == nil {
+		return data
+	}
+	data = encodeEvent(data, envelope, payload, "identity_path", path)
+	return encodeEvent(data, envelope, payload, "identity_code_signing", result)
+}
+
+// leastTrusted signs each path and returns the first whose signature is not an Apple platform binary's, or the first readable one
+// when all are Apple's. The result is nil when none can be read.
+func leastTrusted(paths []string, eval Evaluator) (string, *codesign.Result) {
+	var firstPath string
+	var first *codesign.Result
+	for _, path := range paths {
+		result, ok := eval(path)
+		if !ok || result == nil {
+			continue
+		}
+		if !result.IsPlatformBinary {
+			return path, result
+		}
+		if first == nil {
+			firstPath, first = path, result
+		}
+	}
+	return firstPath, first
+}
+
 // PackageEvaluator reads the signature of the package at pkgPath for the installer script at scriptPath. Production passes
 // pkgsign.Evaluate; tests inject a fake. A false return means no trustworthy answer (unreadable, or changed during the install),
 // and the event is left without a package signature.

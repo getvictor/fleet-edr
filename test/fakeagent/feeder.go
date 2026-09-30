@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -270,6 +271,11 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 			Outcome  string `json:"outcome"`
 			Attempts int    `json:"attempts"`
 		}{ev.Provider, ev.Outcome, ev.Attempts})
+	case "tcc_modify":
+		if ev.Tcc == nil {
+			return nil, errors.New("buildPayload: tcc_modify event needs a tcc block")
+		}
+		return json.Marshal(ev.Tcc)
 	case "btm_launch_item_add":
 		type codeSigning struct {
 			TeamID           string `json:"team_id"`

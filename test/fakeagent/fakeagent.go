@@ -83,6 +83,9 @@ type Event struct {
 	// script's exec. Nil for any other exec, and emitted only when set.
 	PackageSigning *PackageSigning `json:"package_signing,omitempty"`
 
+	// Tcc is a tcc_modify payload, written in a scenario under its wire names and sent as it is.
+	Tcc *TccModify `json:"tcc,omitempty"`
+
 	// exit specifics.
 	ExitCode   int    `json:"exit_code,omitempty"`
 	ExitReason string `json:"exit_reason,omitempty"`
@@ -245,6 +248,8 @@ var knownEventTypes = map[string]bool{
 	// transition above because the provider has not changed state: it is still stopped, and what changed is that the agent
 	// stopped trying.
 	"sensor_recovery_failed": true,
+	// A TCC permission change (issue #1185), with the granted app's signature the agent adds.
+	"tcc_modify": true,
 }
 
 // PackageSigning mirrors schema/events.json's `package_signing`.
@@ -252,4 +257,25 @@ type PackageSigning struct {
 	Signed    bool   `json:"signed"`
 	Notarized bool   `json:"notarized"`
 	TeamID    string `json:"team_id"`
+}
+
+// TccModify mirrors schema/events.json's `tcc_modify_payload`, including the fields the agent adds.
+type TccModify struct {
+	Service             string          `json:"service"`
+	Identity            string          `json:"identity"`
+	IdentityType        string          `json:"identity_type"`
+	UpdateType          string          `json:"update_type"`
+	Right               string          `json:"right"`
+	Reason              string          `json:"reason"`
+	InstigatorPID       int             `json:"instigator_pid"`
+	IdentityPath        string          `json:"identity_path,omitempty"`
+	IdentityCodeSigning *TccCodeSigning `json:"identity_code_signing,omitempty"`
+}
+
+// TccCodeSigning mirrors schema/events.json's `code_signing`.
+type TccCodeSigning struct {
+	TeamID           string `json:"team_id"`
+	SigningID        string `json:"signing_id"`
+	Flags            int    `json:"flags"`
+	IsPlatformBinary bool   `json:"is_platform_binary"`
 }
