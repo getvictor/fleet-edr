@@ -4,6 +4,8 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+## [0.7.0] (2026-09-30)
+
 ### Upgrade notes (action required)
 
 - **The quickstart keeps the process graph for 30 days, not 7.** This matches the event timeline, so an old alert's graph no longer shows its process alone. Expect the MySQL process table to grow to about four times its size; set `EDR_RETENTION_DAYS=7` in `.env` to keep the old window.
@@ -23,6 +25,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
+- **Upgrading the agent no longer needs a restart.** The new extensions take over when the install finishes, or at the next login if no one is logged in, and network and DNS events resume within about 30 seconds. Earlier notes asked for a reboot after every upgrade.
 - **Package installs can be excluded by who signed the package.** Installing a `.pkg` raises a suspicious-exec alert for each of its install scripts. Exclude a vendor's installers with a `package_team_id` exclusion, the team that signed the package; an unsigned package cannot be excluded this way. The alert now names the package and its signer.
 - **Login item registrations say where the item is and who signed it.** A login item was recorded with no signature, and a background helper with a path relative to its app. Hosts now record the item's full path, the app that added a helper, and the signature of the app that will launch. Requires the updated agent.
 - **LaunchAgent persistence is judged on the program it registers.** The rule now watches LaunchAgent registrations rather than `launchctl`, so it also catches a plist that becomes active at the next login, and skips Apple's own and MDM-managed agents. Vendor agents can be excluded by `team_id` or `signing_id`, which a planted file cannot defeat; existing plist path exclusions keep working. If the background items profile is not installed, exclude team `FDG8Q7N4CC` for this rule so the EDR's own LaunchAgent is not reported.
@@ -282,6 +285,9 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
+[0.7.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.7.0
+[0.6.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.6.0
+[0.5.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.1
 [0.5.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.0
 [0.4.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.4.0
 [0.3.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.3.0
