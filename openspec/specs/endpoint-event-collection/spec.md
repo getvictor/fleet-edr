@@ -46,11 +46,28 @@ The field is what lets an operator exclude a code-signed parent from a `suspicio
 
 The system SHALL emit a `btm_launch_item_add` event when launchd registers a launch item (a LaunchDaemon, LaunchAgent, or login item) via Background Task Management. The payload MUST carry the item type, the launch item path, the registered executable path when available, the MDM-managed flag, and the code-signing identity of the REGISTERED EXECUTABLE (`executable_code_signing`: team ID, signing ID, platform-binary flag) evaluated out-of-band, because the event provides code-signing for the instigator process but not for the to-be-launched executable.
 
+Background Task Management reports an item registered through `SMAppService` relative to the app that registered it, and reports that app separately. The payload MUST carry that app as `app_url`, and the launch item path MUST be uploaded resolved against it, as an absolute `file://` URL. A login item, and an app added to the user's login items, have no registered executable path: the registered executable is the app bundle the item names (a helper inside the registering app for `item_type=login_item`, the app itself for `item_type=app`), and `executable_code_signing` MUST be that bundle's.
+
 #### Scenario: A LaunchDaemon is registered via Background Task Management
 
 - **GIVEN** the endpoint event capture is running
 - **WHEN** launchd registers a system LaunchDaemon (for example via `launchctl bootstrap`)
 - **THEN** the system emits a `btm_launch_item_add` event whose payload includes `item_type=daemon`, the launch item path, the registered executable path, the MDM-managed flag, and the registered executable's code-signing identity
+
+#### Scenario: A login item is registered through SMAppService
+
+- **GIVEN** the endpoint event capture is running
+- **WHEN** an app registers a helper in its `Contents/Library/LoginItems/` as a login item
+- **THEN** the uploaded `btm_launch_item_add` event has `item_type=login_item` and the registering app as `app_url`
+- **AND** its launch item path is the helper bundle's absolute `file://` URL
+- **AND** its `executable_code_signing` is the helper bundle's code-signing identity
+
+#### Scenario: An app is added to the user's login items
+
+- **GIVEN** the endpoint event capture is running
+- **WHEN** an app is added to the user's login items, by itself through `SMAppService` or through the legacy login-items list
+- **THEN** the uploaded `btm_launch_item_add` event has `item_type=app` and the app bundle's absolute `file://` URL as its launch item path
+- **AND** its `executable_code_signing` is the app bundle's code-signing identity
 
 ### Requirement: Sensitive-path file-modification capture
 
@@ -344,3 +361,95 @@ Note on verification: decoding, the combination with the built-in paths, the mut
 - **GIVEN** a watched set is active
 - **WHEN** a push arrives whose payload is not a watched-path document
 - **THEN** the active set and the persisted set are unchanged
+
+### Requirement: Browser credential reads are reported
+
+The security extension SHALL watch the credential files of Chrome, Brave, Edge, Arc, Vivaldi and Firefox in every profile of every home it reads from the directory service: for a Chromium browser, `Local State` and each profile's `Login Data`, `Login Data For Account`, `Web Data`, `Cookies` and `Network/Cookies`; for Firefox, each profile's `logins.json`, `key4.db` and `cookies.sqlite`. A Chromium profile is the `Default` directory or one named `Profile`, a space and a number written without leading zeros, as in `Profile 1`; a Firefox profile is a directory under `Profiles/` whose name holds a dot and does not start with one. It SHALL watch each file as a literal path and re-read the accounts and profiles at least every five minutes. When one browser directory holds more than 50 profiles, it SHALL watch that directory as a prefix instead of each file, report only opens of the credential files named here, and log that the directory held more. It SHALL report an open of a watched file as an `open` event carrying the open's access mode, unless the opening process is signed by the team that signs the browser owning the file.
+
+#### Scenario: Every profile's credential files are watched
+
+- **GIVEN** a home with Chrome profiles `Default` and `Profile 1`, a `System Profile` and a `Crashpad` directory beside them, and one Firefox profile
+- **WHEN** the extension lists the files to watch
+- **THEN** it watches Chrome's `Local State`, each of the two profiles' five credential files, and the Firefox profile's three, and nothing in `System Profile` or `Crashpad`
+
+#### Scenario: The browser's own reads are not reported
+
+- **GIVEN** an open of Chrome's `Login Data` by a process signed by Chrome's team, and one by an unsigned process, an Apple tool, or another browser
+- **WHEN** the extension judges each open
+- **THEN** it drops the first and reports the others
+
+#### Scenario: A directory past the bound is watched whole
+
+- **GIVEN** a Chrome directory holding `Default` and 50 numbered profiles, and a Firefox directory holding 50 decoy profiles beside the real one
+- **WHEN** the extension lists the files to watch
+- **THEN** it watches both directories as prefixes and neither's files as literal paths, and of the opens a prefix delivers it reports only those of credential files, so an open of the real Firefox profile's `logins.json` is reported and one of its `places.sqlite` is not
+
+### Requirement: An installer script names its package's signature
+
+The agent SHALL attach to the exec of a package installer script the signature of the package the script belongs to: whether it is signed by a certificate macOS trusts, whether Apple's notary service accepted it, and the Developer ID team that signed it. The package is the one named by the script's first argument, which is where PackageKit passes it.
+
+The agent SHALL do so only when the exec's parent is Apple's `package_script_service`, since the argument can be written by anyone and would otherwise let a script claim a signed package's identity. When the package cannot be read, the exec SHALL carry no package signature rather than one reporting it unsigned. The signature is read after the script has started, so a package changed after PackageKit prepared the install SHALL also leave the exec without one, since the file read may no longer be the package being installed. When the install has already ended by the time the package is read, so that nothing shows it unchanged, the agent SHALL attach the signature only if it is not one macOS trusts: that answer cannot lend trust, and omitting it would let a package with quick scripts escape being reported unsigned. Only a signature macOS accepts SHALL be reported as signed, and a team SHALL be reported only from a Developer ID Installer certificate.
+
+#### Scenario: A script PackageKit ran carries its package's signature
+
+- **GIVEN** an exec whose parent is `package_script_service` and whose script runs out of PackageKit's sandbox with a package path as its first argument
+- **WHEN** the agent enriches the event
+- **THEN** the exec carries that package's signature
+
+#### Scenario: A script from another parent carries none
+
+- **GIVEN** an exec whose arguments name a signed vendor package after a sandbox-shaped script path, but whose parent is a shell
+- **WHEN** the agent enriches the event
+- **THEN** the exec carries no package signature and the package is not read
+
+#### Scenario: An unreadable package is not reported as unsigned
+
+- **GIVEN** an installer script's exec whose package can no longer be read
+- **WHEN** the agent enriches the event
+- **THEN** the exec carries no package signature
+
+#### Scenario: A late read reports only an untrusted package
+
+- **GIVEN** an installer script's exec read after PackageKit removed the install sandbox
+- **WHEN** the agent enriches the event
+- **THEN** an unsigned or untrusted package's signature is attached, reported as not signed
+- **AND** a package macOS trusts is not reported, since nothing shows it is the package that was installed
+
+#### Scenario: A package changed during the install is not classified
+
+- **GIVEN** an installer script's exec whose package file was replaced after PackageKit created the install sandbox
+- **WHEN** the agent enriches the event
+- **THEN** the exec carries no package signature
+
+### Requirement: TCC permission changes are reported
+
+The security extension SHALL emit a `tcc_modify` event when macOS reports that a TCC permission record was created, modified or deleted. The payload SHALL carry the service, the identity of the app the permission is about and its identity type, the update type, the resulting right, the reason, and the instigating process's pid. It SHALL carry the instigating process's code signing when macOS reports that process, the responsible process's pid when macOS reports a responsible audit token, and the responsible process's code signing when macOS reports that process; each is omitted, not sent as null, when absent. The agent SHALL add the app's path and its on-disk code signing, as `identity_path` and `identity_code_signing`, when the identity is an executable path, or a bundle identifier for which LaunchServices has an application, and the app can be read; otherwise it SHALL leave both out. When several installed copies share the bundle identifier, the agent SHALL report the least trusted readable one: the first whose signature is not an Apple platform binary's, or Apple's only when every readable copy is. The identity type, update type, right and reason SHALL be sent as names, and a value the extension does not know SHALL be sent as `unknown`.
+
+#### Scenario: The change is named in words
+
+- **GIVEN** a TCC modification whose SDK values are a bundle identifier, a deletion, an unknown right and no reason
+- **WHEN** the extension serializes it
+- **THEN** the payload says `bundle_id`, `delete`, `unknown` and `none`, and a reason value past the SDK's last known case is sent as `unknown`
+
+#### Scenario: The app a permission is about carries its signature
+
+- **GIVEN** a `tcc_modify` whose identity is a bundle identifier LaunchServices knows, one whose identity is an executable path, and one whose identity no app claims
+- **WHEN** the agent enriches the events
+- **THEN** the first two carry the app's path and its code signing, and the third carries neither
+- **AND** when an Apple copy and a copy that is not Apple's share one identifier, the copy that is not Apple's is reported
+
+### Requirement: A watched path can name every user's home
+
+A watched path that starts with `~/` SHALL name the same path in every user's home folder. The extension SHALL accept such an entry under the rules it applies to an absolute path, judged as the path it would be in a home at the root, so that a prefix names something at least two components below the home. It SHALL expand the entry into one path in each home it reads from the directory service: root's, and each account with a user ID of 500 or above whose home is an absolute path other than a placeholder, once each. An expansion that the extension would not watch as an absolute path SHALL be left out. The extension SHALL re-read the accounts at least every five minutes and re-apply the set when they have changed, so an account added after the set was pushed is watched without another push.
+
+#### Scenario: A home entry is judged below the home
+
+- **GIVEN** pushed entries `~/.ssh/authorized_keys` (literal), `~/Library/LaunchAgents/` (prefix) and `~/Library/` (prefix)
+- **WHEN** the extension decodes the set
+- **THEN** it accepts the first two and refuses `~/Library/`, as it refuses `/Library/`
+
+#### Scenario: A home entry covers root and every person's home
+
+- **GIVEN** accounts for root, two people, a system account, and an account whose home is the `/var/empty` placeholder
+- **WHEN** the extension expands `~/.ssh/authorized_keys`
+- **THEN** it watches the file in root's home and in each person's home, once each, and in no other

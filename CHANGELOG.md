@@ -4,6 +4,8 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+## [0.7.0] (2026-09-30)
+
 ### Upgrade notes (action required)
 
 - **The quickstart keeps the process graph for 30 days, not 7.** This matches the event timeline, so an old alert's graph no longer shows its process alone. Expect the MySQL process table to grow to about four times its size; set `EDR_RETENTION_DAYS=7` in `.env` to keep the old window.
@@ -14,7 +16,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 - **Browser credential theft is detected.** `credential_browser_store_read` alerts when a program other than the browser opens Chrome's, Brave's, Edge's, Arc's, Vivaldi's or Firefox's saved passwords, cookies or their key material, the core behavior of infostealers (T1555.003). Exclude a backup or security tool by its `team_id`. Needs this release's agent.
 - **SSH key persistence is detected.** `persistence_ssh_authorized_keys` alerts when a user's or root's `~/.ssh/authorized_keys` is written or replaced (T1098.004). Every host now watches those files in every home. Exclude a configuration-management agent by its path.
 - **Watched file paths can name every user's home folder.** Start a path with `~/`, such as `~/.ssh/authorized_keys`, and each host watches it for root and every user account, including accounts added later. Needs this release's agent; older hosts skip the path.
-- **Root certificates trusted from the command line are detected.** `trusted_root_certificate` alerts when `security add-trusted-cert` or `trust-settings-import` makes a host trust a certificate (T1553.004). Certificates deployed by MDM profiles are not reported.
+- **Root certificates trusted from the command line are detected.** `trusted_root_certificate` alerts when `security add-trusted-cert` makes a host trust a certificate, or `trust-settings-import` imports trust settings (T1553.004). Certificates deployed by MDM profiles are not reported.
 - **Unsigned installer packages are detected.** `installer_unsigned_package` alerts once per package when a package that is unsigned, or whose signature macOS does not trust, runs an install script (T1546.016). Exclude an in-house package by its path.
 - **Login item persistence is detected.** `persistence_login_item` alerts when a login item launches an app that is not Apple's or MDM-managed (T1547.015), whether it is an app's background helper or an app added to the user's login items. Exclude a vendor by the app's `team_id` or `signing_id`. Needs this release's agent, which reports the app's signature.
 - **Emond and startup-item persistence are detected.** Every host now also watches `/etc/emond.d/rules/`, `/private/var/db/emondClients/` and `/Library/StartupItems/`, which lets two SigmaHQ rules the product already carried run: Emond launch rules and new startup items. Like other imported rules they start in monitor mode.
@@ -23,6 +25,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
+- **Upgrading the agent no longer needs a reboot.** The new extensions take over when the install finishes, or at the next login if no one is logged in, and network and DNS events resume within about 30 seconds. The agent itself restarts during the install. Earlier notes asked for a reboot after every upgrade.
 - **Package installs can be excluded by who signed the package.** Installing a `.pkg` raises a suspicious-exec alert for each of its install scripts. Exclude a vendor's installers with a `package_team_id` exclusion, the team that signed the package; an unsigned package cannot be excluded this way. The alert now names the package and its signer.
 - **Login item registrations say where the item is and who signed it.** A login item was recorded with no signature, and a background helper with a path relative to its app. Hosts now record the item's full path, the app that added a helper, and the signature of the app that will launch. Requires the updated agent.
 - **LaunchAgent persistence is judged on the program it registers.** The rule now watches LaunchAgent registrations rather than `launchctl`, so it also catches a plist that becomes active at the next login, and skips Apple's own and MDM-managed agents. Vendor agents can be excluded by `team_id` or `signing_id`, which a planted file cannot defeat; existing plist path exclusions keep working. If the background items profile is not installed, exclude team `FDG8Q7N4CC` for this rule so the EDR's own LaunchAgent is not reported.
@@ -282,6 +285,9 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
+[0.7.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.7.0
+[0.6.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.6.0
+[0.5.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.1
 [0.5.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.0
 [0.4.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.4.0
 [0.3.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.3.0
