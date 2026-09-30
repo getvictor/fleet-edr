@@ -10,8 +10,9 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 ///
 /// It is a client of its own for the reason FileTamperSubscriber is: it inverts target-path muting so that ONLY the credential
 /// files reach it, and inversion is client-global, so it cannot share a client whose other subscriptions need every path. It
-/// subscribes to NOTIFY_OPEN alone, muted to the literal files CredentialStores.targets lists, and drops an open by the browser's
-/// own team before anything is serialized, so a browser at work puts nothing on the wire.
+/// subscribes to NOTIFY_OPEN alone, muted to the literal files CredentialStores.targets lists (or, for a browser directory holding
+/// more profiles than it bounds, to the directory as a prefix), and drops an open of any other file, and an open by the browser's
+/// own team, before anything is serialized, so a browser at work puts nothing on the wire.
 ///
 /// Each reported open is an `open` event carrying the real access mode, which the server's file-write rules ignore, since they
 /// read only opens that carry write access and change content.
@@ -23,8 +24,10 @@ final class CredentialStoreSubscriber: Sendable {
 
     /// queue serializes every change to the muted set, the start and each refresh. `applied` is only read and written on it.
     private let queue = DispatchQueue(label: "com.fleetdm.edr.credentialstores")
-    /// applied is the literal paths currently muted, and so observed once inversion is on.
+    /// applied is the literal paths currently muted, and so observed once inversion is on; appliedPrefixes is the same for the
+    /// browser directories watched as prefixes.
     private nonisolated(unsafe) var applied: [String] = []
+    private nonisolated(unsafe) var appliedPrefixes: [String] = []
     private nonisolated(unsafe) var refreshTimer: DispatchSourceTimer?
     /// refreshSeconds is how long a profile or an account added to the host goes unwatched at most. Listing the accounts and the
     /// browsers' profile directories is cheap, but both change rarely.
@@ -91,29 +94,48 @@ final class CredentialStoreSubscriber: Sendable {
         if !scanned.unreadableRoots.isEmpty {
             logger.error("credential-store client could not list \(scanned.unreadableRoots.count, privacy: .public) browser directories")
         }
-        if !scanned.truncatedRoots.isEmpty {
+        if !scanned.prefixes.isEmpty {
+            // More profiles than a browser makes is itself odd: somebody may be trying to crowd the watches out.
             let bound = CredentialStores.maxProfilesPerBrowser
-            let count = scanned.truncatedRoots.count
-            logger.error("credential-store client: \(count, privacy: .public) browsers hold over \(bound, privacy: .public) profiles")
+            let count = scanned.prefixes.count
+            logger.error("credential-store client: \(count, privacy: .public) browser paths hold over \(bound, privacy: .public) profiles")
         }
-        let next = CredentialStores.next(applied: applied, scanned: scanned)
+        let literals = CredentialStores.next(applied: applied, scanned: scanned.paths, unreadableRoots: scanned.unreadableRoots)
+        let prefixes = CredentialStores.next(applied: appliedPrefixes, scanned: scanned.prefixes, unreadableRoots: scanned.unreadableRoots)
+        // Both sets are muted before either is unmuted, so a directory moving between a prefix watch and literal watches is
+        // covered by one or the other throughout.
+        let mutedLiterals = mute(literals, applied: &applied, type: ES_MUTE_PATH_TYPE_TARGET_LITERAL)
+        let mutedPrefixes = mute(prefixes, applied: &appliedPrefixes, type: ES_MUTE_PATH_TYPE_TARGET_PREFIX)
+        guard mutedLiterals, mutedPrefixes else {
+            return
+        }
+        unmute(keeping: literals, applied: &applied, type: ES_MUTE_PATH_TYPE_TARGET_LITERAL)
+        unmute(keeping: prefixes, applied: &appliedPrefixes, type: ES_MUTE_PATH_TYPE_TARGET_PREFIX)
+    }
+
+    /// mute mutes every path of next not yet applied, recording each that succeeds, and reports whether all did. Runs on queue.
+    private func mute(_ next: [String], applied: inout [String], type: es_mute_path_type_t) -> Bool {
         let appliedSet = Set(applied)
-        let nextSet = Set(next)
         var failed = 0
         for path in next where !appliedSet.contains(path) {
-            guard es_mute_path(client, path, ES_MUTE_PATH_TYPE_TARGET_LITERAL) == ES_RETURN_SUCCESS else {
+            guard es_mute_path(client, path, type) == ES_RETURN_SUCCESS else {
                 failed += 1
                 continue
             }
             applied.append(path)
         }
-        guard failed == 0 else {
-            logger.error("credential-store client could not mute \(failed, privacy: .public) credential files; nothing unmuted")
-            return
+        if failed > 0 {
+            logger.error("credential-store client could not mute \(failed, privacy: .public) credential paths; nothing unmuted")
         }
+        return failed == 0
+    }
+
+    /// unmute unmutes every applied path that next no longer holds. Runs on queue.
+    private func unmute(keeping next: [String], applied: inout [String], type: es_mute_path_type_t) {
+        let nextSet = Set(next)
         for path in applied where !nextSet.contains(path) {
             // Still muted, so still observed, when the unmute fails: it stays applied and the next refresh tries again.
-            if es_unmute_path(client, path, ES_MUTE_PATH_TYPE_TARGET_LITERAL) == ES_RETURN_SUCCESS {
+            if es_unmute_path(client, path, type) == ES_RETURN_SUCCESS {
                 applied.removeAll { $0 == path }
             }
         }
@@ -125,9 +147,9 @@ final class CredentialStoreSubscriber: Sendable {
         }
         let path = esTokenString(msg.event.open.file.pointee.path)
         let opener = msg.process.pointee
-        // Only a browser's credential store is reported, whatever reached the client: an open of any other path is dropped here, so
-        // a mute set that is not exactly the targets cannot put unrelated reads on the wire.
-        guard CredentialStores.owner(of: path) != nil,
+        // Only a browser's credential files are reported, whatever reached the client: a prefix-watched browser directory delivers
+        // every file in it, and an open of any other path is dropped here, so neither puts unrelated reads on the wire.
+        guard CredentialStores.isCredentialFile(path),
               !CredentialStores.isOwnRead(path: path, openerTeamID: esTokenString(opener.team_id)) else {
             return
         }

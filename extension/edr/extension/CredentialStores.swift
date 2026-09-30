@@ -44,9 +44,10 @@ enum CredentialStores {
     static let chromiumRootFiles = ["Local State"]
     /// firefoxProfileFiles are a Firefox profile's saved logins, the key database that decrypts them, and its cookies.
     static let firefoxProfileFiles = ["logins.json", "key4.db", "cookies.sqlite"]
-    /// maxProfilesPerBrowser bounds the profiles watched in one browser directory. Any user can create profile directories in their
-    /// own home, so without a bound a script making thousands of them would have the client mute that many literal paths on every
-    /// refresh. Browsers number and name profiles far below this, and the profiles kept are the ones a browser creates first.
+    /// maxProfilesPerBrowser bounds the profiles one browser directory gets literal watches for. Any user can create profile
+    /// directories in their own home, so without a bound a script making thousands of them would have the client mute that many
+    /// literal paths on every refresh. Past it the directory is watched as a prefix instead, and the open handler keeps only the
+    /// credential files, so no profile goes unwatched and profiles made to crowd out the real ones have nothing to crowd out.
     static let maxProfilesPerBrowser = 50
 
     /// DirectoryListing is what listing a browser's profile directory found. A missing directory is a browser that is not installed
@@ -57,20 +58,20 @@ enum CredentialStores {
         case unreadable
     }
 
-    /// Targets is the result of a scan: the credential files to watch, the browser directories that could not be read, and the
-    /// ones holding more profiles than maxProfilesPerBrowser, whose profiles past the bound are not watched.
+    /// Targets is the result of a scan: the credential files to watch as literal paths, the browser directories holding more than
+    /// maxProfilesPerBrowser profiles, watched as prefixes instead, and the browser directories that could not be read.
     struct Targets: Equatable {
         let paths: [String]
+        var prefixes: [String] = []
         let unreadableRoots: [String]
-        var truncatedRoots: [String] = []
     }
 
     /// targets is every credential file path to watch in the given homes: each browser's files in each of its profiles, in both
     /// spellings of a firmlinked root, sorted and without duplicates, along with the browser directories whose listing failed.
     static func targets(homes: [String], listDirectory: (String) -> DirectoryListing) -> Targets {
         var out = Set<String>()
+        var prefixes = Set<String>()
         var unreadable: [String] = []
-        var truncated: [String] = []
         for home in homes {
             for browser in browsers {
                 let root = home + "/" + browser.root
@@ -80,25 +81,25 @@ enum CredentialStores {
                 case .unreadable:
                     unreadable.append(contentsOf: WatchedPaths.spellings(of: root))
                 case .entries(let entries):
-                    let found = profiles(in: entries, layout: browser.layout)
-                    if found.count > maxProfilesPerBrowser {
-                        truncated.append(root)
+                    let profiles = entries.filter { isProfile($0, layout: browser.layout) }
+                    guard profiles.count <= maxProfilesPerBrowser else {
+                        prefixes.formUnion(WatchedPaths.spellings(of: root))
+                        continue
                     }
-                    let kept = Array(found.prefix(maxProfilesPerBrowser))
-                    for path in files(in: root, profiles: kept, layout: browser.layout) {
+                    for path in files(in: root, profiles: profiles, layout: browser.layout) {
                         out.formUnion(WatchedPaths.spellings(of: path))
                     }
                 }
             }
         }
-        return Targets(paths: out.sorted(), unreadableRoots: unreadable.sorted(), truncatedRoots: truncated.sorted())
+        return Targets(paths: out.sorted(), prefixes: prefixes.sorted(), unreadableRoots: unreadable.sorted())
     }
 
-    /// next is the set a refresh applies: the scanned paths, and every path already applied under a directory the scan could not
-    /// read, so a directory that fails to list for a moment does not stop its files being watched.
-    static func next(applied: [String], scanned: Targets) -> [String] {
-        let kept = applied.filter { path in scanned.unreadableRoots.contains { path.hasPrefix($0) } }
-        return Array(Set(scanned.paths).union(kept)).sorted()
+    /// next is the set a refresh applies, for literal paths or for prefixes alike: the scanned ones, and every one already applied
+    /// under a directory the scan could not read, so a directory that fails to list for a moment does not stop being watched.
+    static func next(applied: [String], scanned: [String], unreadableRoots: [String]) -> [String] {
+        let kept = applied.filter { path in unreadableRoots.contains { path.hasPrefix($0) } }
+        return Array(Set(scanned).union(kept)).sorted()
     }
 
     /// listing lists a directory with the file manager, telling a directory that does not exist from one that could not be read.
@@ -112,21 +113,6 @@ enum CredentialStores {
         }
     }
 
-    /// profiles is a browser directory's profiles in the order the bound keeps them. Chromium's come as `Default` and then by number,
-    /// the order the browser creates them in, so profiles made to crowd out the real ones can only take numbers after them. Firefox
-    /// names its profiles randomly, so its are sorted by name, which is at least the same set on every refresh.
-    static func profiles(in entries: [String], layout: CredentialBrowser.Layout) -> [String] {
-        switch layout {
-        case .chromium:
-            return entries.compactMap { name in chromiumProfileNumber(name).map { (name, $0) } }
-                .sorted { $0.1 < $1.1 }
-                .map(\.0)
-        case .firefox:
-            // A Firefox profile directory is named `<random>.<name>`, as in `k7xq2a1b.default-release`.
-            return entries.filter { $0.contains(".") && !$0.hasPrefix(".") }.sorted()
-        }
-    }
-
     private static func files(in root: String, profiles: [String], layout: CredentialBrowser.Layout) -> [String] {
         switch layout {
         case .chromium:
@@ -137,26 +123,54 @@ enum CredentialStores {
         }
     }
 
-    /// isChromiumProfile reports whether a directory entry is a Chromium profile: `Default`, or `Profile ` and a number.
-    static func isChromiumProfile(_ name: String) -> Bool {
-        chromiumProfileNumber(name) != nil
+    private static func isProfile(_ name: String, layout: CredentialBrowser.Layout) -> Bool {
+        switch layout {
+        case .chromium:
+            return isChromiumProfile(name)
+        case .firefox:
+            // A Firefox profile directory is named `<random>.<name>`, as in `k7xq2a1b.default-release`.
+            return name.contains(".") && !name.hasPrefix(".")
+        }
     }
 
-    /// chromiumProfileNumber is where a Chromium profile sorts: first for `Default`, and N for `Profile N` written as Chromium writes
-    /// it, so `Profile 01` cannot stand in for `Profile 1`. Nil for any other entry.
-    private static func chromiumProfileNumber(_ name: String) -> Int? {
+    /// isChromiumProfile reports whether a directory entry is a Chromium profile: `Default`, or `Profile ` and a number written as
+    /// Chromium writes it, so `Profile 01` is not a second spelling of `Profile 1`.
+    static func isChromiumProfile(_ name: String) -> Bool {
         if name == "Default" {
-            return Int.min
+            return true
         }
         let prefix = "Profile "
         guard name.hasPrefix(prefix) else {
-            return nil
+            return false
         }
         let digits = String(name.dropFirst(prefix.count))
-        guard let number = Int(digits), number >= 0, String(number) == digits else {
-            return nil
+        guard let number = Int(digits) else {
+            return false
         }
-        return number
+        return number >= 0 && String(number) == digits
+    }
+
+    /// isCredentialFile reports whether a path is one of the files a browser keeps its credentials in, which is every file the
+    /// client watches and none of the others a prefix watch on a browser directory also delivers.
+    static func isCredentialFile(_ path: String) -> Bool {
+        guard let owner = owner(of: path), let range = path.range(of: "/" + owner.root) else {
+            return false
+        }
+        let rest = path[range.upperBound...]
+        if owner.layout == .chromium, chromiumRootFiles.contains(String(rest)) {
+            return true
+        }
+        guard let slash = rest.firstIndex(of: "/") else {
+            return false
+        }
+        let profile = String(rest[..<slash])
+        let file = String(rest[rest.index(after: slash)...])
+        switch owner.layout {
+        case .chromium:
+            return isChromiumProfile(profile) && chromiumProfileFiles.contains(file)
+        case .firefox:
+            return isProfile(profile, layout: .firefox) && firefoxProfileFiles.contains(file)
+        }
     }
 
     /// owner is the browser whose store a path is in, or nil for any other path.
