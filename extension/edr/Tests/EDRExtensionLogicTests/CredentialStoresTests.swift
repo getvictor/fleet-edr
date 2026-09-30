@@ -7,7 +7,7 @@ import XCTest
 final class CredentialStoresTests: XCTestCase {
     /// A home with Chrome (two profiles and the system profile Chrome also keeps), Firefox (one profile and its crash reports),
     /// and nothing else installed.
-    private func listing(_ path: String) -> CredentialStores.DirectoryListing {
+    private func listing(_ path: String, _: CredentialBrowser.Layout) -> CredentialStores.DirectoryListing {
         switch path {
         case "/Users/alice/Library/Application Support/Google/Chrome/":
             return .entries(["Default", "Profile 1", "System Profile", "Crashpad", "Local State", "Profile x"])
@@ -36,7 +36,7 @@ final class CredentialStoresTests: XCTestCase {
 
     func testTargetsCoverRootsHomeInBothSpellings() {
         let root = "/var/root/Library/Application Support/Firefox/Profiles/"
-        let targets = CredentialStores.targets(homes: ["/var/root"]) { $0 == root ? .entries(["a1.default"]) : .missing }.paths
+        let targets = CredentialStores.targets(homes: ["/var/root"]) { path, _ in path == root ? .entries(["a1.default"]) : .missing }.paths
         XCTAssertEqual(targets, [
             "/private/var/root/Library/Application Support/Firefox/Profiles/a1.default/cookies.sqlite",
             "/private/var/root/Library/Application Support/Firefox/Profiles/a1.default/key4.db",
@@ -49,7 +49,7 @@ final class CredentialStoresTests: XCTestCase {
 
     func testTargetsAreEmptyWithNoBrowserInstalled() {
         let nothing = CredentialStores.Targets(paths: [], unreadableRoots: [])
-        XCTAssertEqual(CredentialStores.targets(homes: ["/Users/bob"]) { _ in .missing }, nothing)
+        XCTAssertEqual(CredentialStores.targets(homes: ["/Users/bob"]) { _, _ in .missing }, nothing)
     }
 
     // A browser directory that fails to list says nothing about what is in it, so the files already watched under it stay watched,
@@ -58,7 +58,7 @@ final class CredentialStoresTests: XCTestCase {
         let chrome = "/Users/alice/Library/Application Support/Google/Chrome/"
         let firefox = "/Users/alice/Library/Application Support/Firefox/Profiles/a1.default/"
         let applied = [chrome + "Default/Login Data", firefox + "logins.json"]
-        let scanned = CredentialStores.targets(homes: ["/Users/alice"]) { path in
+        let scanned = CredentialStores.targets(homes: ["/Users/alice"]) { path, _ in
             path == chrome ? .unreadable : .missing
         }
         XCTAssertEqual(scanned.unreadableRoots, [chrome])
@@ -68,12 +68,29 @@ final class CredentialStoresTests: XCTestCase {
     }
 
     func testListingTellsAMissingDirectoryFromAnUnreadableOne() {
-        XCTAssertEqual(CredentialStores.listing("/nonexistent/edr-credential-stores"), .missing)
+        XCTAssertEqual(CredentialStores.profileListing("/nonexistent/edr-credential-stores", layout: .chromium), .missing)
         let file = NSTemporaryDirectory() + "edr-credential-stores-not-a-directory"
         FileManager.default.createFile(atPath: file, contents: Data())
         defer { try? FileManager.default.removeItem(atPath: file) }
-        XCTAssertEqual(CredentialStores.listing(file), .unreadable, "a path that exists but cannot be listed")
-        XCTAssertEqual(CredentialStores.listing(NSTemporaryDirectory()).isEntries, true)
+        XCTAssertEqual(CredentialStores.profileListing(file, layout: .chromium), .unreadable, "a path that exists but cannot be listed")
+    }
+
+    func testListingKeepsOnlyProfilesAndStopsPastTheBound() throws {
+        let dir = NSTemporaryDirectory() + "edr-credential-stores-\(UUID().uuidString)/"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let fileManager = FileManager.default
+        for name in ["Default", "Profile 1", "Profile 01", "Crashpad", "Local State"] {
+            try fileManager.createDirectory(atPath: dir + name, withIntermediateDirectories: true)
+        }
+        XCTAssertEqual(CredentialStores.profileListing(dir, layout: .chromium).entries?.sorted(), ["Default", "Profile 1"])
+        XCTAssertEqual(CredentialStores.profileListing(dir, layout: .firefox).entries, [], "no Chromium name is a Firefox profile")
+
+        let bound = CredentialStores.maxProfilesPerBrowser
+        for number in 2...(bound * 3) {
+            try fileManager.createDirectory(atPath: dir + "Profile \(number)", withIntermediateDirectories: true)
+        }
+        XCTAssertEqual(CredentialStores.profileListing(dir, layout: .chromium).entries?.count, bound + 1,
+                       "one past the bound is enough to know the directory is watched whole")
     }
 
     // spec:endpoint-event-collection/browser-credential-reads-are-reported/the-browser-s-own-reads-are-not-reported
@@ -97,7 +114,7 @@ final class CredentialStoresTests: XCTestCase {
         let bound = CredentialStores.maxProfilesPerBrowser
         let crowded = ["Default"] + (1...bound).map { "Profile \($0)" }
         let decoys = (0..<bound).map { "0000\($0).a" } + ["k7xq2a1b.default-release"]
-        let targets = CredentialStores.targets(homes: ["/Users/alice"]) { path in
+        let targets = CredentialStores.targets(homes: ["/Users/alice"]) { path, _ in
             switch path {
             case chrome: return .entries(crowded)
             case firefox: return .entries(decoys)
@@ -164,10 +181,10 @@ final class CredentialStoresTests: XCTestCase {
 }
 
 private extension CredentialStores.DirectoryListing {
-    var isEntries: Bool {
-        if case .entries = self {
-            return true
+    var entries: [String]? {
+        if case .entries(let names) = self {
+            return names
         }
-        return false
+        return nil
     }
 }

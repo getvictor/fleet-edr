@@ -68,14 +68,14 @@ enum CredentialStores {
 
     /// targets is every credential file path to watch in the given homes: each browser's files in each of its profiles, in both
     /// spellings of a firmlinked root, sorted and without duplicates, along with the browser directories whose listing failed.
-    static func targets(homes: [String], listDirectory: (String) -> DirectoryListing) -> Targets {
+    static func targets(homes: [String], listDirectory: (String, CredentialBrowser.Layout) -> DirectoryListing) -> Targets {
         var out = Set<String>()
         var prefixes = Set<String>()
         var unreadable: [String] = []
         for home in homes {
             for browser in browsers {
                 let root = home + "/" + browser.root
-                switch listDirectory(root) {
+                switch listDirectory(root, browser.layout) {
                 case .missing:
                     continue
                 case .unreadable:
@@ -102,15 +102,28 @@ enum CredentialStores {
         return Array(Set(scanned).union(kept)).sorted()
     }
 
-    /// listing lists a directory with the file manager, telling a directory that does not exist from one that could not be read.
-    static func listing(_ path: String) -> DirectoryListing {
-        do {
-            return .entries(try FileManager.default.contentsOfDirectory(atPath: path))
-        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
-            return .missing
-        } catch {
-            return .unreadable
+    /// profileListing lists a browser directory's profiles, telling a directory that does not exist from one that could not be read.
+    /// It reads the directory one entry at a time, keeps only the profile names, and stops one past maxProfilesPerBrowser, so a
+    /// directory somebody filled with entries costs one pass over it and never more memory than the bound.
+    static func profileListing(_ path: String, layout: CredentialBrowser.Layout) -> DirectoryListing {
+        guard let dir = opendir(path) else {
+            return errno == ENOENT ? .missing : .unreadable
         }
+        defer { closedir(dir) }
+        var profiles: [String] = []
+        errno = 0
+        while profiles.count <= maxProfilesPerBrowser, let entry = readdir(dir) {
+            // A name that is not UTF-8 is not a browser's profile, so it is skipped rather than decoded lossily.
+            let name = withUnsafeBytes(of: entry.pointee.d_name) { raw in
+                String(bytes: raw.prefix(Int(entry.pointee.d_namlen)), encoding: .utf8)
+            }
+            if let name, isProfile(name, layout: layout) {
+                profiles.append(name)
+            }
+            errno = 0
+        }
+        // readdir returns nil both at the end and on an error, which only errno tells apart.
+        return errno == 0 ? .entries(profiles) : .unreadable
     }
 
     private static func files(in root: String, profiles: [String], layout: CredentialBrowser.Layout) -> [String] {
@@ -123,7 +136,7 @@ enum CredentialStores {
         }
     }
 
-    private static func isProfile(_ name: String, layout: CredentialBrowser.Layout) -> Bool {
+    static func isProfile(_ name: String, layout: CredentialBrowser.Layout) -> Bool {
         switch layout {
         case .chromium:
             return isChromiumProfile(name)

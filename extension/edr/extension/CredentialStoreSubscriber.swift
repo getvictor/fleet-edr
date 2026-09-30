@@ -90,7 +90,7 @@ final class CredentialStoreSubscriber: Sendable {
             logger.error("credential-store client could not read the accounts; keeping \(self.applied.count) watched files")
             return
         }
-        let scanned = CredentialStores.targets(homes: homes, listDirectory: CredentialStores.listing)
+        let scanned = CredentialStores.targets(homes: homes, listDirectory: CredentialStores.profileListing)
         if !scanned.unreadableRoots.isEmpty {
             logger.error("credential-store client could not list \(scanned.unreadableRoots.count, privacy: .public) browser directories")
         }
