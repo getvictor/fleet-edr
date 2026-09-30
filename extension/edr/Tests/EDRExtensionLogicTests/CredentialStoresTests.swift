@@ -87,11 +87,53 @@ final class CredentialStoresTests: XCTestCase {
         XCTAssertFalse(CredentialStores.isOwnRead(path: "/Users/alice/notes.txt", openerTeamID: "EQHXZ8M8AV"), "no owner")
     }
 
+    // spec:endpoint-event-collection/browser-credential-reads-are-reported/profiles-past-the-bound-are-not-watched
+    func testChromiumProfilesPastTheBoundAreNotWatched() {
+        let chrome = "/Users/alice/Library/Application Support/Google/Chrome/"
+        let bound = CredentialStores.maxProfilesPerBrowser
+        // Decoys numbered after the real profiles, listed first and in no order, plus zero-padded names that parse to real numbers.
+        let numbered = (1...bound * 20).reversed().map { "Profile \($0 + 3)" }
+        let padded = (1...bound).map { "Profile " + String(repeating: "0", count: $0) + "1" }
+        let decoys = numbered + padded
+        let entries = decoys + ["Profile 2", "Default", "Profile 1", "Profile 3"]
+        let targets = CredentialStores.targets(homes: ["/Users/alice"]) { $0 == chrome ? .entries(entries) : .missing }
+        let profiles = Set(targets.paths.compactMap { path -> String? in
+            guard path.hasPrefix(chrome), path.hasSuffix("/Login Data") else {
+                return nil
+            }
+            return String(path.dropFirst(chrome.count).dropLast("/Login Data".count))
+        })
+        XCTAssertEqual(profiles.count, bound, "at most the bound's profiles are watched")
+        for real in ["Default", "Profile 1", "Profile 2", "Profile 3"] {
+            XCTAssertTrue(profiles.contains(real), "\(real) is kept ahead of the decoys")
+        }
+        XCTAssertFalse(profiles.contains { $0.hasPrefix("Profile 0") }, "a zero-padded name is not a profile")
+        XCTAssertEqual(targets.paths.count, 1 + bound * CredentialStores.chromiumProfileFiles.count)
+        XCTAssertEqual(targets.truncatedRoots, [chrome])
+    }
+
+    func testFirefoxProfilesPastTheBoundAreNotWatched() {
+        let firefox = "/Users/alice/Library/Application Support/Firefox/Profiles/"
+        let bound = CredentialStores.maxProfilesPerBrowser
+        let entries = (0..<bound + 1).map { String(format: "p%03d.default", $0) }.reversed()
+        let targets = CredentialStores.targets(homes: ["/Users/alice"]) { $0 == firefox ? .entries(Array(entries)) : .missing }
+        XCTAssertEqual(targets.paths.count, bound * CredentialStores.firefoxProfileFiles.count)
+        XCTAssertFalse(targets.paths.contains { $0.contains(String(format: "p%03d.default", bound)) }, "the last by name is dropped")
+        XCTAssertEqual(targets.truncatedRoots, [firefox])
+    }
+
+    func testAHomeWithinTheBoundIsNotTruncated() {
+        XCTAssertEqual(CredentialStores.targets(homes: ["/Users/alice"], listDirectory: listing).truncatedRoots, [])
+    }
+
     func testIsChromiumProfile() {
         for name in ["Default", "Profile 0", "Profile 1", "Profile 12"] {
             XCTAssertTrue(CredentialStores.isChromiumProfile(name), name)
         }
-        for name in ["System Profile", "Guest Profile", "Profile", "Profile x", "Profile -1", "Crashpad", "Local State"] {
+        let others = [
+            "System Profile", "Guest Profile", "Profile", "Profile x", "Profile -1", "Profile 01", "Profile +1", "Crashpad", "Local State"
+        ]
+        for name in others {
             XCTAssertFalse(CredentialStores.isChromiumProfile(name), name)
         }
     }

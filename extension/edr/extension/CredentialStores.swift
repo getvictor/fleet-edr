@@ -44,6 +44,10 @@ enum CredentialStores {
     static let chromiumRootFiles = ["Local State"]
     /// firefoxProfileFiles are a Firefox profile's saved logins, the key database that decrypts them, and its cookies.
     static let firefoxProfileFiles = ["logins.json", "key4.db", "cookies.sqlite"]
+    /// maxProfilesPerBrowser bounds the profiles watched in one browser directory. Any user can create profile directories in their
+    /// own home, so without a bound a script making thousands of them would have the client mute that many literal paths on every
+    /// refresh. Browsers number and name profiles far below this, and the profiles kept are the ones a browser creates first.
+    static let maxProfilesPerBrowser = 50
 
     /// DirectoryListing is what listing a browser's profile directory found. A missing directory is a browser that is not installed
     /// and contributes nothing; an unreadable one says nothing about what is there, so the files already watched under it are kept.
@@ -53,10 +57,12 @@ enum CredentialStores {
         case unreadable
     }
 
-    /// Targets is the result of a scan: the credential files to watch, and the browser directories that could not be read.
+    /// Targets is the result of a scan: the credential files to watch, the browser directories that could not be read, and the
+    /// ones holding more profiles than maxProfilesPerBrowser, whose profiles past the bound are not watched.
     struct Targets: Equatable {
         let paths: [String]
         let unreadableRoots: [String]
+        var truncatedRoots: [String] = []
     }
 
     /// targets is every credential file path to watch in the given homes: each browser's files in each of its profiles, in both
@@ -64,6 +70,7 @@ enum CredentialStores {
     static func targets(homes: [String], listDirectory: (String) -> DirectoryListing) -> Targets {
         var out = Set<String>()
         var unreadable: [String] = []
+        var truncated: [String] = []
         for home in homes {
             for browser in browsers {
                 let root = home + "/" + browser.root
@@ -73,13 +80,18 @@ enum CredentialStores {
                 case .unreadable:
                     unreadable.append(contentsOf: WatchedPaths.spellings(of: root))
                 case .entries(let entries):
-                    for path in files(in: root, entries: entries, layout: browser.layout) {
+                    let found = profiles(in: entries, layout: browser.layout)
+                    if found.count > maxProfilesPerBrowser {
+                        truncated.append(root)
+                    }
+                    let kept = Array(found.prefix(maxProfilesPerBrowser))
+                    for path in files(in: root, profiles: kept, layout: browser.layout) {
                         out.formUnion(WatchedPaths.spellings(of: path))
                     }
                 }
             }
         }
-        return Targets(paths: out.sorted(), unreadableRoots: unreadable.sorted())
+        return Targets(paths: out.sorted(), unreadableRoots: unreadable.sorted(), truncatedRoots: truncated.sorted())
     }
 
     /// next is the set a refresh applies: the scanned paths, and every path already applied under a directory the scan could not
@@ -100,28 +112,51 @@ enum CredentialStores {
         }
     }
 
-    private static func files(in root: String, entries: [String], layout: CredentialBrowser.Layout) -> [String] {
+    /// profiles is a browser directory's profiles in the order the bound keeps them. Chromium's come as `Default` and then by number,
+    /// the order the browser creates them in, so profiles made to crowd out the real ones can only take numbers after them. Firefox
+    /// names its profiles randomly, so its are sorted by name, which is at least the same set on every refresh.
+    static func profiles(in entries: [String], layout: CredentialBrowser.Layout) -> [String] {
         switch layout {
         case .chromium:
-            let profiles = entries.filter(isChromiumProfile)
+            return entries.compactMap { name in chromiumProfileNumber(name).map { (name, $0) } }
+                .sorted { $0.1 < $1.1 }
+                .map(\.0)
+        case .firefox:
+            // A Firefox profile directory is named `<random>.<name>`, as in `k7xq2a1b.default-release`.
+            return entries.filter { $0.contains(".") && !$0.hasPrefix(".") }.sorted()
+        }
+    }
+
+    private static func files(in root: String, profiles: [String], layout: CredentialBrowser.Layout) -> [String] {
+        switch layout {
+        case .chromium:
             return chromiumRootFiles.map { root + $0 }
                 + profiles.flatMap { profile in chromiumProfileFiles.map { root + profile + "/" + $0 } }
         case .firefox:
-            // A Firefox profile directory is named `<random>.<name>`, as in `k7xq2a1b.default-release`.
-            return entries.filter { $0.contains(".") && !$0.hasPrefix(".") }
-                .flatMap { profile in firefoxProfileFiles.map { root + profile + "/" + $0 } }
+            return profiles.flatMap { profile in firefoxProfileFiles.map { root + profile + "/" + $0 } }
         }
     }
 
     /// isChromiumProfile reports whether a directory entry is a Chromium profile: `Default`, or `Profile ` and a number.
     static func isChromiumProfile(_ name: String) -> Bool {
+        chromiumProfileNumber(name) != nil
+    }
+
+    /// chromiumProfileNumber is where a Chromium profile sorts: first for `Default`, and N for `Profile N` written as Chromium writes
+    /// it, so `Profile 01` cannot stand in for `Profile 1`. Nil for any other entry.
+    private static func chromiumProfileNumber(_ name: String) -> Int? {
         if name == "Default" {
-            return true
+            return Int.min
         }
-        guard name.hasPrefix("Profile "), let number = Int(name.dropFirst("Profile ".count)) else {
-            return false
+        let prefix = "Profile "
+        guard name.hasPrefix(prefix) else {
+            return nil
         }
-        return number >= 0
+        let digits = String(name.dropFirst(prefix.count))
+        guard let number = Int(digits), number >= 0, String(number) == digits else {
+            return nil
+        }
+        return number
     }
 
     /// owner is the browser whose store a path is in, or nil for any other path.

@@ -3,6 +3,7 @@
 - [x] 1.1 `CredentialStores`: the browsers, their credential files, the profile listing, and the own-read filter
 - [x] 1.2 `CredentialStoreSubscriber`: a NOTIFY_OPEN client muted to the literal files, refreshed every five minutes
 - [x] 1.3 Unit tests for the targets, profile detection, the own-read filter and the access mode
+- [x] 1.4 Bound the profiles watched in one browser directory at 50, so a user creating profile directories cannot grow the muted set without limit
 
 ## 2. Validation
 

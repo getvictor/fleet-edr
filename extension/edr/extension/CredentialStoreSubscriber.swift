@@ -91,6 +91,11 @@ final class CredentialStoreSubscriber: Sendable {
         if !scanned.unreadableRoots.isEmpty {
             logger.error("credential-store client could not list \(scanned.unreadableRoots.count, privacy: .public) browser directories")
         }
+        if !scanned.truncatedRoots.isEmpty {
+            let bound = CredentialStores.maxProfilesPerBrowser
+            let count = scanned.truncatedRoots.count
+            logger.error("credential-store client: \(count, privacy: .public) browsers hold over \(bound, privacy: .public) profiles")
+        }
         let next = CredentialStores.next(applied: applied, scanned: scanned)
         let appliedSet = Set(applied)
         let nextSet = Set(next)
