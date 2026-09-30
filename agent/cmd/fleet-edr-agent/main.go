@@ -749,7 +749,7 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 			data := enrich.BtmExecutableSigning(evt.Data, codesign.Evaluate)
 			data = enrich.PackageScriptSigning(data, p.parentPath, pkgsign.Evaluate)
 			// And a TCC permission change with the signature of the app it is about (issue #1185), found by its bundle ID.
-			data = enrich.TccSubjectSigning(data, appbundle.Path, codesign.Evaluate)
+			data = enrich.TccSubjectSigning(data, appbundle.Paths, codesign.Evaluate)
 			if p.updateTable {
 				updateProcTable(p.pt, data)
 			}

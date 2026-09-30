@@ -9,14 +9,9 @@ import (
 )
 
 // Against the host's own LaunchServices: every Mac has Terminal, and no app claims a made-up identifier.
-func TestPath(t *testing.T) {
+func TestPaths(t *testing.T) {
 	t.Parallel()
-	path, ok := Path("com.apple.Terminal")
-	assert.True(t, ok)
-	assert.Equal(t, "/System/Applications/Utilities/Terminal.app", path)
-
-	_, ok = Path("com.example.edr.no-such-app")
-	assert.False(t, ok)
-	_, ok = Path("")
-	assert.False(t, ok)
+	assert.Contains(t, Paths("com.apple.Terminal"), "/System/Applications/Utilities/Terminal.app")
+	assert.Empty(t, Paths("com.example.edr.no-such-app"))
+	assert.Empty(t, Paths(""))
 }

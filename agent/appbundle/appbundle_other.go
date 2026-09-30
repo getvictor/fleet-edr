@@ -2,6 +2,6 @@
 
 package appbundle
 
-// Path is unsupported off the darwin/cgo build, where there is no LaunchServices; the headless agent is fed events that already
+// Paths is unsupported off the darwin/cgo build, where there is no LaunchServices; the headless agent is fed events that already
 // carry what enrichment would add.
-func Path(_ string) (string, bool) { return "", false }
+func Paths(_ string) []string { return nil }
