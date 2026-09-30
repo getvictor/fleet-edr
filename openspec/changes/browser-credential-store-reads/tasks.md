@@ -3,6 +3,8 @@
 - [x] 1.1 `CredentialStores`: the browsers, their credential files, the profile listing, and the own-read filter
 - [x] 1.2 `CredentialStoreSubscriber`: a NOTIFY_OPEN client muted to the literal files, refreshed every five minutes
 - [x] 1.3 Unit tests for the targets, profile detection, the own-read filter and the access mode
+- [x] 1.4 Past 50 profiles in one browser directory, watch it as a prefix and filter opens to the credential files, so a user creating profile directories can neither grow the muted set without limit nor crowd a real profile out
+- [x] 1.5 On edr-dev, with 51 decoy Firefox profiles, a foreign read of the real profile's `logins.json` is reported and Firefox's other files are not
 
 ## 2. Validation
 
