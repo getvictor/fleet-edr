@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -84,8 +83,8 @@ const (
 	// pending commands. Mirrored as the package-level default in commander.New.
 	commanderPollInterval = 5 * time.Second
 
-	// h2ReadIdleTimeout / h2PingTimeout configure HTTP/2 keep-alive PINGs: if no frame arrives for ReadIdleTimeout, send a PING and
-	// fail the connection if no ack lands within PingTimeout, so a half-open link (sleep, NAT rebind) is detected and re-established.
+	// h2ReadIdleTimeout / h2PingTimeout configure HTTP/2 keep-alive PINGs: if no frame arrives for h2ReadIdleTimeout, send a PING and
+	// fail the connection if no ack lands within h2PingTimeout, so a half-open link (sleep, NAT rebind) is detected and re-established.
 	h2ReadIdleTimeout = 15 * time.Second
 	h2PingTimeout     = 10 * time.Second
 
@@ -404,14 +403,13 @@ func newAgentHTTPClient(cfg *config.Config, dial dialFunc, logger *slog.Logger) 
 	// operator configured in the agent's conf file (issue #1117).
 	baseTransport.Proxy = cfg.Proxy.ProxyFunc()
 	// Enable HTTP/2 with keep-alive PINGs so the long-lived agent connection (shared by the uploader + commander) detects a half-open
-	// link (laptop sleep, NAT rebind) and re-establishes it instead of hanging until the request timeout. ConfigureTransports negotiates
-	// h2 over the existing TLS config and returns the h2 transport for tuning. Non-fatal on failure: the agent keeps HTTP/1.1 keep-alive.
-	if h2, h2err := http2.ConfigureTransports(baseTransport); h2err == nil {
-		h2.ReadIdleTimeout = h2ReadIdleTimeout
-		h2.PingTimeout = h2PingTimeout
-	} else {
-		logger.WarnContext(context.Background(), "http2 configure failed; using http/1.1 keep-alive", "err", h2err)
-	}
+	// link (laptop sleep, NAT rebind) and re-establishes it instead of hanging until the request timeout. h2 is negotiated over the
+	// existing TLS config via ALPN, and HTTP/1.1 stays enabled for a server or proxy that does not offer h2.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
+	baseTransport.Protocols = protocols
+	baseTransport.HTTP2 = &http.HTTP2Config{SendPingTimeout: h2ReadIdleTimeout, PingTimeout: h2PingTimeout}
 	agentTransport := otelhttp.NewTransport(baseTransport)
 	return agentTransport, &http.Client{Transport: agentTransport, Timeout: agentHTTPTimeout}, nil
 }

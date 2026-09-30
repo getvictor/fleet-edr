@@ -12,7 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -212,23 +211,17 @@ func h1Client(useTLS bool) *http.Client {
 	return &http.Client{Transport: tr, Timeout: 3 * time.Second}
 }
 
-// h2Client forces HTTP/2: over TLS via ALPN, and over cleartext (h2c) via a plain dialer, so the multiplexer's content-type split is
+// h2Client forces HTTP/2: over TLS via ALPN, and over cleartext (h2c) with prior knowledge, so the multiplexer's content-type split is
 // exercised with REST traffic that rides the same HTTP/2 the gRPC channel uses.
 func h2Client(t *testing.T, useTLS bool, addr string) *http.Client {
 	t.Helper()
+	protocols := new(http.Protocols)
+	tr := &http.Transport{Protocols: protocols}
 	if useTLS {
-		return &http.Client{
-			Transport: &http2.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // in-test self-signed cert
-			Timeout:   3 * time.Second,
-		}
+		protocols.SetHTTP2(true)
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // in-test self-signed cert
+	} else {
+		protocols.SetUnencryptedHTTP2(true)
 	}
-	return &http.Client{
-		Transport: &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network, a string, _ *tls.Config) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, network, a)
-			},
-		},
-		Timeout: 3 * time.Second,
-	}
+	return &http.Client{Transport: tr, Timeout: 3 * time.Second}
 }
