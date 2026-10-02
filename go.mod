@@ -9,7 +9,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fleetdm/edr/tools/comment-wrap-check/lint v0.0.0-00010101000000-000000000000
 	github.com/go-sql-driver/mysql v1.10.1
-	github.com/go-webauthn/webauthn v0.18.1
+	github.com/go-webauthn/webauthn v0.18.2
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/open-policy-agent/opa v1.20.2
 	github.com/pressly/goose/v3 v3.28.0
@@ -36,7 +36,7 @@ require (
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.16.0
 	golang.org/x/tools v0.50.0
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.59.0
 	pgregory.net/rapid v1.3.0
@@ -54,7 +54,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.8.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
