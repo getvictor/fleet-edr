@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { RuleSource } from "./RuleSource";
 import * as api from "../api";
+import * as downloadModule from "../download";
 
 // RuleSource navigates after a delete, so it renders inside a router.
 function render(ui: ReactElement) {
@@ -31,13 +32,49 @@ describe("RuleSource", () => {
     expect(container.querySelector("pre")?.textContent).toBe(content);
   });
 
-  it("says a built-in rule has no document instead of showing an empty panel", async () => {
+  // spec:web-ui/the-rule-catalogue-is-browsable/an-operator-reads-a-rule-as-written
+  it("shows a built-in rule's exported rule file, parameters included, instead of an empty panel", async () => {
     vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([{ path: "authored/keychain_extra.yml", bytes: 42 }]);
     const get = vi.spyOn(api, "getRuleContentDocument");
-    render(<RuleSource ruleId="suspicious_exec" />);
+    const exported = "title: Suspicious exec chain\nx-engine:\n  rule_id: suspicious_exec\n  params:\n    window: 30s\n";
+    const exportRule = vi.spyOn(api, "exportRule").mockResolvedValue(exported);
+    const { container } = render(<RuleSource ruleId="suspicious_exec" />);
 
     expect(await screen.findByText(/built into the server/)).toBeVisible();
+    expect(exportRule).toHaveBeenCalledWith("suspicious_exec");
     expect(get).not.toHaveBeenCalled();
+    expect(container.querySelector("pre")?.textContent).toBe(exported);
+    // A built-in rule ships with the release, so it is never offered for editing here.
+    expect(screen.queryByRole("link", { name: "Edit" })).toBeNull();
+  });
+
+  it("downloads a built-in rule's file under the rule's id", async () => {
+    vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([]);
+    vi.spyOn(api, "exportRule").mockResolvedValue("title: Suspicious exec chain\n");
+    const download = vi.spyOn(downloadModule, "downloadText").mockImplementation(() => undefined);
+    render(<RuleSource ruleId="suspicious_exec" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+    expect(download).toHaveBeenCalledWith("title: Suspicious exec chain\n", "suspicious_exec.yml", "application/yaml");
+  });
+
+  it("downloads a stored rule document under its own file name", async () => {
+    vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([{ path: "imported/process_creation/curl.yml", bytes: 12 }]);
+    vi.spyOn(api, "getRuleContentDocument").mockResolvedValue("title: Curl\n");
+    const download = vi.spyOn(downloadModule, "downloadText").mockImplementation(() => undefined);
+    render(<RuleSource ruleId="curl" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+    expect(download).toHaveBeenCalledWith("title: Curl\n", "curl.yml", "application/yaml");
+  });
+
+  it("reports a built-in rule whose file could not be exported", async () => {
+    vi.spyOn(api, "listRuleContentDocuments").mockResolvedValue([]);
+    vi.spyOn(api, "exportRule").mockRejectedValue(new Error("API error: 404"));
+    render(<RuleSource ruleId="suspicious_exec" />);
+
+    expect(await screen.findByText(/could not be loaded: API error: 404/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
   });
 
   // spec:web-ui/rules-can-be-written-in-the-console/an-operator-deletes-a-rule-with-a-reason

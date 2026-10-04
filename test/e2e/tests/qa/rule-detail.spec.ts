@@ -44,8 +44,9 @@ test.describe("per-rule documentation page", () => {
     await expect(page.locator(`code.rule-detail__id:has-text("${target.id}")`)).toBeVisible();
 
     // Summary, severity, and the per-section headings always render for any registered rule. Severity case
-    // varies (Badge renders lowercase) so match case-insensitively.
-    await expect(page.getByText(target.doc.summary, { exact: false })).toBeVisible();
+    // varies (Badge renders lowercase) so match case-insensitively. The summary is matched in its own element: the rule
+    // file shown further down the page carries the same text in its description.
+    await expect(page.locator("p.rule-detail__summary")).toHaveText(target.doc.summary);
     await expect(page.getByRole("row", { name: new RegExp(String.raw`severity\s+${target.doc.severity}`, "i") })).toBeVisible();
     await expect(page.getByRole("row", { name: /att&ck/i })).toBeVisible();
     await expect(page.getByRole("row", { name: /event types/i })).toBeVisible();

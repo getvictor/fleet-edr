@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **A built-in rule's page shows its rule file**, including the values the rule reads, instead of saying there is no document. Every rule's file can be downloaded from its page.
+
 ## [0.7.0] (2026-09-30)
 
 ### Upgrade notes (action required)
