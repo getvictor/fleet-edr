@@ -159,16 +159,21 @@ jobs:
           config.model: "openai/gpt-6-sol"
           config.fallback_models: '["gpt-5.6-terra"]'
           # pr-agent also refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until this, the
-          # prefix above, and the temperature below were all set, every review fell back to gpt-5.6-terra. The
+          # prefix above, and the temperature setting below were all in place, every review fell back to gpt-5.6-terra. The
           # value is gpt-6-sol's documented context window (https://developers.openai.com/api/docs/models/gpt-6-sol). It applies
           # only to models absent from the table, so the fallback keeps its own entry, and config.max_model_tokens (32000 by
           # default) still caps what is sent, so declaring the full window does not raise the cost of a review.
           config.custom_model_max_tokens: "1050000"
-          # gpt-6-sol is a reasoning model and accepts only temperature 1 while reasoning is on; pr-agent's default of 0.2 makes
-          # LiteLLM refuse the request before it is sent. Listing it as reasoning-capable makes the effort explicit (pr-agent's
-          # default, medium) rather than whatever the model defaults to. Checked against the pinned image: the request goes out
-          # with temperature=1 and reasoning_effort=medium.
-          config.temperature: "1"
+          # gpt-6-sol is a reasoning model, and OpenAI's guide says to omit temperature while its reasoning effort is not `none`;
+          # pr-agent's default of 0.2 makes LiteLLM refuse the request before it is sent. Listing it in no_temperature_models
+          # drops temperature for this model only, so the fallback keeps pr-agent's default. Setting the key replaces upstream's
+          # list rather than extending it, so that list (as in the pinned image) is restated first. Listing it as
+          # reasoning-capable makes the effort explicit (pr-agent's default, medium). Checked against the pinned image: the
+          # request goes out with no temperature and reasoning_effort=medium.
+          config.no_temperature_models: >-
+            ["deepseek/deepseek-reasoner", "o1-mini", "o1-mini-2024-09-12", "o1", "o1-2024-12-17", "o3-mini", "o3-mini-2025-01-31", "o3",
+            "o3-2025-04-16", "o4-mini", "o4-mini-2025-04-16", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.2-codex", "gpt-5.3-codex",
+            "gpt-5-mini", "openai/gpt-6-sol"]
           config.additional_reasoning_effort_models: '["openai/gpt-6-sol"]'
           #
           # The hosted config's review guidance lives under keys the open-source schema does not have
