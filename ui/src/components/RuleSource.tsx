@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   deleteRuleContentDocument,
+  exportRule,
   getRuleContentDocument,
   listRuleContentDocuments,
   ReauthRequiredError,
   ruleDocumentStem,
 } from "../api";
 import { useReauthRetry } from "../hooks/useReauthRetry";
+import { downloadText } from "../download";
 import { ReasonModal } from "./DetectionConfig/ReasonModal";
 import { ReauthModal } from "./ReauthModal";
 import { Button } from "./ui/Button";
@@ -16,15 +18,21 @@ import "./RuleSource.scss";
 type SourceState =
   | { kind: "loading" }
   | { kind: "document"; path: string; content: string }
-  | { kind: "builtin" }
+  | { kind: "builtin"; content: string }
   | { kind: "error"; message: string };
 
 const deleteDescription =
   "The rule stops being evaluated when the server next reloads its rules, within 30 seconds. Alerts it already raised are kept.";
 
+// fileName is the last segment of a stored document's path, the name the document is saved under.
+function fileName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
 // RuleSource shows the file a rule is loaded from, as written (issue #1001). Rules loaded from the stored corpus are Sigma YAML with an
 // x-engine block, and reading one as written is how an operator sees exactly what it matches. A rule built into the server is not loaded
-// from that corpus, and says so rather than showing an empty panel.
+// from that corpus, so it shows the document the server renders for it instead, which carries the values the rule reads. Either can be
+// downloaded.
 //
 // The owning page renders this only for an operator with rule_content.read, since both reads here are gated on it. `editable` adds Edit
 // and Delete, which the owning page grants only for a rule this deployment wrote and an operator with rule_content.write: built-in
@@ -62,7 +70,7 @@ export function RuleSource({ ruleId, editable = false }: { readonly ruleId: stri
       const documents = await listRuleContentDocuments();
       // A rule's identity is its document's file stem, so the matching document is the one whose stem is the rule id.
       const match = documents.find((d) => ruleDocumentStem(d.path) === ruleId);
-      if (match === undefined) return { kind: "builtin" } as const;
+      if (match === undefined) return { kind: "builtin", content: await exportRule(ruleId) } as const;
       const content = await getRuleContentDocument(match.path);
       return { kind: "document", path: match.path, content } as const;
     })()
@@ -82,25 +90,43 @@ export function RuleSource({ ruleId, editable = false }: { readonly ruleId: stri
       {state.kind === "loading" && <p className="rule-source__note">Loading the rule document...</p>}
       {state.kind === "error" && <p className="rule-source__note">The rule document could not be loaded: {state.message}</p>}
       {state.kind === "builtin" && (
-        <p className="rule-source__note">
-          This rule is built into the server rather than loaded from the stored rule corpus, so there is no stored document to show.
-        </p>
+        <>
+          <p className="rule-source__note">
+            This rule is built into the server. This is its rule file, including the values it reads under <code>x-engine.params</code>. It
+            ships with each release and is not edited here: tune it with its mode and exclusions in Detection tuning.
+          </p>
+          <div className="rule-source__actions">
+            <Button size="small" variant="inverse" onClick={() => { downloadText(state.content, `${ruleId}.yml`, "application/yaml"); }}>
+              Download
+            </Button>
+          </div>
+          <pre className="rule-source__content">{state.content}</pre>
+        </>
       )}
       {state.kind === "document" && (
         <>
           <p className="rule-source__note">
             <code>{state.path}</code>
           </p>
-          {editable && (
-            <div className="rule-source__actions">
-              <Link className="button button--inverse button--small" to={`/rules/${encodeURIComponent(ruleId)}/edit`}>
-                Edit
-              </Link>
-              <Button size="small" variant="alert" onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
-                Delete
-              </Button>
-            </div>
-          )}
+          <div className="rule-source__actions">
+            <Button
+              size="small"
+              variant="inverse"
+              onClick={() => { downloadText(state.content, fileName(state.path), "application/yaml"); }}
+            >
+              Download
+            </Button>
+            {editable && (
+              <>
+                <Link className="button button--inverse button--small" to={`/rules/${encodeURIComponent(ruleId)}/edit`}>
+                  Edit
+                </Link>
+                <Button size="small" variant="alert" onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
+                  Delete
+                </Button>
+              </>
+            )}
+          </div>
           <pre className="rule-source__content">{state.content}</pre>
         </>
       )}

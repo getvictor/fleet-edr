@@ -10,6 +10,7 @@ import { Button } from "./ui/Button";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
 import { TECHNIQUE_CATALOG, TACTIC_ORDER, type TechniqueMeta } from "./attack-techniques.generated";
 import "./AttackCoverage.scss";
+import { downloadText } from "../download";
 
 // AttackCoverage renders the MITRE ATT&CK technique coverage that the
 // registered detection rules provide. The data comes from the same
@@ -116,21 +117,7 @@ export function AttackCoverage() {
 
   const downloadLayer = () => {
     if (!layer) return;
-    const blob = new Blob([JSON.stringify(layer, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    try {
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "fleet-edr-attack-coverage.json";
-      document.body.appendChild(a);
-      try {
-        a.click();
-      } finally {
-        a.remove();
-      }
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    downloadText(JSON.stringify(layer, null, 2), "fleet-edr-attack-coverage.json", "application/json");
   };
 
   const { groups, distinctRules } = useMemo(() => buildCoverageGroups(layer), [layer]);

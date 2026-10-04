@@ -657,6 +657,12 @@ export function ruleDocumentStem(path: string): string {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
+// exportRule returns a rule as a declarative rule file: the stored document for a rule loaded from one, and for a rule built into the
+// server the document rendered from it, carrying the values it reads under x-engine.params.
+export async function exportRule(ruleId: string): Promise<string> {
+  return fetchText(`/rules/${encodeURIComponent(ruleId)}/export`);
+}
+
 // SUB_DELIMITER_ENCODINGS percent-encodes the characters encodeURIComponent leaves unescaped.
 const SUB_DELIMITER_ENCODINGS: ReadonlyMap<string, string> = new Map([
   ["!", "%21"],
