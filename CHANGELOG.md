@@ -4,11 +4,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
-### Changed
-
-- **A built-in rule's page shows its rule file**, including the values the rule reads, instead of saying there is no document. Every rule's file can be downloaded from its page.
-
-## [0.7.0] (2026-09-30)
+## [0.7.0] (2026-10-04)
 
 ### Upgrade notes (action required)
 
@@ -29,6 +25,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
+- **A built-in rule's page shows its rule file**, including the values the rule reads, instead of saying there is no document. Every rule's file can be downloaded from its page.
 - **Upgrading the agent no longer needs a reboot.** The new extensions take over when the install finishes, or at the next login if no one is logged in, and network and DNS events resume within about 30 seconds. The agent itself restarts during the install. Earlier notes asked for a reboot after every upgrade.
 - **Package installs can be excluded by who signed the package.** Installing a `.pkg` raises a suspicious-exec alert for each of its install scripts. Exclude a vendor's installers with a `package_team_id` exclusion, the team that signed the package; an unsigned package cannot be excluded this way. The alert now names the package and its signer.
 - **Login item registrations say where the item is and who signed it.** A login item was recorded with no signature, and a background helper with a path relative to its app. Hosts now record the item's full path, the app that added a helper, and the signature of the app that will launch. Requires the updated agent.
