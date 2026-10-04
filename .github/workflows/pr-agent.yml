@@ -122,8 +122,13 @@ jobs:
         id: before
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # The image is pinned by digest, not reached through the-pr-agent/pr-agent@<sha>. That action's Dockerfile is a single
+      # `FROM pragent/pr-agent:github_action`, a moving tag, so pinning the action's commit pinned nothing that runs: the image
+      # changed under an unchanged SHA between 2026-09-30 and 2026-10-04, and the newer one turned an unknown model from a
+      # silent fallback into a failed review. Running the image directly keeps its entrypoint and reads the same env config.
+      # Dependabot's github-actions updater skips docker:// references, so this digest is bumped by hand, which is the point.
       - name: Review the pull request
-        uses: the-pr-agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
+        uses: docker://pragent/pr-agent:github_action@sha256:31b9aac6ab067bada9a0c1b001d30ebc500ea4487e00a93c18c59b9ef5fa66db
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -150,6 +155,12 @@ jobs:
           # agrees with a bug rather than catching it.
           config.model: "gpt-6-sol"
           config.fallback_models: '["gpt-5.6-terra"]'
+          # pr-agent refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until this was
+          # declared, every review fell back to gpt-5.6-terra, which the table does list. The value is gpt-6-sol's documented
+          # context window (https://developers.openai.com/api/docs/models/gpt-6-sol). It applies only to models absent from the
+          # table, so the fallback keeps its own entry, and config.max_model_tokens (32000 by default) still caps what is sent,
+          # so declaring the full window does not raise the cost of a review.
+          config.custom_model_max_tokens: "1050000"
           #
           # The hosted config's review guidance lives under keys the open-source schema does not have
           # (`review_agent.issues_user_guidelines`), so it is restated here against the key that does exist.
