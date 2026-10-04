@@ -158,12 +158,18 @@ jobs:
           # while `openai/gpt-6-sol` reaches the OpenAI API. The fallback is listed, so it needs no prefix.
           config.model: "openai/gpt-6-sol"
           config.fallback_models: '["gpt-5.6-terra"]'
-          # pr-agent also refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until both this
-          # and the prefix above were set, every review fell back to gpt-5.6-terra, which LiteLLM and the table both list. The
+          # pr-agent also refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until this, the
+          # prefix above, and the temperature below were all set, every review fell back to gpt-5.6-terra. The
           # value is gpt-6-sol's documented context window (https://developers.openai.com/api/docs/models/gpt-6-sol). It applies
           # only to models absent from the table, so the fallback keeps its own entry, and config.max_model_tokens (32000 by
           # default) still caps what is sent, so declaring the full window does not raise the cost of a review.
           config.custom_model_max_tokens: "1050000"
+          # gpt-6-sol is a reasoning model and accepts only temperature 1 while reasoning is on; pr-agent's default of 0.2 makes
+          # LiteLLM refuse the request before it is sent. Listing it as reasoning-capable makes the effort explicit (pr-agent's
+          # default, medium) rather than whatever the model defaults to. Checked against the pinned image: the request goes out
+          # with temperature=1 and reasoning_effort=medium.
+          config.temperature: "1"
+          config.additional_reasoning_effort_models: '["openai/gpt-6-sol"]'
           #
           # The hosted config's review guidance lives under keys the open-source schema does not have
           # (`review_agent.issues_user_guidelines`), so it is restated here against the key that does exist.
