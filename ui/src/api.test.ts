@@ -13,6 +13,7 @@ import {
   Unauthorized401Error,
   ReauthRequiredError,
   getRuleContentDocument,
+  exportRule,
   listRuleContentDocuments,
   ruleDocumentStem,
   checkRuleContentDocument,
@@ -453,6 +454,15 @@ describe("rule content documents", () => {
     expect(body).toBe("title: x\n");
     const [target] = fetchMock.mock.calls[0] as [URL];
     expect(target.pathname).toBe("/api/v1/rule-content/documents/authored/keychain%20extra.yml");
+  });
+
+  it("exports a rule as its rule file, unchanged, from the rule's export endpoint", async () => {
+    const file = "title: AppleScript dropper\nx-engine:\n  params:\n    window: 30s\n";
+    const fetchMock = vi.fn().mockResolvedValue(new Response(file, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await exportRule("osascript_network_exec")).toBe(file);
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.pathname).toBe("/api/rules/osascript_network_exec/export");
   });
 
   it("percent-encodes the characters encodeURIComponent leaves, so a listed path can be opened", async () => {
