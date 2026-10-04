@@ -21,10 +21,9 @@ name: PR review (pr-agent)
 #    pull request through the API and only then lets the review job start. Gating inside the review job would be too late, since
 #    the environment (and therefore the model key) is granted when the job begins, not when its first step passes.
 #
-# SUPPLY CHAIN CAVEAT: the action is pinned by commit SHA, but upstream's `Dockerfile.github_action_dockerhub` is only
-# `FROM pragent/pr-agent:github_action`, a MUTABLE Docker Hub tag. So the pin fixes the wrapper, not the code that executes.
-# Accepted here because the job holds no checkout, a scoped token, and one secret. Pinning the image by digest instead would
-# mean vendoring the Dockerfile; revisit if this job is ever given more than it has now.
+# SUPPLY CHAIN: the review runs the pr-agent image pinned by digest (`docker://...@sha256:`), not upstream's action. The
+# action's Dockerfile is only `FROM pragent/pr-agent:github_action`, a mutable Docker Hub tag, so a commit-pinned action fixed
+# the wrapper and not the code that executes. With the digest, the reviewer changes only through a commit here.
 
 on:
   pull_request:
@@ -153,13 +152,17 @@ jobs:
           #
           # Choosing a non-Claude reviewer is intentional: Claude writes the code here, and a reviewer sharing its blind spots
           # agrees with a bug rather than catching it.
-          config.model: "gpt-6-sol"
+          #
+          # The provider prefix is required. LiteLLM, which pr-agent calls models through, resolves the provider of a bare name
+          # only for models it lists, and gpt-6-sol is not one of them: `gpt-6-sol` fails with "LLM Provider NOT provided"
+          # while `openai/gpt-6-sol` reaches the OpenAI API. The fallback is listed, so it needs no prefix.
+          config.model: "openai/gpt-6-sol"
           config.fallback_models: '["gpt-5.6-terra"]'
-          # pr-agent refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until this was
-          # declared, every review fell back to gpt-5.6-terra, which the table does list. The value is gpt-6-sol's documented
-          # context window (https://developers.openai.com/api/docs/models/gpt-6-sol). It applies only to models absent from the
-          # table, so the fallback keeps its own entry, and config.max_model_tokens (32000 by default) still caps what is sent,
-          # so declaring the full window does not raise the cost of a review.
+          # pr-agent also refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until both this
+          # and the prefix above were set, every review fell back to gpt-5.6-terra, which LiteLLM and the table both list. The
+          # value is gpt-6-sol's documented context window (https://developers.openai.com/api/docs/models/gpt-6-sol). It applies
+          # only to models absent from the table, so the fallback keeps its own entry, and config.max_model_tokens (32000 by
+          # default) still caps what is sent, so declaring the full window does not raise the cost of a review.
           config.custom_model_max_tokens: "1050000"
           #
           # The hosted config's review guidance lives under keys the open-source schema does not have
