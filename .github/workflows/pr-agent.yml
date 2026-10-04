@@ -21,10 +21,9 @@ name: PR review (pr-agent)
 #    pull request through the API and only then lets the review job start. Gating inside the review job would be too late, since
 #    the environment (and therefore the model key) is granted when the job begins, not when its first step passes.
 #
-# SUPPLY CHAIN CAVEAT: the action is pinned by commit SHA, but upstream's `Dockerfile.github_action_dockerhub` is only
-# `FROM pragent/pr-agent:github_action`, a MUTABLE Docker Hub tag. So the pin fixes the wrapper, not the code that executes.
-# Accepted here because the job holds no checkout, a scoped token, and one secret. Pinning the image by digest instead would
-# mean vendoring the Dockerfile; revisit if this job is ever given more than it has now.
+# SUPPLY CHAIN: the review runs the pr-agent image pinned by digest (`docker://...@sha256:`), not upstream's action. The
+# action's Dockerfile is only `FROM pragent/pr-agent:github_action`, a mutable Docker Hub tag, so a commit-pinned action fixed
+# the wrapper and not the code that executes. With the digest, the reviewer changes only through a commit here.
 
 on:
   pull_request:
@@ -122,8 +121,13 @@ jobs:
         id: before
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # The image is pinned by digest, not reached through the-pr-agent/pr-agent@<sha>. That action's Dockerfile is a single
+      # `FROM pragent/pr-agent:github_action`, a moving tag, so pinning the action's commit pinned nothing that runs: the image
+      # changed under an unchanged SHA between 2026-09-30 and 2026-10-04, and the newer one turned an unknown model from a
+      # silent fallback into a failed review. Running the image directly keeps its entrypoint and reads the same env config.
+      # Dependabot's github-actions updater skips docker:// references, so this digest is bumped by hand, which is the point.
       - name: Review the pull request
-        uses: the-pr-agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
+        uses: docker://pragent/pr-agent:github_action@sha256:31b9aac6ab067bada9a0c1b001d30ebc500ea4487e00a93c18c59b9ef5fa66db
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -148,8 +152,29 @@ jobs:
           #
           # Choosing a non-Claude reviewer is intentional: Claude writes the code here, and a reviewer sharing its blind spots
           # agrees with a bug rather than catching it.
-          config.model: "gpt-6-sol"
+          #
+          # The provider prefix is required. LiteLLM, which pr-agent calls models through, resolves the provider of a bare name
+          # only for models it lists, and gpt-6-sol is not one of them: `gpt-6-sol` fails with "LLM Provider NOT provided"
+          # while `openai/gpt-6-sol` reaches the OpenAI API. The fallback is listed, so it needs no prefix.
+          config.model: "openai/gpt-6-sol"
           config.fallback_models: '["gpt-5.6-terra"]'
+          # pr-agent also refuses a model missing from its built-in token table, and gpt-6-sol is missing from it. Until this, the
+          # prefix above, and the temperature setting below were all in place, every review fell back to gpt-5.6-terra. The
+          # value is gpt-6-sol's documented context window (https://developers.openai.com/api/docs/models/gpt-6-sol). It applies
+          # only to models absent from the table, so the fallback keeps its own entry, and config.max_model_tokens (32000 by
+          # default) still caps what is sent, so declaring the full window does not raise the cost of a review.
+          config.custom_model_max_tokens: "1050000"
+          # gpt-6-sol is a reasoning model, and OpenAI's guide says to omit temperature while its reasoning effort is not `none`;
+          # pr-agent's default of 0.2 makes LiteLLM refuse the request before it is sent. Listing it in no_temperature_models
+          # drops temperature for this model only, so the fallback keeps pr-agent's default. Setting the key replaces upstream's
+          # list rather than extending it, so that list (as in the pinned image) is restated first. Listing it as
+          # reasoning-capable makes the effort explicit (pr-agent's default, medium). Checked against the pinned image: the
+          # request goes out with no temperature and reasoning_effort=medium.
+          config.no_temperature_models: >-
+            ["deepseek/deepseek-reasoner", "o1-mini", "o1-mini-2024-09-12", "o1", "o1-2024-12-17", "o3-mini", "o3-mini-2025-01-31", "o3",
+            "o3-2025-04-16", "o4-mini", "o4-mini-2025-04-16", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.2-codex", "gpt-5.3-codex",
+            "gpt-5-mini", "openai/gpt-6-sol"]
+          config.additional_reasoning_effort_models: '["openai/gpt-6-sol"]'
           #
           # The hosted config's review guidance lives under keys the open-source schema does not have
           # (`review_agent.issues_user_guidelines`), so it is restated here against the key that does exist.
