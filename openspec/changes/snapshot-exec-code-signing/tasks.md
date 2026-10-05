@@ -11,4 +11,5 @@
 
 ## 3. Validation
 
-- [ ] 3.1 On edr-dev, after the extension restarts, the server's snapshot rows for long-running Apple daemons carry their signatures
+- [x] 3.1 On edr-dev (build 71), the startup snapshot's exec events carry signatures: 398 of 400 after the extension restarted
+- [ ] 3.2 On rc.3 (dogfood, after the upgrade), the open `mds` row carries its signature and no `credential_browser_store_read` is raised for Spotlight
