@@ -33,6 +33,15 @@ final class SnapshotSigningTests: XCTestCase {
         XCTAssertNil(SnapshotSigning.codeSigning(from: [kSecCodeInfoIdentifier as String: ""]))
     }
 
+    // spec:endpoint-event-collection/a-snapshot-exec-carries-the-running-process-s-signature/invalid-code-carries-no-identity
+    func testCodeTheKernelNoLongerValidatesCarriesNoIdentity() {
+        XCTAssertNil(SnapshotSigning.codeSigning(from: [
+            kSecCodeInfoIdentifier as String: "us.zoom.updater",
+            kSecCodeInfoTeamIdentifier as String: "BJ4HAAB9B3",
+            kSecCodeInfoStatus as String: NSNumber(value: SnapshotSigning.platformBinaryFlag)
+        ]), "a team and signing id are not attributed to code whose signature the kernel no longer holds valid")
+    }
+
     // spec:endpoint-event-collection/a-snapshot-exec-carries-the-running-process-s-signature/a-reused-pid-gets-no-signature
     func testAReusedPidIsNotGivenTheListedProcessSignature() {
         let listed = timeval(tv_sec: 1_791_030_436, tv_usec: 491_552)

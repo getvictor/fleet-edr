@@ -15,18 +15,26 @@ import Security
 enum SnapshotSigning {
     /// platformBinaryFlag is CS_PLATFORM_BINARY from the kernel's code-signing flags, the bit ES reports as `is_platform_binary`.
     static let platformBinaryFlag: UInt32 = 0x0400_0000
+    /// validFlag is CS_VALID: the kernel still holds the running code's signature valid. Without it the code was modified or its
+    /// signature failed after launch, and its claimed identity is not attributed.
+    static let validFlag: UInt32 = 0x0000_0001
     /// pidPathBufferPaths is how many MAXPATHLEN buffers PROC_PIDPATHINFO_MAXSIZE, the size proc_pidpath fills, spans. The C macro
     /// does not import into Swift.
     private static let pidPathBufferPaths = 4
     private static let pidPathBufferSize = pidPathBufferPaths * Int(MAXPATHLEN)
 
     /// codeSigning maps the dictionary SecCodeCopySigningInformation returns to the shape an exec event carries, or nil when the
-    /// code carries no identifier, which is an unsigned process: it has no signature to report, the same as a live exec of one.
+    /// code carries no identifier, which is an unsigned process, or when the kernel no longer holds its signature valid. Exclusions
+    /// trust a team and signing identifier, so an identity is attributed only to code the kernel still validates; anything else is
+    /// judged as unsigned, which reports it rather than excludes it.
     static func codeSigning(from info: [String: Any]) -> CodeSigning? {
         guard let identifier = info[kSecCodeInfoIdentifier as String] as? String, !identifier.isEmpty else {
             return nil
         }
         let flags = (info[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value ?? 0
+        guard flags & validFlag != 0 else {
+            return nil
+        }
         return CodeSigning(
             teamID: info[kSecCodeInfoTeamIdentifier as String] as? String ?? "",
             signingID: identifier,
