@@ -73,6 +73,12 @@ func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pi
 	return err
 }
 
+// BackfillSnapshotSigning completes the signature of row rowID, which an earlier extension's snapshot left unsigned, from a later
+// snapshot of the same process. The graph builder decides which rows qualify; the statement only writes an open, unsigned row.
+func (s *Store) BackfillSnapshotSigning(ctx context.Context, _ string, _ int, rowID int64, codeSigning api.NullRawJSON) error {
+	return backfillSigning(ctx, s.db, []SigningBackfill{{ID: rowID, CodeSigning: codeSigning}})
+}
+
 // SnapshotHeartbeat is one heartbeat's freshness signal: the PID it pings and the event timestamp to record as last_seen_ns.
 type SnapshotHeartbeat struct {
 	PID         int

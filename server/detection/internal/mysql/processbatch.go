@@ -119,12 +119,50 @@ type ProcessRowUpdate struct {
 // ProcessBatchPlan is the set of writes the graph builder's in-memory fold produced for one batch: new rows to insert (in creation
 // order) and preloaded rows to update. The plan is pure data so the builder stays free of SQL and the fold is unit-testable.
 type ProcessBatchPlan struct {
-	NewRows []NewProcessRow
-	Updates []ProcessRowUpdate
+	NewRows          []NewProcessRow
+	Updates          []ProcessRowUpdate
+	SigningBackfills []SigningBackfill
+}
+
+// SigningBackfill completes the code signature of a preloaded row an earlier extension's snapshot left unsigned. It is written as its
+// own conditional UPDATE rather than folded into ProcessRowUpdate, whose full-row write would carry this batch's stale view of
+// last_seen_ns and the exit columns over a heartbeat or a TTL exit another writer committed after the preload.
+type SigningBackfill struct {
+	ID          int64
+	CodeSigning api.NullRawJSON
 }
 
 // Empty reports whether the plan would issue no writes.
-func (p ProcessBatchPlan) Empty() bool { return len(p.NewRows) == 0 && len(p.Updates) == 0 }
+func (p ProcessBatchPlan) Empty() bool {
+	return len(p.NewRows) == 0 && len(p.Updates) == 0 && len(p.SigningBackfills) == 0
+}
+
+// backfillSigningGuard limits a signature backfill to a row that is still open and still has none, so a concurrent exit or an
+// earlier backfill wins.
+const backfillSigningGuard = `code_signing IS NULL AND exit_time_ns IS NULL`
+
+// backfillSigning writes the backfills in chunks of processUpdateChunk, each one set-based UPDATE keyed by id: an upgraded endpoint's
+// first snapshot can complete hundreds of rows in one batch, which per-row statements would turn into hundreds of round trips.
+func backfillSigning(ctx context.Context, ext sqlx.ExtContext, backfills []SigningBackfill) error {
+	for start := 0; start < len(backfills); start += processUpdateChunk {
+		chunk := backfills[start:min(start+processUpdateChunk, len(backfills))]
+		var sb strings.Builder
+		args := make([]any, 0, len(chunk)*3)
+		sb.WriteString("UPDATE processes SET code_signing = CASE id")
+		for _, b := range chunk {
+			sb.WriteString(" WHEN ? THEN ?")
+			args = append(args, b.ID, b.CodeSigning)
+		}
+		sb.WriteString(" END WHERE id IN (?" + strings.Repeat(", ?", len(chunk)-1) + ") AND " + backfillSigningGuard)
+		for _, b := range chunk {
+			args = append(args, b.ID)
+		}
+		if _, err := ext.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("backfill code_signing for %d processes: %w", len(chunk), err)
+		}
+	}
+	return nil
+}
 
 // FlushProcessBatch persists a batch plan. The fast path runs in one transaction: a single multi-row INSERT for the new rows (when
 // none links to a same-batch predecessor) plus chunked set-based UPDATEs for the modified rows, collapsing what used to be
@@ -162,6 +200,9 @@ func (s *Store) flushProcessBatchFast(ctx context.Context, plan ProcessBatchPlan
 		return err
 	}
 	if err := s.updateRowsBatched(ctx, tx, plan.Updates); err != nil {
+		return err
+	}
+	if err := backfillSigning(ctx, tx, plan.SigningBackfills); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -382,6 +423,11 @@ func (s *Store) flushProcessBatchPerRow(ctx context.Context, plan ProcessBatchPl
 			}
 			return err
 		}
+	}
+	// A backfill writes only a signature already parsed from an event payload, so it is never the poison value this path isolates;
+	// it is applied as the fast path applies it.
+	if err := backfillSigning(ctx, tx, plan.SigningBackfills); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit process-batch per-row tx: %w", err)

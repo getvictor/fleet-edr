@@ -10,11 +10,6 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// a wildly larger list, without changing real-world behavior.
 private let maxEnumeratedPIDs = 16_384
 
-/// proc_pidpath wants room for the resolved path. macOS's PROC_PIDPATHINFO_MAXSIZE
-/// is 4 * MAXPATHLEN; size the buffer the same way so any kernel-side bump is covered
-/// without us editing both ends. Matches the networkextension/ProcessInfo helper.
-private let pathBufferMultiplier = 4
-
 /// Re-probe loop cap when the kinfo_proc buffer needs to grow between the size probe
 /// and the fill call (the process table grew due to forks in that window). Three
 /// attempts is plenty in practice; an unbounded loop would risk an infinite spin on
@@ -54,7 +49,7 @@ enum ProcessSnapshotEnumerator {
     /// Run the baseline pass. `emit` is invoked once per live PID with a fully-formed
     /// ExecPayload (snapshot=true). The function blocks on the caller's thread; main.swift
     /// schedules it onto a background dispatch queue so ESF callback delivery is not held
-    /// up by the per-PID proc_pidpath call.
+    /// up by the per-PID path and signature reads.
     static func run(emit: (ExecPayload) -> Void) {
         let processes = listAllProcesses()
         logger.info("ESF startup snapshot: enumerating \(processes.count, privacy: .public) live processes")
@@ -70,7 +65,7 @@ enum ProcessSnapshotEnumerator {
                 cwd: "",
                 uid: info.uid,
                 gid: info.gid,
-                codeSigning: nil,
+                codeSigning: SnapshotSigning.live(pid: info.pid, startTime: info.startTime, path: path),
                 sha256: nil,
                 snapshot: true
             )
@@ -127,11 +122,7 @@ enum ProcessSnapshotEnumerator {
     }
 
     private static func resolvePath(pid: pid_t) -> String {
-        let size = pathBufferMultiplier * Int(MAXPATHLEN)
-        var buf = [CChar](repeating: 0, count: size)
-        let result = proc_pidpath(pid, &buf, UInt32(size))
-        guard result > 0 else { return "" }
-        return String(cString: buf)
+        SnapshotSigning.processPath(pid: pid) ?? ""
     }
 }
 
@@ -143,11 +134,15 @@ private struct ProcIdentity {
     let ppid: pid_t
     let uid: uid_t
     let gid: gid_t
+    /// startTime is when the process started, which SnapshotSigning checks so a reused pid is not given another process's
+    /// signature.
+    let startTime: timeval
 
     init(_ kp: kinfo_proc) {
         self.pid = kp.kp_proc.p_pid
         self.ppid = kp.kp_eproc.e_ppid
         self.uid = kp.kp_eproc.e_ucred.cr_uid
         self.gid = kp.kp_eproc.e_ucred.cr_ngroups > 0 ? kp.kp_eproc.e_ucred.cr_groups.0 : 0
+        self.startTime = kp.kp_proc.p_un.__p_starttime
     }
 }

@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **Signature exclusions and built-in skips now apply to processes running before the agent started.** A process already running at boot or across an agent upgrade had no signature on record until it exited, so `team_id` and `signing_id` exclusions missed it and Spotlight's indexer could be reported as browser credential theft.
+
 ## [0.7.0] (2026-10-04)
 
 ### Upgrade notes (action required)

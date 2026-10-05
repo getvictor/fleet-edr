@@ -79,7 +79,7 @@ credentialStores.start()
 // LaunchAgents, every long-lived daemon) is invisible to the tree until it
 // exec's again. Walk the process table via sysctl(KERN_PROC_ALL) and emit a
 // synthetic exec event per live PID so the server materialises a baseline
-// tree. Dispatched onto a background queue so the per-PID proc_pidpath cost
+// tree. Dispatched onto a background queue so the per-PID path and signature reads
 // doesn't hold up live ESF callback delivery.
 //
 // No explicit wait-for-peer barrier is needed: XPCServer buffers sends when

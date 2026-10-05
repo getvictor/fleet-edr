@@ -23,6 +23,7 @@ type processStore interface {
 	CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error
 	ReExec(ctx context.Context, priorID int64, exitTimeNs, exitIngestedAtNs int64, newRow api.Process) (newID int64, reLinked bool, err error)
 	UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error
+	BackfillSnapshotSigning(ctx context.Context, hostID string, pid int, rowID int64, codeSigning api.NullRawJSON) error
 }
 
 // procRow is one process row in the in-memory overlay during a batch fold. proc holds the current field values; loaded marks a row
@@ -49,6 +50,8 @@ type batchSession struct {
 	byKey    map[mysql.HostPID][]*procRow
 	seqBase  int64 // max preloaded id; new rows get seq = seqBase + creationIndex + 1
 	nextProv int64 // provisional id allocator, decreasing from -1
+	// signingBackfills are the signature completions for preloaded rows, flushed as their own conditional UPDATEs.
+	signingBackfills []mysql.SigningBackfill
 }
 
 // newBatchSession bulk-loads the candidate rows for keys and builds the in-memory index.
@@ -422,6 +425,23 @@ func (s *batchSession) UpdateLastSeenForSnapshot(_ context.Context, hostID strin
 	return nil
 }
 
+// BackfillSnapshotSigning completes the signature of row rowID, found under its own (host, pid). The overlay takes it at once, so
+// later events in this batch see it; a preloaded row is then written by a dedicated conditional UPDATE rather than marked dirty, and
+// a row created in this batch carries it in its INSERT. The builder decides when a row may take a snapshot's signature.
+func (s *batchSession) BackfillSnapshotSigning(_ context.Context, hostID string, pid int, rowID int64, codeSigning api.NullRawJSON) error {
+	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
+		if r.proc.ID != rowID {
+			continue
+		}
+		r.proc.CodeSigning = codeSigning
+		if r.loaded {
+			s.signingBackfills = append(s.signingBackfills, mysql.SigningBackfill{ID: rowID, CodeSigning: codeSigning})
+		}
+		return nil
+	}
+	return nil
+}
+
 // plan converts the folded overlay into the set-based write plan: every new row (creation order, with same-batch re-exec links
 // carried as PrevNewIndex) and every modified preloaded row (its full final mutable state).
 func (s *batchSession) plan() mysql.ProcessBatchPlan {
@@ -434,6 +454,7 @@ func (s *batchSession) plan() mysql.ProcessBatchPlan {
 			p.Updates = append(p.Updates, rowUpdate(r.proc))
 		}
 	}
+	p.SigningBackfills = s.signingBackfills
 	return p
 }
 
