@@ -70,3 +70,32 @@ func TestProcessBatch_PoisonFallbackPreservesReExecChain(t *testing.T) {
 		"SELECT COUNT(*) FROM processes WHERE pid = 900").Scan(&poison))
 	assert.Equal(t, 0, poison, "the poison fork is dropped")
 }
+
+// TestProcessBatch_PoisonFallbackAppliesSignatureBackfill: a batch whose poison row forces the per-row fallback still completes the
+// signature a later snapshot carries for a row an earlier snapshot left unsigned.
+func TestProcessBatch_PoisonFallbackAppliesSignatureBackfill(t *testing.T) {
+	t.Parallel()
+	b, db := newBuilder(t)
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	require.NoError(t, b.ProcessBatch(ctx, []api.Event{
+		{EventID: "snap-unsigned", HostID: "good", TimestampNs: now, IngestedAtNs: now, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":810,"ppid":1,"path":"/System/mds","args":[],"snapshot":true}`)},
+	}))
+
+	poisonHost := strings.Repeat("h", 300) // exceeds host_id VARCHAR(255): permanent ER_DATA_TOO_LONG, forces the per-row fallback
+	require.NoError(t, b.ProcessBatch(ctx, []api.Event{
+		{EventID: "snap-signed", HostID: "good", TimestampNs: now + 10, IngestedAtNs: now + 10, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":810,"ppid":1,"path":"/System/mds","args":[],"snapshot":true,` +
+				`"code_signing":{"team_id":"","signing_id":"com.apple.mds","flags":0,"is_platform_binary":true}}`)},
+		{EventID: "poison", HostID: poisonHost, TimestampNs: now + 11, IngestedAtNs: now + 11, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":910,"parent_pid":1}`)},
+	}), "the poison row must be isolated, not fail the batch")
+
+	var signingID string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.signing_id')) FROM processes WHERE host_id = 'good' AND pid = 810`).
+		Scan(&signingID))
+	assert.Equal(t, "com.apple.mds", signingID, "the backfill survives the per-row fallback")
+}

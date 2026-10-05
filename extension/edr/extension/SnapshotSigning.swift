@@ -38,8 +38,12 @@ enum SnapshotSigning {
     /// live returns the running process's signature, or nil when it cannot be read or the pid no longer runs what was listed. Two
     /// things can change under the read. The pid can be reused by a new process, which the start time catches; and the listed
     /// process can exec another program, which keeps its start time but not its path. A signature is attributed only when both
-    /// still match, so it describes the program the snapshot reports at `path`.
+    /// still match, so it describes the program the snapshot reports at `path`. Both are checked before the read and again after it,
+    /// so the signature is taken only while the identity held across the whole read.
     static func live(pid: pid_t, startTime: timeval, path: String) -> CodeSigning? {
+        guard stillListed(pid: pid, startTime: startTime, path: path) else {
+            return nil
+        }
         var guest: SecCode?
         let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &guest) == errSecSuccess, let code = guest else {
@@ -54,10 +58,15 @@ enum SnapshotSigning {
         guard SecCodeCopySigningInformation(running, flags, &info) == errSecSuccess, let dict = info as? [String: Any] else {
             return nil
         }
-        guard sameStartTime(startTime, processStartTime(pid: pid)), !path.isEmpty, processPath(pid: pid) == path else {
+        guard stillListed(pid: pid, startTime: startTime, path: path) else {
             return nil
         }
         return codeSigning(from: dict)
+    }
+
+    /// stillListed reports whether the pid still runs the process the snapshot listed: same start time, same program path.
+    private static func stillListed(pid: pid_t, startTime: timeval, path: String) -> Bool {
+        sameStartTime(startTime, processStartTime(pid: pid)) && !path.isEmpty && processPath(pid: pid) == path
     }
 
     /// sameStartTime reports whether the process now holding the pid started when the listed one did.
@@ -68,7 +77,9 @@ enum SnapshotSigning {
         return listed.tv_sec == current.tv_sec && listed.tv_usec == current.tv_usec
     }
 
-    private static func processPath(pid: pid_t) -> String? {
+    /// processPath is the executable path of a running process, or nil when it cannot be read. The snapshot uses it for the path it
+    /// reports as well as for this recheck, so both read it the same way.
+    static func processPath(pid: pid_t) -> String? {
         var buf = [CChar](repeating: 0, count: pidPathBufferSize)
         guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else {
             return nil

@@ -80,3 +80,46 @@ func TestBackfillSnapshotSigning(t *testing.T) {
 		}
 	}
 }
+
+// TestBackfillSnapshotSigning_OneStatementForMany flushes several backfills in one plan, as an upgraded endpoint's first snapshot
+// does: the set-based statement writes only the rows its guard admits.
+func TestBackfillSnapshotSigning_OneStatementForMany(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+	signed := api.NullRawJSON(`{"team_id":"","signing_id":"com.apple.mds","flags":0,"is_platform_binary":true}`)
+	earlier := api.NullRawJSON(`{"team_id":"","signing_id":"com.apple.mds.first","flags":0,"is_platform_binary":true}`)
+	execNs := int64(1_000_000_000)
+	insert := func(pid int, cs api.NullRawJSON) int64 {
+		id, err := s.InsertProcess(ctx, api.Process{HostID: "h-many", PID: pid, Path: "/System/mds", ForkTimeNs: execNs,
+			ExecTimeNs: &execNs, IsSnapshot: true, CodeSigning: cs})
+		require.NoError(t, err)
+		return id
+	}
+	open1, open2, keeps, exited := insert(1, nil), insert(2, nil), insert(3, earlier), insert(4, nil)
+	_, err := s.DB().ExecContext(ctx, `UPDATE processes SET exit_time_ns = ? WHERE id = ?`, execNs+1, exited)
+	require.NoError(t, err)
+
+	var backfills []mysql.SigningBackfill
+	for _, id := range []int64{open1, open2, keeps, exited} {
+		backfills = append(backfills, mysql.SigningBackfill{ID: id, CodeSigning: signed})
+	}
+	require.NoError(t, s.FlushProcessBatch(ctx, mysql.ProcessBatchPlan{SigningBackfills: backfills}))
+
+	sid := func(id int64) string {
+		var got api.NullRawJSON
+		require.NoError(t, s.DB().GetContext(ctx, &got, `SELECT code_signing FROM processes WHERE id = ?`, id))
+		if len(got) == 0 {
+			return ""
+		}
+		var cs struct {
+			SigningID string `json:"signing_id"`
+		}
+		require.NoError(t, json.Unmarshal(got, &cs))
+		return cs.SigningID
+	}
+	assert.Equal(t, "com.apple.mds", sid(open1))
+	assert.Equal(t, "com.apple.mds", sid(open2))
+	assert.Equal(t, "com.apple.mds.first", sid(keeps), "an existing signature is kept")
+	assert.Empty(t, sid(exited), "a row that exited meanwhile is not written")
+}

@@ -137,14 +137,28 @@ func (p ProcessBatchPlan) Empty() bool {
 	return len(p.NewRows) == 0 && len(p.Updates) == 0 && len(p.SigningBackfills) == 0
 }
 
-// backfillSigningSQL writes a snapshot's signature only onto a row that is still open and still has none, so a concurrent exit or an
+// backfillSigningGuard limits a signature backfill to a row that is still open and still has none, so a concurrent exit or an
 // earlier backfill wins.
-const backfillSigningSQL = `UPDATE processes SET code_signing = ? WHERE id = ? AND code_signing IS NULL AND exit_time_ns IS NULL`
+const backfillSigningGuard = `code_signing IS NULL AND exit_time_ns IS NULL`
 
-func backfillSigning(ctx context.Context, tx *sqlx.Tx, backfills []SigningBackfill) error {
-	for _, b := range backfills {
-		if _, err := tx.ExecContext(ctx, backfillSigningSQL, b.CodeSigning, b.ID); err != nil {
-			return fmt.Errorf("backfill code_signing for process %d: %w", b.ID, err)
+// backfillSigning writes the backfills in chunks of processUpdateChunk, each one set-based UPDATE keyed by id: an upgraded endpoint's
+// first snapshot can complete hundreds of rows in one batch, which per-row statements would turn into hundreds of round trips.
+func backfillSigning(ctx context.Context, ext sqlx.ExtContext, backfills []SigningBackfill) error {
+	for start := 0; start < len(backfills); start += processUpdateChunk {
+		chunk := backfills[start:min(start+processUpdateChunk, len(backfills))]
+		var sb strings.Builder
+		args := make([]any, 0, len(chunk)*3)
+		sb.WriteString("UPDATE processes SET code_signing = CASE id")
+		for _, b := range chunk {
+			sb.WriteString(" WHEN ? THEN ?")
+			args = append(args, b.ID, b.CodeSigning)
+		}
+		sb.WriteString(" END WHERE id IN (?" + strings.Repeat(", ?", len(chunk)-1) + ") AND " + backfillSigningGuard)
+		for _, b := range chunk {
+			args = append(args, b.ID)
+		}
+		if _, err := ext.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("backfill code_signing for %d processes: %w", len(chunk), err)
 		}
 	}
 	return nil
@@ -410,14 +424,10 @@ func (s *Store) flushProcessBatchPerRow(ctx context.Context, plan ProcessBatchPl
 			return err
 		}
 	}
-	for _, b := range plan.SigningBackfills {
-		if err := backfillSigning(ctx, tx, []SigningBackfill{b}); err != nil {
-			if IsPermanentDataError(err) {
-				s.logger.WarnContext(ctx, "process signature backfill dropped: permanent data error at flush", "id", b.ID, "err", err)
-				continue
-			}
-			return err
-		}
+	// A backfill writes only a signature already parsed from an event payload, so it is never the poison value this path isolates;
+	// it is applied as the fast path applies it.
+	if err := backfillSigning(ctx, tx, plan.SigningBackfills); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit process-batch per-row tx: %w", err)
