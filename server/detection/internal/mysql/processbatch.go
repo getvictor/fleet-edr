@@ -119,12 +119,36 @@ type ProcessRowUpdate struct {
 // ProcessBatchPlan is the set of writes the graph builder's in-memory fold produced for one batch: new rows to insert (in creation
 // order) and preloaded rows to update. The plan is pure data so the builder stays free of SQL and the fold is unit-testable.
 type ProcessBatchPlan struct {
-	NewRows []NewProcessRow
-	Updates []ProcessRowUpdate
+	NewRows          []NewProcessRow
+	Updates          []ProcessRowUpdate
+	SigningBackfills []SigningBackfill
+}
+
+// SigningBackfill completes the code signature of a preloaded row an earlier extension's snapshot left unsigned. It is written as its
+// own conditional UPDATE rather than folded into ProcessRowUpdate, whose full-row write would carry this batch's stale view of
+// last_seen_ns and the exit columns over a heartbeat or a TTL exit another writer committed after the preload.
+type SigningBackfill struct {
+	ID          int64
+	CodeSigning api.NullRawJSON
 }
 
 // Empty reports whether the plan would issue no writes.
-func (p ProcessBatchPlan) Empty() bool { return len(p.NewRows) == 0 && len(p.Updates) == 0 }
+func (p ProcessBatchPlan) Empty() bool {
+	return len(p.NewRows) == 0 && len(p.Updates) == 0 && len(p.SigningBackfills) == 0
+}
+
+// backfillSigningSQL writes a snapshot's signature only onto a row that is still open and still has none, so a concurrent exit or an
+// earlier backfill wins.
+const backfillSigningSQL = `UPDATE processes SET code_signing = ? WHERE id = ? AND code_signing IS NULL AND exit_time_ns IS NULL`
+
+func backfillSigning(ctx context.Context, tx *sqlx.Tx, backfills []SigningBackfill) error {
+	for _, b := range backfills {
+		if _, err := tx.ExecContext(ctx, backfillSigningSQL, b.CodeSigning, b.ID); err != nil {
+			return fmt.Errorf("backfill code_signing for process %d: %w", b.ID, err)
+		}
+	}
+	return nil
+}
 
 // FlushProcessBatch persists a batch plan. The fast path runs in one transaction: a single multi-row INSERT for the new rows (when
 // none links to a same-batch predecessor) plus chunked set-based UPDATEs for the modified rows, collapsing what used to be
@@ -162,6 +186,9 @@ func (s *Store) flushProcessBatchFast(ctx context.Context, plan ProcessBatchPlan
 		return err
 	}
 	if err := s.updateRowsBatched(ctx, tx, plan.Updates); err != nil {
+		return err
+	}
+	if err := backfillSigning(ctx, tx, plan.SigningBackfills); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -379,6 +406,15 @@ func (s *Store) flushProcessBatchPerRow(ctx context.Context, plan ProcessBatchPl
 			if IsPermanentDataError(err) {
 				s.logger.WarnContext(ctx, "process row update dropped: permanent data error at flush", "id", u.ID, "err", err)
 				continue // drop the poison update; the rest still applies
+			}
+			return err
+		}
+	}
+	for _, b := range plan.SigningBackfills {
+		if err := backfillSigning(ctx, tx, []SigningBackfill{b}); err != nil {
+			if IsPermanentDataError(err) {
+				s.logger.WarnContext(ctx, "process signature backfill dropped: permanent data error at flush", "id", b.ID, "err", err)
+				continue
 			}
 			return err
 		}

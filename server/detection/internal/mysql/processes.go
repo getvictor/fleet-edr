@@ -73,10 +73,10 @@ func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pi
 	return err
 }
 
-// BackfillSnapshotSigning sets code_signing on row rowID: a row an earlier extension's snapshot left unsigned, completed by a later
-// snapshot of the same process. The graph builder decides which rows qualify.
-func (s *Store) BackfillSnapshotSigning(ctx context.Context, rowID int64, codeSigning api.NullRawJSON) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE processes SET code_signing = ? WHERE id = ?`, codeSigning, rowID)
+// BackfillSnapshotSigning completes the signature of row rowID, which an earlier extension's snapshot left unsigned, from a later
+// snapshot of the same process. The graph builder decides which rows qualify; the statement only writes an open, unsigned row.
+func (s *Store) BackfillSnapshotSigning(ctx context.Context, _ string, _ int, rowID int64, codeSigning api.NullRawJSON) error {
+	_, err := s.db.ExecContext(ctx, backfillSigningSQL, codeSigning, rowID)
 	return err
 }
 

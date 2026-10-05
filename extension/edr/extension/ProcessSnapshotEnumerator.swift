@@ -70,7 +70,7 @@ enum ProcessSnapshotEnumerator {
                 cwd: "",
                 uid: info.uid,
                 gid: info.gid,
-                codeSigning: SnapshotSigning.live(pid: info.pid, startTime: info.startTime),
+                codeSigning: SnapshotSigning.live(pid: info.pid, startTime: info.startTime, path: path),
                 sha256: nil,
                 snapshot: true
             )

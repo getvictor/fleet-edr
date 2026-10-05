@@ -329,7 +329,7 @@ func (b *Builder) handleExec(ctx context.Context, w processStore, evt api.Event)
 	// written. A live exec always carries a signature, so nothing a live exec recorded is replaced.
 	if p.Snapshot && current != nil && current.ExecTimeNs != nil {
 		if len(current.CodeSigning) == 0 && len(p.CodeSigning) > 0 && current.Path == p.Path {
-			return w.BackfillSnapshotSigning(ctx, current.ID, p.CodeSigning)
+			return w.BackfillSnapshotSigning(ctx, evt.HostID, p.PID, current.ID, p.CodeSigning)
 		}
 		return nil
 	}

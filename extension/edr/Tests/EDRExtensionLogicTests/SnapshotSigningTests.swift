@@ -2,6 +2,7 @@
 // exec event's shape, the guard against a reused pid, and a real read of a running Apple binary.
 
 @testable import EDRExtensionLogic
+import Darwin
 import Foundation
 import Security
 import XCTest
@@ -54,11 +55,14 @@ final class SnapshotSigningTests: XCTestCase {
         XCTAssertEqual(proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size), size)
         let started = timeval(tv_sec: Int(info.pbi_start_tvsec), tv_usec: Int32(info.pbi_start_tvusec))
 
-        let signing = try XCTUnwrap(SnapshotSigning.live(pid: pid, startTime: started))
+        let signing = try XCTUnwrap(SnapshotSigning.live(pid: pid, startTime: started, path: "/bin/sleep"))
         XCTAssertEqual(signing.signingID, "com.apple.sleep")
         XCTAssertTrue(signing.isPlatformBinary)
         XCTAssertEqual(signing.teamID, "")
 
-        XCTAssertNil(SnapshotSigning.live(pid: pid, startTime: timeval(tv_sec: started.tv_sec - 1, tv_usec: started.tv_usec)))
+        let earlier = timeval(tv_sec: started.tv_sec - 1, tv_usec: started.tv_usec)
+        XCTAssertNil(SnapshotSigning.live(pid: pid, startTime: earlier, path: "/bin/sleep"), "a different process now holds the pid")
+        XCTAssertNil(SnapshotSigning.live(pid: pid, startTime: started, path: "/usr/bin/true"),
+                     "the process now runs another program than the one listed")
     }
 }

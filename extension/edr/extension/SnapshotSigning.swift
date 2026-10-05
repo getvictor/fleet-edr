@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -14,6 +15,10 @@ import Security
 enum SnapshotSigning {
     /// platformBinaryFlag is CS_PLATFORM_BINARY from the kernel's code-signing flags, the bit ES reports as `is_platform_binary`.
     static let platformBinaryFlag: UInt32 = 0x0400_0000
+    /// pidPathBufferPaths is how many MAXPATHLEN buffers PROC_PIDPATHINFO_MAXSIZE, the size proc_pidpath fills, spans. The C macro
+    /// does not import into Swift.
+    private static let pidPathBufferPaths = 4
+    private static let pidPathBufferSize = pidPathBufferPaths * Int(MAXPATHLEN)
 
     /// codeSigning maps the dictionary SecCodeCopySigningInformation returns to the shape an exec event carries, or nil when the
     /// code carries no identifier, which is an unsigned process: it has no signature to report, the same as a live exec of one.
@@ -30,10 +35,11 @@ enum SnapshotSigning {
         )
     }
 
-    /// live returns the running process's signature, or nil when it cannot be read or the pid no longer names the process that
-    /// was listed. A pid can be reused between listing the process table and reading the signature, so the process's start time
-    /// is compared before and after the read: a signature is attributed only to the process it was read from.
-    static func live(pid: pid_t, startTime: timeval) -> CodeSigning? {
+    /// live returns the running process's signature, or nil when it cannot be read or the pid no longer runs what was listed. Two
+    /// things can change under the read. The pid can be reused by a new process, which the start time catches; and the listed
+    /// process can exec another program, which keeps its start time but not its path. A signature is attributed only when both
+    /// still match, so it describes the program the snapshot reports at `path`.
+    static func live(pid: pid_t, startTime: timeval, path: String) -> CodeSigning? {
         var guest: SecCode?
         let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &guest) == errSecSuccess, let code = guest else {
@@ -48,7 +54,7 @@ enum SnapshotSigning {
         guard SecCodeCopySigningInformation(running, flags, &info) == errSecSuccess, let dict = info as? [String: Any] else {
             return nil
         }
-        guard sameStartTime(startTime, processStartTime(pid: pid)) else {
+        guard sameStartTime(startTime, processStartTime(pid: pid)), !path.isEmpty, processPath(pid: pid) == path else {
             return nil
         }
         return codeSigning(from: dict)
@@ -60,6 +66,14 @@ enum SnapshotSigning {
             return false
         }
         return listed.tv_sec == current.tv_sec && listed.tv_usec == current.tv_usec
+    }
+
+    private static func processPath(pid: pid_t) -> String? {
+        var buf = [CChar](repeating: 0, count: pidPathBufferSize)
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else {
+            return nil
+        }
+        return String(cString: buf)
     }
 
     private static func processStartTime(pid: pid_t) -> timeval? {

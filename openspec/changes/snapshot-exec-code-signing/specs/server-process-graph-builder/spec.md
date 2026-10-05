@@ -4,7 +4,7 @@
 
 When a snapshot `exec` carrying a code signature arrives for a process whose open row has no signature and the same executable path, the system SHALL record that signature on the existing row and SHALL change nothing else about it. Rows an earlier extension's snapshot created carry no signature, and a snapshot `exec` for a process that already has a row is otherwise dropped, so without this the process would stay unsigned until it exits, even after an extension that reads signatures has started.
 
-The system SHALL NOT replace a signature a row already has, and SHALL NOT apply a snapshot's signature to a row whose path differs, since a different path is a different program.
+The system SHALL NOT replace a signature a row already has, and SHALL NOT apply a snapshot's signature to a row whose path differs, since a different path is a different program. The signature SHALL be written on its own, so a heartbeat or an exit another writer recorded for the row in the meantime is kept, and SHALL NOT be written to a row that exited in the meantime.
 
 #### Scenario: An unsigned snapshot row gains its signature
 
@@ -23,3 +23,9 @@ The system SHALL NOT replace a signature a row already has, and SHALL NOT apply 
 - **GIVEN** an open process row with no signature
 - **WHEN** a later snapshot `exec` with a signature arrives for the same pid but a different path
 - **THEN** the row stays without a signature
+
+#### Scenario: A row that exits meanwhile is not written
+
+- **GIVEN** an open process row with no signature that a batch has read
+- **WHEN** another writer records the row's exit before the batch writes the later snapshot's signature
+- **THEN** the row keeps its exit and stays without a signature
