@@ -70,7 +70,7 @@ enum ProcessSnapshotEnumerator {
                 cwd: "",
                 uid: info.uid,
                 gid: info.gid,
-                codeSigning: nil,
+                codeSigning: SnapshotSigning.live(pid: info.pid, startTime: info.startTime),
                 sha256: nil,
                 snapshot: true
             )
@@ -143,11 +143,15 @@ private struct ProcIdentity {
     let ppid: pid_t
     let uid: uid_t
     let gid: gid_t
+    /// startTime is when the process started, which SnapshotSigning checks so a reused pid is not given another process's
+    /// signature.
+    let startTime: timeval
 
     init(_ kp: kinfo_proc) {
         self.pid = kp.kp_proc.p_pid
         self.ppid = kp.kp_eproc.e_ppid
         self.uid = kp.kp_eproc.e_ucred.cr_uid
         self.gid = kp.kp_eproc.e_ucred.cr_ngroups > 0 ? kp.kp_eproc.e_ucred.cr_groups.0 : 0
+        self.startTime = kp.kp_proc.p_un.__p_starttime
     }
 }

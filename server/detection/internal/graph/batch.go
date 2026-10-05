@@ -23,6 +23,7 @@ type processStore interface {
 	CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error
 	ReExec(ctx context.Context, priorID int64, exitTimeNs, exitIngestedAtNs int64, newRow api.Process) (newID int64, reLinked bool, err error)
 	UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error
+	BackfillSnapshotSigning(ctx context.Context, rowID int64, codeSigning api.NullRawJSON) error
 }
 
 // procRow is one process row in the in-memory overlay during a batch fold. proc holds the current field values; loaded marks a row
@@ -419,6 +420,20 @@ func (s *batchSession) UpdateLastSeenForSnapshot(_ context.Context, hostID strin
 	ls := lastSeenNs
 	best.proc.LastSeenNs = &ls
 	markDirty(best)
+	return nil
+}
+
+// BackfillSnapshotSigning sets code_signing on row rowID. The builder decides when a row may take a snapshot's signature.
+func (s *batchSession) BackfillSnapshotSigning(_ context.Context, rowID int64, codeSigning api.NullRawJSON) error {
+	for _, rows := range s.byKey {
+		for _, r := range rows {
+			if r.proc.ID == rowID {
+				r.proc.CodeSigning = codeSigning
+				markDirty(r)
+				return nil
+			}
+		}
+	}
 	return nil
 }
 

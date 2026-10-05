@@ -2440,6 +2440,101 @@ func TestGraph_PendingExitConsumedBySnapshotExec(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "snapshot exec must consume pending exit and mark the row exited at insert time")
 }
 
+// spec:server-process-graph-builder/a-later-snapshot-completes-a-missing-signature/an-unsigned-snapshot-row-gains-its-signature
+// spec:server-process-graph-builder/a-later-snapshot-completes-a-missing-signature/a-row-s-existing-signature-is-kept
+// spec:server-process-graph-builder/a-later-snapshot-completes-a-missing-signature/a-snapshot-of-a-different-program-is-not-applied
+func TestGraph_SnapshotBackfillsMissingSignature(t *testing.T) {
+	t.Parallel()
+	// A process the extension found already running carried no signature until the snapshot read one, so an upgraded extension's
+	// snapshot finds rows an earlier one left unsigned. It completes the signature on that row, and on nothing else.
+	const signed = `"code_signing":{"team_id":"","signing_id":"com.apple.mds","flags":637606673,"is_platform_binary":true}`
+	cases := []struct {
+		name      string
+		first     string // payload of the exec that creates the row
+		later     string // payload of the later snapshot exec
+		wantTeam  string // team_id expected on the row afterwards
+		wantID    string // signing_id expected on the row afterwards
+		wantNoSig bool   // the row has no signature afterwards
+	}{
+		{
+			name:   "unsigned snapshot row gains the later snapshot's signature",
+			first:  `{"pid":4001,"ppid":1,"path":"/System/mds","args":[],"snapshot":true}`,
+			later:  `{"pid":4001,"ppid":1,"path":"/System/mds","args":[],"snapshot":true,` + signed + `}`,
+			wantID: "com.apple.mds",
+		},
+		{
+			name: "a live exec's signature is not replaced",
+			first: `{"pid":4001,"ppid":1,"path":"/System/mds","args":["mds"],"code_signing":{"team_id":"ABC",` +
+				`"signing_id":"com.example.live","flags":0,"is_platform_binary":false}}`,
+			later:    `{"pid":4001,"ppid":1,"path":"/System/mds","args":[],"snapshot":true,` + signed + `}`,
+			wantTeam: "ABC",
+			wantID:   "com.example.live",
+		},
+		{
+			name: "a snapshot row that already has a signature keeps it",
+			first: `{"pid":4001,"ppid":1,"path":"/System/mds","args":[],"snapshot":true,"code_signing":{"team_id":"",` +
+				`"signing_id":"com.apple.mds.first","flags":637606673,"is_platform_binary":true}}`,
+			later:  `{"pid":4001,"ppid":1,"path":"/System/mds","args":[],"snapshot":true,` + signed + `}`,
+			wantID: "com.apple.mds.first",
+		},
+		{
+			name:      "a snapshot of a different program is not taken for the same process",
+			first:     `{"pid":4001,"ppid":1,"path":"/System/mds","args":[],"snapshot":true}`,
+			later:     `{"pid":4001,"ppid":1,"path":"/tmp/other","args":[],"snapshot":true,` + signed + `}`,
+			wantNoSig: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+			ctx := t.Context()
+			host := "h-snap-sign"
+			now := time.Now().UnixNano()
+			insertEventsViaIngest(ctx, t, d, host, []api.Event{
+				{EventID: "exec-first", HostID: host, TimestampNs: now, EventType: "exec", Payload: json.RawMessage(tc.first)},
+			})
+			var firstID int64
+			require.Eventually(t, func() bool {
+				p, err := d.Service().GetProcessDetail(ctx, host, 4001, now+1, nil)
+				if err != nil || p == nil {
+					return false
+				}
+				firstID = p.Process.ID
+				return true
+			}, 5*time.Second, 50*time.Millisecond)
+
+			// The marker fork rides in the same batch as the later snapshot, so its row appearing means the snapshot was applied too,
+			// including in the cases where the snapshot changes nothing.
+			insertEventsViaIngest(ctx, t, d, host, []api.Event{
+				{EventID: "exec-later", HostID: host, TimestampNs: now + 10, EventType: "exec", Payload: json.RawMessage(tc.later)},
+				{EventID: "fork-marker", HostID: host, TimestampNs: now + 11, EventType: "fork",
+					Payload: json.RawMessage(`{"child_pid":4999,"parent_pid":1}`)},
+			})
+			require.Eventually(t, func() bool {
+				marker, err := d.Service().GetProcessDetail(ctx, host, 4999, now+12, nil)
+				return err == nil && marker != nil
+			}, 5*time.Second, 50*time.Millisecond)
+
+			p, err := d.Service().GetProcessDetail(ctx, host, 4001, now+12, nil)
+			require.NoError(t, err)
+			require.NotNil(t, p)
+			assert.Equal(t, firstID, p.Process.ID, "the same row, not a new one")
+			if tc.wantNoSig {
+				assert.Empty(t, p.Process.CodeSigning)
+				return
+			}
+			var cs struct {
+				TeamID    string `json:"team_id"`
+				SigningID string `json:"signing_id"`
+			}
+			require.NoError(t, json.Unmarshal(p.Process.CodeSigning, &cs))
+			assert.Equal(t, tc.wantTeam, cs.TeamID)
+			assert.Equal(t, tc.wantID, cs.SigningID)
+		})
+	}
+}
+
 func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 	t.Parallel()
 	// Issue #11 review (Copilot): the extension's startup snapshot pass enumerates

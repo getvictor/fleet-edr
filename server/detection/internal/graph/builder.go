@@ -323,7 +323,14 @@ func (b *Builder) handleExec(ctx context.Context, w processStore, evt api.Event)
 	// below and replace the live row (real args, code_signing, sha256) with a sparse snapshot row. The race window is small but real.
 	// See issue #11 review: extension's snapshot pass fires ~ms after es_subscribe, and any process the live stream observed in
 	// that window is in `processes` before the snapshot batch ingests. Drop the snapshot exec; the live data is the authoritative one.
+	//
+	// The one exception is a row an earlier extension's snapshot left without a signature, which a later snapshot of the same process
+	// completes: the process is the same one when the row is still open and its path matches, and only a missing signature is
+	// written. A live exec always carries a signature, so nothing a live exec recorded is replaced.
 	if p.Snapshot && current != nil && current.ExecTimeNs != nil {
+		if len(current.CodeSigning) == 0 && len(p.CodeSigning) > 0 && current.Path == p.Path {
+			return w.BackfillSnapshotSigning(ctx, current.ID, p.CodeSigning)
+		}
 		return nil
 	}
 

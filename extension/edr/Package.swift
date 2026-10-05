@@ -114,6 +114,8 @@ let package = Package(
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
+                // SnapshotSigning.swift reads a running process's signature for the startup snapshot. Security and Darwin only.
+                "extension/SnapshotSigning.swift",
                 // WatchedPaths.swift is the file-tamper client's watched set (#998): decoding a pushed set, combining it with the
                 // built-in sudoers paths, and the mute/unmute difference between two sets. Pure Foundation, so it is unit-testable;
                 // FileTamperSubscriber applies the result.
