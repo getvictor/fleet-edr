@@ -4,11 +4,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
-### Fixed
-
-- **Signature exclusions and built-in skips now apply to processes running before the agent started.** A process already running at boot or across an agent upgrade had no signature on record until it exited, so `team_id` and `signing_id` exclusions missed it and Spotlight's indexer could be reported as browser credential theft.
-
-## [0.7.0] (2026-10-04)
+## [0.7.0] (2026-10-05)
 
 ### Upgrade notes (action required)
 
@@ -37,6 +33,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
+- **Signature exclusions and built-in skips now apply to processes running before the agent started.** A process already running at boot or across an agent upgrade had no signature on record until it exited, so `team_id` and `signing_id` exclusions missed it and Spotlight's indexer could be reported as browser credential theft.
 - **An osascript download-and-run chain is no longer missed when its last step is recorded late.** The rule now waits for that step's record, as the other rules do, rather than giving up on the chain.
 - **The process graph says when its window predates retention.** A window reaching back past process retention now shows a notice, rather than an alert's process alone with nothing around it.
 - **Sigma rules no longer drop an exec whose own record arrives late.** A rule that checks the parent program now waits for the record it is found from, instead of reading the parent as missing. Detection tuning now also counts the events Sigma rules give up on.
