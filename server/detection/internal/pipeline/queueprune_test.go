@@ -61,11 +61,14 @@ func TestQueuePruneRunner_Run(t *testing.T) {
 
 	t.Run("propagates a prune error", func(t *testing.T) {
 		t.Parallel()
-		log := &fakeEventLog{pruneN: 3, pruneErr: errors.New("db down")}
-		r := NewQueuePrune(log, QueuePruneOptions{})
+		dbDown := errors.New("db down")
+		log := &fakeEventLog{pruneN: 3, pruneErr: dbDown}
+		rec := &capturingRecorder{}
+		r := NewQueuePrune(log, QueuePruneOptions{Metrics: rec})
 		n, err := r.Run(context.Background())
-		require.Error(t, err)
+		require.ErrorIs(t, err, dbDown)
 		assert.Equal(t, int64(3), n, "rows removed before the failure are still reported")
+		assert.Equal(t, int64(3), rec.queuePruned, "rows removed before the failure are still recorded")
 	})
 }
 

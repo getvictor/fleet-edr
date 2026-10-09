@@ -46,48 +46,23 @@ Archive a completed change in the experimental workflow.
 
    **If no tasks file exists:** Proceed without task-related warning.
 
-4. **Assess delta spec sync state**
+4. **Archive with the OpenSpec CLI, never by hand**
 
-   Check for delta specs at `openspec/changes/<name>/specs/`. If none exist, proceed without sync prompt.
+   This repo batches archives at release (CLAUDE.md, `docs/release-checklist.md`): a merged change stays in
+   `openspec/changes/<name>/` until the release archive step. Outside that step, stop and say so rather than archiving one change.
 
-   **If delta specs exist:**
-   - Compare each delta spec with its corresponding main spec at `openspec/specs/<capability>/spec.md`
-   - Determine what changes would be applied (adds, modifications, removals, renames)
-   - Show a combined summary before prompting
+   For the release batch run `task release:archive -- --dry-run`, then `task release:archive`, which applies
+   `openspec archive <name> -y` in the order `spectrace archive-order` computes. To archive one named change on the user's explicit
+   request, run `openspec archive "<name>" -y`. Pass `--skip-specs` only when the canonical spec was already updated by hand. Never
+   edit `openspec/specs/**` with ordinary file edits, and never move a change folder into `openspec/changes/archive/`.
 
-   **Prompt options:**
-   - If changes needed: "Sync now (recommended)", "Archive without syncing"
-   - If already synced: "Archive now", "Sync anyway", "Cancel"
-
-   If user chooses sync, apply the analyzed adds/modifications/removals/renames directly to each main spec at
-   `openspec/specs/<capability>/spec.md` using ordinary file edits, then proceed to archive. If the diff is too large
-   or ambiguous to apply automatically, surface the combined summary, pause, and ask the user how to proceed. Proceed
-   to archive regardless of sync choice.
-
-5. **Perform the archive**
-
-   Create the archive directory if it doesn't exist:
-   ```bash
-   mkdir -p openspec/changes/archive
-   ```
-
-   Generate target name using current date: `YYYY-MM-DD-<change-name>`
-
-   **Check if target already exists:**
-   - If yes: Fail with error, suggest renaming existing archive or using different date
-   - If no: Move the change directory to archive
-
-   ```bash
-   mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
-   ```
-
-6. **Display summary**
+5. **Display summary**
 
    Show archive completion summary including:
    - Change name
    - Schema that was used
    - Archive location
-   - Spec sync status (synced / sync skipped / no delta specs)
+   - Whether delta specs were merged
    - Note about any warnings (incomplete artifacts/tasks)
 
 **Output On Success**
@@ -98,7 +73,7 @@ Archive a completed change in the experimental workflow.
 **Change:** <change-name>
 **Schema:** <schema-name>
 **Archived to:** openspec/changes/archive/YYYY-MM-DD-<name>/
-**Specs:** ✓ Synced to main specs
+**Specs:** merged by openspec archive
 
 All artifacts complete. All tasks complete.
 ```
@@ -124,12 +99,11 @@ All artifacts complete. All tasks complete.
 **Change:** <change-name>
 **Schema:** <schema-name>
 **Archived to:** openspec/changes/archive/YYYY-MM-DD-<name>/
-**Specs:** Sync skipped (user chose to skip)
+**Specs:** merged by openspec archive
 
 **Warnings:**
 - Archived with 2 incomplete artifacts
 - Archived with 3 incomplete tasks
-- Delta spec sync was skipped (user chose to skip)
 
 Review the archive if this was not intentional.
 ```
@@ -154,8 +128,5 @@ Target archive directory already exists.
 - Always prompt for change selection if not provided
 - Use artifact graph (openspec status --json) for completion checking
 - Don't block archive on warnings - just inform and confirm
-- Preserve .openspec.yaml when moving to archive (it moves with the directory)
+- Archive only through `openspec archive` or `task release:archive`; never hand-edit `openspec/specs/**` or move folders into `archive/`
 - Show clear summary of what happened
-- If sync is requested, apply the analyzed adds/modifications/removals/renames directly to the matching files at
-  `openspec/specs/<capability>/spec.md`; if the diff is too large or ambiguous, surface the summary and pause for the user
-- If delta specs exist, always run the sync assessment and show the combined summary before prompting

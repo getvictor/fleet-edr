@@ -57,7 +57,7 @@ reviews:
     - "!.task/**"
 
   # Path-scoped review focus. Globs use `**/...` style so they match
-  # both the current macOS-only layout AND future platform splits
+  # both the current macOS + Windows layout AND future platform splits
   # (e.g. agent/internal/platform/{macos,windows,linux}/, or sibling
   # extension/edr-windows/). Update the audit task whenever a new
   # platform tree lands that needs its own threat-model framing.
@@ -106,9 +106,10 @@ reviews:
 
     - path: "{agent,extension}/**"
       instructions: |
-        Host-side capture surface. Today macOS only (ESF + NE in
-        extension/edr/, Go agent in agent/). Windows + Linux are
-        planned. Cross-platform invariants worth flagging
+        Host-side capture surface. macOS ships today (ESF + NE in
+        extension/edr/, Go agent in agent/), and the Go agent has a
+        Windows ETW sensor in agent/wintel/. Linux is planned.
+        Cross-platform invariants worth flagging
         regardless of OS:
           - Peer-validation on every IPC channel against the
             expected sysext/service identity + signing requirement
@@ -220,6 +221,7 @@ reviews:
     eslint:        { enabled: false }   # .github/workflows/ts-lint.yml
     swiftlint:     { enabled: false }   # .github/workflows/swift-lint.yml
     actionlint:    { enabled: false }   # .github/workflows/actionlint.yml
+    zizmor:        { enabled: false }   # .github/workflows/zizmor.yml
     osvScanner:    { enabled: false }   # .github/workflows/osv-scanner.yml
 
     # Security/secrets: explicitly named for visibility. These are

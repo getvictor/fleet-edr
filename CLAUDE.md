@@ -2,7 +2,7 @@
 
 Exactly ONE coverage condition can block a merge: SonarCloud's "Coverage on
 New Code >= 80%" (configured in the SonarCloud UI). That is because
-`SonarCloud scan` is one of the 15 checks the `main-protection` ruleset
+`SonarCloud scan` is one of the 16 checks the `main-protection` ruleset
 lists as required, and GitHub blocks a merge only on checks in that list
 (`.github/rulesets/main.json`, mirrored live; there is no catch-all
 "all checks must pass" option and the ruleset has no bypass actors).
@@ -119,8 +119,9 @@ Minimum requirements per PR:
 
 ADR-0004 carved `server/` into bounded contexts: the original five
 (`identity`, `endpoint`, `rules`, `response`, `detection`), since amended to add
-`observability` (the sixth) and `visibility` (the seventh, carved from
-`detection` per ADR-0015). Cross-context calls go through the imported `api/`
+`observability` (the sixth), `visibility` (the seventh, carved from
+`detection` per ADR-0015), and `rulecontent` (the eighth, carved from `rules`
+per ADR-0021). Cross-context calls go through the imported `api/`
 package only. Internal packages are Go-compiler enforced via the `internal/`
 rule. arch-go (`arch-go.yml`) layers an extra check.
 
@@ -136,8 +137,8 @@ rule. arch-go (`arch-go.yml`) layers an extra check.
 
 ## Coverage gates
 
-CI uploads `coverage-server.out` from
-`go test -coverpkg=./server/...,./internal/... -coverprofile=... ./server/... ./internal/...`.
+CI uploads `coverage-server.out` from `task test:go:server:coverage`, which runs
+`go test -race -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out ./server/... ./internal/... ./test/integration/... ./test/scale/... ./tools/...`.
 The wide `-coverpkg` is mandatory: integration tests at
 `server/<context>/internal/tests/` exercise other packages' symbols, and
 without `-coverpkg` Sonar would report 0% on the bootstrap / service files

@@ -21,7 +21,7 @@ This task is for the design wrong-turns those miss: wrong-layer logic, premature
 
 ## Scope
 
-`server/` (all seven contexts), `agent/`, `internal/`, `api/` packages. The Swift extension (`extension/`, `shared/`) is in scope for the layering and god-object checks but not the Go-specific heuristics.
+`server/` (every context), `agent/`, `internal/`, `api/` packages. The Swift extension (`extension/`, `shared/`) is in scope for the layering and god-object checks but not the Go-specific heuristics.
 
 ## Anti-pattern catalog
 
@@ -38,6 +38,7 @@ The checklist this task scans for. Each entry names the smell, the EDR-specific 
 | **Feature envy / inappropriate intimacy** | A function in package A that takes a B type and only reads its fields; logic that "wants" to live in B | Judgment, flag the clear cases |
 | **Synchronous coupling where async is the design** | Inline enforcement / command paths blocking on a dependency whose failure semantics ADR-0014 / ADR-0016 define as fire-and-forget | Real finding when it contradicts the ADR |
 | **Reinvented stdlib / framework** | Hand-rolled retry, set, ring buffer, or JSON walk that the stdlib or an existing `internal/` helper already provides | Real finding (run `find-prior-art` before proposing the replacement) |
+| **API surface with no production caller** | A method on a context's `api/` interface that only tests call, often with a doc comment naming a consumer that does not exist (`response.Service.CountPending` 2026-08-20, `detection.Service.CountUnprocessed` 2026-10-08). `unused` cannot see it: an interface method counts as used once any type satisfies it | Real finding: wire the claimed consumer or delete the method and its comments. A method that only fixtures need belongs on `testkit/`, not `api/` |
 
 ## Steps
 

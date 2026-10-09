@@ -60,6 +60,10 @@ x-server: &server
     # for this long so the proxy removes it from rotation before the listener
     # closes. This is what makes a rolling restart hitless.
     EDR_SHUTDOWN_DRAIN: ${EDR_SHUTDOWN_DRAIN:-30s}
+    # Trust X-Forwarded-For only from the Docker network nginx sits on, so the
+    # per-IP enroll limit and the audit log see each client, not nginx. The
+    # default Compose address pool lives inside 172.16.0.0/12.
+    EDR_TRUSTED_PROXIES: ${EDR_TRUSTED_PROXIES:-172.16.0.0/12}
     EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
     EDR_LOG_FORMAT: "json"
     OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}

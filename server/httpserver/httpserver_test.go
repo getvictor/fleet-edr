@@ -15,7 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -268,4 +271,79 @@ func TestBuild_AccessLog_UnmatchedRouteLabel(t *testing.T) { //nolint:parallelte
 	assert.Equal(t, "unmatched", line["route"])
 	require.Len(t, rec.calls, 1)
 	assert.Equal(t, "unmatched", rec.calls[0].route)
+}
+
+func TestBuild_SpanRenamedToRouteTemplate(t *testing.T) { //nolint:paralleltest // installs/depends on process-global OTel tracer
+	spans := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans))
+	prevProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(prevProvider)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/hosts/{host_id}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	srv := httptest.NewServer(Build(mux, Options{Logger: newLogger(io.Discard), ServiceName: "test"}))
+	t.Cleanup(srv.Close)
+
+	cases := []struct {
+		name     string
+		path     string
+		wantSpan string
+	}{
+		// spec:observability-instrumentation/http-request-spans-are-named-by-route-template/a-matched-request-s-span-carries-the-route-template
+		{"matched route drops the id", "/api/hosts/host-abc", "GET /api/hosts/{host_id}"},
+		// spec:observability-instrumentation/http-request-spans-are-named-by-route-template/an-unmatched-request-s-span-is-named-unmatched
+		{"scanner probe collapses to unmatched", "/wp-login.php", "GET unmatched"},
+	}
+	for _, tc := range cases { //nolint:paralleltest // subtests share the global tracer provider
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(spans.Ended())
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+tc.path, nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			resp.Body.Close()
+
+			ended := spans.Ended()
+			require.Len(t, ended, before+1)
+			assert.Equal(t, tc.wantSpan, ended[before].Name())
+		})
+	}
+}
+
+// spec:observability-instrumentation/http-request-spans-are-named-by-route-template/request-duration-is-recorded-once-per-request
+//
+// otelhttp would otherwise record its own http.server.request.duration without the route, doubling every request in the
+// request-rate panels next to the access log's routed instrument of the same name.
+func TestBuild_OtelhttpRecordsNoDuplicateDurationMetric(t *testing.T) { //nolint:paralleltest // installs the process-global meter provider
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prevProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() {
+		_ = mp.Shutdown(context.Background())
+		otel.SetMeterProvider(prevProvider)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	srv := httptest.NewServer(Build(mux, Options{Logger: newLogger(io.Discard), ServiceName: "test"}))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/ping", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	var collected metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &collected))
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			assert.NotEqual(t, "http.server.request.duration", m.Name, "scope %s recorded a route-less duplicate", scope.Scope.Name)
+		}
+	}
 }

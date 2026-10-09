@@ -86,11 +86,7 @@ func (r *TrustedRootCertificate) evalEvent(
 		return nil, nil
 	}
 	se := view.Event
-	if !trustedRootDetection().Matches(se) {
-		view.noteUnmatched(scope, r.ID())
-		return nil, nil
-	}
-	proc, err := view.subjectOrAbandon(scope, r.ID())
+	proc, err := view.matchSubject(scope, trustedRootDetection(), r.ID())
 	if err != nil || proc == nil {
 		return nil, err
 	}

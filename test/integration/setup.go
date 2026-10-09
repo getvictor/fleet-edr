@@ -36,7 +36,6 @@ import (
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
-	identityapi "github.com/fleetdm/edr/server/identity/api"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	responseapi "github.com/fleetdm/edr/server/response/api"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
@@ -62,14 +61,12 @@ type Stack struct {
 	DB        *sqlx.DB
 }
 
-// IdentityService / EndpointService / etc. expose each context's public api.Service so tests can call methods (e.g.
+// ResponseService / DetectionService expose each context's public api.Service so tests can call methods (e.g.
 // response.Service.Insert to queue a command) without going through HTTP.
-func (s *Stack) IdentityService() identityapi.Service   { return s.Identity.Service() }
-func (s *Stack) EndpointService() endpointapi.Service   { return s.Endpoint.Service() }
 func (s *Stack) ResponseService() responseapi.Service   { return s.Response.Service() }
 func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Service() }
 
-// Setup composes the five contexts the same way cmd/fleet-edr-server's
+// Setup composes seven of the eight contexts (all but observability) the same way cmd/fleet-edr-server's
 // main.go does, against an isolated MySQL test database with every schema
 // pre-applied. Background goroutines (detection processor + retention,
 // identity session-cleanup) start; t.Cleanup stops them.

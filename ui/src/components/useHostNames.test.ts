@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 
 import { useHostNames } from "./useHostNames";
 import * as api from "../api";
@@ -20,9 +20,11 @@ describe("useHostNames", () => {
   });
 
   it("leaves the map empty when listHosts fails (rows fall back to the id)", async () => {
-    vi.spyOn(api, "listHosts").mockRejectedValue(new Error("boom"));
+    const listSpy = vi.spyOn(api, "listHosts").mockRejectedValue(new Error("boom"));
     const { result } = renderHook(() => useHostNames());
-    // Give the rejected promise a tick to settle; the map stays empty rather than throwing.
-    await waitFor(() => { expect(result.current.size).toBe(0); });
+    // The map starts empty, so asserting size 0 right away proves nothing: wait for the call, let the rejection settle, then assert.
+    await waitFor(() => { expect(listSpy).toHaveBeenCalled(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.size).toBe(0);
   });
 });

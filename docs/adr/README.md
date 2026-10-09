@@ -26,24 +26,24 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0001](0001-single-go-module-with-internal.md) | Single Go module with `internal/` for shared code | Accepted |
 | [0002](0002-macos-apple-silicon-mvp-only.md) | MVP ships macOS on Apple Silicon only | Accepted |
 | [0003](0003-standalone-product-not-fleet-integrated.md) | EDR is a standalone product, Fleet is a deployment channel | Accepted |
-| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented; extended by [0015](0015-clickhouse-visibility-store.md) (`visibility` context now live) |
+| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented; extended by [0015](0015-clickhouse-visibility-store.md) and [0021](0021-rule-content-bounded-context.md) (`visibility` and `rulecontent` contexts now live) |
 | [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted; narrowed by [0015](0015-clickhouse-visibility-store.md) |
 | [0006](0006-otel-only-metrics.md) | OpenTelemetry is the only metrics pipeline; no Prometheus /metrics | Accepted |
 | [0007](0007-xpc-peer-validation-libxpc-only.md) | XPC peer validation via libxpc code-signing requirement; no audit_token layer | Accepted |
-| [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Accepted |
+| [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Accepted; amended (server-pushed watched set shipped, three ES clients) |
 | [0009](0009-migrations-via-goose.md) | Versioned, forward-only, per-context schema migrations via goose | Accepted |
 | [0010](0010-stateless-server.md) | Stateless server: no in-process state survives a request | Accepted |
 | [0011](0011-ha-architecture.md) | High-availability architecture: multi-replica app tier with rolling upgrade | Accepted |
 | [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Accepted |
 | [0013](0013-service-account-and-api-authentication.md) | Service-account and API authentication: client-credentials with short-lived self-validating tokens | Accepted |
-| [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Accepted |
+| [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Accepted; amended (self-heal corrected: a DNS proxy cannot bypass itself) |
 | [0015](0015-clickhouse-visibility-store.md) | ClickHouse event store in a new `visibility` bounded context | Accepted |
 | [0016](0016-event-delivery-substrate.md) | Event delivery: database-backed work queue now, streaming substrate at scale | Accepted |
 | [0017](0017-unified-principal-model.md) | Unified principal model: one typed actor identity for users and service accounts | Accepted |
 | [0018](0018-windows-platform-strategy.md) | Windows platform strategy: phased Windows agent, platform-agnostic contract, driverless first | Accepted |
 | [0019](0019-tls-13-only.md) | TLS 1.3 only, with no TLS 1.2 opt-out | Accepted |
 | [0020](0020-agent-updates-ride-the-deployment-channel.md) | Agent updates ride the deployment channel, for now (in-product auto-update deferred, #88) | Accepted |
-| [0021](0021-rule-content-bounded-context.md) | Rule content is its own bounded context, carved when it acquires storage | Accepted |
+| [0021](0021-rule-content-bounded-context.md) | Rule content is its own bounded context, carved when it acquires storage | Implemented (`rulecontent` context live) |
 
 ## Tooling
 

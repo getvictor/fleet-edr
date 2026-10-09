@@ -40,9 +40,9 @@ type RefusedProxy struct {
 // supportedProxySchemes are the proxy protocols this agent can actually speak: a CONNECT tunnel to an HTTP or HTTPS proxy, and
 // the SOCKS5 handshake for both of its spellings (issues #1064, #1110).
 //
-// This is the ONE answer to that question. The control channel's tunnel dispatch asks here rather than keeping the copy it used
-// to, because the two disagreeing is how a proxy gets dialed by one path and refused by another, which is the shape of the bug
-// this list exists to prevent.
+// The containment lifeline's tunnel dispatch (agent/containment and the agent's containment wiring) still names these schemes
+// itself; keep those copies in step with this list, because the two disagreeing is how a proxy gets dialed by one path and
+// refused by another.
 var supportedProxySchemes = map[string]bool{"http": true, "https": true, "socks5": true, "socks5h": true}
 
 // ProxySchemeSupported reports whether the agent can speak a proxy of this scheme.

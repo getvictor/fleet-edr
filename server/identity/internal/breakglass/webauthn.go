@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 
@@ -104,31 +103,3 @@ func (u User) WebAuthnDisplayName() string {
 // WebAuthnCredentials returns the user's stored credentials, already converted from the storage layer via
 // CredentialStore.ToWebauthnCredentials.
 func (u User) WebAuthnCredentials() []webauthn.Credential { return u.Credentials }
-
-// FinishRegistrationFromHTTP runs go-webauthn's FinishRegistration over an *http.Request, returning the new credential the caller
-// must persist. Pulled into a helper so the handler stays focused on HTTP wiring rather than WebAuthn ceremony details. session is the
-// SessionData minted by BeginRegistration; the caller is responsible for round-tripping it through a signature-protected cookie so the
-// browser cannot tamper.
-func FinishRegistrationFromHTTP(
-	w *webauthn.WebAuthn, user webauthn.User,
-	session webauthn.SessionData, r *http.Request,
-) (*webauthn.Credential, error) {
-	c, err := w.FinishRegistration(user, session, r)
-	if err != nil {
-		return nil, fmt.Errorf("breakglass: finish registration: %w", err)
-	}
-	return c, nil
-}
-
-// FinishLoginFromHTTP runs go-webauthn's FinishLogin and returns the matched credential plus the new sign_count the caller must
-// persist via CredentialStore.RecordAssertion. session is the SessionData from BeginLogin.
-func FinishLoginFromHTTP(
-	w *webauthn.WebAuthn, user webauthn.User,
-	session webauthn.SessionData, r *http.Request,
-) (*webauthn.Credential, error) {
-	c, err := w.FinishLogin(user, session, r)
-	if err != nil {
-		return nil, fmt.Errorf("breakglass: finish login: %w", err)
-	}
-	return c, nil
-}

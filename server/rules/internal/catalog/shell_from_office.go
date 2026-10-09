@@ -102,26 +102,14 @@ func (r *ShellFromOffice) evalEvent(
 		return nil, nil
 	}
 	se := view.Event
-	matched := shellFromOfficeDetection().Matches(se)
-	if err := se.ResolveErr(); err != nil {
+	// The detection requires ParentImage, which is found through the subject, so a match means the subject resolved: a missing
+	// subject is counted where it is decided, as a decline (issue #1169), never as a matched abandon.
+	proc, err := view.matchSubject(scope, shellFromOfficeDetection(), r.ID())
+	if err != nil || proc == nil {
 		return nil, err
-	}
-	if !matched {
-		view.noteUnmatched(scope, r.ID())
-		return nil, nil
 	}
 	// The parent the detection matched on, read back from the same field, so the alert names the Office app that spawned the shell.
 	parentPath := firstField(se, "ParentImage")
-
-	// Plain Subject, not subjectOrAbandon: the detection requires ParentImage, which is found through the subject, so a match means
-	// the subject resolved. A missing subject is counted where it is decided, by noteUnmatched above (issue #1169).
-	proc, err := view.Subject()
-	if err != nil {
-		return nil, err
-	}
-	if proc == nil {
-		return nil, nil
-	}
 	return &api.Finding{
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),

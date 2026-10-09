@@ -8,7 +8,7 @@ SSO is configured entirely in the UI under **Admin settings -> Single sign-on**;
 
 ## Configure SSO in the UI
 
-OIDC is configurable in-product under **Admin settings -> Single sign-on** (the account menu, top right; visible to operators with the `sso.manage` permission). An admin sets the issuer, client ID, client secret (write-only: enter a value to rotate, never displayed), the deployment external URL, and the default JIT role, then saves. The settings page does not expose a JIT on/off toggle, so saving through the UI always enables just-in-time provisioning: anyone who signs in through the provider is auto-created with the default role. (The stored config and admin API do support `jit_enabled=false`; the UI just has no toggle for it, and the operator-invite flow that would let an admin pre-provision users is not built yet.) Changes apply at runtime with no restart, and the test-connection button verifies the provider before saving.
+OIDC is configurable in-product under **Admin settings -> Single sign-on** (the account menu, top right; visible to operators with the `sso.manage` permission). An admin sets the issuer, client ID, client secret (write-only: enter a value to rotate, never displayed), the deployment external URL, and the default JIT role, then saves. The settings page does not expose a JIT on/off toggle, so saving through the UI always enables just-in-time provisioning: anyone who signs in through the provider is auto-created with the default role. (The stored config and admin API do support `jit_enabled=false`; the UI just has no toggle for it. To give someone a role before their first sign-in, pre-provision them on the **Users** settings page.) Changes apply at runtime with no restart, and the test-connection button verifies the provider before saving.
 
 The server always boots without any OIDC configuration, so on a fresh deployment you sign in with the break-glass admin first (see [`breakglass.md`](breakglass.md)), then fill in this form. The redirect URI is derived from the external URL (`<external-url>/api/auth/callback`) and shown read-only; register that exact value at the IdP.
 
@@ -112,7 +112,7 @@ The requested OIDC scopes default to `openid,email,profile`: enough for the clai
 
 Notes on the optional knobs:
 
-- **JIT provisioning.** Saving through the SSO settings UI always enables JIT (the page has no toggle): a first successful sign-in creates a user + identity + role binding at the configured default role. The stored config and admin API accept `jit_enabled=false`, but the UI does not expose it, and the operator-invite flow that would let an admin pre-provision users is not built yet.
+- **JIT provisioning.** Saving through the SSO settings UI always enables JIT (the page has no toggle): a first successful sign-in creates a user + identity + role binding at the configured default role. The stored config and admin API accept `jit_enabled=false`, but the UI does not expose it. An admin can pre-provision a user with a role on the **Users** settings page before their first sign-in.
 - **Session timeouts.** OIDC-minted sessions slide on every authenticated request up to `EDR_SESSION_ABSOLUTE_TIMEOUT`. The reauth window applies to destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical) and forces a fresh IdP prompt when `last_auth_at` is older than `EDR_REAUTH_WINDOW`.
 
 ## Verify

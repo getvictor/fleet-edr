@@ -1,14 +1,12 @@
 package testkit
 
 import (
-	"context"
 	"log/slog"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
 
-	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
@@ -47,16 +45,3 @@ func NewScenario(t *testing.T, db *sqlx.DB) *Scenario {
 		Archive: archive,
 	}
 }
-
-// SeedAndMaterialise stores the events in the archive (so the rule's correlation + evidence reads find them) and runs ProcessBatch so the
-// rule under test sees a populated process graph. Returns the GraphReader the rule's Evaluate consumes.
-func (s *Scenario) SeedAndMaterialise(t *testing.T, ctx context.Context, events []detectionapi.Event) detectionapi.GraphReader {
-	t.Helper()
-	require.NoError(t, s.Archive.Insert(ctx, events), "seed archive")
-	require.NoError(t, s.Builder.ProcessBatch(ctx, events), "materialise")
-	return s.Store
-}
-
-// GraphReader returns the underlying store as a GraphReader
-// (rule.Evaluate's third argument).
-func (s *Scenario) GraphReader() detectionapi.GraphReader { return s.Store }

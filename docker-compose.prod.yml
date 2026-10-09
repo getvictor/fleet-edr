@@ -95,10 +95,10 @@ services:
       # private network; blank env so the *_FILE path wins and no value lands in `docker inspect`.
       EDR_CLICKHOUSE_DSN: ""
       EDR_CLICKHOUSE_DSN_FILE: /run/secrets/clickhouse_dsn
-      # TLS cert paths are unconditionally required (issue #140 removed the
-      # EDR_ALLOW_INSECURE_HTTP opt-out). Mount fullchain.pem + privkey.pem
-      # under ./tls/ (or override EDR_TLS_DIR to point at your cert store).
-      # The server refuses to boot when either path is empty or unreadable.
+      # TLS cert paths are required unless EDR_TLS_TERMINATED_BY_PROXY=1 says a
+      # proxy in front terminates TLS. Mount fullchain.pem + privkey.pem under
+      # ./tls/ (or override EDR_TLS_DIR to point at your cert store). The server
+      # refuses to boot when either path is empty or unreadable.
       EDR_TLS_CERT_FILE: ${EDR_TLS_CERT_FILE:-/tls/fullchain.pem}
       EDR_TLS_KEY_FILE: ${EDR_TLS_KEY_FILE:-/tls/privkey.pem}
       EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}

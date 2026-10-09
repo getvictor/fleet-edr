@@ -168,25 +168,16 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 	se := view.Event
-	matched := sudoersDetection().Matches(se)
-	if resolveErr := se.ResolveErr(); resolveErr != nil {
-		return nil, resolveErr
-	}
-	if !matched {
-		view.noteUnmatched(scope, r.ID())
-		return nil, nil
-	}
-
 	// The same process the detection matched on, not a second lookup of it: resolving again could return a different image if a
 	// materialization commit landed in between, and the finding would then describe a writer other than the one the suppression
 	// was decided against.
-	proc, err := view.subjectOrAbandon(scope, r.ID())
+	proc, err := view.matchSubject(scope, sudoersDetection(), r.ID())
 	if err != nil {
 		return nil, err
 	}
 	if proc == nil {
-		// The writer's row never materialized within the grace window (resolveSubjectProcess raises the retryable
-		// ErrProcessNotYetMaterialized while inside it), so there is no process to link the finding to.
+		// No match, or the writer's row never materialized within the grace window (resolveSubjectProcess raises the retryable
+		// ErrProcessNotYetMaterialized while inside it), so there is no process to link a finding to.
 		return nil, nil
 	}
 

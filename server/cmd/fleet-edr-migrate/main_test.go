@@ -21,7 +21,7 @@ func tableExists(t *testing.T, db *sqlx.DB, name string) bool {
 
 // TestApplyAll exercises the CLI's core: applying every context's migrations against a fresh database creates each context's
 // tables, and a second pass is an idempotent no-op (goose skips already-applied versions). This is the smoke test that the
-// standalone migrate path stays wired to all five contexts.
+// standalone migrate path stays wired to every context.
 func TestApplyAll(t *testing.T) {
 	t.Parallel()
 	db := testdb.Open(t)

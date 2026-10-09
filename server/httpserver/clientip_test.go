@@ -192,7 +192,7 @@ func TestClientIP_FallsBackToRemoteAddrWithoutMiddleware(t *testing.T) {
 	req.RemoteAddr = "203.0.113.1:5555"
 	req.Header.Set("X-Forwarded-For", "1.2.3.4")
 	// No middleware ran -> ctx has no resolved IP -> fall back to peer. XFF is NOT honoured on this fallback path (the fallback is
-	// httpserver.RemoteIP, not the resolver) so a forgotten middleware wire-up degrades safely instead of letting XFF spoofing through.
+	// the TCP peer, not the resolver) so a forgotten middleware wire-up degrades safely instead of letting XFF spoofing through.
 	assert.Equal(t, "203.0.113.1", httpserver.ClientIP(req))
 }
 

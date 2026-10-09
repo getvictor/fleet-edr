@@ -86,11 +86,10 @@ type Deps struct {
 // BreakglassDeps is the per-deployment configuration the break-glass surface needs. Lifted out of Deps so further break-glass-related
 // additions don't keep widening the parent struct.
 type BreakglassDeps struct {
-	BootstrapTokenTTL time.Duration
-	IPAllowlist       []string
-	RPID              string
-	RPDisplayName     string
-	RPOrigins         []string
+	IPAllowlist   []string
+	RPID          string
+	RPDisplayName string
+	RPOrigins     []string
 }
 
 // OIDCDeps carries the live, deployment-level knobs the OIDC handler needs at construction time. The provider connection config

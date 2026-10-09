@@ -145,11 +145,16 @@ func TestOpenTemplated_ReplayLeavesForeignKeyChecksOn(t *testing.T) { //nolint:p
 	})
 }
 
+// parallelBuildRuns numbers each invocation of TestOpenTemplated_ParallelCallersShareOneBuild so -count=N gets a fresh template key.
+var parallelBuildRuns atomic.Int64
+
 // TestOpenTemplated_ParallelCallersShareOneBuild covers the concurrency the suite actually runs under: the template is built
 // once even when many parallel tests reach it at the same time, and every one of them gets a usable schema.
 func TestOpenTemplated_ParallelCallersShareOneBuild(t *testing.T) {
 	t.Parallel()
-	const key = "synthetic-parallel"
+	// A fresh key per invocation: the template cache is process-wide, so under -count=N a fixed key is already built by the first
+	// iteration and every later one counts zero builds.
+	key := fmt.Sprintf("synthetic-parallel-%d", parallelBuildRuns.Add(1))
 	// Atomic, because this counter's whole job is to catch OpenTemplated building concurrently. A plain int would be a data
 	// race in exactly that regression, and could lose an increment and report the count it was supposed to catch.
 	var builds atomic.Int64

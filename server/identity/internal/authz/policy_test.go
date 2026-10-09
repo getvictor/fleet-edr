@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/open-policy-agent/opa/v1/ast"
@@ -197,7 +196,3 @@ func setDifference(a, b map[string]struct{}) []string {
 	sort.Strings(out)
 	return out
 }
-
-// Compile-time guard against a stray import this file would otherwise miss; keeps `strings` from being a dead import if a future
-// rewrite drops the diff helper.
-var _ = strings.Builder{}

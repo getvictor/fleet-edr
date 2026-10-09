@@ -68,7 +68,7 @@ Don't try to fix all thin tests. File findings as issues with a representative e
 
 ### 5. Mutation testing (optional, advanced)
 
-If the team has bandwidth, run a mutation test (e.g. `gomutesting`) on one critical package per quarter (`server/detection/`, `server/identity/middleware`). Mutation score below 70% on a critical path warrants attention.
+If the team has bandwidth, run a mutation test (e.g. `gomutesting`) on one critical package per quarter (`server/detection/`, `server/identity/internal/middleware`). Mutation score below 70% on a critical path warrants attention.
 
 ## Output
 

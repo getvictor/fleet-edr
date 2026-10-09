@@ -28,7 +28,7 @@ import (
 // running it in CI would spend minutes to prove nothing.
 //
 //	EDR_MEASURE=1 EDR_TEST_DSN='root@tcp(127.0.0.1:33307)/edr_test?parseTime=true' \
-//	  go test -tags integration -run TestMeasureEvalStatsRecordLatency -v ./server/rules/internal/detectionconfig/
+//	  go test -tags integration -run TestMeasureEvalStatsRecordLatency -v ./server/rules/internal/tests/
 //
 // Deliberately NOT parallel, which is why paralleltest is silenced rather than satisfied: a latency measurement sharing the
 // machine with the rest of the suite measures contention, not the thing it names. It is also skipped by default, so it costs the

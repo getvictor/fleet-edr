@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
@@ -70,6 +71,26 @@ type sigmaView struct {
 	Subject func() (*api.Process, error)
 	// PID is the process the event is about.
 	PID int
+}
+
+// matchSubject runs detection against this rule's view and returns the process a finding names. A nil process with a nil error
+// means no finding: the detection declined (noteUnmatched records an abandon if the subject was missing) or it matched a subject that
+// never materialized (subjectOrAbandon records that one).
+//
+// The resolver error is checked before the verdict is trusted, for every rule, including one whose detection reads no graph field
+// today. A failed read leaves the field absent, which reads as a decline, so skipping the check would turn a retryable miss into a
+// silently lost detection the day the pack file starts reading that field, and the pack file can do that without the Go code
+// changing.
+func (v *sigmaView) matchSubject(scope *api.BatchScope, detection *sigma.Rule, ruleID string) (*api.Process, error) {
+	matched := detection.Matches(v.Event)
+	if err := v.Event.ResolveErr(); err != nil {
+		return nil, err
+	}
+	if !matched {
+		v.noteUnmatched(scope, ruleID)
+		return nil, nil
+	}
+	return v.subjectOrAbandon(scope, ruleID)
 }
 
 // subjectOrAbandon is Subject for a detection that MATCHED: it returns the process the finding names, and when that process never

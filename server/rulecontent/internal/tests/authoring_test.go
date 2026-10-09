@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -142,7 +143,11 @@ func TestPutDocument_AFailedWriteLeavesTheVersionAlone(t *testing.T) {
 		Path:    "imported/" + strings.Repeat("x", 300) + ".yml",
 		Content: []byte("content"),
 	}, before, api.AuditOutboxEntry{})
-	require.Error(t, err, "a path the column cannot hold must fail rather than silently truncate")
+	// Pin the failure to the insert inside the transaction (ER_DATA_TOO_LONG). A bare Error would also pass if the path were
+	// rejected before the transaction opened, and then the version check below would prove nothing about the rollback.
+	var mysqlErr *mysql.MySQLError
+	require.ErrorAs(t, err, &mysqlErr, "a path the column cannot hold must fail rather than silently truncate")
+	require.EqualValues(t, 1406, mysqlErr.Number, "the failure must come from the insert, inside the transaction")
 
 	after, err := s.Version(ctx)
 	require.NoError(t, err)

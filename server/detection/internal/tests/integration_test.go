@@ -2062,7 +2062,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	insertEventsViaIngest(ctx, t, d, "h", events)
 
 	// Wait until the LAST exec has been applied, not just until 3 rows exist. A fork creates a row with the parent's path inherited;
-	// the exec that follows rewrites that row's path. If we polled on countNodes >= 3 we'd race the window where row 200's path is still
+	// the exec that follows rewrites that row's path. If we polled on a node count >= 3 we'd race the window where row 200's path is still
 	// the inherited "/bin/sh" because exec-pl hasn't been processed yet (CI surfaced exactly that as `["/usr/bin/python3", "/bin/sh",
 	// "/bin/sh"]`).
 	require.Eventually(t, func() bool {
@@ -3615,16 +3615,7 @@ func insertAlertDirect(t *testing.T, ctx context.Context, d *bootstrap.Detection
 	require.Eventually(t, func() bool {
 		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: hostID})
 		return len(alerts) > 0
-	}, 5*time.Second, 50*time.Millisecond)
-}
-
-// countNodes recursively counts process nodes across the forest.
-func countNodes(forest []api.ProcessNode) int {
-	n := 0
-	for _, root := range forest {
-		n += 1 + countNodes(root.Children)
-	}
-	return n
+	}, 5*time.Second, 50*time.Millisecond, "alert for %s not raised within 5s; did the processor stall?", hostID)
 }
 
 // flattenPaths walks the forest and returns every node's Path. Used

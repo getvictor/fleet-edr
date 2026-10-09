@@ -47,22 +47,6 @@ func (AllowAllAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decis
 	return api.Decision{Allow: true, Reason: "granted"}, nil
 }
 
-// DenyAuthZ implements api.AuthZ with a fixed deny reason. Used by handler tests that exercise the deny-path response shape (403 +
-// X-Edr-Authz-Reason header) without depending on the live policy.
-type DenyAuthZ struct {
-	Reason string
-}
-
-// Allow satisfies api.AuthZ; returns Decision{Allow: false} with the configured reason. Default reason "no_matching_rule" matches the
-// production policy's deny label so tests that pin the header value stay in sync with the live decision shape.
-func (d DenyAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decision, error) {
-	r := d.Reason
-	if r == "" {
-		r = "no_matching_rule"
-	}
-	return api.Decision{Allow: false, Reason: r}, nil
-}
-
 // SeededUser is the result of SeedJITUser: the user row + a live session ready to drop into a cookie. ID is the user's primary key;
 // SessionCookie is the base64url-encoded session token (use this for the `edr_session` cookie value); CSRFToken is the per-session
 // CSRF secret base64url-encoded for the `X-Csrf-Token` header.

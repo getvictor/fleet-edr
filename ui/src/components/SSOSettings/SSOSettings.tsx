@@ -159,8 +159,8 @@ export function SSOSettings() {
         ...(secret === "" ? {} : { client_secret: secret }),
         external_url: form.externalURL.trim(),
         scopes,
-        // JIT is always on: operators who sign in are auto-created with the default role. The invite flow that would let
-        // an admin disable JIT and pre-provision operators is not built yet, so there is no UI to turn this off.
+        // JIT is always on: operators who sign in are auto-created with the default role. The page has no toggle to turn it
+        // off; an admin who wants to set a role before first sign-in pre-provisions the user on the Users page.
         jit_enabled: true,
         default_role: form.defaultRole,
         groups_claim: form.groupsClaim.trim(),

@@ -150,9 +150,8 @@ enum ApplicationControlAction {
     static let silentBlock = "SILENT_BLOCK"
 }
 
-/// Rule-enforcement tokens that match the server enum exactly. The demo
-/// cut only enforces PROTECT (deny-on-match); DETECT (log only) arrives
-/// with Phase B.
+/// Rule-enforcement tokens that match the server enum exactly. PROTECT denies a
+/// matching exec; DETECT allows it and records a monitor event.
 enum ApplicationControlEnforcement {
     static let protect = "PROTECT"
     static let detect = "DETECT"

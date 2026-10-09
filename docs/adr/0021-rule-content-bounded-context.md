@@ -1,6 +1,6 @@
 # 0021. Rule content is its own bounded context, carved when it acquires storage
 
-- Status: Accepted
+- Status: Implemented (carved at #766 in #847; the authoring HTTP surface this ADR left undecided stays in the `rules` operator handler, `server/rules/internal/operator/ruleauthoring_handler.go`, calling `rulecontent/api`)
 - Date: 2026-08-29
 - Deciders: getvictor
 
