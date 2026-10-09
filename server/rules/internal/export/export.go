@@ -1,22 +1,15 @@
 // Package export renders a registered detection as a declarative rule file (issue #757).
 //
-// The file is standard Sigma metadata plus one namespaced `x-engine` key holding what Sigma has no concept of. Phase 1 is
-// deliberately pure output: nothing here is read back, no rule's behaviour depends on it, and a wrong choice costs a serialiser
-// rewrite rather than an engine rewrite.
+// The file is standard Sigma metadata plus one namespaced `x-engine` key holding what Sigma has no concept of. Everything in it is
+// generated from the rule's Go documentation except the `detection:` block and `x-engine.params`: the rules read both, so they
+// are passed in and re-emitted verbatim rather than rendered.
 //
-// # Why every export is type: graph today
+// # Why a rule is type: graph or type: sigma
 //
-// A rule is `type: sigma` only when its logic lives in the file's `detection:` block AND the engine evaluates it from there. All
-// ten detections are Go implementations, so neither half is true yet and every export is honestly `type: graph` / `portable:
-// none`. Emitting a hand-written `detection:` block that the engine never reads would be a claim about behaviour that nothing
-// verifies, which is exactly how a draft of this format acquired an `interval_regularity_and_entropy` algorithm that no code
-// implements. Converting the expressible rules, and with them the first real `type: sigma` files, is issue #761.
-//
-// # Why params are absent
-//
-// Rule constants are unexported Go values with no accessor on api.Rule. Adding accessors purely so the serialiser could read them
-// back is work that issue #758 undoes when it moves those values into the files for real, so files gain `params` there rather
-// than here.
+// A rule is `type: sigma` only when its logic lives in the file's `detection:` block AND the engine evaluates it from there;
+// classify derives this from the rule itself. A rule without a detection block is a Go implementation and exports as
+// `type: graph` with `portable: none`. Emitting a hand-written `detection:` block that the engine never reads would be a claim
+// about behaviour that nothing verifies.
 package export
 
 import (

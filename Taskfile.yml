@@ -328,7 +328,7 @@ tasks:
       EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
       # -timeout=20m, not the 10m every other lane uses. This lane runs the DB-backed integration suites, and
-      # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all six bounded contexts'
+      # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all eight bounded contexts'
       # schemas per test) under -race. Measured on CI: ~250s typical, against a 600s ceiling. That is only 2.4x headroom
       # for a package whose cost is dominated by shared MySQL and ClickHouse containers, and it blew through twice in two
       # days (#690, #697) purely on contention: both times the timeout panic listed tests that had been running only 5-26s,
@@ -476,7 +476,7 @@ tasks:
       # names: the Sigma upstream sync workflow's step scripts are exercised only by tools/sigma-sync's tests. The tools' own code
       # is not in -coverpkg, so it adds nothing to the denominator, but a tool test that calls server code counts toward its coverage.
       # -timeout=20m, not the 10m every other lane uses. This lane runs the DB-backed integration suites, and
-      # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all six bounded contexts'
+      # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all eight bounded contexts'
       # schemas per test) under -race. Measured on CI: ~250s typical, against a 600s ceiling. That is only 2.4x headroom
       # for a package whose cost is dominated by shared MySQL and ClickHouse containers, and it blew through twice in two
       # days (#690, #697) purely on contention: both times the timeout panic listed tests that had been running only 5-26s,

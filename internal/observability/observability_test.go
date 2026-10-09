@@ -134,7 +134,7 @@ func TestInit_Disabled(t *testing.T) { //nolint:paralleltest // Init mutates pro
 
 	// The W3C propagator must be installed even when the SDK is no-op; otherwise incoming
 	// traceparent headers would be dropped.
-	assert.NotNil(t, otel.GetTextMapPropagator(), "TextMapPropagator should be installed")
+	assert.Contains(t, otel.GetTextMapPropagator().Fields(), "traceparent", "the W3C TraceContext propagator should be installed")
 }
 
 // spec:observability-instrumentation/otlp-export-is-opt-in-via-otel-exporter-otlp-endpoint/otel-exporter-otlp-endpoint-points-at-a-collector
@@ -157,11 +157,11 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Ini
 		InitTimeout: 2 * time.Second,
 		Endpoint:    "http://127.0.0.1:1",
 	})
-	// Init itself may or may not return an error depending on how aggressively the exporter
-	// validates; what we care about is that it returns quickly.
 	assert.Less(t, time.Since(start), 3*time.Second, "Init should not block on bogus endpoint")
-
+	// gRPC dials lazily, so a dead endpoint does not fail Init; the SDK provider being installed is what the scenario promises.
+	require.NoError(t, err)
 	require.NotNil(t, shutdown)
+	assert.IsType(t, &sdktrace.TracerProvider{}, otel.GetTracerProvider(), "a configured endpoint must install the SDK tracer provider")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -169,8 +169,6 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Ini
 	shutdownStart := time.Now()
 	_ = shutdown(ctx)
 	assert.Less(t, time.Since(shutdownStart), 3*time.Second, "Shutdown should respect deadline")
-	// If Init succeeded, err is nil; if it errored, so be it. The assertion is about latency.
-	_ = err
 }
 
 // TestInit_SamplerWired exercises the Options.Sampler branch: the no-op path (empty endpoint) must ignore the sampler and still

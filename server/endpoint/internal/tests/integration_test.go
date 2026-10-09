@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -45,36 +44,6 @@ const (
 	// testHostTokenSigningKey is the fixed >=32-byte HMAC key the endpoint bootstrap requires for signing self-validating host tokens.
 	testHostTokenSigningKey = "endpoint-integration-host-token-signing-key0"
 )
-
-// recordingCommandInserter captures every CommandInserter call so tests can assert on the host_id targeting and the command type.
-// The CommandInserter closure shape (endpoint/bootstrap.CommandInserter) is satisfied by the Insert method's method-value.
-type recordingCommandInserter struct {
-	mu     sync.Mutex
-	calls  []recordedCommand
-	nextID int64
-}
-
-type recordedCommand struct {
-	HostID      string
-	CommandType string
-	Payload     json.RawMessage
-}
-
-func (r *recordingCommandInserter) Insert(_ context.Context, hostID, commandType string, payload []byte) (int64, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.nextID++
-	r.calls = append(r.calls, recordedCommand{HostID: hostID, CommandType: commandType, Payload: append(json.RawMessage(nil), payload...)})
-	return r.nextID, nil
-}
-
-func (r *recordingCommandInserter) snapshot() []recordedCommand {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]recordedCommand, len(r.calls))
-	copy(out, r.calls)
-	return out
-}
 
 // newEndpoint wires endpoint.bootstrap.New against a fresh test DB. Returns the *Endpoint handle so tests can hit Service() directly
 // or register routes onto a test mux. Tests that need direct DB access (e.g. rotation_test.go's ageToken) reach for newEndpointWithDB.

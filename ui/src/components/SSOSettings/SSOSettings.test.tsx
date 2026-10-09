@@ -212,7 +212,7 @@ describe("SSOSettings", () => {
     render(<SSOSettings />);
     await screen.findByLabelText("Issuer URL");
 
-    // The on/off switch was removed: JIT is always on because the invite flow that would let an admin disable it is not built yet.
+    // The on/off switch was removed: JIT is always on, and pre-provisioning on the Users page is how an admin sets a role up front.
     expect(screen.queryByRole("switch", { name: "Just-in-time provisioning" })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Default role for new SSO users"), { target: { value: "auditor" } });

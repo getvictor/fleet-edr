@@ -3,7 +3,6 @@
 package breakglass_test
 
 import (
-	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -283,6 +282,3 @@ func TestNewService_DefaultLogger(t *testing.T) {
 	})
 	require.NotNil(t, svc)
 }
-
-// Recorder used by TestService_AuditHelpers.
-var _ = func() context.Context { return context.Background() } // keep imports tight

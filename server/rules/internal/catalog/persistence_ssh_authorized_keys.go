@@ -101,15 +101,7 @@ func (r *PersistenceSSHAuthorizedKeys) evalEvent(
 		return nil, nil
 	}
 	se := view.Event
-	matched := authorizedKeysDetection().Matches(se)
-	if resolveErr := se.ResolveErr(); resolveErr != nil {
-		return nil, resolveErr
-	}
-	if !matched {
-		view.noteUnmatched(scope, r.ID())
-		return nil, nil
-	}
-	proc, err := view.subjectOrAbandon(scope, r.ID())
+	proc, err := view.matchSubject(scope, authorizedKeysDetection(), r.ID())
 	if err != nil || proc == nil {
 		return nil, err
 	}

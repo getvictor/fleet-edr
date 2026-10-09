@@ -17,7 +17,7 @@ This task is the human-judgment counterpart to `arch-go`.
 
 ## Scope
 
-`server/identity/`, `server/endpoint/`, `server/rules/`, `server/response/`, `server/detection/`, `internal/`, plus `server/testdb/full/` (cross-context test fixtures).
+Every context under `server/` (each directory with an `api/` package), the shared server platform packages, `internal/`, plus `server/testdb/full/` (cross-context test fixtures).
 
 ## Steps
 
@@ -29,7 +29,7 @@ The bounded-context decision is the yardstick. Before scrutinising drift, refres
 
 ```bash
 # What does each context import from another?
-for ctx in identity endpoint rules response detection; do
+for ctx in $(ls -d server/*/api | cut -d/ -f2); do
   echo "=== $ctx ==="
   grep -rE '"github.com/[^"]+/server/[^/]+/' server/$ctx --include='*.go' \
     | grep -vE "/server/$ctx/" | sed 's/.*\/server\///' | sort -u
@@ -59,7 +59,7 @@ If a single struct in any context's `api/` is referenced by all four other conte
 
 ### 6. Migration ordering
 
-`grep -rE 'schema/migrations|server/.*/internal/mysql/migrations' . --include='*.go'`. Confirm migration files for one context don't reference another context's tables. If they do (sometimes legitimate for FKs), that's a real cross-context coupling and deserves an ADR amendment, not silence.
+`grep -nE 'REFERENCES' server/*/migrations/*.sql`. Confirm migration files for one context don't reference another context's tables. If they do (sometimes legitimate for FKs), that's a real cross-context coupling and deserves an ADR amendment, not silence.
 
 ## Output
 

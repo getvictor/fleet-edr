@@ -3,7 +3,6 @@
 package breakglass_test
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -899,6 +898,3 @@ func TestHandleSetupChallenge_PerSetupRateLimit(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, resp2.StatusCode)
 	assert.Equal(t, "setup_rate_limited", resp2.Header.Get("X-Edr-Auth-Reason"))
 }
-
-// Recorder shared with credentials_test / handler_test / service_test.
-var _ = func() context.Context { return context.Background() }

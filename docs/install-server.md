@@ -214,6 +214,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_TLS_KEY_FILE` | **yes** | none | PEM key (pair with cert) |
 | `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
+| `EDR_TRUSTED_PROXIES` | behind a proxy | none | Comma-separated CIDRs or IPs of the reverse proxies or load balancers in front of the server. `X-Forwarded-For` is honoured only from these peers; unset, every request is attributed to the TCP peer, so all clients behind a proxy share one enroll rate limit and one audit IP |
 | `EDR_RETENTION_DAYS` | no | 30 | Process-record TTL, 0 disables, at most 36500. Event retention is the ClickHouse archive's native time-based expiry, configured on the archive, not here |
 | `EDR_ALERT_RETENTION_DAYS` | no | 180 | How long an alert is kept after its last triage activity, 0 disables, at most 36500. Independent of `EDR_RETENTION_DAYS` in both directions. See [alert retention](operations.md#alert-retention) |
 | `EDR_MONITOR_RETENTION_DAYS` | no | 7 | How long a monitor record (a match from a rule in monitor mode) is kept, 0 disables, at most 36500. Independent of both windows above. See [monitor records](operations.md#monitor-records) |
@@ -226,7 +227,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_BREAKGLASS_IP_ALLOWLIST` | no | none | Comma-separated CIDR list gating `/admin/break-glass*`. Off-list callers get a 404 |
 | `EDR_SESSION_IDLE_TIMEOUT` | no | 8h | Inactivity cap for OIDC-minted sessions. Sliding window on last_seen_at |
 | `EDR_SESSION_ABSOLUTE_TIMEOUT` | no | 24h | Hard age cap for OIDC-minted sessions (forces periodic re-auth) |
-| `EDR_REAUTH_WINDOW` | no | 30m | Freshness window for destructive actions (host.isolate, host.kill_process, host.run_script, critical alert resolve) |
+| `EDR_REAUTH_WINDOW` | no | 30m | Freshness window for destructive actions (host.isolate, host.kill_process, host.run_script, containment_config.write, critical alert resolve) |
 | `EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT` | no | 15m | Strict idle cap for recovery sessions |
 | `EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT` | no | 1h | Absolute cap for recovery sessions |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | none | `host:port` of an OTLP/gRPC collector; unset disables metrics export |

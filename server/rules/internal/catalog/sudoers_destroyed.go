@@ -129,21 +129,9 @@ func (r *SudoersDestroyed) evalEvent(
 		return nil, nil
 	}
 	se := view.Event
-	matched := sudoersDestroyedDetection().Matches(se)
-	if resolveErr := se.ResolveErr(); resolveErr != nil {
-		return nil, resolveErr
-	}
-	if !matched {
-		view.noteUnmatched(scope, r.ID())
-		return nil, nil
-	}
-
-	proc, err := view.subjectOrAbandon(scope, r.ID())
-	if err != nil {
+	proc, err := view.matchSubject(scope, sudoersDestroyedDetection(), r.ID())
+	if err != nil || proc == nil {
 		return nil, err
-	}
-	if proc == nil {
-		return nil, nil
 	}
 	if r.excluded(proc.Path, evt.HostID) {
 		return nil, nil

@@ -1,9 +1,6 @@
 package httpserver
 
 import (
-	"net"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -94,14 +91,4 @@ func (l *IPLimiter) evictOldestLocked() {
 		}
 	}
 	delete(l.buckets, oldestIP)
-}
-
-// RemoteIP returns the client IP from r.RemoteAddr, stripping the port. Falls back to the raw RemoteAddr if SplitHostPort fails (e.g.
-// the caller used a Unix socket).
-func RemoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
-	}
-	return host
 }

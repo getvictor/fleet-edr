@@ -5,10 +5,9 @@
 // validators, and the lookup paths the REST handler and the agent
 // fan-out consume.
 //
-// v0.1.0 ships every wire-enum rule type wired through to the
-// extension's AUTH_EXEC walker: BINARY, CDHASH, SIGNINGID, TEAMID
-// (Phase A close-out, PR #289), plus CERTIFICATE and PATH (Phase B
-// close-out, PR for #210). The validator's only rejection branch is
+// Every wire-enum rule type is wired through to the
+// extension's AUTH_EXEC walker: BINARY, CDHASH, SIGNINGID, TEAMID, CERTIFICATE
+// and PATH. The validator's only rejection branch is
 // ErrAppControlInvalidRuleType for tokens that aren't on the enum at
 // all. ErrAppControlUnsupportedRuleType is retained on the api
 // package for the future case where a new wire-enum value lands

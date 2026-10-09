@@ -493,10 +493,9 @@ func openIdentity(
 			StateCookieTTL: config.DefaultOIDCStateCookieTTL,
 		},
 		Breakglass: identitybootstrap.BreakglassDeps{
-			BootstrapTokenTTL: cfg.BreakglassBootstrapTokenTTL,
-			IPAllowlist:       cfg.BreakglassIPAllowlist,
-			RPID:              cfg.BreakglassRPID,
-			RPOrigins:         cfg.BreakglassRPOrigins,
+			IPAllowlist: cfg.BreakglassIPAllowlist,
+			RPID:        cfg.BreakglassRPID,
+			RPOrigins:   cfg.BreakglassRPOrigins,
 		},
 		SessionIdle:               cfg.SessionIdleTimeout,
 		SessionAbsolute:           cfg.SessionAbsoluteTimeout,

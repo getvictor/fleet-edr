@@ -16,7 +16,7 @@ Secondary: [`.github/copilot-instructions.md`](../../../.github/copilot-instruct
 
 Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), and the review skill `ai-review-fixes-edr`, which holds the round policy and is per-maintainer.
 
-**Not in scope because it is already automated:** the pinned version of the pr-agent action. Dependabot's `github-actions` ecosystem entry groups `patterns: ["*"]`, so the pin is bumped weekly on its own. Do not hand-check it.
+**In scope and manual:** the pr-agent image digest. The workflow runs `docker://pragent/pr-agent:github_action@sha256:...` directly and Dependabot's `github-actions` updater skips `docker://` references, so nothing bumps it. Compare the pinned digest with the current `github_action` tag, and before bumping confirm `config.model` still resolves on the new image: an image change once turned an unknown model from a silent fallback into a failed review.
 
 Two dashboard-only settings have no committed file and so can only be verified here, by looking at them:
 
@@ -43,7 +43,7 @@ The open-source reviewer's schema drifts from the hosted product it was forked o
 - `config.model` and `config.fallback_models` still name models that exist and are still priced as assumed. The pin is deliberate: upstream's default is a MOVING alias, so leaving it unset locks neither a version nor a price.
 - Anything new upstream worth adopting. `service_tier` is the one to watch: it would halve token cost via flex processing, and its absence is the only reason flex is not used here.
 
-Note what this step cannot protect against. The action is SHA-pinned but upstream's Dockerfile is `FROM pragent/pr-agent:github_action`, a mutable tag, so the code that actually runs is always upstream's latest regardless of the pin. The exposure is an upstream regression reaching CI ungated, not staleness.
+Note what this step cannot protect against. The image is pinned by digest, so upstream code reaches CI only through a commit here; the exposure is staleness, not an ungated regression. After a digest bump, confirm the first review's job log shows `Generating prediction with` the configured model.
 
 ### 2. Path glob validity
 
@@ -113,7 +113,7 @@ Steps:
      configuration.toml: every config.* / pr_reviewer.* / github_action_config.* key
      still exists, config.model and config.fallback_models still name real models at
      the assumed prices, and note anything new worth adopting (service_tier especially).
-     Do NOT hand-check the action's pinned version; Dependabot bumps it weekly.
+     Dependabot does not bump the image digest (it skips `docker://` references); note its age and whether `config.model` still resolves on it.
   1c. Look at the two dashboard-only settings, which have no file to audit:
      Copilot review effort (policy: Lite by default, Balanced only for large or
      sensitive PRs) and CodeReviewBot's trigger mode.

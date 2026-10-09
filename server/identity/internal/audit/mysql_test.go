@@ -580,6 +580,4 @@ func TestAuditAction_StableConstants(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, string(tc.got))
 	}
-	// Sanity quick-fail if the package is compiled with the wrong context.
-	_ = context.TODO
 }

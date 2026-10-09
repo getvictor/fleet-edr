@@ -4,7 +4,6 @@ package integration
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -217,8 +216,3 @@ func mustReadBody(t *testing.T, resp *http.Response) string {
 	}
 	return string(b)
 }
-
-// Compile-time check that test/integration/ is a layer-3 package whose imports are bootstrap + api + testdb (everything else is
-// platform). If a future edit accidentally pulls in <X>/internal/, Go's internal/ rule blocks the import; this declaration just keeps
-// `context.Context` in the import list so unused-import never fires the deletion.
-var _ context.Context = context.TODO()

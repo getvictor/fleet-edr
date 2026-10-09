@@ -98,25 +98,17 @@ func (r *CredentialKeychainDump) EvaluateScoped(
 			continue
 		}
 		se := view.Event
-		if !keychainDetection().Matches(se) {
-			view.noteUnmatched(scope, r.ID())
-			continue
-		}
-		// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired.
-		sub := ""
-		if values, ok := se.Field("Subcommand"); ok && len(values) > 0 {
-			sub = values[0]
-		}
-
-		proc, err := view.subjectOrAbandon(scope, r.ID())
+		proc, err := view.matchSubject(scope, keychainDetection(), r.ID())
 		if fatal := miss.absorb(err); fatal != nil {
 			return fatalResult(findings, fatal)
 		}
 		if proc == nil {
-			// The exec's own row never materialized within the grace window (a young miss raises the retryable
-			// ErrProcessNotYetMaterialized instead), so there is no process_id to link the finding to.
+			// No match, or the exec's own row never materialized within the grace window (a young miss raises the retryable
+			// ErrProcessNotYetMaterialized instead), so there is no process_id to link a finding to.
 			continue
 		}
+		// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired.
+		sub := firstField(se, "Subcommand")
 
 		findings = append(findings, api.Finding{
 			HostID:   evt.HostID,

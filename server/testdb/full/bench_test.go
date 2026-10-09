@@ -12,7 +12,7 @@ import (
 //
 // It exists because this fixture was optimised (the detection integration package calls it 109 times and was timing out in
 // CI), and an optimisation nobody can measure is one that quietly regresses. The first iteration builds the schema by running
-// all seven contexts' migrations; every iteration after replays the captured DDL, which is the path that matters.
+// every context's migrations; every iteration after replays the captured DDL, which is the path that matters.
 //
 // Run it with a real MySQL: EDR_TEST_DSN=... go test -run XXX -bench BenchmarkOpen ./server/testdb/full/
 func BenchmarkOpen(b *testing.B) {

@@ -16,12 +16,12 @@ Run this before generating any non-trivial new code: a function or method beyond
 
 ## Where to look
 
-The server is seven bounded contexts under `server/`: the original five `identity`, `endpoint`, `rules`, `response`, `detection` (ADR-0004), plus `observability` and `visibility` (the ClickHouse event store, ADR-0015). Cross-context code lives in the imported `api/` package; code shared by server and agent lives in `internal/`. The agent is under `agent/`, the extension under `extension/edr/`.
+The server is eight bounded contexts under `server/`: the original five `identity`, `endpoint`, `rules`, `response`, `detection` (ADR-0004), plus `observability`, `visibility` (the ClickHouse event store, ADR-0015), and `rulecontent` (rule definitions as durable content, ADR-0021). Cross-context code lives in each context's imported `server/<context>/api/` package; code shared by server and agent lives in `internal/`. The agent is under `agent/`, the extension under `extension/edr/`.
 
 Search in this order:
 
 1. The owning bounded context (or `agent/` package) for a local equivalent.
-2. `internal/` and `api/` for a shared equivalent the new code should call instead.
+2. `internal/` and the `server/<context>/api/` packages for a shared equivalent the new code should call instead.
 3. The whole tree, to catch a third copy that should become the shared one.
 
 ## How to search
@@ -30,7 +30,7 @@ Search the concept, not the exact name you were about to type. Look for the verb
 
 ```bash
 # Functions by concept: adjust the verb stem and domain noun to your case
-rg -n --type go -i 'func .*(normaliz|sanitiz|validat).*host' server internal api
+rg -n --type go -i 'func .*(normaliz|sanitiz|validat).*host' server internal
 
 # Existing type or interface for the shape you need
 rg -n --type go 'type .*(HostID|Enrollment|Session)' server internal

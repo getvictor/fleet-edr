@@ -16,37 +16,37 @@ The detection surface is the product. Treat detection content as code: versioned
 - [x] Code-signing capture on every `exec` event (team identifier, signing flags, hash)
 - [x] SHA-256 hashing of executed binaries
 - [x] Network-attribution events (PID -> connection) via `NEFilterDataProvider`
-- [~] Application Control subsystem. Shipped: named policies, host-group scoping, and matching on all six dimensions (path / SHA-256 / CDHash / TeamID / SigningID / certificate), each with a keyed index in the extension's `ApplicationControlStore`. Rules run in `PROTECT` (block) or `DETECT` (block nothing and keep a monitor record of each matching exec that runs), so a rule can be observed before it enforces.
-- [x] Response action: command queue (kill, set_application_control) with ack/complete lifecycle
-- [~] **MITRE ATT&CK mapping** on every rule. The `Rule` interface in `server/rules/api/types.go` requires a `Techniques()` method returning the ATT&CK technique IDs the rule maps to; each catalog rule under `server/rules/internal/catalog/` implements it, and the engine threads the IDs onto every alert so they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`, `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export (the `handleATTACKCoverage` handler in `server/rules/internal/operator/handler.go`, which delegates to `BuildNavigatorLayer` / `NavigatorTechnique` in `server/rules/api/navigator.go`). **Demoted to `[~]`**: ATT&CK v19 (April 2026) split Defense Evasion into the new Stealth and Defense Impairment tactics and revoked ~13 technique IDs into new parents (e.g. "Clear Windows Event Logs" → T1685/005). Current rule mappings have not yet been re-validated against v19; track as a follow-up task.
+- [x] Application Control subsystem: named policies, host-group scoping, and matching on all six dimensions (path / SHA-256 / CDHash / TeamID / SigningID / certificate), each with a keyed index in the extension's `ApplicationControlStore`. Every rule names its enforcement: `PROTECT` blocks, and `DETECT` blocks nothing and keeps a monitor record of each matching exec that runs, so a rule can be observed before it enforces.
+- [x] Response action: command queue (`kill_process`, `set_network_containment`, `set_application_control`, `set_watched_paths`) with an ack/complete lifecycle, operator cancellation, and expiry of a command that waits too long to be delivered
+- [x] **MITRE ATT&CK mapping** on every rule that detects an attack technique. The `Rule` interface in `server/rules/api/types.go` requires a `Techniques()` method; each catalog rule under `server/rules/internal/catalog/` implements it, and the engine threads the IDs onto every alert so they survive the rule lifecycle. Mappings target ATT&CK v19.2, including v19's Stealth and Defense Impairment tactics (e.g. clearing macOS system logs maps to T1685.006). Rules that report the sensor's own health map to no technique on purpose. Surfaced in the UI (`AttackCoverage.tsx`, `RuleDetail.tsx`, technique names from the generated `attack-techniques.generated.ts`) and exposed as an ATT&CK Navigator JSON export (the `handleATTACKCoverage` handler in `server/rules/internal/operator/handler.go`, which delegates to `BuildNavigatorLayer` / `NavigatorTechnique` in `server/rules/api/navigator.go`).
 - [ ] **ATT&CK Detection Strategies / Analytics** alignment (v18+ taxonomy). v18 (Oct 2025) retired traditional Detections + Data Sources in favour of Detection Strategies and Analytics per technique; rules should surface the strategy ID alongside the technique so coverage gaps map to MITRE's published analytics, not just techniques
-- [ ] **Sigma rule support** (import community rules; transpile to native rule format). SigmaHQ now ships bi-weekly versioned rule packages, so adoption can be packaged rather than per-rule scraped from `main`
+- [x] **Sigma rule support**. SigmaHQ's macOS rules (main and threat-hunting sets) are vendored unmodified under `server/rules/internal/catalog/imported/` with a SHA-256 manifest and evaluated natively by `server/rules/internal/sigma` (no transpile step). Imported rules start in monitor mode and credit their upstream author.
 - [ ] **YARA scanning** for file-based detections (signature + heuristic)
 - [ ] **IOC management**: bulk import of hashes / domains / IPs from STIX/TAXII feeds
 - [ ] **Threat-intel enrichment**: VirusTotal, AlienVault OTX, GreyNoise lookups on alert
 - [ ] **File quarantine** with cryptographic chain of custody (move to vault, hash before and after, signed manifest)
-- [ ] **Network isolation** action (deny all but management traffic to a single host)
+- [x] **Network isolation** action: Contain host cuts a Mac off from the network except the EDR server, DHCP, DNS and an operator-listed set of extra destinations, survives restarts and re-enrollment until released, and requires `host.isolate` plus an audited reason (`set_network_containment`, enforced in the network extension's `NetworkContainment.swift`)
 - [ ] **Memory acquisition** for forensics on demand
 - [x] **DNS query monitoring**. The network extension's `DNSProxyProvider` is the host's resolver and emits `dns_query` events; they land in the ClickHouse archive alongside `network_connect`, feed the process-detail network panel, and are what the `dns_c2_beacon` rule correlates a resolve against the connection that follows it. Runbook: [`dns-monitoring.md`](dns-monitoring.md).
 - [ ] **USB / removable-media device events**
-- [ ] **File integrity monitoring** (FIM) for sensitive paths
-- [ ] **Persistence-mechanism coverage**: LaunchAgents (have), LaunchDaemons, login items, cron, sudoers, kernel extensions, browser extensions
-- [ ] **Tamper resistance**: agent self-protection (block `kill -9` of agent, detect launchd unload, signed-config enforcement)
-- [ ] **Offline buffering with bounded loss** documented + tested (SQLite queue exists; needs explicit drop policy + metric)
+- [~] **File integrity monitoring** (FIM) for sensitive paths: every host records writes, renames, truncations and deletions of the sudoers files, SSH `authorized_keys` in every home, and any operator-listed path (a `~/` prefix expands to every user's home). Events record the change but no content hash or before-and-after diff
+- [~] **Persistence-mechanism coverage**: LaunchAgents, LaunchDaemons and login items (Background Task Management registrations, judged on the registered program's signature), cron (SigmaHQ), sudoers, emond rules, startup items, and SSH `authorized_keys` are covered. Kernel extensions and browser extensions are not
+- [~] **Tamper resistance**: the `edr-login-items.mobileconfig` profile marks the agent's background items as managed so users cannot switch them off, a stopped capture provider is restored automatically, and `sensor_tamper` / `sensor_recovery_failed` record each stop. No ESF self-protection blocks `kill -9` of the agent, and configuration is not signed
+- [x] **Offline buffering with bounded loss** documented + tested: the agent's SQLite queue has a fixed 500 MiB cap that drops already-uploaded rows first and only then the oldest undelivered ones, counted in `edr.agent.queue.dropped` with a `lossy` attribute (`agent/queue/queue.go`, documented in [`operations.md`](operations.md))
 - [ ] **Detection content repository** separate from engine (community PRs land in `rules/` with test fixtures, like Falco rules or Sigma)
-- [ ] **Detection unit tests with replayed event fixtures** (golden-event suites per rule)
-- [ ] **Detection coverage report** mapped to ATT&CK matrix (Atomic Red Team replays, Caldera scenarios)
+- [x] **Detection unit tests with replayed event fixtures**: every catalog rule has a committed fixture under `server/rules/internal/catalog/fixtures/` replayed through the real decode, graph and evaluate path, with gates for coverage (every rule has one), regression (each still fires) and orphan fixtures (`fixture_coverage_test.go`)
+- [~] **Detection coverage report** mapped to ATT&CK matrix: the Rules page's Coverage tab reports which macOS techniques the rules cover and which they miss, by tactic, and the efficacy corpus (`test/efficacy/corpus/T<id>-*/`) asserts per technique that a scenario fires its rule. Not yet validated against Atomic Red Team or Caldera replays
 - [ ] **Behavioral baselining / anomaly detection** (statistical or ML; even simple per-host process-frequency baselines)
 - [ ] **Threat-hunting query interface** (saved queries against the process graph; long-term this becomes a SQL or KQL-style surface)
 - [ ] **Case management**: alert -> investigation -> evidence -> outcome with audit trail
-- [ ] **SOAR / playbook integration** (webhook out, structured response API)
+- [x] **SOAR / playbook integration**: signed webhook deliveries out ([`webhooks.md`](webhooks.md)) and a REST response API that automation drives with service-account tokens ([`service-accounts.md`](service-accounts.md))
 - [ ] **SIEM export**: Splunk HEC, Elastic, Syslog/CEF/LEEF formats
 - [ ] **Slack / Teams / PagerDuty alert sinks**
-- [ ] **OCSF (Open Cybersecurity Schema Framework)** event export. Splunk-led standard (now under the Linux Foundation) adopted by AWS Security Hub, Cloudflare, Sumo Logic, IBM QRadar; becoming the lingua franca for cross-vendor security telemetry exchange. OCSF 1.8.0 (Mar 2026) added a macOS extension that patches the `process` object with `egid` / `euid` (a direct map for our ESF exec capture) and moved the `ai_operation` profile onto `process_activity`; both sharpen the case for an OCSF export, the latter once we ship LLM features (§15)
+- [ ] **OCSF (Open Cybersecurity Schema Framework)** event export. Splunk-led standard (now under the Linux Foundation) adopted by AWS Security Hub, Cloudflare, Sumo Logic, IBM QRadar; becoming the lingua franca for cross-vendor security telemetry exchange. OCSF 1.8.0 (Mar 2026) added a macOS extension that patches the `process` object with `egid` / `euid` (a direct map for our ESF exec capture) and moved the `ai_operation` profile onto `process_activity`; both sharpen the case for an OCSF export, the latter once we ship LLM features (§15). OCSF 1.9.0 (Aug 2026) added a Record Integrity profile that attaches a cryptographic attestation to each event, a ready-made shape for tamper-evident telemetry if we export OCSF
 - [ ] **OpenC2** action verbs for the response API (OASIS standard for `kill`, `isolate`, `quarantine`, etc.) so SOAR platforms can drive responses without custom adapters
 - [ ] **LOLBAS / GTFOBins** reference data baked into rules so each detection cites the living-off-the-land binary entry that justifies the alert
-- [ ] **DeTT&CT / ATT&CK Navigator export** for visualizing rule-set coverage against the matrix; lets buyers compare your coverage to commercial vendors
-- [ ] **Atomic Red Team / Stratus Red Team / Caldera** scenario replays in CI to assert rules fire on canonical attack signals
+- [x] **ATT&CK Navigator export** for visualizing rule-set coverage against the matrix: served by the rules API and committed as [`attack-navigator-layer.json`](attack-navigator-layer.json). DeTT&CT's own format is not produced
+- [~] **Atomic Red Team / Stratus Red Team / Caldera** scenario replays in CI to assert rules fire on canonical attack signals. The efficacy corpus runs nightly and on every push to `main` that touches detection (`.github/workflows/efficacy.yml`), but its scenarios are our own rather than replays of the upstream atomics
 - [ ] **ITDR signals**: pull IdP login anomalies, privileged-access changes, and lateral-movement indicators into the same alert surface (Okta, Entra ID system logs). EDR / ITDR convergence is a 2024-2026 industry trend
 - [ ] **Deception primitives**: canary tokens, honeyfiles, honey credentials. Cheap, high signal-to-noise, and a differentiator for an open-source EDR
 - [ ] **AI-agent / shadow-AI activity telemetry**: CrowdStrike's RSAC 2026 release (Falcon AIDR plus Shadow AI Discovery for Endpoint, GA March 2026) discovers LLM runtimes, AI agents, MCP servers, and AI dev tools running on the endpoint, and SentinelOne shipped comparable AI-agent discovery and runtime control. For us this means capturing LLM tool-use, MCP server invocations, and agent-process behaviour as distinct event types, not just generic exec / network
@@ -58,12 +58,12 @@ Today the agent is macOS-only on Apple Silicon. Best-in-class EDRs (CrowdStrike 
 - [x] macOS 13+ on Apple Silicon (system extension + network extension + agent)
 - [-] macOS Intel: **will not do**. Apple stopped shipping Intel Macs in 2023; the last supported macOS release for Intel is approaching EOL. Pilot customers are Apple Silicon only, so the QA + signing matrix is not worth carrying.
 - [ ] **Linux agent** (eBPF-based; replace ESF with `tracee` / `falco-libs` / direct eBPF)
-- [ ] **Windows agent** (ETW + Defender APIs / Windows Driver)
+- [~] **Windows agent** (ETW + Defender APIs / Windows Driver): a user-mode ETW sensor (`agent/wintel`) is wired into the agent, and CI cross-builds the agent for windows/amd64 and windows/arm64 (ADR-0018). There is no installer or release artifact yet, and the user-mode tier cannot block execution
 - [ ] **Container runtime telemetry** (Docker / containerd / CRI-O)
 - [ ] **Kubernetes-aware** events (pod / node / namespace attribution)
-- [ ] **Platform-agnostic event envelope** (today `schema/events.json` mirrors the ESF vocabulary; needs an audit before a Linux or Windows agent ships so we do not bake in a macOS-shaped contract that future agents have to translate around)
+- [~] **Platform-agnostic event envelope**: `schema/events.json` carries an optional `platform` (absent means `darwin`) and a Windows process-creation time as the platform-neutral `pid_epoch` (ADR-0018). The signing object is still the macOS `code_signing` shape; ADR-0018's Authenticode variant is not in the schema yet
 - [ ] **Unified process-graph model** that admits Windows job objects and Linux cgroups, not just POSIX `pid`/`ppid`
-- [ ] **Per-platform detection-rule selectors** (a rule declares the OS / kernel surface it applies to, so the engine skips evaluation on irrelevant hosts)
+- [x] **Per-platform detection-rule selectors**: every rule declares `Platforms()` (`server/rules/api/types.go`), the engine evaluates a rule only against events from matching platforms, and `GET /api/rules` surfaces the list
 
 ## 3. Security: AuthN, AuthZ, cryptography
 
@@ -78,15 +78,15 @@ Today the agent is macOS-only on Apple Silicon. Best-in-class EDRs (CrowdStrike 
 - [-] **Restricted TLS 1.2 cipher suites**: moot. The server refuses TLS 1.2 entirely (line above), so there is no TLS 1.2 cipher-suite surface to restrict, and Go does not expose TLS 1.3 cipher-suite selection
 - [x] HSTS with `includeSubDomains`, two-year max-age
 - [x] Reload TLS cert + key on `SIGHUP` without dropping connections
-- [x] Refusal of `X-Forwarded-For` until a trusted-proxy allowlist exists
+- [x] `X-Forwarded-For` is honoured only when the TCP peer is in the `EDR_TRUSTED_PROXIES` allowlist, walking the chain right to left (`server/httpserver/clientip.go`); with no allowlist the peer address is the client IP
 - [x] Audit logging of auth outcomes with span attributes
 - [x] **Multi-factor authentication** (WebAuthn-mandatory on the break-glass surface in `server/identity/internal/breakglass`; MFA on the day-to-day OIDC path is enforced upstream by the IdP)
-- [~] **SSO**: OIDC PKCE shipped (`server/identity/internal/oidc`); SAML 2.0 still unimplemented
+- [~] **SSO**: OIDC PKCE shipped (`server/identity/internal/oidc`), with IdP groups mapped to EDR roles at each sign-in (`server/identity/internal/ssoadmin`); SAML 2.0 still unimplemented
 - [x] **RBAC** with five built-in roles (super_admin, admin, senior_analyst, analyst, auditor) and an OPA / Rego chokepoint on every privileged route (`server/identity/api/{authz.go,types.go}`, `server/identity/internal/authz/`)
 - [ ] **Mutual TLS for agent <-> server** (today is bearer-only; mTLS pins the agent identity at the transport layer)
 - [ ] **Certificate pinning** in the agent (refuse rotation that bypasses pin)
 - [ ] **Secrets management**: integrate with HashiCorp Vault / AWS KMS / GCP KMS for the enroll secret and DB DSN
-- [ ] **Encryption at rest** for the events table (per-row payload encryption with envelope keys, or InnoDB tablespace encryption documented as a deployment requirement)
+- [ ] **Encryption at rest** for the ClickHouse event store and MySQL (per-row payload encryption with envelope keys, or disk and InnoDB tablespace encryption documented as a deployment requirement)
 - [ ] **Audit-log export** to immutable storage (S3 Object Lock, etc.)
 - [ ] **Session pinning** to client IP / fingerprint with rotation policy
 - [ ] **Account lockout / progressive delay** after failed logins
@@ -99,12 +99,12 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 
 - [x] SHA-pinned GitHub Actions everywhere (`actions/checkout@<40-char-sha>`)
 - [x] `permissions: {}` default at workflow level, narrow per-job grants
-- [~] `persist-credentials: false` on every checkout except one: 37 of 38 set it, the exception being the `openspec-archived` job at `.github/workflows/release.yml:54` (which does no credentialed git op)
+- [~] `persist-credentials: false` on every checkout except two: 40 of 42 set it, the exceptions being the `openspec-archived` job at `.github/workflows/release.yml:54` and the commit-message scan at `.github/workflows/no-agent-attribution.yml:29` (neither does a credentialed git op)
 - [x] `concurrency` cancellation to avoid stale parallel runs
 - [x] `zizmor` GitHub Actions security audit (auditor persona, weekly schedule)
 - [x] `actionlint` workflow-syntax linter
 - [x] `govulncheck` against agent and server (push, PR, dispatch)
-- [x] Dependabot for `gomod` (agent + server), `npm` (ui), and `github-actions`
+- [x] Dependabot for `gomod` (agent + server), `npm` (ui), `github-actions`, and `docker` (server image)
 - [x] Dependabot `cooldown` (10 days default, 30 for majors) plus version grouping
 - [x] Major-version updates ignored for code deps (security overrides bypass)
 - [x] **Sigstore / cosign v3** signed release artifacts via keyless OIDC: every pkg, mobileconfig, SHA256SUMS, and SBOM gets a single Sigstore bundle (`<file>.sigstore.json`, the cosign-v3 default format) on each release tag, and the GHCR server + demo-seed images are signed with their SBOM attestations stored as OCI 1.1 referring artifacts (`.github/workflows/release.yml`). Verify a release artifact with `cosign verify-blob --bundle <file>.sigstore.json ...` and an image with `cosign verify ghcr.io/getvictor/fleet-edr-server@<digest> ...`
@@ -117,7 +117,7 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] **OSV-Scanner** in CI (broader than `govulncheck`; covers indirect npm deps too) at `.github/workflows/osv-scanner.yml`
 - [ ] **Trivy / Grype** scan of release container images
 - [ ] **Verified-commit policy** (signed commits or DCO required on `main`)
-- [ ] **Branch protection ruleset** committed as `.github/rulesets/*.json` (so the protection lives in the repo, not just the GitHub UI)
+- [x] **Branch protection ruleset** committed as `.github/rulesets/*.json` (`main.json`, `tags-v.json`), mirrored from the live rulesets by hand and drift-checked by the opt-in `rulesets-drift.yml`; see [`.github/rulesets/README.md`](../.github/rulesets/README.md)
 - [ ] **Reproducible builds**: documented `-trimpath`, `-buildvcs`, deterministic timestamps, and a `verify-build` job that diffs two independent rebuilds
 - [ ] **`go.sum` / `package-lock.json` integrity verification** in CI (`go mod verify`, `npm ci` already enforces this for npm)
 - [-] **`vendor/` modules**: **will not do**. `go.sum` + GOPROXY checksum verification already gives reproducible, hermetic builds; vendoring would double the diff size of every dep bump and slow CI clones for no security gain. Reconsider only if an air-gapped customer requires it
@@ -139,7 +139,7 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] `tsc --noEmit` strict type-check in CI
 - [x] SonarCloud for cross-language quality + security hot spots (`sonar-project.properties`; runs as the `sonarcloud` job in `.github/workflows/test.yml`)
 - [x] Single Go module (ADR-0001; the 2026-04 refactor collapsed the old two-module workspace). The `agent/` vs `server/` boundary is enforced by `depguard` deny rules and shared code lives in `internal/`
-- [x] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/` layout: `api/` (public types and interfaces), `bootstrap/` (DI entry point for `server/cmd/*` and `test/integration/`), `internal/<module>/` (private, Go-compiler enforced). Seven contexts: the original five (`detection`, `rules`, `response`, `endpoint`, `identity`) plus `observability` and `visibility` added later (ADR-0004 amendment / ADR-0015; `observability` is internal-only, with no `api/`). Cross-context calls go via the imported `api/` package only; no cross-context transactions; no cross-context foreign keys (the one such FK, `fk_alerts_updated_by`, was dropped in favour of code-level validation)
+- [x] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/` layout: `api/` (public types and interfaces), `bootstrap/` (DI entry point for `server/cmd/*` and `test/integration/`), `internal/<module>/` (private, Go-compiler enforced). Eight contexts: the original five (`detection`, `rules`, `response`, `endpoint`, `identity`) plus `observability`, `visibility` and `rulecontent` added later (ADR-0004 amendment / ADR-0015 / ADR-0021; `observability` is internal-only, with no `api/`). Cross-context calls go via the imported `api/` package only; no cross-context transactions; no cross-context foreign keys (the one such FK, `fk_alerts_updated_by`, was dropped in favour of code-level validation)
 - [x] **Architecture lint** via `arch-go` ([github.com/arch-go/arch-go](https://github.com/arch-go/arch-go)). Declarative YAML rules at `arch-go.yml`; programmatic API runs from `go test ./test/arch/...` so violations break the test job, not just lint. Complements `depguard` (which stays for block-list deps like `pkg/errors`). Wired as `task lint:arch` locally and as a hard-fail gating CI job (`.github/workflows/arch-go.yml`)
 - [x] **Test-coverage thresholds** uploaded to SonarCloud. Both Go and TS coverage reports flow through (`sonar.go.coverage.reportPaths`, `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to ≥80% and applies per PR.
 - [x] **Codecov** with PR comments and coverage diff. Uploaded by the `codecov` job in `.github/workflows/test.yml` after `agent-test`, `server-test`, and `ui-test` finish; `CODECOV_TOKEN` lives in the `codecov` GitHub Environment (same pattern as `sonarcloud` and `release-signing`). Three per-component flags (`agent`, `server`, `ui`) so the dashboard splits the Go binaries from the React bundle; the UI flag is fed by the Playwright E2E run's V8 coverage via monocart-coverage-reports (vitest tests can upload to the same flag once they land and Codecov takes the union). Per-PR PATCH gate stays enforcing at 70% on new code; the PROJECT rollup is informational (`informational: true` in `codecov.yml`) because Codecov's project numbers drifted vs reality on this repo through the M13 stack and the rollup gate became a chronic flake. SonarCloud's 80% new-code gate remains the authoritative bar for per-PR coverage
@@ -147,10 +147,10 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] **`uber-go/nilaway`**: inter-procedural nil-dereference static analysis. Catches panics that `staticcheck` and `govet -nilness` miss because nilaway tracks nilability across function boundaries. Wired as `task lint:nilaway` locally and as a gating CI job `.github/workflows/go-nilaway.yml`. False positives from tests or map-aliasing are addressed by restructuring the code (explicit `require.NotNil` / `ok :=` guards) rather than adding a blanket suppression, so the gate stays honest.
 - [ ] **`go-licenses` / `licensed`** to enforce dep license policy
 - [ ] **Spell-check** (`codespell`, `misspell`) in CI
-- [ ] **Markdown linter** (`markdownlint-cli2`) for the docs
+- [x] **Markdown linter** (`markdownlint-cli2`) for the docs: `task lint:md`, gated in CI by `.github/workflows/md-lint.yml`, with Prettier owning prose wrapping and table alignment
 - [x] **Pre-commit hooks** via `lefthook` (`lefthook.yml`) running gofmt, eslint, and swiftformat on staged files; pre-push runs `go build`, fast golangci-lint, and `tsc`
 - [ ] **`gci` import-grouping** + `goimports` enforced
-- [ ] **Go test build tags** to separate integration / e2e / unit
+- [x] **Go test build tags** to separate integration from unit tests (`//go:build integration` on the real-database suites)
 - [ ] **Mutation testing** for the detection engine (`go-mutesting` / Stryker)
 
 ## 6. Testing strategy
@@ -162,9 +162,9 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] **Three-layer test split** aligned with bounded contexts (per ADR-0004). Layer 1: per-package unit tests, default tag, co-located with the code; use `server/testdb.Open(t)` + the relevant context's `bootstrap.ApplySchema` (or external `_test` packages where the cycle bites). Layer 2: per-context integration tests at `server/<context>/internal/tests/`, `package tests`, scoped to one context's public surface (compiler refuses cross-context internals); use `server/testdb/full.Open(t)` for the full multi-schema fixture. Layer 3: cross-context integration tests at `test/integration/` exercise scenarios spanning multiple contexts
 - [x] Subtest + table-driven test convention (per [`CLAUDE.md`](../CLAUDE.md))
 - [x] Load-test harness (`test/loadtest.go`)
-- [ ] **End-to-end tests** (Playwright / Cypress) covering login -> alert -> ack -> close
+- [x] **End-to-end tests** (Playwright) covering login, alert list and attribution, process tree, policy editor, authz and audit flows, and break-glass, run by the `e2e-test` job in `.github/workflows/test.yml`
 - [ ] **API contract tests**: generated from OpenAPI, run against the live server
-- [ ] **Fuzz tests** for the JSON event parser and any HTTP body that comes from the agent (Go has built-in `go test -fuzz`)
+- [x] **Fuzz tests** (`go test -fuzz`) for the agent-facing event intake and enrollment handlers, plus operator inputs (containment, SSO group mapping, rule windows, enforcement); seed corpora run on every test pass, and there is no continuous fuzzing service
 - [~] **Property-based tests** via `pgregory.net/rapid` for components with clear algebraic invariants. Use when the property holds across an input space larger than what a table-driven test reasonably enumerates: serialization round-trips (`Marshal ∘ Unmarshal == identity`, `Scan ∘ Value == identity`), state-machine matrices (alert lifecycle, process lifecycle), graph algorithms (process tree build / re-exec chain walk: every non-root has a real parent in the tree, no cycles, every input PID appears exactly once), and order-preserving filters (e.g. `filterSnapshotEvents` removes only snapshot exec events and preserves the order of the rest). Rapid's built-in shrinking + state-machine API are the modern Go choice: `gopter` works but is heavier, and `testing/quick` lacks shrinking. PBT does NOT replace example-based tests for wire-format pinning, security-critical regressions, or named bug repros; those still want explicit values. See the detection bounded context's `internal/tests/`
   - `api/api_test.go` for the canonical patterns.
 - [ ] **Snapshot tests** for the React process-tree D3 layout
@@ -201,15 +201,15 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [ ] **On-call rotation** documented (PagerDuty / Opsgenie integration)
 - [ ] **Continuous profiling** (Pyroscope / Parca / Polar Signals) wired through OTLP
 - [ ] **Synthetic monitoring** of the public ingest endpoint (CloudPing-style)
-- [ ] **Distributed tracing across agent <-> server** boundary (propagator is installed; the agent uploader needs to actually inject `traceparent` on the upload request)
-- [ ] **Dashboard-as-code** for SigNoz / Grafana committed to the repo
+- [x] **Distributed tracing across agent <-> server** boundary: the agent's shared HTTP transport (uploader and commander) is wrapped in `otelhttp.NewTransport`, so every request carries `traceparent` under the propagator `internal/observability` installs
+- [x] **Dashboard-as-code** for SigNoz committed to the repo: the HTTP RED and authz dashboards under `config/observability/`
 - [ ] **Log retention + sampling policy** documented per-environment
 - [ ] **Crash reporting** for the Swift extensions: Sentry or an `os_log` -> OTel pipeline. (Firebase Crashlytics is the wrong tool here: deprecated for non-mobile and Google-account-locked.)
 
 ## 8. API and protocol design
 
 - [x] Stable API URL prefix (`/api/`); evolve in place rather than bumping a URL version, since v1 → v2 transitions rarely happen and are the wrong layer for protocol versioning when they do
-- [~] JSON event schema (`schema/events.json`): the canonical wire contract both sides code to and the docs / openspec / fakeagent reference, but it is not programmatically consumed (no `go:embed`, codegen, or runtime validation), so agent and server can still drift from it
+- [~] JSON event schema (`schema/events.json`): the canonical wire contract both sides code to and the docs / openspec / fakeagent reference. Tests check parts of it (`test/fakeagent/schema_test.go` validates the fake agent's envelopes against it, and `server/apidocs/event_types_test.go` keeps the OpenAPI event-type enum in step), but nothing consumes it at build or run time (no `go:embed`, codegen, or runtime validation), and the extension's Swift payload structs mirror it by hand, so the real agent can still drift from it
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration time so the policy is reviewable in `main.go`
 - [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml`, prose overview at [`api.md`](api.md), AND hosted rendering at `/api/docs` via embedded Redoc (D1 deliverable: zero external network calls, served from `server/apidocs/embed`). Still missing: handler/client codegen via `oapi-codegen` / `openapi-typescript`, so today the spec and the Go handlers can still drift without CI catching it
@@ -220,7 +220,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [ ] **Idempotency keys** on the event upload endpoint so retries are safe end-to-end (today dedup is by `event_id`; explicit header keeps semantics first-class)
 - [ ] **Per-host rate limiting** beyond the per-route limits today
 - [ ] **gRPC + Protobuf event upload** as an alternative to JSON for high-volume hosts
-- [ ] **Webhook out** for alerts (with retry, signed payload, replay protection)
+- [x] **Webhook out** for alerts and sensor health faults: Standard Webhooks signatures with a timestamp for replay rejection, a stable id for deduplication, and bounded exponential-backoff retries ([`webhooks.md`](webhooks.md))
 - [ ] **API deprecation policy** documented (deprecation header + sunset header per RFC 8594)
 - [ ] **Agent <-> server protocol back-compat policy**: N versions back the server still accepts. Without a written policy every protocol bump risks bricking older fleets that the customer's MDM has not yet rolled forward
 - [ ] **Server-Sent Events / WebSocket alert stream** so the UI does not poll for new alerts (today the React app would have to poll)
@@ -247,7 +247,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 ## 10. Data layer
 
 - [x] MySQL 8.4 with `parseTime=true`, foreign keys, and unique constraints enforced
-- [x] Idempotent migrations with explicit duplicate-error swallowing (`store.go`)
+- [-] Idempotent migrations with explicit duplicate-error swallowing: superseded by versioned goose migrations (below, ADR-0009), which apply each migration exactly once, so there is no duplicate error to swallow
 - [x] Indexed lookup paths for hot queries (composite indexes on `(processed, host_id, timestamp_ns)`, etc.)
 - [x] `FOR UPDATE SKIP LOCKED` for safe parallel processor claiming
 - [x] Foreign key cascades that match the lifecycle (`sessions` -> `users` cascade; the identity config tables' `updated_by` -> `users` SET NULL). The former `alerts.updated_by` FK was dropped when that column became a cross-context principal id (ADR-0017)
@@ -255,15 +255,15 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [x] Connection-pool stats exposed via OTel
 - [x] Retention runner with configurable age (`server/detection/internal/pipeline/retention.go`)
 - [x] Local Docker Compose with `mysql_test` for parallel test isolation
-- [x] **Versioned migrations** via [goose](https://github.com/pressly/goose), embedded in the server binary, per-context directories with per-context `<context>_goose_db_version` tracking tables, forward-only, tiered (expand-contract for Tier 2). Adopted in ADR-0009 to replace the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations. All seven bounded contexts are converted (the original five identity, endpoint, rules, response, detection plus visibility and observability; visibility also carries a separate `migrations-clickhouse` set). See ADR-0009
+- [x] **Versioned migrations** via [goose](https://github.com/pressly/goose), embedded in the server binary, per-context directories with per-context `<context>_goose_db_version` tracking tables, forward-only, tiered (expand-contract for Tier 2). Adopted in ADR-0009 to replace the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations. All eight bounded contexts are converted (the original five identity, endpoint, rules, response, detection plus visibility, observability, and rulecontent; visibility also carries a separate `migrations-clickhouse` set). See ADR-0009
 - [-] **PostgreSQL alternative**: **will not do**. Supporting two RDBMSes doubles migration testing, query tuning, and store-layer surface for a small team. MySQL 8.4 covers what the data plane needs; customers who require Postgres can stand up a CDC bridge via Debezium against the existing MySQL primary
 - [ ] **Read-replica support** for the read-heavy UI queries
 - [ ] **Logical-replication / CDC outbox** for downstream SIEM / data-lake export
 - [ ] **Backup + point-in-time-restore** runbook
 - [ ] **Encryption at rest** documented as a deployment requirement (and enforced via config validation in production mode)
-- [ ] **Schema-change CI gate** (`atlas migrate lint` or `skeema diff --safe`) that flags destructive operations before merge. Particularly important once the in-process idempotent-ALTER pattern is replaced with versioned migrations
+- [ ] **Schema-change CI gate** (`atlas migrate lint` or `skeema diff --safe`) that flags destructive operations before merge. Schema changes are versioned goose files (ADR-0009), so each one is a reviewable unit such a gate can lint
 - [ ] **Slow-query log review** runbook
-- [ ] **Data retention by event type** (some events should live longer than others; today it's a single global window)
+- [~] **Data retention by event type**: raw events (ClickHouse TTL), process records (`EDR_RETENTION_DAYS`), alerts (`EDR_ALERT_RETENTION_DAYS`, counted from last triage activity) and monitor records (`EDR_MONITOR_RETENTION_DAYS`) each have their own window. Raw events still share one fixed 30-day TTL whatever their type, set in a migration rather than configurable
 
 ## 11. Build, release, packaging
 
@@ -279,7 +279,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [-] **systemd unit** + RPM / DEB for self-hosted Linux deployments: **will not do** for the macOS-only MVP. The agent is Apple-Silicon only per ADR-0002 and there is no Linux endpoint surface yet, so shipping a Linux init-system + distro packaging surface for a server-only deploy duplicates what the existing Docker Compose stack already covers. Reconsider when a Linux agent lands (§2)
 - [~] **In-product auto-update channel**: **deferred for the pilot phase, not declined** (ADR-0020, tracked by [#88](https://github.com/getvictor/fleet-edr/issues/88)). Agent upgrades ride the customer's MDM channel (Fleet, Jamf, Kandji, Intune) today. A Sparkle-style appcast fetcher genuinely is a will-not-do (a consumer pattern that bypasses operator policy), but that is not what the major EDRs ship: CrowdStrike, SentinelOne and Defender all auto-update sensors under operator-set policy with version pinning and staged rollout, and buyers ask about it. What makes the gap survivable for now is that our detection runs server-side, so a stale agent is not stale detection. ADR-0020 records the revisit triggers
 - [ ] **Conventional Commits** + `semantic-release` for automated CHANGELOG + versioning. Side benefit: clean commit history is far easier for AI assistants to mine for context
-- [ ] **`CHANGELOG.md`** following Keep a Changelog format
+- [x] **`CHANGELOG.md`** in Keep a Changelog shape (Added / Changed / Fixed per release, upgrade notes first), written for the security and IT readers of each release
 - [ ] **DORA metrics** dashboard (deployment frequency, lead time for changes, change-failure rate, MTTR) committed to the repo as queries / dashboards-as-code
 
 ## 12. Open-source community signals
@@ -338,11 +338,11 @@ If anyone is going to deploy this against employee endpoints in regulated indust
 - [x] Endpoint Security entitlement requested explicitly
 - [~] CGo bridge audit-token handling: the old `-lbsm` (libbsm) link is gone. The agent bridge now links `-framework Foundation` (`agent/receiver/receiver.go`) and audit-token PID/UID extraction is Swift-native in the extensions (`flow.sourceProcessAuditToken`), so no `audit_token_to_pid` C path remains to link `-lbsm` for
 - [~] Lessons captured for `os.log` redaction ([`lessons-and-gotchas.md`](lessons-and-gotchas.md)). The `es_process_t.cwd` difference is noted in project memory but is not yet in the lessons doc
-- [ ] **Notarized signed extensions** for production install via MDM
-- [ ] **Profile-delivered entitlement consent** (`SystemPolicyAllListConfiguration` payloads) pushed via Fleet so end-users do not see a TCC prompt
-- [ ] **MDM-managed Full Disk Access** profile for the agent
-- [ ] **Privacy Preferences Policy Control** profile in the installer artifact
-- [ ] **Hardened runtime** with the minimum entitlement set audited
+- [x] **Notarized signed extensions** for production install via MDM: both extensions ship inside the notarized `.pkg` (§11)
+- [x] **Profile-delivered extension consent**: `edr-system-extension.mobileconfig` (`com.apple.system-extension-policy`) pre-approves both extensions through any MDM, so end users see no approval prompt
+- [x] **MDM-managed Full Disk Access** profile for the agent (`edr-tcc-fda.mobileconfig`)
+- [x] **Privacy Preferences Policy Control** profile shipped with every release (`edr-tcc-fda.mobileconfig`, `com.apple.TCC.configuration-profile-policy`)
+- [x] **Hardened runtime** with the minimum entitlement set audited (see §11)
 - [ ] **OSLogStore** historical pull for forensic timeline reconstruction
 
 ## 15. AI-assisted engineering
@@ -357,14 +357,14 @@ A 2024-2026 industry shift: AI coding assistants (Claude Code, Cursor, Copilot, 
 
 ### AI-assisted code review
 
-- [x] **AI PR review bot**: Qodo PR-Agent runs automatically since the paid plan landed 2026-06-12 (`.pr_agent.toml`: `pr_commands = ["/agentic_review"]` on open, `handle_push_trigger = true` re-reviews every push). `/describe` is deliberately NOT auto-run so the maintainer owns PR bodies. `.coderabbit.yaml` layers a second reviewer (below)
-- [ ] **GitHub Copilot code review** enabled at the repo level (free for public repos)
+- [x] **AI PR review bot**: the open-source pr-agent runs in this repo's own Actions (`.github/workflows/pr-agent.yml`) with a pinned model and a digest-pinned image, reviewing the maintainer's pull requests when they open or leave draft; the owner re-runs it with `/review`. Pull requests from forks are deliberately not reviewed, because a reviewing agent reads the diff as instructions and must not run with the model key on attacker-authored text. `/describe` is not run, so the maintainer owns PR bodies. `.coderabbit.yaml` layers a second reviewer (below)
+- [x] **GitHub Copilot code review** enabled at the repo level by the `main` ruleset (`copilot_code_review`, review on every push, drafts skipped)
 - [~] **CodeRabbit** configured in-repo ([`.coderabbit.yaml`](../.coderabbit.yaml): `profile: assertive`, security-leaning `tone_instructions` biasing toward bypassed authz, TOCTOU, weak crypto, audit-log tampering, secrets in logs) with path-scoped review focus; runs manual-only per project convention. Greptile not used
 - [ ] **AI-generated PR change-summary** auto-posted (Qodo can do this; today disabled by policy)
 
 ### Provenance and risk hygiene for AI-generated code
 
-- [x] Per-user policy on `Co-Authored-By` lines (this user: never; documented in auto-memory). Worth promoting into [`CONTRIBUTING.md`](../CONTRIBUTING.md) once that file exists so it binds external contributors too
+- [x] **Agent attribution policy**: [`CONTRIBUTING.md`](../CONTRIBUTING.md) treats an AI assistant as a tool, not a co-author, and `.github/workflows/no-agent-attribution.yml` refuses commits whose message credits an agent, on pull requests and on pushes to `main` (where squash merges bypass local hooks). Human co-authors stay allowed
 - [ ] **DCO sign-off (`Signed-off-by`)** required on PRs: forces every contributor (human or AI) to attest to the DCO terms; doubles as a paper trail for AI provenance and is the Linux Foundation's preferred alternative to CLAs
 - [ ] **AI-generated code license stance** documented (training-data contamination risk; cite OpenSSF AI/ML Working Group guidance + Linux Foundation AI policy)
 
@@ -377,7 +377,7 @@ None of these ship today; flagging them as deliberate-future so they are not for
 - [ ] **Detection-rule authoring assistant** (ATT&CK technique -> Go rule scaffold)
 - [ ] **Prompt-injection threat model** for any LLM feature shipped. Event payloads, alert text, and process arguments are _all attacker-controlled_; an EDR that blindly passes them into an LLM context window is the textbook indirect-prompt-injection target
 - [ ] **LLM eval suite in CI** (golden-prompt regression tests; hallucination + injection resistance) for every shipped LLM feature
-- [ ] **OWASP Top 10 for LLM Applications** self-assessment
+- [ ] **OWASP Top 10 for LLM Applications** (2026 edition) and **OWASP Top 10 for Agentic Applications** self-assessment, for any shipped LLM feature and for the in-repo AI review agent, which reads attacker-influenceable diffs
 - [ ] **OpenSSF AI/ML SIG** best-practices alignment
 
 ---
@@ -388,22 +388,22 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 
 | Area                           | Adopted | Total | %   |
 | ------------------------------ | ------- | ----- | --- |
-| Detection content + response   | 6.5     | 38    | 17% |
-| Cross-platform reach           | 1       | 8     | 12% |
+| Detection content + response   | 16.5    | 38    | 43% |
+| Cross-platform reach           | 3       | 8     | 38% |
 | AuthN / AuthZ / crypto         | 14.5    | 24    | 60% |
-| Supply-chain security          | 15      | 27    | 56% |
-| Code quality + static analysis | 15      | 22    | 68% |
-| Testing                        | 7       | 19    | 37% |
-| Observability + operations     | 15      | 24    | 62% |
-| API design                     | 5       | 16    | 31% |
+| Supply-chain security          | 16.5    | 27    | 61% |
+| Code quality + static analysis | 19      | 24    | 79% |
+| Testing                        | 10.5    | 20    | 52% |
+| Observability + operations     | 17      | 24    | 71% |
+| API design                     | 6       | 16    | 38% |
 | Frontend                       | 6       | 14    | 43% |
-| Data layer                     | 9       | 17    | 53% |
-| Build / release / packaging    | 5.5     | 11    | 50% |
-| Community signals              | 14      | 24    | 58% |
+| Data layer                     | 9.5     | 16    | 59% |
+| Build / release / packaging    | 6.5     | 11    | 59% |
+| Community signals              | 13      | 24    | 54% |
 | Compliance + privacy           | 1       | 14    | 7%  |
-| macOS platform hygiene         | 5       | 12    | 42% |
-| AI-assisted engineering        | 4       | 17    | 24% |
+| macOS platform hygiene         | 10      | 12    | 83% |
+| AI-assisted engineering        | 5       | 17    | 29% |
 
 The supply-chain hardening track shipped Sigstore signing (cosign keyless on every release artifact), CycloneDX + SPDX SBOMs, SLSA build provenance at level 2 (Apple notarization breaks L3's hermeticity requirement), OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck. A real SonarCloud coverage gate (≥80% on new code, per PR) closed the last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59% to 64%. Wiring Codecov alongside (CODECOV_TOKEN scoped to the `codecov` environment, agent + server flags, thresholds matching the Sonar gate so the two never disagree) lifted §5 to 68% and added the procurement-recognized Codecov badge to the README without stacking a second coverage authority. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing the existing hardened-runtime + minimal-entitlements pipeline that notarization already enforces, lifted §11 Build/release from 17% to 50% (with GoReleaser and Linux init-system + distro packaging both flipped to will-not-do since the custom workflow + Apple-Silicon-only MVP scope already cover those). Adding `LICENSE` (MIT) + [`SECURITY.md`](../SECURITY.md) + [`CONTRIBUTING.md`](../CONTRIBUTING.md) lifted §12 Community signals from 42% to 54% and unblocked the rest of that section's doc items. [`threat-model.md`](threat-model.md) (STRIDE per component) opened §13 Compliance + privacy from 0% to 8%: that section was the last fully-empty area on the checklist.
 
-RBAC + MFA on the UI shipped, lifting §3 from 52% to 62%: OIDC PKCE for the day-to-day path (`server/identity/internal/oidc`), WebAuthn-mandatory break-glass for IdP-down recovery (`server/identity/internal/breakglass`), and a five-role OPA / Rego chokepoint (`server/identity/internal/authz`). The remaining big gaps that buyers ask about are the rest of the §12 community-signals checklist (CODE_OF_CONDUCT, CODEOWNERS, PR template, OpenSSF CII Best Practices badge), the detection-content surface (ATT&CK mapping is wired but Sigma / YARA / IOC management still wait for v1.1), and the AI-era hygiene that enterprise procurement is starting to ask for (CISA Secure by Design, OWASP LLM Top 10, AI provenance policy).
+RBAC + MFA on the UI shipped, lifting §3 from 52% to 62%: OIDC PKCE for the day-to-day path (`server/identity/internal/oidc`), WebAuthn-mandatory break-glass for IdP-down recovery (`server/identity/internal/breakglass`), and a five-role OPA / Rego chokepoint (`server/identity/internal/authz`). The remaining big gaps that buyers ask about are the rest of the §12 community-signals checklist (CODE_OF_CONDUCT, CODEOWNERS, SUPPORT.md), the detection-content surface beyond ATT&CK mapping and Sigma (YARA, IOC management, threat-intel enrichment), and the AI-era hygiene that enterprise procurement is starting to ask for (CISA Secure by Design, OWASP LLM Top 10, AI provenance policy).

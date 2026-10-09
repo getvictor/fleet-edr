@@ -26,6 +26,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -94,9 +95,16 @@ func Build(handler http.Handler, opts Options) http.Handler {
 		h = opts.ClientIPResolver.Middleware(h)
 	}
 	h = otelhttp.NewHandler(h, opts.ServiceName,
+		// accessLog records http.server.request.duration with the matched route template. otelhttp's own instrument of the same name
+		// cannot see r.Pattern from outside the mux, so it would add a route-less duplicate of every request.
+		otelhttp.WithMeterProvider(noop.NewMeterProvider()),
+		// otelhttp calls the formatter at span start, before the mux runs, and again at span end once r.Pattern is set. The start
+		// name is the raw path because the route-tier sampler decides then; the end name is the route template, so ids and scanner
+		// probes do not each create a span name. accessLog covers the request whose pattern otelhttp never sees.
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-			// otelhttp calls the formatter inside its own handler, so r.Pattern may be empty. Use method + path; patterns like
-			// "/api/hosts/{host_id}/tree" appear as literal paths, which is acceptable for a pilot-scale product.
+			if route := routeTemplate(r.Pattern); route != "" {
+				return r.Method + " " + route
+			}
 			return r.Method + " " + r.URL.Path
 		}),
 	)
@@ -189,6 +197,9 @@ func accessLog(logger *slog.Logger, slowThreshold time.Duration, recorder HTTPRe
 			if route == "" {
 				route = "unmatched"
 			}
+			// The span was named from the raw path so the sampler could tier it. Rename it here as well as in otelhttp's end-of-span
+			// formatter call: an unmatched request has no pattern for that call to use, so only this names it "unmatched".
+			trace.SpanFromContext(ctx).SetName(r.Method + " " + route)
 			if recorder != nil {
 				recorder.ObserveHTTPRequest(ctx, r.Method, route, rw.status, dur)
 			}

@@ -160,7 +160,7 @@ type clientIPCtxKey struct{}
 // resolver is wired (returns peer IP).
 //
 // Production code should always call this rather than
-// httpserver.RemoteIP or r.RemoteAddr directly: prod sets the value
+// reading r.RemoteAddr directly: prod sets the value
 // via middleware, and the fallback keeps tests that don't go through
 // the middleware chain working. The fallback NEVER honours XFF: a
 // forgotten middleware wire-up degrades to the secure default rather

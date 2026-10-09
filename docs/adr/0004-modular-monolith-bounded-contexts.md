@@ -1,6 +1,6 @@
 # 0004. Modular monolith with bounded contexts
 
-- Status: Implemented; amendment implemented via [0015](0015-clickhouse-visibility-store.md) (the seventh context, `visibility`, carved from `detection` to own ingestion and the event store, is now live; `observability` was the sixth)
+- Status: Implemented; amended via [0015](0015-clickhouse-visibility-store.md) (the seventh context, `visibility`, carved from `detection` to own ingestion and the event store; `observability` was the sixth) and [0021](0021-rule-content-bounded-context.md) (the eighth context, `rulecontent`, carved from `rules`); all eight are live
 - Date: 2026-05-01
 - Deciders: getvictor
 

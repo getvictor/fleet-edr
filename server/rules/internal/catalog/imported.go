@@ -636,23 +636,11 @@ func (r *importedRule) evalEvent(
 	if view == nil {
 		return nil, nil
 	}
-	matched := r.detection.Matches(view.Event)
-	if resolveErr := view.Event.ResolveErr(); resolveErr != nil {
-		return nil, resolveErr
-	}
-	if !matched {
-		view.noteUnmatched(scope, r.id)
-		return nil, nil
-	}
-
-	// The same process the detection matched against, not a second lookup of it.
-	proc, err := view.subjectOrAbandon(scope, r.id)
-	if err != nil {
+	// The same process the detection matched against, not a second lookup of it. A nil one is no match, or a subject whose row
+	// never materialized within the grace window: either way there is no process to link a finding to.
+	proc, err := view.matchSubject(scope, r.detection, r.id)
+	if err != nil || proc == nil {
 		return nil, err
-	}
-	if proc == nil {
-		// The subject's row never materialized within the grace window, so there is no process to link the finding to.
-		return nil, nil
 	}
 	return &api.Finding{
 		HostID:      evt.HostID,

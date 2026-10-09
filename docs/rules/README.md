@@ -4,7 +4,7 @@ The pack moved. One declarative rule file per registered detection now lives at 
 
 ## Why it moved
 
-Phase 1 generated these files and nothing read them, so `docs/` was a reasonable home. From Phase 2 the rules read their own parameters out of them at boot, and a `go:embed` pattern cannot contain `..`, so a package under `server/rules/` cannot embed a directory at the repository root.
+The rules read their own parameters out of these files at boot, and a `go:embed` pattern cannot contain `..`, so a package under `server/rules/` cannot embed a directory at the repository root.
 
 Keeping the canonical copy here and generating a second one next to the code was the obvious workaround and the wrong one: that is the arrangement in issue #781, where the embedded OpenAPI spec drifted 49 lines from its canonical source because the `go:generate` that syncs them is wired to nothing. One canonical location, owned by the code that reads it, has no such failure mode.
 

@@ -1,8 +1,10 @@
 // fleet-edr-ingest is a standalone event ingestion service. It accepts events
-// from agents and writes them to MySQL without any processing. A separate
-// fleet-edr-server instance polls for unprocessed events and builds process graphs.
+// from agents and writes them to the ClickHouse archive and the MySQL event
+// queue without any processing. A separate fleet-edr-server instance claims
+// queued events and builds process graphs.
 //
-// Same env surface as fleet-edr-server; processor knobs are ignored.
+// It reads the server's storage, TLS and auth env vars; processor knobs are
+// ignored, and it does not honour EDR_TRUSTED_PROXIES or EDR_SHUTDOWN_DRAIN.
 package main
 
 import (

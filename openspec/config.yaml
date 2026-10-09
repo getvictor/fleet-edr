@@ -3,7 +3,7 @@ schema: spec-driven
 # Project context injected into every artifact prompt so agents know the
 # stack and conventions before drafting proposals or specs.
 context: |
-  Fleet EDR is a standalone macOS endpoint detection and response
+  Fleet EDR is a standalone, macOS-first endpoint detection and response
   product. It ships its own server, agent, UI, and installer; Fleet
   (the MDM product) is one supported deployment channel, not an
   owner of the data plane.
@@ -16,11 +16,13 @@ context: |
                       (anchor apple generic, team ID FDG8Q7N4CC).
   - agent/            Go daemon. Receives events from the extension
                       via XPC, queues them in a SQLite WAL store,
-                      uploads to the server with bearer-token auth,
+                      uploads to the server with a signed, refreshable
+                      host token,
                       polls for and executes commands, reconciles
                       missing exit events.
   - server/           Go ingestion server. Stateless ingest endpoint
-                      writes to MySQL; a separate processor builds
+                      writes events to the ClickHouse archive and the
+                      MySQL work queue; a separate processor builds
                       the per-host process forest and runs detection
                       rules. Embeds the React UI.
   - ui/               React + TypeScript + D3 frontend, built into
@@ -32,14 +34,16 @@ context: |
                       profiles for MDM distribution.
 
   Authentication shapes:
-  - Agents use a per-host bearer token issued at /api/enroll.
-  - UI operators use a session cookie + CSRF token issued at
-    POST /api/session.
+  - Agents use a per-host signed token issued at POST /api/enroll
+    and refreshed at POST /api/token/refresh.
+  - UI operators use a session cookie + CSRF token issued by the
+    OIDC or break-glass sign-in (GET /api/session reads it).
   - Tags are protected by the release-tag-protection ruleset; the
     release workflow gates Apple signing on the release-signing
     GitHub Environment.
 
-  Targets: Apple Silicon, macOS 13+. Pilot scale 10 - 500 endpoints.
+  Targets: Apple Silicon, macOS 26.2+ (the app's deployment target;
+  ADR-0002). Pilot scale 10 to 500 endpoints.
 
 # Project-wide rules that every artifact must respect.
 rules:

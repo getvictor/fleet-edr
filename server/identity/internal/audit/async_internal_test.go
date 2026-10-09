@@ -68,6 +68,7 @@ func TestAsyncWriter_DrainGlobalDeadline_SpillsToSlog(t *testing.T) {
 	assert.LessOrEqual(t, spilled, uint64(queued), "cannot spill more than were queued")
 	assert.LessOrEqual(t, rec.calls.Load(), int64(1),
 		"a 1ms deadline against a 40ms recorder must drain at most one event before spilling the rest")
+	assert.EqualValues(t, queued-rec.calls.Load(), spilled, "every queued event must be either recorded or spilled")
 
 	logs := buf.String()
 	assert.Contains(t, logs, `"undrained-payload"`, "the spill line must carry the undrained event payload")

@@ -855,53 +855,6 @@ paths:
         "404":
           description: Host not found
 
-  /api/policy:
-    get:
-      tags: [Admin]
-      summary: Current blocklist policy
-      security:
-        - SessionCookie: []
-      responses:
-        "200":
-          description: Current policy
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Policy"
-    put:
-      tags: [Admin]
-      summary: Replace blocklist policy
-      description: |
-        Replaces the entire policy atomically and fans out a
-        `policy.update` command to every active host. The response
-        reports how many hosts received the fan-out; failed hosts will
-        pick it up on their next poll.
-      security:
-        - SessionCookie: []
-          CSRF: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                paths:
-                  type: array
-                  items: {type: string}
-                hashes:
-                  type: array
-                  items: {type: string}
-                reason: {type: string}
-                actor: {type: string}
-      responses:
-        "200":
-          description: Policy updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PolicyUpdateResult"
-
   /api/attack-coverage:
     get:
       tags: [Admin]
@@ -2272,27 +2225,6 @@ components:
         revoked_at: {type: string, format: date-time}
         revoke_reason: {type: string}
         revoked_by: {type: string}
-
-    Policy:
-      type: object
-      properties:
-        version: {type: integer, format: int64}
-        blocklist:
-          type: object
-          properties:
-            paths:
-              type: array
-              items: {type: string}
-            hashes:
-              type: array
-              items: {type: string}
-
-    PolicyUpdateResult:
-      type: object
-      properties:
-        version: {type: integer, format: int64}
-        fanout_hosts: {type: integer}
-        fanout_failed: {type: integer}
 
     NavigatorLayer:
       type: object

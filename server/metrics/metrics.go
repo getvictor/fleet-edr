@@ -200,7 +200,8 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.detection.rule_evaluation_skipped",
 		metric.WithDescription("Rules a replica stopped evaluating after they exceeded their evaluation budget repeatedly (issue #767). "+
 			"The rule in `rule_id` is no longer contributing detections on that replica and needs its patterns looked at. Cleared by a "+
-			"restart, so alert on an increase rather than an absolute value."),
+			"restart, so alert on the value being above zero: it is recorded once per rule per replica, so an increase-based "+
+			"condition never sees it."),
 		metric.WithUnit("{rule}"),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,

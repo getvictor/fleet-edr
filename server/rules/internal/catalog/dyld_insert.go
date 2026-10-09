@@ -107,21 +107,16 @@ func (r *DyldInsert) EvaluateScoped(
 			continue
 		}
 		se := view.Event
-		if !dyldDetection().Matches(se) {
-			view.noteUnmatched(scope, r.ID())
-			continue
-		}
-		// The variable the detection matched on, named in the alert WITHOUT its value: the injected dylib path is attacker-chosen
-		// content and the finding is read by people, so the rule has always redacted it.
-		matched := redactedDyldAssignment(se)
-
-		proc, err := view.subjectOrAbandon(scope, r.ID())
+		proc, err := view.matchSubject(scope, dyldDetection(), r.ID())
 		if fatal := miss.absorb(err); fatal != nil {
 			return fatalResult(findings, fatal)
 		}
 		if proc == nil {
 			continue
 		}
+		// The variable the detection matched on, named in the alert WITHOUT its value: the injected dylib path is attacker-chosen
+		// content and the finding is read by people, so the rule has always redacted it.
+		matched := redactedDyldAssignment(se)
 
 		findings = append(findings, api.Finding{
 			HostID:      evt.HostID,

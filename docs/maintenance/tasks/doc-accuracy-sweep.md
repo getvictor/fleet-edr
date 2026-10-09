@@ -31,7 +31,7 @@ Every run so far has re-chased these. Skip them unless something else looks wron
 - **Unchecked `[ ]` checklist items.** `docs/best-practices.md` legitimately names files that do not exist yet (`docs/slos.md`, `.devcontainer/devcontainer.json`); that is the point of the checkbox.
 - **"Future:" and preserved-branch references.** `.github/workflows/system-test.yml` is named as work tracked in #220, not as a file that exists.
 - **Env vars absent from code may be PROHIBITIONS.** `EDR_SESSION_SIGNING_KEY` appears in the canonical identity spec precisely because the server SHALL NOT read it. `EDR_HOST_TOKEN_GRACE` appears as a historical example of a dead knob.
-- **Historical text.** ADRs, this log, and `openspec/changes/archive/**` correctly record paths and counts as they were. ADR-0004 and ADR-0005 say "five bounded contexts" because that was the decision; the live count is seven.
+- **Historical text.** ADRs, this log, and `openspec/changes/archive/**` correctly record paths and counts as they were. ADR-0004 and ADR-0005 say "five bounded contexts" because that was the decision; the live count is eight.
 - **Relative shorthand** where the sentence already names the directory (`policy/data/roles.json`, `fixtures/auth.ts`).
 
 Two method notes, both learned by getting them wrong:

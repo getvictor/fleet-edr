@@ -812,13 +812,13 @@ var (
 	ErrAppControlPolicyNotFound = errors.New("rules: application control policy not found")
 
 	// ErrAppControlInvalidRuleType is returned when the rule_type is not one of the documented enum values. Distinct from
-	// ErrAppControlUnsupportedRuleType (which is the demo-cut signal that the type is on the enum but not yet wired through validation and
-	// decisioning).
+	// ErrAppControlUnsupportedRuleType, which is reserved for a type that is on the enum but not yet wired through validation and
+	// decisioning.
 	ErrAppControlInvalidRuleType = errors.New("rules: invalid application control rule type")
 
-	// ErrAppControlUnsupportedRuleType is returned when the rule_type is on the enum but the demo cut hasn't wired its validator and
-	// decision-engine branch yet. Lifts as the remaining types come online; the constant stays as the named error so callers can errors.Is
-	// on it without breaking when the message changes.
+	// ErrAppControlUnsupportedRuleType is reserved for a future wire-enum value that lands before its validator and decision-engine
+	// branch; no validator branch produces it today, since every current enum value is wired through. It stays as the named error so
+	// callers can errors.Is on it without breaking when the message changes.
 	ErrAppControlUnsupportedRuleType = errors.New("rules: rule type not yet supported")
 
 	// ErrAppControlInvalidIdentifier is returned when the identifier does not match the format required by its rule_type (e.g. a BINARY

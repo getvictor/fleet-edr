@@ -1,6 +1,6 @@
 # 0008. Selective Endpoint Security subscription: BTM for persistence, no broad NOTIFY_OPEN
 
-- Status: Accepted (amended 2026-05-29 and 2026-05-30; see Amendments below)
+- Status: Accepted (amended 2026-05-29, 2026-05-30, 2026-05-31, 2026-09-13 and 2026-10-08; see Amendments below)
 - Date: 2026-05-29
 - Deciders: getvictor
 
@@ -68,6 +68,17 @@ Issue #998 starts step 4. The file-tamper client's watched set is now the built-
 - **Failure handling splits by origin.** A built-in path that fails to mute stays fatal, as before. A pushed path that fails is logged, because exiting would restart the extension into the same persisted failure, and the running client unmutes nothing that the failed update drops. A restart watches the persisted set; #1018 tracks that, and the ordering of sets across a database restore.
 
 Validated on edr-dev (macOS 26.3, SIP off) against a dev server, by hand-queued commands, reading the uploaded events: with nothing pushed, a write under `/Library/StartupItems/` produced no event while `/etc/sudoers.d/` did. Pushing `/Library/StartupItems/` (prefix) took effect on the running client (targets 4 to 5) and writes there produced `open` and `file_delete` events, with sudoers still captured. After killing the extension it restarted with 5 targets from the persisted set and still captured both. Replacing the set with `/etc/emond.d/` (targets 6: two spellings added, one path dropped) captured writes there, reported under `/private/etc/emond.d/`, and stopped capturing `/Library/StartupItems/`. A payload the extension could not decode left the set and the persisted file unchanged, and an empty set returned to the 4 built-in targets. An extension predating this change logged the new message as unknown and kept its connection, and exec capture continued throughout.
+
+## Amendment 2026-10-08: three ES clients, and the file-tamper client watches renames and destructive opens
+
+None of these reverses the Decision. Collection stays selective at the source, and target-path inversion stays off the exec-authorization client.
+
+- **The file-tamper client subscribes to `NOTIFY_RENAME`** (#935), together with `NOTIFY_TRUNCATE`, `NOTIFY_UNLINK` and `NOTIFY_OPEN` (#940). The 2026-05-31 objection to rename did not hold: one `visudo` edit already fires CREATE, WRITE and UNLINK on a `.tmp` sibling inside the watched prefix, and rename is the only event that carries a source path, which is what lets `sudoers_tamper` tell an atomic replace from that noise. `NOTIFY_OPEN` is there because `: > /etc/sudoers` empties the file through `open(2)` with `O_TRUNC` and raises no other event. The extension discards every open that does not destroy content before it is serialized.
+- **A third ES client reports reads of browser credential stores** (#1194, #1201). `CredentialStoreSubscriber` subscribes to `NOTIFY_OPEN` alone, with target-path inversion scoped to browsers' saved-password and cookie files (or to a browser directory as a prefix once it holds more profiles than the bound), and drops an open by the browser's own team in the extension. It is a client of its own for the reason the file-tamper client is: inversion is client-global. Unlike the other two clients, failing to create it is not fatal.
+- **Step 4 is complete.** The server stores, bounds and pushes the watched set, and the console edits it, so the server-pushed set is now the end state the Decision named rather than future work.
+- **The primary client also subscribes to `NOTIFY_TCC_MODIFY`** (#1196), a low-volume event that needs no inversion.
+
+Where the Decision and Consequences say "two ES clients", read three; the per-client lifecycle cost applies to each.
 
 ## Context
 

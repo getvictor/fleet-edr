@@ -290,7 +290,7 @@ First stable release. The product ships as two components, released together for
 [0.7.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.7.0
 [0.6.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.6.0
 [0.5.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.1
-[0.5.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.0
+[0.5.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.5.1
 [0.4.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.4.0
 [0.3.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.3.0
 [0.2.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.1
