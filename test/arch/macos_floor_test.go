@@ -5,8 +5,8 @@ package arch_test
 // through 26.1 installed the package and then could not launch it (ADR-0002, 2026-10-10 amendment).
 
 import (
+	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,9 +26,9 @@ var (
 // spec:release-packaging/the-installer-refuses-a-macos-the-bundles-cannot-run-on/an-older-mac-is-refused-with-the-requirement-named
 func TestMacOSFloor_InstallerMatchesDeploymentTarget(t *testing.T) {
 	t.Parallel()
-	root := repoRootFromTest(t)
+	repo := os.DirFS(repoRootFromTest(t))
 
-	pbxproj, err := os.ReadFile(filepath.Join(root, "extension", "edr", "edr.xcodeproj", "project.pbxproj"))
+	pbxproj, err := fs.ReadFile(repo, "extension/edr/edr.xcodeproj/project.pbxproj")
 	require.NoError(t, err)
 	targets := deploymentTargetRE.FindAllStringSubmatch(string(pbxproj), -1)
 	require.NotEmpty(t, targets, "the Xcode project sets no MACOSX_DEPLOYMENT_TARGET")
@@ -37,7 +37,7 @@ func TestMacOSFloor_InstallerMatchesDeploymentTarget(t *testing.T) {
 		assert.Equal(t, deploymentTarget, m[1], "every build configuration must share one deployment target")
 	}
 
-	distribution, err := os.ReadFile(filepath.Join(root, "packaging", "pkg", "distribution.xml"))
+	distribution, err := fs.ReadFile(repo, "packaging/pkg/distribution.xml")
 	require.NoError(t, err)
 	installerMin := installerMinRE.FindStringSubmatch(string(distribution))
 	require.NotNil(t, installerMin, "distribution.xml declares no <os-version min>")
