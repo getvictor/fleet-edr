@@ -2,7 +2,8 @@
 <!--
     productbuild distribution file for the Fleet EDR installer.
 
-    Enforces Apple Silicon (arm64) and macOS 13+. The three component packages
+    Enforces Apple Silicon (arm64) and macOS 26 (Tahoe) or later, the deployment
+    target the app and both extensions are built for (ADR-0002). The three component packages
     (agent, app, support) are built separately by build.sh and combined here
     into a single .pkg that the MDM uploads or the operator double-clicks.
 
@@ -16,12 +17,12 @@
 
     <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
     <allowed-os-versions>
-        <os-version min="13.0"/>
+        <os-version min="26.0"/>
     </allowed-os-versions>
 
     <!--
         Script-driven installation gate: refuse to install on Intel Macs or on
-        pre-13 OS. hostArchitectures=arm64 above handles Intel on recent macOS
+        anything older than macOS 26. hostArchitectures=arm64 above handles Intel on recent macOS
         installer versions, but the JS is a belt-and-suspenders check that
         runs on anything that honors volume selection.
     -->
@@ -52,9 +53,9 @@ function installationCheck() {
 function volumeCheck() {
     var ver = system.version.ProductVersion.split('.');
     var major = parseInt(ver[0], 10);
-    if (isNaN(major) || major < 13) {
+    if (isNaN(major) || major < 26) {
         my.result.title = 'Unsupported macOS';
-        my.result.message = 'Fleet EDR requires macOS 13 (Ventura) or later.';
+        my.result.message = 'Fleet EDR requires macOS 26 (Tahoe) or later.';
         my.result.type = 'Fatal';
         return false;
     }

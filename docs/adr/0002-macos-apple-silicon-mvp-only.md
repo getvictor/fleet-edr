@@ -1,6 +1,6 @@
 # 0002. MVP ships macOS on Apple Silicon only
 
-- Status: Accepted
+- Status: Accepted (amended 2026-06-14 and 2026-10-10; see Amendments below)
 - Date: 2026-04-18
 - Deciders: getvictor
 
@@ -20,6 +20,20 @@ MVP targets macOS 13+ on Apple Silicon only. Intel Macs are a deliberate non-dec
 ## Amendment (2026-06-14): supported floor is macOS 26+
 
 As of the v0.2.0 release the supported and tested floor for the agent is macOS 26+ (Tahoe), which is what QA validates against today. This is a support and test-coverage statement, not a code change: the codebase still builds for and installs on macOS 13+ (`extension/edr/Package.swift` declares `.macOS(.v13)` and `packaging/pkg/distribution.xml` allows `min="13.0"`), so the macOS-13 references in ADR-0007, ADR-0008, and the build tooling remain accurate descriptions of the technical floor. macOS 13, 14, and 15 (Ventura, Sonoma, Sequoia) may run but are untested and unsupported (there is no macOS 16 through 25: Apple jumped to year-based versioning at Tahoe / macOS 26). Revisit to either extend QA coverage down to 13 or raise the installer minimum to 26 (which would refuse older systems outright) once that posture is decided.
+
+## Amendment (2026-10-10): the installer refuses anything older than macOS 26
+
+The 2026-06-14 amendment stopped short of making the floor technical, and the two halves drifted: the app and both extensions were built with `MACOSX_DEPLOYMENT_TARGET = 26.2` while the installer still accepted macOS 13. A Mac on 13 through 26.1 installed the package and then could not launch what it installed.
+
+The floor is now macOS 26.0 everywhere it is enforced:
+
+- `MACOSX_DEPLOYMENT_TARGET = 26.0` in `extension/edr/edr.xcodeproj` for the app and both extensions. They compile at 26.0 with no availability errors, so nothing they call needs 26.1 or later.
+- `packaging/pkg/distribution.xml` allows `min="26.0"` and its `volumeCheck()` refuses any major version below 26 with a message naming the requirement.
+- `test/arch/macos_floor_test.go` fails the build if the installer minimum and the deployment target disagree.
+
+`extension/edr/Package.swift` still declares `.macOS(.v13)`. That package is the SwiftPM facade the unit tests build, never a shipped artifact, and raising it needs a newer `swift-tools-version`. The macOS-13 references in ADR-0007 and ADR-0008 describe when those APIs appeared, which stays true.
+
+Macs that are not on macOS 26 are refused at install time and must upgrade first. Supporting an older release again means lowering both numbers together and adding the `#available` guards the build would then demand.
 
 ## Consequences
 

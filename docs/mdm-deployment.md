@@ -77,7 +77,7 @@ sudo tail -n 50 /var/log/fleet-edr-agent.log | grep -E 'ES|receiver'
 
 ## Step 3: push the background items profile
 
-Upload `edr-login-items.mobileconfig` the same way. It needs macOS 13 or later.
+Upload `edr-login-items.mobileconfig` the same way.
 
 What the profile does: a `com.apple.servicemanagement` payload with one rule matching team ID `FDG8Q7N4CC` marks every background item the team signs as managed: the agent daemon (`com.fleetdm.edr.agent`) and the activation LaunchAgent (`com.fleetdm.edr.activate`). Without it, a user can turn either off in **System Settings > General > Login Items & Extensions**, which stops the agent or the re-activation after an upgrade. With it, both show as managed and cannot be turned off.
 
@@ -117,7 +117,7 @@ Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope t
 
 The pkg's install flow:
 
-1. `installationCheck()` validates the Mac is Apple Silicon + macOS 13+.
+1. `installationCheck()` validates the Mac is Apple Silicon + macOS 26 or later.
 2. Preinstall script stops any existing `com.fleetdm.edr.agent` LaunchDaemon and boots out the activation LaunchAgent (idempotent; no-op on fresh installs). It does not deactivate the system extension: the post-upgrade activation replaces the old bundle in place.
 3. Payload lands under `/usr/local/bin`, `/Applications`, `/Library/LaunchDaemons`, `/Library/LaunchAgents`, `/Library/Application Support/com.fleetdm.edr`.
 4. Postinstall script loads the LaunchDaemon (`launchctl bootstrap system ...`) and kickstarts it. The agent reads `/etc/fleet-edr.conf`, enrolls, starts polling.

@@ -6,7 +6,7 @@
 
 ## Context
 
-Every network boundary this product owns is a boundary between components we own or specify: the agent (our Go binary, macOS 13+ today and Windows 11 24H2+ per ADR-0018, both of which ship TLS 1.3 in their system stacks), the browser UI (evergreen Chrome / Safari / Firefox / Edge), and API clients generated against our OpenAPI document.
+Every network boundary this product owns is a boundary between components we own or specify: the agent (our Go binary, macOS 26+ today and Windows 11 24H2+ per ADR-0018, both of which ship TLS 1.3 in their system stacks), the browser UI (evergreen Chrome / Safari / Firefox / Edge), and API clients generated against our OpenAPI document.
 
 That last category is not empty, and it is the one that carries the risk. `docs/api.md` explicitly supports third-party integrators polling `GET /api/alerts`, because outbound webhook / SIEM push does not ship until v1.1. Those clients run on runtimes we do not control, so the honest framing is not "no such client exists" but "TLS 1.3 is a stated requirement for supported API clients". Any runtime new enough to be a sensible choice for a SIEM integration in 2026 has it; the requirement is a real constraint we are choosing to impose rather than an absence we are observing.
 

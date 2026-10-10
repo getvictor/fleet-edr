@@ -8,7 +8,7 @@ Self-contained scripts that fire a real Fleet EDR detection on a live host, for 
 
 ## Prerequisites
 
-- An Apple Silicon Mac on macOS 13+ with the agent installed, the system + network extensions active, and Full Disk Access granted. See [`docs/install-agent-manual.md`](../../docs/install-agent-manual.md).
+- An Apple Silicon Mac on macOS 26 or later with the agent installed, the system + network extensions active, and Full Disk Access granted. See [`docs/install-agent-manual.md`](../../docs/install-agent-manual.md).
 - Outbound internet from that host: the beacon resolves a [nip.io](https://nip.io) name over plain UDP DNS (which the proxy sees, unlike DoH/DoT) and opens a real outbound TCP connection to the resolved address.
 - The Fleet EDR server reachable with this host enrolled, so the alert surfaces in the UI.
 
