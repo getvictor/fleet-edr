@@ -1,6 +1,6 @@
 # 0007. XPC peer validation uses libxpc-side code-signing requirement; no audit_token layer
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-10: the deferred identifier pin has landed; see the amendment below)
 - Date: 2026-05-25
 - Deciders: getvictor
 
@@ -87,6 +87,21 @@ The reason it is **deferred** rather than landed here:
 - It is a tightening, not a fix. The current gate is correct against unauthorized processes; the deferred work raises the bar against a more sophisticated threat (a trusted-but-malicious insider with an FDM signing key for a different binary). That threat class is not in the MVP threat model.
 
 When the agent's production signing-identifier story is locked down, narrow the constants in `PeerCodeSigningRequirement` to include the `identifier "..."` clause, update both the spec scenarios and the `XPCServerLogicTests.testProductionRequirementPinsTheFleetTeamID` assertion, and reference this ADR's "Deferred tightening" section from the change description.
+
+## Amendment (2026-10-10): the agent identifier is pinned in release builds
+
+The tightening deferred above has landed. Both conditions it waited on now hold:
+
+- **The identifier is locked down.** `packaging/pkg/build.sh` signs the release agent with `--identifier fleet-edr-agent` explicitly, in every signing mode, and the `release-packaging` spec requires it.
+- **The threat model now needs it.** The inbound XPC documents grew: containment state, application-control rules and watched paths now arrive over this channel. With team ID alone, any binary the team ever signed could lift a host's containment or rewrite its blocklist.
+
+The production requirement is now:
+
+```text
+anchor apple generic and identifier "fleet-edr-agent" and certificate leaf[subject.OU] = "FDG8Q7N4CC"
+```
+
+Checked with `codesign -R` against the released v0.7.0 agent: the real agent satisfies it, and the same signature checked against any other identifier does not. Debug builds keep accepting the ad-hoc dev agent by the identifier alone. Renaming the agent's signing identifier is now a coordinated change to `build.sh`, `task build:agent` and `PeerCodeSigningRequirement`, as the deferred-tightening section predicted.
 
 ## Alternatives considered
 

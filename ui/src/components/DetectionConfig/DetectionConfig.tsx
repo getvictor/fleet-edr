@@ -17,6 +17,8 @@ import {
   type RuleDocEntry,
 } from "../../api";
 import { useCan, PermissionAction } from "../../permissions-core";
+import { useReauthRetry } from "../../hooks/useReauthRetry";
+import { ReauthModal } from "../ReauthModal";
 import { formatRelativeISO } from "../../time";
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
@@ -597,12 +599,17 @@ export function DetectionConfig() {
     };
   }, [reload]);
 
+  // Every write here is detection_config.write, which needs a fresh sign-in because it can blind detection fleet-wide. One hook
+  // serves them all: it runs the operation, and on reauth_required prompts and runs the same operation again.
+  const runOp = useCallback(async (op: () => Promise<unknown>): Promise<unknown> => op(), []);
+  const { call: withReauth, modal: reauthModal } = useReauthRetry(runOp);
+
   const runMutation = useCallback(
     async (op: () => Promise<unknown>): Promise<void> => {
       setActionError(null);
       setMutating(true);
       try {
-        await op();
+        await withReauth(op);
         await reload();
       } catch (err: unknown) {
         setActionError(errMessage(err));
@@ -610,7 +617,7 @@ export function DetectionConfig() {
         if (mountedRef.current) setMutating(false);
       }
     },
-    [reload],
+    [reload, withReauth],
   );
 
   const handleAddExclusion = useCallback(() => {
@@ -706,12 +713,14 @@ export function DetectionConfig() {
       setMutating(true);
       (async () => {
         try {
-          await upsertDetectionRuleSetting({
-            rule_id: pending.ruleID,
-            mode: pending.mode,
-            severity_override: pending.severity || undefined,
-            reason,
-          });
+          await withReauth(() =>
+            upsertDetectionRuleSetting({
+              rule_id: pending.ruleID,
+              mode: pending.mode,
+              severity_override: pending.severity || undefined,
+              reason,
+            }),
+          );
           await reload();
           if (mountedRef.current) setPendingMode(null);
         } catch (err: unknown) {
@@ -723,7 +732,7 @@ export function DetectionConfig() {
         /* inner try/catch handles all paths */
       });
     },
-    [pendingMode, reload],
+    [pendingMode, reload, withReauth],
   );
 
   const cancelPendingMode = useCallback(() => {
@@ -736,6 +745,7 @@ export function DetectionConfig() {
 
   return (
     <>
+      <ReauthModal {...reauthModal} />
       <PageHeader
         title="Detection tuning"
         subtitle="False-positive exclusions and per-rule mode the detection engine consults at evaluation time"

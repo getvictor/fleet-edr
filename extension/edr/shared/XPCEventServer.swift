@@ -5,39 +5,38 @@ import os.log
 /// constants so the unit tests can assert the requirement language on both production and debug paths without spinning
 /// up an XPC listener.
 ///
-/// Production: only binaries signed with the Fleet Device Management team ID (FDG8Q7N4CC, chained to the Apple anchor)
-/// pass. Debug builds additionally accept the locally-built ad-hoc agent by its code-signing IDENTIFIER so dev iteration
-/// on SIP-disabled VMs works: `go build` produces an ad-hoc signature with no team ID, so the strict production
-/// requirement would lock dev iteration out (observed on edr-dev as "Received message forbidden due to code signing
-/// requirement" rejecting the agent's hello message). Pinning the identifier rather than a content-derived cdhash is the
-/// deferred tightening ADR-0007 anticipated: `task build:agent` re-signs the ad-hoc binary with the fixed identifier
-/// `fleet-edr-agent` (the same designated identifier the notarized release carries), so the pin no longer goes stale on
-/// every rebuild the way the old committed cdhash did (issue #623). The active `peerCodeSigningRequirement` constant
-/// below excludes the ad-hoc branch from release builds so production binaries are team-id-only even if the .debug string
-/// is left in source.
+/// Production: a peer must chain to the Apple anchor, carry the Fleet Device Management team ID (FDG8Q7N4CC) in its leaf
+/// certificate, AND be signed with the agent's identifier `fleet-edr-agent`. Team ID alone is not enough: the inbound
+/// documents (containment, application-control rules, watched paths) would otherwise be accepted from any binary the team
+/// ever signed. The release package signs the agent with this identifier explicitly (packaging/pkg/build.sh), so the pin
+/// cannot drift from what ships (ADR-0007, 2026-10-10 amendment).
+///
+/// Debug builds additionally accept the locally-built ad-hoc agent by that identifier alone so dev iteration on
+/// SIP-disabled VMs works: `go build` produces an ad-hoc signature with no team ID, so the production requirement would lock
+/// dev iteration out. `task build:agent` re-signs the ad-hoc binary with the same fixed identifier, so the pin does not go
+/// stale on every rebuild the way the old committed cdhash did (issue #623). The active `peerCodeSigningRequirement`
+/// constant below excludes the identifier-only branch from release builds.
 enum PeerCodeSigningRequirement {
     /// FDM team ID. Every signed peer that reaches us in production must chain to a leaf cert carrying this OU.
     static let teamID = "FDG8Q7N4CC"
 
-    /// Code-signing identifier of the locally-built ad-hoc agent. `task build:agent` re-signs the binary with
-    /// `--identifier fleet-edr-agent` so this value is stable across every rebuild (unlike the content-derived cdhash it
-    /// replaced), and it matches the designated identifier the notarized release carries, so no dev re-pinning is needed.
-    static let agentIdentifierDebug = "fleet-edr-agent"
+    /// Code-signing identifier of the agent, in release (packaging/pkg/build.sh) and in dev (`task build:agent`) alike.
+    static let agentIdentifier = "fleet-edr-agent"
 
-    /// Production requirement string: Apple anchor + FDM team ID, nothing else. Used by release-configured extensions.
-    static let production = "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\""
-
-    /// Debug requirement string: production + the ad-hoc agent's fixed identifier. Used by debug-configured extensions
-    /// only. On a SIP-disabled dev VM this accepts an ad-hoc binary claiming the agent identifier; that is the accepted
-    /// dev-side trade the .debug branch makes, and it never reaches release builds (see peerCodeSigningRequirement).
-    static let debug = """
-        (anchor apple generic and certificate leaf[subject.OU] = "\(teamID)") or \
-        identifier "\(agentIdentifierDebug)"
+    /// Production requirement string: Apple anchor, the agent's identifier, and the FDM team ID, all three. Used by
+    /// release-configured extensions.
+    static let production = """
+        anchor apple generic and identifier "\(agentIdentifier)" and certificate leaf[subject.OU] = "\(teamID)"
         """
+
+    /// Debug requirement string: production, or the ad-hoc agent by its fixed identifier alone. Used by debug-configured
+    /// extensions only. On a SIP-disabled dev VM this accepts an ad-hoc binary claiming the agent identifier; that is the
+    /// accepted dev-side trade the .debug branch makes, and it never reaches release builds (see peerCodeSigningRequirement).
+    static let debug = "(\(production)) or identifier \"\(agentIdentifier)\""
 }
 
 /// The active requirement string the listener applies at peer-accept time. Picks between .production and .debug via
-/// `#if DEBUG` so a release extension never accepts the ad-hoc cdhash even if the .debug constant is left in source.
+/// `#if DEBUG` so a release extension never accepts the identifier-only clause even if the .debug constant is left in source.
 private let peerCodeSigningRequirement: String = {
     #if DEBUG
     return PeerCodeSigningRequirement.debug

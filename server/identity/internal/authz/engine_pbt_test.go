@@ -38,8 +38,8 @@ const rolesPath = "policy/data/roles.json"
 //     except when the action+resource pair requires a fresh auth
 //     event and the actor's SessionFresh=false (then it denies with
 //     reauth_required). The Rego policy's requires_fresh_auth covers
-//     host.{isolate,kill_process,run_script} and
-//     containment_config.write unconditionally, and alert.resolve when
+//     host.{isolate,kill_process,run_script}, enrollment.revoke, containment_config.write,
+//     rule_content.write and detection_config.write unconditionally, and alert.resolve when
 //     resource.severity=="critical"; the test's requiresFreshAuth
 //     predicate mirrors that table.
 //  4. Determinism: two Allow calls with the same input return the
@@ -220,7 +220,10 @@ var freshAuthActions = map[api.Action]struct{}{
 	api.ActionHostIsolate:            {},
 	api.ActionHostKillProcess:        {},
 	api.ActionHostRunScript:          {},
+	api.ActionEnrollmentRevoke:       {},
 	api.ActionContainmentConfigWrite: {},
+	api.ActionRuleContentWrite:       {},
+	api.ActionDetectionConfigWrite:   {},
 }
 
 func requiresFreshAuth(action api.Action, resource api.Resource) bool {

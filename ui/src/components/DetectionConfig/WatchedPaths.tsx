@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   DetectionConfigApiError,
   getWatchedPaths,
@@ -12,6 +12,8 @@ import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
 import { Table, EmptyState } from "../ui/Table";
 import { ReasonModal } from "./ReasonModal";
+import { useReauthRetry } from "../../hooks/useReauthRetry";
+import { ReauthModal } from "../ReauthModal";
 
 const MATCH_LABEL: Record<WatchedPath["match"], string> = {
   literal: "This file",
@@ -32,6 +34,14 @@ function sameEntries(a: readonly WatchedPath[], b: readonly WatchedPath[]): bool
 // operator builds a draft of the whole set and saves it with a reason; the server validates, stores and pushes it. The server is the
 // one validator, and its refusal names the entry and why, so it is shown as written rather than re-derived here.
 export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
+  // Saving is detection_config.write, which needs a fresh sign-in: on reauth_required the hook prompts and saves again.
+  const { call: replaceWithReauth, modal: reauthModal } = useReauthRetry(
+    useCallback(
+      (paths: WatchedPath[], reason: string, version: number): Promise<ReplaceWatchedPathsResult> =>
+        replaceWatchedPaths(paths, reason, version),
+      [],
+    ),
+  );
   const [stored, setStored] = useState<WatchedPathsResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState<WatchedPath[]>([]);
@@ -103,7 +113,7 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
     clearOutcome();
     // The version the draft started from rides along, so a save made after someone else changed the set is refused rather than
     // silently removing what they added.
-    replaceWatchedPaths(draft, reason, stored.version)
+    replaceWithReauth(draft, reason, stored.version)
       .then((result) => {
         // Every set field comes from the response, so a label the server could not resolve does not leave the previous saver's name.
         setStored({ built_in: stored.built_in, max_paths: stored.max_paths, ...result.set });
@@ -127,6 +137,7 @@ export function WatchedPaths({ canWrite }: { readonly canWrite: boolean }) {
 
   return (
     <>
+      <ReauthModal {...reauthModal} />
       <p className="detection-config__note">
         Each host&apos;s file sensor records writes, renames, truncations and deletions of these paths, on top of the ones it always
         watches: {stored.built_in.map((p) => p.path).join(", ")}. Start a path with <code>~/</code> to watch it in every user&apos;s home

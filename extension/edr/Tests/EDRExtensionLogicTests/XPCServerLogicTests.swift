@@ -58,13 +58,25 @@ final class XPCServerLogicTests: XCTestCase {
 
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-rejected-in-production-builds
     func testProductionRequirementExcludesAdHocIdentifierClause() {
-        // The lone-identifier clause must NOT appear in the production requirement string; if it did, a release extension
-        // could be tricked into accepting an arbitrary binary that merely claims the agent identifier, with no anchor or
-        // team-ID chain. Production stays anchor + team-ID only.
+        // An identifier-only alternative must NOT appear in the production requirement string; if it did, a release
+        // extension could be tricked into accepting an arbitrary binary that merely claims the agent identifier, with no
+        // anchor or team-ID chain. Production is one conjunction with no `or`, and no content-derived cdhash.
         XCTAssertFalse(PeerCodeSigningRequirement.production.contains("cdhash"),
                        "production requirement must exclude every cdhash clause")
-        XCTAssertFalse(PeerCodeSigningRequirement.production.contains("identifier \"\(PeerCodeSigningRequirement.agentIdentifierDebug)\""),
-                       "production requirement must not accept the ad-hoc agent by identifier alone")
+        XCTAssertFalse(PeerCodeSigningRequirement.production.contains(" or "),
+                       "production requirement must not offer any alternative to the full anchor + identifier + team chain")
+    }
+
+    // spec:extension-xpc-server/peer-code-signing-validation/a-team-signed-peer-with-another-identifier-is-rejected
+    func testProductionRequirementPinsTheAgentIdentifierAlongsideTheTeam() {
+        // Team ID alone would let any binary the team ever signed push containment, application-control rules and
+        // watched paths into the extensions. The identifier is ANDed into the same chain, so a team-signed peer with any
+        // other identifier fails it. Verified against the released agent with codesign -R: the real agent satisfies the
+        // string, and the same signature checked against another identifier does not.
+        XCTAssertEqual(
+            PeerCodeSigningRequirement.production,
+            "anchor apple generic and identifier \"fleet-edr-agent\" and certificate leaf[subject.OU] = \"FDG8Q7N4CC\"",
+            "production requirement must be the anchor, the agent identifier and the team ID, all required")
     }
 
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-by-its-signing-identifier
@@ -76,7 +88,7 @@ final class XPCServerLogicTests: XCTestCase {
         // acceptance), and that the content-derived cdhash clause is gone.
         XCTAssertTrue(PeerCodeSigningRequirement.debug.contains("FDG8Q7N4CC"),
                       "debug requirement must still accept the FDM team ID")
-        XCTAssertTrue(PeerCodeSigningRequirement.debug.contains("identifier \"\(PeerCodeSigningRequirement.agentIdentifierDebug)\""),
+        XCTAssertTrue(PeerCodeSigningRequirement.debug.contains("identifier \"\(PeerCodeSigningRequirement.agentIdentifier)\""),
                       "debug requirement must accept the ad-hoc agent by its fixed identifier")
         XCTAssertFalse(PeerCodeSigningRequirement.debug.contains("cdhash"),
                        "debug requirement must no longer pin a content-derived cdhash (issue #623)")
