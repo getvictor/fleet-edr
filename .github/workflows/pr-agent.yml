@@ -34,9 +34,6 @@ on:
   #
   # The command is matched exactly, either `/review` alone or `/review <args>`. A bare `startsWith` would also fire on
   # `/reviewer` or `/reviewing`, which is sloppy rather than dangerous (only the owner can trigger at all) but costs a review.
-  # Note that `/review` is also the hosted Qodo app's command, so while that app is installed one comment can start two reviews.
-  # It is paused on this repository and slated for removal, and pr-agent's own command cannot be renamed, so this is recorded
-  # rather than worked around.
   issue_comment:
     types: [created]
 
@@ -131,11 +128,10 @@ jobs:
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Configuration lives here rather than in `.pr_agent.toml` on purpose. That file is read by the hosted Qodo app, which
-          # keeps running in parallel until the comparison in #1141 settles; keeping this job's settings in the workflow means
-          # the two reviewers cannot perturb each other, and the baseline stays a baseline.
+          # This block is the whole configuration: there is no repository `.pr_agent.toml`, so nothing outside the workflow
+          # changes how pr-agent reviews.
           #
-          # Review only. `describe` is off because the maintainer owns PR bodies (same rule the hosted config states), and
+          # Review only. `describe` is off because the maintainer owns PR bodies, and
           # `improve` is off because its suggestions duplicate what the other bots already emit.
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"

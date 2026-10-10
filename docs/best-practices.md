@@ -360,7 +360,7 @@ A 2024-2026 industry shift: AI coding assistants (Claude Code, Cursor, Copilot, 
 - [x] **AI PR review bot**: the open-source pr-agent runs in this repo's own Actions (`.github/workflows/pr-agent.yml`) with a pinned model and a digest-pinned image, reviewing the maintainer's pull requests when they open or leave draft; the owner re-runs it with `/review`. Pull requests from forks are deliberately not reviewed, because a reviewing agent reads the diff as instructions and must not run with the model key on attacker-authored text. `/describe` is not run, so the maintainer owns PR bodies. `.coderabbit.yaml` layers a second reviewer (below)
 - [x] **GitHub Copilot code review** enabled at the repo level by the `main` ruleset (`copilot_code_review`, review on every push, drafts skipped)
 - [~] **CodeRabbit** configured in-repo ([`.coderabbit.yaml`](../.coderabbit.yaml): `profile: assertive`, security-leaning `tone_instructions` biasing toward bypassed authz, TOCTOU, weak crypto, audit-log tampering, secrets in logs) with path-scoped review focus; runs manual-only per project convention. Greptile not used
-- [ ] **AI-generated PR change-summary** auto-posted (Qodo can do this; today disabled by policy)
+- [ ] **AI-generated PR change-summary** auto-posted (pr-agent's `describe` can do this; disabled by policy because the maintainer owns PR bodies)
 
 ### Provenance and risk hygiene for AI-generated code
 
