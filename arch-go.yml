@@ -177,6 +177,8 @@ dependenciesRules:
         - "**.httpserver"          # TimeRange on the EventArchive correlation read
         - "**.sqlhelpers"
         - "**.testdb"
+        # The shared otelsql span policy, so the ClickHouse archive traces queries exactly as the MySQL pool does.
+        - "**.observability.tracing"
 
   # ----- testkit packages -----------------------------------------------------
   #

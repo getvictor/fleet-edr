@@ -322,16 +322,18 @@ Server logs go through the same OTLP pipeline (via `otelslog`) with `service.nam
 
 ### Trace sampling
 
-Traces are head-sampled so trace export volume stays bounded at fleet scale. Every inbound HTTP request span is classified into a tier and sampled at that tier's ratio:
+Traces are head-sampled so trace export volume stays bounded at fleet scale. Every inbound HTTP request span, and the root span of each unit of background work, is classified into a tier and sampled at that tier's ratio:
 
 | Tier | Routes | Default ratio |
 | --- | --- | --- |
-| High-volume | High-frequency agent data plane: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh` | 0.01 (1%) |
+| High-volume | High-frequency agent data plane: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh`, and the detection batches that ingest drives (`detection.batch.process`) | 0.01 (1%) |
 | Standard | Operator/UI read traffic: the dashboard and settings `GET` endpoints | 0.1 (10%) |
-| Full | Everything else: writes, admin mutations, any unclassified route | 1.0 (100%) |
+| Full | Everything else: writes, admin mutations, the periodic sweeps (`detection.periodic.*`), any unclassified route | 1.0 (100%) |
 | Drop | Liveness/health probes (`/livez`, `/readyz`, `/health`) | never exported |
 
-Sampling is parent-based: a sampled parent forces its children sampled, so a trace is never partially captured. Operator detail reads that carry a path parameter (e.g. `GET /api/alerts/{id}`) are not classified and fall to Full.
+Sampling is parent-based: a sampled parent forces its children sampled, so a trace is never partially captured. Operator detail reads that carry a path parameter (e.g. `GET /api/alerts/{id}`) are not classified and fall to Full. A detection batch's per-rule `detection.rule.evaluate` spans and its database spans are children of its batch span, so they follow its decision.
+
+Database client spans are recorded only under a parent span; a query issued outside any request, batch or sweep records no span. Connection housekeeping (session reset, statement prepare, row iteration) is not recorded as spans. The `db.sql.latency` histogram still records every query.
 
 Because traces are sampled, **read p99 / error-rate / request-rate from metrics, not from spans.** The `http.server.request.duration` histogram and the `edr.*` counters record every request and event regardless of the sample ratio; the RED dashboard above is built on that histogram and is unaffected by sampling. Spans are for exemplar drill-down, not aggregates.
 

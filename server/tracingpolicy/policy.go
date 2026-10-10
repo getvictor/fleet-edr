@@ -1,7 +1,7 @@
-// Package tracingpolicy holds the EDR route-to-sampling-tier policy: the mapping from HTTP routes to the tiers defined in
-// internal/observability/tracing. It is the "policy" half of the mechanism/policy split (the sampler + registry are the mechanism).
-// Keeping it in the server layer lets the shared tracing package stay free of EDR routes, and lets both server binaries
-// (fleet-edr-server and fleet-edr-ingest) share one classification.
+// Package tracingpolicy holds the EDR sampling-tier policy: the mapping from HTTP routes, and from the root spans of background work,
+// to the tiers defined in internal/observability/tracing. It is the "policy" half of the mechanism/policy split (the sampler +
+// registry are the mechanism). Keeping it in the server layer lets the shared tracing package stay free of EDR routes, and lets both
+// server binaries (fleet-edr-server and fleet-edr-ingest) share one classification.
 //
 // Classification keys are "METHOD /path" matching the span name the HTTP span-name formatter emits. Because that span name is the raw
 // request path (otelhttp runs before net/http route matching), only routes whose template has NO path parameters can be classified
@@ -9,7 +9,10 @@
 // (e.g. GET /api/alerts/{id}) are operator detail reads at low volume and intentionally fall to TierFull (100%), the safe default.
 package tracingpolicy
 
-import "github.com/fleetdm/edr/internal/observability/tracing"
+import (
+	"github.com/fleetdm/edr/internal/observability/tracing"
+	detectionapi "github.com/fleetdm/edr/server/detection/api"
+)
 
 type route struct {
 	method string
@@ -49,11 +52,22 @@ var drop = []route{
 	{"GET", "/health"},
 }
 
+// highVolumeSpans is background work that scales with the agent data plane and is classified by root span name rather than route.
+// The detection processor opens one batch span per host batch it claims, so its volume follows POST /api/events and it shares that
+// route's ratio. Its per-rule evaluation spans and queries are children and follow the batch's decision. The periodic sweeps
+// (detection.periodic.*) are not listed: the most frequent runs every 15 seconds, so they stay at full fidelity.
+var highVolumeSpans = []string{
+	detectionapi.BatchSpanName,
+}
+
 // Register applies the EDR sampling-tier policy to reg. Safe to call with routes a given binary does not serve: an unused registry
 // entry is inert. Routes absent from every list fall to TierFull via Registry.Lookup's zero value.
 func Register(reg *tracing.Registry) {
 	for _, r := range highVolume {
 		reg.Register(r.method, r.path, tracing.TierHighVolume)
+	}
+	for _, name := range highVolumeSpans {
+		reg.RegisterSpan(name, tracing.TierHighVolume)
 	}
 	for _, r := range standard {
 		reg.Register(r.method, r.path, tracing.TierStandard)

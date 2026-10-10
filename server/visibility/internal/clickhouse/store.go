@@ -18,15 +18,18 @@ import (
 	"github.com/jmoiron/sqlx"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 
+	"github.com/fleetdm/edr/internal/observability/tracing"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/visibility/api"
 )
 
-// Open dials the ClickHouse event archive through the same otelsql wrapper MySQL uses (server/bootstrap.OpenDB), so every archive
-// query and insert gets a span plus the connection-pool / db.sql.* RED metrics with no bespoke code (ADR-0006, OTel only). dsn is a
-// clickhouse-go DSN, e.g. "clickhouse://default:@127.0.0.1:9000/edr". Closing the handle is the caller's responsibility.
+// Open dials the ClickHouse event archive through the same otelsql wrapper and span policy MySQL uses (server/bootstrap.OpenDB), so
+// every archive query and insert is timed in the connection-pool / db.sql.* RED metrics and traced under the caller's span, with no
+// bespoke code (ADR-0006, OTel only). dsn is a clickhouse-go DSN, e.g. "clickhouse://default:@127.0.0.1:9000/edr". Closing the
+// handle is the caller's responsibility.
 func Open(ctx context.Context, dsn string) (*sqlx.DB, error) {
-	sqldb, err := otelsql.Open("clickhouse", dsn, otelsql.WithAttributes(semconv.DBSystemNameClickHouse))
+	sqldb, err := otelsql.Open("clickhouse", dsn,
+		otelsql.WithAttributes(semconv.DBSystemNameClickHouse), otelsql.WithSpanOptions(tracing.SQLSpanOptions()))
 	if err != nil {
 		return nil, fmt.Errorf("open clickhouse: %w", err)
 	}

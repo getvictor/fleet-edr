@@ -735,3 +735,8 @@ func IsValidationError(err error) bool {
 	return errors.Is(err, ErrInvalidAlertTransition) ||
 		errors.Is(err, ErrInvalidUserUpdater)
 }
+
+// BatchSpanName is the root span the detection processor opens around each host batch it claims. Exported so the server's sampling
+// policy (server/tracingpolicy) can classify it without reaching into the detection context: the per-rule evaluation spans and the
+// batch's queries are its children and follow its sampling decision, so this one name sets the trace volume of the whole pipeline.
+const BatchSpanName = "detection.batch.process"

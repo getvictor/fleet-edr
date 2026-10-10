@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel/codes"
 )
 
 // runPeriodic runs fn once immediately and then every interval until ctx is cancelled, logging a warning when a run returns an error.
@@ -15,7 +17,7 @@ import (
 func runPeriodic(ctx context.Context, interval time.Duration, logger *slog.Logger, name string, fn func(context.Context) (int64, error)) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
-	if _, err := fn(ctx); err != nil && ctx.Err() == nil {
+	if err := runPass(ctx, name, fn); err != nil && ctx.Err() == nil {
 		logger.WarnContext(ctx, name+" initial run failed", "err", err)
 	}
 	for {
@@ -23,9 +25,22 @@ func runPeriodic(ctx context.Context, interval time.Duration, logger *slog.Logge
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if _, err := fn(ctx); err != nil && ctx.Err() == nil {
+			if err := runPass(ctx, name, fn); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, name+" run failed", "err", err)
 			}
 		}
 	}
+}
+
+// runPass runs one pass under its own root span, "detection.periodic.<name>". The pass's queries become its children, and the span
+// attributes the runners set (retention cutoffs, rows pruned) land on it rather than on the no-op span of an untraced context.
+func runPass(ctx context.Context, name string, fn func(context.Context) (int64, error)) error {
+	ctx, span := tracer().Start(ctx, "detection.periodic."+name)
+	defer span.End()
+	_, err := fn(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
 }

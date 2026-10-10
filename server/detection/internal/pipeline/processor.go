@@ -14,6 +14,8 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // batchBuilder materializes a claimed event batch into the process graph before rule evaluation reads it. *graph.Builder is the
@@ -316,7 +318,7 @@ func (p *Processor) processOnce(ctx context.Context, workerIndex int) int {
 			return 0
 		}
 		host := hosts[(workerIndex+offset)%len(hosts)]
-		claimed, ran := p.processHost(ctx, host)
+		claimed, ran := p.processHostTraced(ctx, host)
 		if ran && claimed > 0 {
 			return claimed
 		}
@@ -327,6 +329,16 @@ func (p *Processor) processOnce(ctx context.Context, workerIndex int) int {
 		// no work for us right now and the next candidate might, so keep walking rather than idling until the next tick.
 	}
 	return 0
+}
+
+// processHostTraced runs processHost under the batch's root span (api.BatchSpanName). The server's sampling policy classifies that
+// span with the agent ingest traffic that drives it, and the per-rule evaluation spans and the batch's queries follow its decision.
+func (p *Processor) processHostTraced(ctx context.Context, host string) (int, bool) {
+	ctx, span := tracer().Start(ctx, api.BatchSpanName, trace.WithAttributes(attribute.String("host_id", host)))
+	defer span.End()
+	claimed, ran := p.processHost(ctx, host)
+	span.SetAttributes(attribute.Int("edr.batch.events", claimed))
+	return claimed, ran
 }
 
 // hostCandidates is how many hosts one cycle considers: wide enough that concurrent workers rotate onto different hosts, floored so a
