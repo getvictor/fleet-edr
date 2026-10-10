@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Upgrade notes (action required)
+
+- **The agent requires macOS 26 (Tahoe) or later.** The installer now refuses older Macs and says so. Earlier packages installed on macOS 13 to 26.1 but could not run there, so upgrade any such Mac to macOS 26 first.
+
 ## [0.7.0] (2026-10-05)
 
 ### Upgrade notes (action required)

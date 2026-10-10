@@ -10,7 +10,7 @@ For production deployments of more than a handful of Macs, use [mdm-deployment.m
 
 ## Prerequisites
 
-- macOS 13 (Ventura) or later, Apple Silicon only.
+- macOS 26 (Tahoe) or later, Apple Silicon only.
 - Admin (sudo) on the Mac.
 - A reachable Fleet EDR server. You need its URL and the `enroll_secret` from the server's `./secrets/enroll_secret`.
 - Optionally, the SHA-256 fingerprint of the server's TLS cert, for pinned installs. Otherwise the agent validates against the system trust store.
@@ -133,13 +133,11 @@ The postinstall script loads the LaunchDaemon. The agent starts immediately, rea
 
 Fleet EDR ships two system extensions: an Endpoint Security extension (`com.fleetdm.edr.securityextension`, process and file events) and a Network Extension (`com.fleetdm.edr.networkextension`, network and DNS events). The pkg's activation LaunchAgent (`com.fleetdm.edr.activate`) runs the host app's `activate` right after install (and again at every login), but on a Mac that isn't MDM-managed each extension needs a human to approve it. macOS posts a notification when the host app requests activation.
 
-On macOS 15 (Sequoia) and later:
+Approve each extension in System Settings:
 
 1. Open **System Settings > General > Login Items & Extensions**.
 2. Under **Extensions**, open **Endpoint Security Extensions**, enable **Fleet EDR**, and authenticate with your user password.
 3. Open **Network Extensions** and enable **Fleet EDR** the same way. macOS also prompts to allow it to filter network content; click **Allow**.
-
-On macOS 13 and 14 (Ventura and Sonoma), the controls live under **System Settings > Privacy & Security > Security** instead: click **Allow** on the _"System extension blocked"_ message for each extension and authenticate.
 
 Each extension moves `activated waiting for user` → `activated enabled`.
 
@@ -224,7 +222,7 @@ After uninstall, the host disappears from the admin UI only after its `last_seen
 
 **`installer: Error - Fleet EDR requires Apple Silicon (M1 or later).`** You're on an Intel Mac. We don't ship Intel builds. Apple Silicon only.
 
-**`installer: Error - Fleet EDR requires macOS 13 (Ventura) or later.`** Upgrade macOS before installing.
+**`installer: Error - Fleet EDR requires macOS 26 (Tahoe) or later.`** Upgrade macOS before installing.
 
 **Installer runs but the daemon never starts. `launchctl print` says "Could not find service".** The postinstall script probably failed. Check `sudo tail /var/log/install.log`. Common causes: `/Library/LaunchDaemons` owned by the wrong user, or `launchctl bootstrap` hit a permission error. Run:
 

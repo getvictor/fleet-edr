@@ -4,7 +4,7 @@
 
 ## Why this matters
 
-ADRs encode load-bearing decisions ("single Go module + `internal/`", "modular monolith with bounded contexts", "Apple Silicon + macOS 13+ MVP", "standalone product, not Fleet-integrated"). Two failure modes are common:
+ADRs encode load-bearing decisions ("single Go module + `internal/`", "modular monolith with bounded contexts", "Apple Silicon + macOS 26+ MVP", "standalone product, not Fleet-integrated"). Two failure modes are common:
 
 1. **Silent supersession.** The team reverses a decision in a PR review or Slack thread, but never updates the ADR. New contributors then follow the old ADR and write code that conflicts with current direction.
 2. **Missing ADRs.** A non-trivial decision (e.g. "all metrics go through OTel, never Prometheus") gets repeated in code reviews for a year before someone writes it down. Until it's in an ADR, every contributor relearns it from scratch.
@@ -33,7 +33,7 @@ Go through these candidate decision domains and ask: is there an ADR for it? If 
 | Domain                                                     | Existing? | Decision worth recording?                |
 | ---------------------------------------------------------- | --------- | ---------------------------------------- |
 | Single Go module                                           | ADR-0001  | yes                                      |
-| Apple Silicon + macOS 13+ MVP                              | ADR-0002  | yes                                      |
+| Apple Silicon + macOS 26+ MVP                              | ADR-0002  | yes                                      |
 | Standalone product (not Fleet)                             | ADR-0003  | yes                                      |
 | Modular monolith / bounded contexts                        | ADR-0004  | yes                                      |
 | Test layering (unit / per-context / cross-context)         | maybe     | check                                    |

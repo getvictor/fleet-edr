@@ -55,7 +55,7 @@ The detection surface is the product. Treat detection content as code: versioned
 
 Today the agent is macOS-only on Apple Silicon. Best-in-class EDRs (CrowdStrike Falcon, SentinelOne, Microsoft Defender for Endpoint, Elastic Security, Wazuh) run one server that ingests from OS-specific agents and presents a unified host inventory, event schema, process-graph format, and alert queue. The agent is per-OS because the telemetry sources differ (ESF on macOS, eBPF / `auditd` on Linux, ETW + kernel callbacks on Windows), but everything past the upload boundary is platform-agnostic. Achieving that means the event envelope, host identity model, and detection-rule API have to be designed without macOS assumptions baked in.
 
-- [x] macOS 13+ on Apple Silicon (system extension + network extension + agent)
+- [x] macOS 26 (Tahoe) or later on Apple Silicon (system extension + network extension + agent), per ADR-0002
 - [-] macOS Intel: **will not do**. Apple stopped shipping Intel Macs in 2023; the last supported macOS release for Intel is approaching EOL. Pilot customers are Apple Silicon only, so the QA + signing matrix is not worth carrying.
 - [ ] **Linux agent** (eBPF-based; replace ESF with `tracee` / `falco-libs` / direct eBPF)
 - [~] **Windows agent** (ETW + Defender APIs / Windows Driver): a user-mode ETW sensor (`agent/wintel`) is wired into the agent, and CI cross-builds the agent for windows/amd64 and windows/arm64 (ADR-0018). There is no installer or release artifact yet, and the user-mode tier cannot block execution

@@ -27,7 +27,7 @@ fleetctl get fleets
 
 ## Step 1: push the three profiles
 
-Fleet's "custom settings" feature sends a `.mobileconfig` verbatim to the Macs in a fleet's scope. All three of our profiles go here: the system-extension approval, Full Disk Access, and the background items profile that keeps users from turning off the agent (macOS 13 or later).
+Fleet's "custom settings" feature sends a `.mobileconfig` verbatim to the Macs in a fleet's scope. All three of our profiles go here: the system-extension approval, Full Disk Access, and the background items profile that keeps users from turning off the agent.
 
 ```sh
 fleetctl apply -f - <<'EOF'

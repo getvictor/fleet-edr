@@ -8,7 +8,7 @@
 # Detection target: catalog rule dns_c2_beacon (server/rules/internal/catalog/dns_c2_beacon.go).
 # Synthetic equivalent: test/efficacy/corpus/T1071.004-dns-c2-beacon (fakeagent, no live host).
 #
-# Prerequisites: an Apple Silicon Mac on macOS 13+ with the agent installed, the system + network extensions active, and
+# Prerequisites: an Apple Silicon Mac on macOS 26 or later with the agent installed, the system + network extensions active, and
 # Full Disk Access granted. The host must reach the internet: the beacon resolves a nip.io name (plain UDP DNS, which the
 # proxy sees) and opens a real outbound TCP connection to the resolved address.
 #
