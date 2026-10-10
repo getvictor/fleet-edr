@@ -41,13 +41,19 @@ func NewRegistry() *Registry {
 // Register classifies a method+path. Re-registering the same method+path overwrites the prior tier. The key is method+" "+path,
 // matching the span name the otelhttp span-name formatter produces ("POST /api/events").
 func (r *Registry) Register(method, path string, tier Tier) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.routes[method+" "+path] = tier
+	r.RegisterSpan(method+" "+path, tier)
 }
 
-// Lookup returns the tier for a span name, or TierFull when the span name is not registered (the safe-by-default catch-all). Non-HTTP
-// span names (cron, internal work) are simply absent and fall to TierFull.
+// RegisterSpan classifies a span by its exact name. It is how work that no HTTP request starts, such as a background batch, gets a
+// tier: its root span name is registered here, and its children follow the root's decision through the parent-based wrapper.
+func (r *Registry) RegisterSpan(name string, tier Tier) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.routes[name] = tier
+}
+
+// Lookup returns the tier for a span name, or TierFull when the span name is not registered (the safe-by-default catch-all). A
+// background span name falls to TierFull unless it was registered with RegisterSpan.
 func (r *Registry) Lookup(spanName string) Tier {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

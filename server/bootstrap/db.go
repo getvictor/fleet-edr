@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/XSAM/otelsql"
+	"github.com/fleetdm/edr/internal/observability/tracing"
 	_ "github.com/go-sql-driver/mysql" // register driver
 	"github.com/jmoiron/sqlx"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
@@ -65,16 +66,12 @@ func ensureParseTime(dsn string) string {
 	return dsn + sep + "parseTime=true"
 }
 
-// openInstrumentedDB opens the MySQL driver through otelsql so every
-// query emits a span + connection metrics.
+// openInstrumentedDB opens the MySQL driver through otelsql so every query is timed in the connection metrics, and every query made
+// under an active span gets a child span (tracing.SQLSpanOptions).
 func openInstrumentedDB(dsn string) (*sql.DB, error) {
 	sqldb, err := otelsql.Open("mysql", dsn,
 		otelsql.WithAttributes(semconv.DBSystemNameMySQL),
-		// DisableErrSkip suppresses driver.ErrSkip ("driver: skip fast-path; continue as if unimplemented") from being
-		// recorded as a span exception. It is a benign control-flow sentinel, not a failure: the MySQL driver returns it
-		// frequently because interpolateParams=false (the secure default) makes it fall back to the prepare path rather
-		// than running a parametrized query directly. Recording it just floods traces with non-errors.
-		otelsql.WithSpanOptions(otelsql.SpanOptions{DisableErrSkip: true}),
+		otelsql.WithSpanOptions(tracing.SQLSpanOptions()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

@@ -8,6 +8,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 - **The agent requires macOS 26 (Tahoe) or later.** The installer now refuses older Macs and says so. Earlier packages installed on macOS 13 to 26.1 but could not run there, so upgrade any such Mac to macOS 26 first.
 
+### Changed
+
+- **Much lower trace volume.** Detection batches are now sampled with agent ingest traffic, and database queries outside a request or batch no longer produce spans. One host exported about 500,000 spans an hour, almost all from this background work. Metrics are unchanged.
+
 ## [0.7.0] (2026-10-05)
 
 ### Upgrade notes (action required)
