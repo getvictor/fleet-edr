@@ -29,7 +29,7 @@ fail() {
   printf '%s\n' "$1" | sed 's/^/    /' >&2
   echo >&2
   echo "This repo does not list agents as authors. Remove the trailer and commit again." >&2
-  echo "If Claude Code is adding it automatically, set \"includeCoAuthoredBy\": false in .claude/settings.json." >&2
+  echo "If Claude Code is adding it automatically, set \"attribution\": {\"commit\": false, \"pr\": false, \"sessionUrl\": false} in .claude/settings.json." >&2
   exit 1
 }
 

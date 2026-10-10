@@ -4,13 +4,13 @@
 
 ## Why this matters
 
-`.coderabbit.yaml` (and any future bot configs such as Copilot custom instructions, Qodo policy files) sit in the same gap as [`CLAUDE.md`](../../../CLAUDE.md): they actively shape every PR review but no compiler or CI gate catches drift. A path glob that no longer matches the tree, a tool key the vendor renamed, a docstring threshold that made sense before test/e2e/ existed: each silently degrades review quality. Nobody notices until a real finding gets buried under noise or a regression slips through because the path_instruction for that directory was pointing at a dead path.
+`.coderabbit.yaml` (and any future bot configs such as Copilot custom instructions) sit in the same gap as [`CLAUDE.md`](../../../CLAUDE.md): they actively shape every PR review but no compiler or CI gate catches drift. A path glob that no longer matches the tree, a tool key the vendor renamed, a docstring threshold that made sense before test/e2e/ existed: each silently degrades review quality. Nobody notices until a real finding gets buried under noise or a regression slips through because the path_instruction for that directory was pointing at a dead path.
 
 This task is the periodic re-grounding. It is deliberately small (30 min) because most quarters the answer is "no change needed" and the value is in _verifying_ that, not in finding work.
 
 ## Scope
 
-Primary: `.coderabbit.yaml` and [`.github/workflows/pr-agent.yml`](../../../.github/workflows/pr-agent.yml), which is where the open-source reviewer's configuration lives. It is deliberately not in `.pr_agent.toml`: that file is the hosted Qodo app's, and keeping the two apart stopped them perturbing each other. If Qodo is retired, `.pr_agent.toml` becomes dead config and should be deleted rather than left to look authoritative.
+Primary: `.coderabbit.yaml` and [`.github/workflows/pr-agent.yml`](../../../.github/workflows/pr-agent.yml), which is where the open-source reviewer's configuration lives. There is deliberately no repository `.pr_agent.toml`, so the workflow's `env:` block is the whole configuration; if one reappears, flag it, because pr-agent would merge it in.
 
 Secondary: [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), and any future PR-review-bot config committed to the repo. Treat this audit as the catch-all for the class.
 
