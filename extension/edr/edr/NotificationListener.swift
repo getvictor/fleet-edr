@@ -28,7 +28,7 @@ private let logger = Logger(subsystem: "com.fleetdm.edr", category: "Notificatio
 ///      (not a hostile process) created it.
 ///   2. scan() rejects any .json whose file owner isn't root, so
 ///      forgeries from non-root local UIDs never reach the presenter.
-/// This mirrors the team-ID code-signing requirement the XPC path
+/// This mirrors the code-signing requirement the XPC path
 /// enforced via xpc_connection_set_peer_code_signing_requirement.
 ///
 /// Cleanup: the extension owns the dropped files (root-owned, mode

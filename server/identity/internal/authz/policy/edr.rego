@@ -79,13 +79,19 @@ reauth_satisfied if input.actor.session_fresh
 
 reauth_satisfied if input.actor.auth_method == "service_account"
 
-# requires_fresh_auth pins the destructive-action set: host commands
-# always need freshness; alert.resolve needs it only when the alert is
-# critical-severity. Add new rules here as the action set grows; the
+# requires_fresh_auth pins the destructive-action set: host commands and
+# revoking a host's enrollment always need freshness, and so do the deployment-wide writes that
+# weaken every host at once: the reachable-address set, rule content
+# and detection tuning (exclusions, rule modes, watched paths), any of
+# which can blind detection fleet-wide. alert.resolve needs it only when
+# the alert is critical-severity. Add new rules here as the action set grows; the
 # pattern is "rule fires when this action+resource pair is destructive
 # enough to warrant proving recent possession of credentials."
 requires_fresh_auth(action, _) if {
-	action in {"host.isolate", "host.kill_process", "host.run_script", "containment_config.write"}
+	action in {
+		"host.isolate", "host.kill_process", "host.run_script", "enrollment.revoke",
+		"containment_config.write", "rule_content.write", "detection_config.write",
+	}
 }
 
 requires_fresh_auth("alert.resolve", resource) if {

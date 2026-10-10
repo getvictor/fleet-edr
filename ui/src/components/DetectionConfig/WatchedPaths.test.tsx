@@ -131,6 +131,21 @@ describe("WatchedPaths", () => {
     expect(screen.getByText(/Last saved .* by bob@example\.com\./)).toBeVisible();
   });
 
+  // spec:server-identity-authentication/reauthentication-is-required-for-destructive-actions/fleet-wide-change-needs-a-fresh-session
+  // Saving is detection_config.write, which needs a fresh sign-in. A stale session must get the identity prompt, not an error.
+  it("asks the operator to confirm their identity when the save needs a fresh sign-in", async () => {
+    await renderLoaded();
+    vi.spyOn(api, "replaceWatchedPaths").mockRejectedValue(
+      new api.ReauthRequiredError({ authMethod: "oidc", reauthURL: "https://idp.example/reauth" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove /Library/StartupItems/" }));
+    await saveWithReason("narrow the set");
+
+    expect(await screen.findByRole("heading", { name: "Confirm your identity" })).toBeVisible();
+    expect(screen.queryByText(/Not saved/)).toBeNull();
+  });
+
   it("reports a push that reached every host, in the singular for one host", async () => {
     await renderLoaded();
     const saved: WatchedPath[] = [{ path: "/Library/StartupItems/", match: "prefix" }];

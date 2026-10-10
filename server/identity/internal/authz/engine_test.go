@@ -297,6 +297,46 @@ func TestAllow_StaleSession_ChallengedBeforeDestructiveAction(t *testing.T) {
 	assert.Equal(t, api.ReasonReauthRequired, events[0].Payload["reason"])
 }
 
+// spec:server-identity-authentication/reauthentication-is-required-for-destructive-actions/fleet-wide-change-needs-a-fresh-session
+//
+// The deployment-wide writes that can blind detection or weaken every contained host, and revoking a host's enrollment, need a fresh
+// sign-in like the host commands do. Pinned per action because the property test samples the action space and can miss one.
+func TestAllow_StaleSession_ChallengedBeforeFleetWideChange(t *testing.T) {
+	t.Parallel()
+	e, _ := newEngine(t)
+	actions := []struct {
+		name     string
+		action   api.Action
+		resource api.Resource
+	}{
+		{"rule content write", api.ActionRuleContentWrite, api.Resource{Type: "rule_content"}},
+		{"detection config write", api.ActionDetectionConfigWrite, api.Resource{Type: "detection_config"}},
+		{"reachable-address set write", api.ActionContainmentConfigWrite, api.Resource{Type: "containment_config"}},
+		{"enrollment revoke", api.ActionEnrollmentRevoke, api.Resource{Type: "enrollment", ID: "h-1"}},
+	}
+	for _, tc := range actions {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, fresh := range []bool{false, true} {
+				actor := &api.Actor{
+					Principal:    api.UserPrincipal(1, ""),
+					AuthMethod:   "oidc",
+					SessionFresh: fresh,
+					Roles:        []api.RoleBinding{globalBinding("admin", "default")},
+				}
+				d, err := e.Allow(api.WithActor(t.Context(), actor), tc.action, tc.resource)
+				require.NoError(t, err)
+				if fresh {
+					assert.True(t, d.Allow, "a fresh admin session performs %s", tc.action)
+					continue
+				}
+				assert.False(t, d.Allow, "a stale session must not perform %s", tc.action)
+				assert.Equal(t, api.ReasonReauthRequired, d.Reason)
+			}
+		})
+	}
+}
+
 // TestAllow_NilAuditDoesNotPanic guards the test-only path where a caller passes nil for the AuditRecorder. Production callers must
 // supply one; tests sometimes don't.
 func TestAllow_NilAuditDoesNotPanic(t *testing.T) {

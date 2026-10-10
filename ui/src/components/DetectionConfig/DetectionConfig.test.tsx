@@ -410,6 +410,25 @@ describe("DetectionConfig", () => {
     });
   });
 
+  // spec:server-identity-authentication/reauthentication-is-required-for-destructive-actions/fleet-wide-change-needs-a-fresh-session
+  // Every detection-tuning write is detection_config.write, which needs a fresh sign-in. A stale session must get the identity
+  // prompt rather than an error banner.
+  it("asks the operator to confirm their identity when a change needs a fresh sign-in", async () => {
+    stubReads({ exclusions: [makeExclusion()] });
+    vi.spyOn(api, "deleteDetectionExclusion").mockRejectedValue(
+      new api.ReauthRequiredError({ authMethod: "oidc", reauthURL: "https://idp.example/reauth" }),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByRole("heading", { name: "Confirm your identity" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   // Disabling a rule opens the reason modal; the operator's reason rides the upsert for the audit row.
   // spec:web-ui/detection-configuration-admin-views/disabling-a-rule-requires-an-operator-reason
   it("requires a reason via the modal before disabling a rule", async () => {
