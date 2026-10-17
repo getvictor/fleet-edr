@@ -193,7 +193,7 @@ jobs:
       - name: Run agent tests with coverage
         run: task test:go:agent:coverage
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-agent
           path: coverage-agent.out
@@ -276,7 +276,7 @@ jobs:
       - name: Run server tests with coverage
         run: task test:go:server:coverage
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-server
           path: coverage-server.out
@@ -334,7 +334,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -359,7 +359,7 @@ jobs:
       - name: Run UI tests with coverage
         run: task test:ui:coverage
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-ui
           path: ui/coverage/lcov.info
@@ -425,7 +425,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -488,14 +488,14 @@ jobs:
         # monocart converter aggregates V8 payloads from coverage-raw/.
         run: task test:e2e:coverage
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-server-e2e
           path: coverage-server-e2e.out
           if-no-files-found: error
           retention-days: 1
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-ui-e2e
           path: test/e2e/coverage/lcov-e2e.info
@@ -507,7 +507,7 @@ jobs:
 
       - name: Upload per-phase server logs on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-server-logs
           # The orchestration script writes one log file per phase
@@ -563,13 +563,13 @@ jobs:
       # a PR that didn't touch that language has no new lines to cover.
       - name: Download agent coverage
         if: needs.agent-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-agent
 
       - name: Download server coverage
         if: needs.server-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-server
 
@@ -578,7 +578,7 @@ jobs:
       # the file at that exact path, so re-create the directory layout.
       - name: Download UI coverage
         if: needs.ui-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-ui
           path: ui/coverage
@@ -591,13 +591,13 @@ jobs:
       # those exact paths in the download targets.
       - name: Download server E2E coverage
         if: needs.e2e-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-server-e2e
 
       - name: Download UI E2E coverage
         if: needs.e2e-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-ui-e2e
           path: test/e2e/coverage
@@ -650,25 +650,25 @@ jobs:
       # artifacts; gating prevents that breakage on non-Go PRs.
       - name: Download agent coverage
         if: needs.agent-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-agent
 
       - name: Download server coverage
         if: needs.server-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-server
 
       - name: Download server E2E coverage
         if: needs.e2e-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-server-e2e
 
       - name: Download UI E2E coverage
         if: needs.e2e-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-ui-e2e
           path: test/e2e/coverage
@@ -679,7 +679,7 @@ jobs:
       # uses; codecov takes the union of LCOVs per flag so the two cover-paths (unit + E2E) merge cleanly.
       - name: Download UI vitest coverage
         if: needs.ui-test.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-ui
           path: ui/coverage
