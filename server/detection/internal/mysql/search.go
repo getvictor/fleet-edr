@@ -154,19 +154,23 @@ const maxDescendantDepth = 900
 // (previous_exec_id) from it. A re-exec row keeps its prior generation's creator, so it is reached by its re-exec edge only: each row
 // then has one way in, and the walk visits each process once however its generations branch. A descendant inherits its creator's
 // story, so the walk stays inside the ancestor's story, which is indexed; an ancestor whose story was not seen is walked over its host
-// instead. The ancestor itself is not its own descendant.
-const descendantsSQL = `id IN (
+// instead. The ancestor itself is not its own descendant. descendantsWhereSQL adds a condition each step must meet, so the walk stops
+// where it fails rather than walking past it; its one %s is that condition on p, the row the step reaches.
+const descendantsWhereSQL = `id IN (
 	WITH RECURSIVE below (id, host_id, scope, depth) AS (
 		SELECT id, host_id, story_root_id, 0 FROM processes WHERE id = ?
 		UNION ALL
 		SELECT p.id, p.host_id, below.scope, below.depth + 1
 		FROM below JOIN processes p
 			ON p.host_id = below.host_id AND (below.scope IS NULL OR p.story_root_id = below.scope)
-			AND ((p.parent_process_id = below.id AND p.previous_exec_id IS NULL) OR p.previous_exec_id = below.id)
+			AND ((p.parent_process_id = below.id AND p.previous_exec_id IS NULL) OR p.previous_exec_id = below.id) AND %s
 		WHERE below.depth < ?
 	)
 	SELECT id FROM below WHERE id <> ?
 )`
+
+// descendantsSQL walks every row below the ancestor.
+var descendantsSQL = fmt.Sprintf(descendantsWhereSQL, "TRUE")
 
 // Signing-class SQL fragments over the code_signing JSON, built once and composed below so no predicate literal repeats. Each uses
 // COALESCE so a missing or partial JSON key (e.g. an empty {} block) takes a definite default rather than NULL (which would make

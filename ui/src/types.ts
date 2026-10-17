@@ -448,6 +448,8 @@ export interface TreeResponse {
   // agents are a session read's AI agent processes (issue #1334): the agent carries no session marker, so it is not among the roots,
   // and each root it created names it by parent_process_id. Absent for other reads, and when the agent was not seen.
   agents?: ProcessNode[];
+  // agent_own_truncated is set when an agent's own processes, the children of an agents node (issue #1361), were cut at their bound.
+  agent_own_truncated?: boolean;
 }
 
 export interface Alert {

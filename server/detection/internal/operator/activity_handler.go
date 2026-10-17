@@ -182,23 +182,73 @@ func (h *Handler) boundAgents(
 	ctx context.Context, sessionID string, agents []api.ProcessNode, filter visibilityapi.ActivityFilter,
 ) (visibilityapi.ActivityFilter, error) {
 	for _, agent := range agents {
-		if agent.PIDVersion == nil {
-			continue
-		}
-		gen := visibilityapi.ProcessGeneration{PID: int64(agent.PID), PIDVersion: int64(*agent.PIDVersion)}
-		touches, err := h.activity.SessionTouches(ctx, filter.HostID, gen)
+		span, bounded, err := h.agentSpan(ctx, filter.HostID, sessionID, agent)
 		if err != nil {
 			return filter, err
 		}
-		span, bounded := sessionSpan(touches, sessionID)
 		if !bounded {
 			continue
 		}
-		span.ProcessGeneration = gen
-		filter.Generations = slices.DeleteFunc(filter.Generations, func(g visibilityapi.ProcessGeneration) bool { return g == gen })
+		filter.Generations = slices.DeleteFunc(filter.Generations, func(g visibilityapi.ProcessGeneration) bool {
+			return g == span.ProcessGeneration
+		})
 		filter.Spans = append(filter.Spans, span)
 	}
 	return filter, nil
+}
+
+// agentSpan is the span an agent process served a session, from the session transcripts its generation touched (issue #1319). It is
+// not bounded when the process served no other session, or its generation is unknown: its whole life is then the session's.
+func (h *Handler) agentSpan(
+	ctx context.Context, hostID, sessionID string, agent api.ProcessNode,
+) (visibilityapi.GenerationSpan, bool, error) {
+	if agent.PIDVersion == nil {
+		return visibilityapi.GenerationSpan{}, false, nil
+	}
+	gen := visibilityapi.ProcessGeneration{PID: int64(agent.PID), PIDVersion: int64(*agent.PIDVersion)}
+	touches, err := h.activity.SessionTouches(ctx, hostID, gen)
+	if err != nil {
+		return visibilityapi.GenerationSpan{}, false, err
+	}
+	span, bounded := sessionSpan(touches, sessionID)
+	span.ProcessGeneration = gen
+	return span, bounded, nil
+}
+
+// agentWindow is the window an agent process's own processes are listed for in a session (issue #1361): the span it served the
+// session, or its whole life when it served only this one. The tree read and the alert read both use it, so they list the same.
+func (h *Handler) agentWindow(ctx context.Context, hostID, sessionID string, agent api.ProcessNode) (int64, int64, error) {
+	span, bounded, err := h.agentSpan(ctx, hostID, sessionID, agent)
+	if err != nil {
+		return 0, 0, err
+	}
+	fromNs, toNs := int64(0), int64(math.MaxInt64)
+	if bounded {
+		fromNs = span.FromNs
+		if span.ToNs > 0 {
+			toNs = span.ToNs
+		}
+	}
+	return fromNs, toNs, nil
+}
+
+// agentOwnProcesses sets each of a session's agent processes' Children to its own processes (issue #1361): what it ran for itself,
+// with no session marker, while it served the session. It reports whether any agent's were cut at their bound.
+func (h *Handler) agentOwnProcesses(ctx context.Context, hostID, sessionID string, agents []api.ProcessNode) (bool, error) {
+	cut := false
+	for i := range agents {
+		fromNs, toNs, err := h.agentWindow(ctx, hostID, sessionID, agents[i])
+		if err != nil {
+			return false, err
+		}
+		own, truncated, err := h.svc.BuildAgentOwnTree(ctx, hostID, agents[i].ID, fromNs, toNs)
+		if err != nil {
+			return false, err
+		}
+		agents[i].Children = own
+		cut = cut || truncated
+	}
+	return cut, nil
 }
 
 // sessionSpan is the span an agent process served a session, from the transcripts it touched: from its first touch of the session's

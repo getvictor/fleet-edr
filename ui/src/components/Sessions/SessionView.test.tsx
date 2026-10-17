@@ -491,6 +491,66 @@ describe("SessionView", () => {
 
   // spec:web-ui/session-processes-view/every-process-is-listed-under-the-agent-that-ran-it
   // spec:web-ui/session-processes-view/a-reparented-process-stays-under-its-creator
+  // The agent's own processes (issue #1361): counted, hidden until asked for, then listed under the agent marked as its own.
+  // spec:web-ui/agent-own-processes-view/the-agent-s-own-processes-are-counted-and-listed-on-request
+  it("counts the agent's own processes in the Processes view and lists them, marked, on request", async () => {
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    const scan = proc(20, 20, 50, "/opt/homebrew/bin/rg", ["rg", "--files", "--hidden"], [], { agent_session_id: undefined });
+    const snapshot = proc(21, 21, 60, "/bin/zsh", ["/bin/zsh", "-c", "-l", "SNAPSHOT_FILE=s"], [
+      proc(22, 22, 61, "/usr/bin/env", ["env"], [], { agent_session_id: undefined }),
+    ], { agent_session_id: undefined });
+    const agent = proc(9, 5000, 0, "/Users/victor/.local/share/claude/versions/2.1.302", ["claude"], [scan, snapshot],
+      { agent_session_id: undefined });
+    const call = proc(10, 10, 100, "/bin/zsh", ["/bin/zsh", "-c", "eval 'ls'"], [], { tool_call_group: 10, ppid: 5000, parent_process_id: 9 });
+    vi.spyOn(api, "getSessionTree").mockResolvedValue(tree({ roots: [call], agents: [agent] }));
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Processes" }));
+    const names = () => [...document.querySelectorAll(".session-view__processes .session-view__name")].map((b) => b.textContent);
+    expect(names()).toEqual(["claude", "zsh"]);
+    expect(screen.queryByText("agent's own")).toBeNull();
+    const toggle = screen.getByLabelText("Show the agent's own processes (3)");
+    expect(toggle).toBeVisible();
+
+    fireEvent.click(toggle);
+    expect(names()).toEqual(["claude", "rg", "zsh", "env", "zsh"]);
+    expect(screen.getAllByText("agent's own")).toHaveLength(3);
+    const commandRow = [...document.querySelectorAll(".session-view__processes li")].find((li) =>
+      li.querySelector(".session-view__cmdline")?.textContent.includes("eval"));
+    expect(commandRow?.querySelector(".session-view__row")?.textContent).not.toContain("agent's own");
+  });
+
+  // An alert on one of the agent's own processes is read by the agent (the session read covers stamped processes only) and badged.
+  // spec:server-rest-api/agent-own-processes/an-agent-s-own-processes-alerts-are-read-by-the-agent
+  it("badges an alert on one of the agent's own processes", async () => {
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    const keychain = proc(20, 20, 50, "/usr/bin/security", ["security", "find-generic-password", "-s", "Claude Code-credentials"], [],
+      { agent_session_id: undefined });
+    const agent = proc(9, 5000, 0, "/Users/victor/.local/share/claude/versions/2.1.302", ["claude"], [keychain],
+      { agent_session_id: undefined });
+    const call = proc(10, 10, 100, "/bin/zsh", ["/bin/zsh", "-c", "eval 'ls'"], [], { tool_call_group: 10, ppid: 5000, parent_process_id: 9 });
+    vi.spyOn(api, "getSessionTree").mockResolvedValue(tree({ roots: [call], agents: [agent] }));
+    const read = vi.spyOn(api, "listAlerts").mockImplementation((params) =>
+      Promise.resolve(params?.agent_process === 9 ? [alert({ id: 7, process_id: 20, title: "Keychain credential read" })] : []));
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Processes" }));
+    fireEvent.click(screen.getByLabelText("Show the agent's own processes (1)"));
+    const badge = await screen.findByText("Keychain credential read");
+    expect(badge).toBeVisible();
+    expect(badge.closest("li")?.querySelector(".session-view__name")?.textContent).toBe("security");
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ host_id: "H1", agent_process: 9, served_session: SESSION }));
+  });
+
+  it("offers no agent's own processes toggle when the agent ran none", async () => {
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    const agent = proc(9, 5000, 0, "/Users/victor/.local/share/claude/versions/2.1.302", ["claude"], [], { agent_session_id: undefined });
+    const call = proc(10, 10, 100, "/bin/zsh", ["/bin/zsh", "-c", "eval 'ls'"], [], { tool_call_group: 10, ppid: 5000, parent_process_id: 9 });
+    vi.spyOn(api, "getSessionTree").mockResolvedValue(tree({ roots: [call], agents: [agent] }));
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Processes" }));
+    expect(await screen.findByText("2 processes, under the agent that ran them")).toBeVisible();
+    expect(screen.queryByText(/agent's own processes/)).toBeNull();
+  });
+
   it("lists every process under the agent in the Processes view, a reparented one marked", async () => {
     vi.spyOn(api, "listHosts").mockResolvedValue([]);
     vi.spyOn(api, "getProcessDetail").mockImplementation(() => new Promise(() => undefined));

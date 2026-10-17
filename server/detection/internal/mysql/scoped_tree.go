@@ -54,6 +54,29 @@ func (s *Store) CountScopedProcesses(ctx context.Context, hostID string, scope a
 	return total, false, nil
 }
 
+// GetAgentOwnProcesses returns up to limit of an AI agent process's own descendants on the host (issue #1361), oldest first: the
+// processes it started, and theirs, that carry no session marker, forked from fromNs up to (not including) toNs. The walk does not
+// enter a process stamped with a session, whose subtree is that session's, nor one forked at or after toNs, whose descendants all
+// fork later, so it costs what the agent ran for itself up to the window's end, not the session's work or the agent's later life.
+func (s *Store) GetAgentOwnProcesses(ctx context.Context, hostID string, agentID, fromNs, toNs int64, limit int) ([]api.Process, error) {
+	procs := make([]api.Process, 0, limit)
+	if err := s.db.SelectContext(ctx, &procs, `
+		SELECT `+processReadColumns+`
+		FROM processes
+		WHERE host_id = ? AND fork_time_ns >= ? AND fork_time_ns < ? AND `+agentOwnSQL+`
+		ORDER BY fork_time_ns, id
+		LIMIT ?`,
+		hostID, fromNs, toNs, agentID, toNs, maxDescendantDepth, agentID, limit,
+	); err != nil {
+		return nil, fmt.Errorf("query agent own processes: %w", err)
+	}
+	return procs, nil
+}
+
+// agentOwnSQL walks an agent's descendants through rows that carry no session marker, forked before its second argument. Its
+// arguments are the agent's row id, that bound, the walk's depth and the agent's row id.
+var agentOwnSQL = fmt.Sprintf(descendantsWhereSQL, "p.agent_session_id IS NULL AND p.fork_time_ns < ?")
+
 // GetStoryCandidates returns up to limit rows that can descend from a process in story rootID on the host, forked between fromNs and
 // toNs, oldest first: the story's own rows, and the rows with no story root, which a child forked before its creator's row was
 // recorded is left with (issue #1282). The alert chain's descendant walk matches children among them in memory, by the same ppid and

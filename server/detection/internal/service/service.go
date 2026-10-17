@@ -73,6 +73,11 @@ func (s *Service) BuildScopedTree(
 	return s.query.BuildScopedTree(ctx, hostID, scope, limit, flatten, pinnedID)
 }
 
+// BuildAgentOwnTree returns an AI agent process's own descendants (issue #1361).
+func (s *Service) BuildAgentOwnTree(ctx context.Context, hostID string, agentID, fromNs, toNs int64) ([]api.ProcessNode, bool, error) {
+	return s.query.BuildAgentOwnTree(ctx, hostID, agentID, fromNs, toNs)
+}
+
 // BuildChainTree returns the pinned process with its ancestors and descendants, and nothing else.
 func (s *Service) BuildChainTree(
 	ctx context.Context, hostID string, tr api.TimeRange, pinnedID int64, flatten bool,

@@ -380,10 +380,15 @@ paths:
                     type: array
                     description: |
                       For a `session` read only: the session's AI agent processes. An agent carries no session marker, so it is
-                      not among `roots`; each root it created names the agent's `id` as its `parent_process_id`. Omitted for
-                      other reads, and when the agent process was not seen.
+                      not among `roots`; each root it created names the agent's `id` as its `parent_process_id`. An agent's
+                      `children` are the processes it ran for itself while it served the session, with no session marker (plugin
+                      scans, shell snapshots, its fork daemon), nested by creator. Omitted for other reads, and when the agent process
+                      was not seen.
                     items:
                       $ref: "#/components/schemas/ProcessNode"
+                  agent_own_truncated:
+                    type: boolean
+                    description: For a `session` read, true when an agent's own processes were cut at their bound (2,000 per agent).
                   retained_from_ns:
                     type: integer
                     format: int64
@@ -1005,6 +1010,18 @@ paths:
           description: >-
             An AI agent session's id. Selects the alerts raised on that session's processes. Requires `host_id`, since a session id
             names a session only on its host; without it the request is rejected with `agent_session_requires_host_id`.
+          schema: {type: string}
+        - name: agent_process
+          in: query
+          description: >-
+            An AI agent process's `id`, as a session read's `agents` names it. Selects the alerts raised on that agent's own processes,
+            its descendants with no session marker, in the window it served `served_session`, as that session's tree read lists them.
+            Requires `host_id` and `served_session`; without either the request is rejected with
+            `agent_process_requires_host_id_and_served_session`.
+          schema: {type: integer, format: int64}
+        - name: served_session
+          in: query
+          description: With `agent_process`, the session the agent served, whose window bounds its processes.
           schema: {type: string}
         - name: limit
           in: query

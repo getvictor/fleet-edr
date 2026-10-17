@@ -34,6 +34,9 @@ type Service interface {
 	// with the same truncation metadata as BuildTree. There is no time window: the scope is its own bound. pinnedID only keeps that
 	// process out of a sibling aggregate.
 	BuildScopedTree(ctx context.Context, hostID string, scope TreeScope, limit int, flatten bool, pinnedID int64) (ProcessTreeResult, error)
+	// BuildAgentOwnTree returns an AI agent process's own descendants (issue #1361), forked from fromNs up to toNs: the processes it
+	// ran for itself, which carry no session marker, as a forest whose roots the agent created. It reports whether the read was cut.
+	BuildAgentOwnTree(ctx context.Context, hostID string, agentID, fromNs, toNs int64) ([]ProcessNode, bool, error)
 	// GetProcessDetail returns one process generation with its flows and re-exec chain. pidVersion is optional: when set it names the
 	// exact generation, which is the only way to address any but the newest member of a re-exec chain (all of whose generations share
 	// one fork_time_ns, so the as-of read cannot separate them). nil keeps the as-of resolution the tree and timeline pass.

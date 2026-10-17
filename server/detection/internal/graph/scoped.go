@@ -60,3 +60,22 @@ func (q *Query) BuildScopedTree(
 	res.Roots = aggregateSiblingsKeeping(forest, linkEnds(res.Links, pinnedID))
 	return res, nil
 }
+
+// maxAgentOwnProcesses bounds an agent's own processes one read lists (issue #1361). An agent runs a few for itself around each prompt;
+// thousands are a long life, whose oldest are listed and the read marked as cut.
+const maxAgentOwnProcesses = 2000
+
+// BuildAgentOwnTree returns an AI agent process's own descendants forked from fromNs up to toNs (issue #1361): what it ran for
+// itself, its plugin scans, shell snapshots and fork daemon among them, with none of a session's processes. They are a forest whose
+// roots the agent created, nested by creator as any tree is, and the read reports whether the bound cut it.
+func (q *Query) BuildAgentOwnTree(ctx context.Context, hostID string, agentID, fromNs, toNs int64) ([]api.ProcessNode, bool, error) {
+	procs, err := q.store.GetAgentOwnProcesses(ctx, hostID, agentID, fromNs, toNs, maxAgentOwnProcesses+1)
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(procs) > maxAgentOwnProcesses
+	if truncated {
+		procs = procs[:maxAgentOwnProcesses]
+	}
+	return buildForest(procs, nil), truncated, nil
+}

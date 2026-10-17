@@ -734,6 +734,12 @@ type AlertFilter struct {
 	// AgentSessionID selects the alerts raised on the processes of one AI agent session on HostID (issue #1284). It requires HostID,
 	// since a session id names a session only on its host.
 	AgentSessionID string
+	// AgentProcessID selects the alerts raised on an AI agent process's own processes on HostID (issue #1361): its descendants with no
+	// session marker forked from AgentFromNs up to AgentToNs, the window a session's Processes view lists them for. The handler
+	// derives the window from the session the agent served, as the session's tree read does.
+	AgentProcessID int64
+	AgentFromNs    int64
+	AgentToNs      int64
 	Limit          int
 }
 
@@ -780,6 +786,8 @@ type ProcessTreeResult struct {
 	// Agents are an AI agent session's agent processes (issue #1334), read only for a session scope: the agent carries no session
 	// marker, so it is not among the roots, and each root it created names its row as ParentProcessID. Absent otherwise.
 	Agents []ProcessNode `json:"agents,omitempty"`
+	// AgentOwnTruncated reports that an agent's own processes, the Children of an Agents node (issue #1361), were cut at their bound.
+	AgentOwnTruncated bool `json:"agent_own_truncated,omitempty"`
 }
 
 // ProcessLinkInferredLaunch is a link inferred from timing and a matching target: an open or launchctl exec, then within seconds a

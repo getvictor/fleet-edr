@@ -279,6 +279,12 @@ func alertFilterWhere(f api.AlertFilter) (string, []any) {
 		clauses = append(clauses, "process_id IN (SELECT id FROM processes WHERE host_id = ? AND agent_session_id = ?)")
 		args = append(args, f.HostID, f.AgentSessionID)
 	}
+	if f.AgentProcessID != 0 {
+		// The agent's own processes in the window the tree read lists them for, by the same walk.
+		clauses = append(clauses, "process_id IN (SELECT id FROM processes WHERE host_id = ? AND fork_time_ns >= ? AND fork_time_ns < ? AND "+
+			agentOwnSQL+")")
+		args = append(args, f.HostID, f.AgentFromNs, f.AgentToNs, f.AgentProcessID, f.AgentToNs, maxDescendantDepth, f.AgentProcessID)
+	}
 	return strings.Join(clauses, " AND "), args
 }
 

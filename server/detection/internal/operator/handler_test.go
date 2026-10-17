@@ -17,6 +17,7 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // fakeService is the closure-driven detection api.Service stub. Methods relevant to operator routes are pinned per-test via the
@@ -26,6 +27,7 @@ type fakeService struct {
 	listHosts         func(ctx context.Context) ([]api.HostSummary, error)
 	buildChainTree    func(ctx context.Context, hostID string, tr api.TimeRange, pinnedID int64, flatten bool) (api.ProcessTreeResult, error)
 	buildScopedTree   func(ctx context.Context, hostID string, scope api.TreeScope, limit int, flatten bool, pinnedID int64) (api.ProcessTreeResult, error)
+	buildAgentOwnTree func(ctx context.Context, hostID string, agentID, fromNs, toNs int64) ([]api.ProcessNode, bool, error)
 	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) (api.ProcessTreeResult, error)
 	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64, pidVersion *uint32) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
@@ -72,6 +74,16 @@ func (f fakeService) BuildScopedTree(
 		panic("fakeService.BuildScopedTree not set")
 	}
 	return f.buildScopedTree(ctx, hostID, scope, limit, flatten, pinnedID)
+}
+
+// BuildAgentOwnTree returns no processes when unset, so a session tree test about something else needs no agent's own read.
+func (f fakeService) BuildAgentOwnTree(
+	ctx context.Context, hostID string, agentID, fromNs, toNs int64,
+) ([]api.ProcessNode, bool, error) {
+	if f.buildAgentOwnTree == nil {
+		return nil, false, nil
+	}
+	return f.buildAgentOwnTree(ctx, hostID, agentID, fromNs, toNs)
 }
 
 func (f fakeService) GetProcessDetail(
@@ -579,6 +591,38 @@ func TestHandleListAlerts(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		assert.Equal(t, errSessionNeedsHost, readErrorEnvelope(t, resp))
 		assert.False(t, called)
+	})
+
+	// spec:server-rest-api/agent-own-processes/an-agent-s-own-processes-alerts-are-read-by-the-agent
+	t.Run("agent_process is read for the window the agent served the session, and needs its host and session", func(t *testing.T) {
+		t.Parallel()
+		var got api.AlertFilter
+		calls := 0
+		svc := fakeService{listAlerts: func(_ context.Context, f api.AlertFilter) ([]api.Alert, error) { got = f; calls++; return nil, nil }}
+		gen := uint32(77)
+		touches := []visibilityapi.SessionTouch{{SessionID: "earlier", FirstNs: 100}, {SessionID: "s1", FirstNs: 300},
+			{SessionID: "later", FirstNs: 500}}
+		h := New(svc, allowAllAuthZ{}, slog.Default())
+		h.SetActivity(&fakeActivityReader{processes: map[int64]api.Process{50: {ID: 50, HostID: "h1", PID: 4911, PIDVersion: &gen}},
+			touches: map[int64][]visibilityapi.SessionTouch{4911: touches}})
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		resp := doGet(t, srv, "/api/alerts?host_id=h1&agent_process=50&served_session=s1")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, api.AlertFilter{HostID: "h1", AgentProcessID: 50, AgentFromNs: 300, AgentToNs: 500, Limit: 100}, got)
+		for _, query := range []string{"agent_process=50&served_session=s1", "host_id=h1&agent_process=50"} {
+			rejected := doGet(t, srv, "/api/alerts?"+query)
+			defer rejected.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, rejected.StatusCode, query)
+			assert.Equal(t, errAgentNeedsHost, readErrorEnvelope(t, rejected))
+		}
+		unknown := doGet(t, srv, "/api/alerts?host_id=h1&agent_process=51&served_session=s1")
+		defer unknown.Body.Close()
+		assert.Equal(t, http.StatusOK, unknown.StatusCode, "an agent row the host does not hold has no alerts")
+		assert.Equal(t, 1, calls)
 	})
 
 	t.Run("nil alerts normalized to empty array", func(t *testing.T) {

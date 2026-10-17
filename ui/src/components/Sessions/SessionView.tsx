@@ -26,6 +26,7 @@ import {
   searchCommands,
   searchRows,
   buildProcessForest,
+  countOwn,
   countRows,
   summarizeSession,
   type SearchHits,
@@ -54,6 +55,11 @@ const SESSION_LENSES: readonly { lens: SessionLens; label: string }[] = [
 // REPORTED_LABEL marks what the agent reported about a command, as distinct from what the sensor observed (issue #1333).
 const REPORTED_LABEL = "Reported by agent";
 const REPORTED_TITLE = "From the agent's session transcript, which the agent and its user can write; not observed by the sensor";
+
+// OWN_SUMMARY and OWN_TITLE say what the agent's own processes are (issue #1361): what the agent ran for itself, not commands the
+// session ran.
+const OWN_SUMMARY = "Plugin scans, shell snapshots and other work the agent ran for itself, not commands the session ran.";
+const OWN_TITLE = "The agent ran this for itself. It carries no session marker and is not a command the session ran.";
 
 // REPARENTED_TITLE explains a reparented badge: the server marks a process launchd adopted (issue #1280), and the views list it
 // under the process that created it, not under launchd.
@@ -123,13 +129,18 @@ async function readSession(key: string, hostId: string, sessionId: string): Prom
     getAgentSessionLineage(hostId, sessionId).catch(() => undefined),
   ]);
   if (typeof tree === "string") return { key, error: tree };
+  // The session's alerts are those on its stamped processes; the agent's own processes (issue #1361) carry no session marker, so their
+  // alerts are read by the agent that ran them, to badge them in the Processes view.
+  const ownAlerts = await Promise.all((tree.agents ?? []).filter((agent) => (agent.children ?? []).length > 0).map((agent) =>
+    listAlerts({ host_id: hostId, agent_process: agent.id, served_session: sessionId, limit: MAX_SESSION_ALERTS + 1 }).catch(() => null)));
+  const lists = [alerts, ...ownAlerts];
   return {
     key,
     tree,
     record,
-    alerts: (alerts ?? []).slice(0, MAX_SESSION_ALERTS),
-    alertsFailed: alerts === null,
-    alertsTruncated: (alerts?.length ?? 0) > MAX_SESSION_ALERTS,
+    alerts: lists.flatMap((list) => (list ?? []).slice(0, MAX_SESSION_ALERTS)),
+    alertsFailed: lists.includes(null),
+    alertsTruncated: lists.some((list) => (list?.length ?? 0) > MAX_SESSION_ALERTS),
     toolCalls: toolCalls?.tool_calls,
     toolCallsTruncated: toolCalls?.truncated,
     lineage,
@@ -145,6 +156,9 @@ export function SessionView() {
   const { hostId = "", sessionId = "" } = useParams();
   const hostNames = useHostNames();
   const [verbose, setVerbose] = useState(false);
+  // showOwn lists the processes the agent ran for itself in the Processes view (issue #1361); off by default, so the session's own
+  // work reads first, and their count says how many are one click away.
+  const [showOwn, setShowOwn] = useState(false);
   const [query, setQuery] = useState("");
   // view picks what the session's main column shows: its commands, every process it ran as one tree (issue #1335), or the totals of
   // what it touched (issue #1285).
@@ -181,9 +195,10 @@ export function SessionView() {
   );
   const forest = useMemo(
     () => (tree && logical
-      ? buildProcessForest(logical.roots, tree.agents ?? [], { verbose: true, inferred: logical.inferred, services: logical.services })
+      ? buildProcessForest(logical.roots, tree.agents ?? [], { verbose: true, inferred: logical.inferred, services: logical.services },
+        showOwn)
       : []),
-    [tree, logical],
+    [tree, logical, showOwn],
   );
   const summary = useMemo(() => summarizeSession(tree?.roots ?? []), [tree]);
   const hits = useMemo(
@@ -268,7 +283,7 @@ export function SessionView() {
               ))}
             </div>
             {view === "commands" && <SessionBody read={current} groups={groups} />}
-            {view === "processes" && <ProcessesBody read={current} forest={forest} />}
+            {view === "processes" && <ProcessesBody read={current} forest={forest} showOwn={showOwn} onShowOwn={setShowOwn} />}
             {view === "activity" && (
               <ActivityTabs
                 label="Session activity"
@@ -398,13 +413,30 @@ function SessionBody({ read, groups }: { readonly read: SessionRead | null; read
 
 // ProcessesBody lists every process the session ran as one tree rooted at the agent (issue #1335), with nothing hidden or folded: the
 // forensic counterpart to the commands, which group and trim the same processes for reading.
-function ProcessesBody({ read, forest }: { readonly read: SessionRead | null; readonly forest: SessionRow[] }) {
+function ProcessesBody({ read, forest, showOwn, onShowOwn }: {
+  readonly read: SessionRead | null;
+  readonly forest: SessionRow[];
+  readonly showOwn: boolean;
+  readonly onShowOwn: (show: boolean) => void;
+}) {
   if (read?.error) return <EmptyState>Error: {read.error}</EmptyState>;
   if (!read?.tree) return <EmptyState>Loading...</EmptyState>;
   if (forest.length === 0) return <EmptyState>No processes are recorded for this session.</EmptyState>;
+  const own = countOwn(read.tree.agents ?? []);
   return (
     <div className="session-view__processes">
       <p className="session-view__processes-summary">{processesSummary(forest)}</p>
+      {own > 0 && (
+        <div className="session-view__own">
+          <Toggle
+            id="session-own"
+            label={`Show the agent's own processes (${own.toLocaleString()}${read.tree.agent_own_truncated ? "+" : ""})`}
+            checked={showOwn}
+            onChange={(e) => { onShowOwn(e.target.checked); }}
+          />
+          <span className="session-view__meta">{OWN_SUMMARY}</span>
+        </div>
+      )}
       <ProcessRows rows={forest} />
     </div>
   );
@@ -505,7 +537,7 @@ function ProcessRows({ rows }: { readonly rows: SessionRow[] }) {
 
 function ProcessRow({ listed }: { readonly listed: SessionRow }) {
   const { alertsByProcess, hits, selectedId, onSelect } = useSessionRows();
-  const { node, children, uidChange, folded, inferred, service, agent } = listed;
+  const { node, children, uidChange, folded, inferred, service, agent, own } = listed;
   const span = folded ? forkSpan(listed) : null;
   const rowClass = `session-view__row${hits.rows.has(listed) ? " session-view__row--hit" : ""}`;
   return (
@@ -521,6 +553,11 @@ function ProcessRow({ listed }: { readonly listed: SessionRow }) {
         </button>
         <span className="session-view__mono session-view__cmdline">{commandLine(node.path, node.args)}</span>
         {agent && <Badge variant="info">agent</Badge>}
+        {own && (
+          <span title={OWN_TITLE}>
+            <Badge variant="neutral">agent's own</Badge>
+          </span>
+        )}
         {folded && <Badge variant="neutral">{`×${String(folded.length + 1)}`}</Badge>}
         <span className="session-view__meta">
           {span

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +84,76 @@ func TestProcessTreeHandler_SessionNamesItsAgent(t *testing.T) {
 	t.Run("a failed session lookup fails the read", func(t *testing.T) {
 		t.Parallel()
 		status, _ := serve(&fakeSessionLister{err: errors.New("db down")}, "?scope=session&session=47abb2a1")
+		assert.Equal(t, http.StatusInternalServerError, status)
+	})
+}
+
+// A session's tree read lists the agent's own processes under the agent (issue #1361), read for the span the agent served the
+// session: from its first touch of this session's transcript to its first touch of a later session's, when it served several.
+//
+// spec:server-rest-api/agent-own-processes/a-session-read-lists-the-agent-s-own-processes-under-it
+func TestProcessTreeHandler_SessionListsTheAgentsOwnProcesses(t *testing.T) {
+	t.Parallel()
+	agentRow, agentPID, agentGen := int64(50), 4911, uint32(77)
+	agentProc := api.Process{ID: agentRow, HostID: "h1", PID: agentPID, PIDVersion: &agentGen, Path: "/opt/claude/2.1.302"}
+	creator := agentRow
+	root := activityNode(1, 5001, 1)
+	root.ParentProcessID = &creator
+	own := []api.ProcessNode{activityNode(9, 6001, 1)}
+	sessions := api.AgentSessionResult{Rows: []api.AgentSessionSummary{{HostID: "h1", AgentSessionID: "47abb2a1", AgentPID: &agentPID}}}
+	type ask struct{ agentID, fromNs, toNs int64 }
+	serve := func(touches []visibilityapi.SessionTouch, ownErr error) (int, api.ProcessTreeResult, *ask) {
+		var asked *ask
+		svc := fakeService{
+			buildScopedTree: func(context.Context, string, api.TreeScope, int, bool, int64) (api.ProcessTreeResult, error) {
+				return api.ProcessTreeResult{Roots: []api.ProcessNode{root}, Returned: 1, TotalMatched: 1}, nil
+			},
+			buildAgentOwnTree: func(_ context.Context, _ string, agentID, fromNs, toNs int64) ([]api.ProcessNode, bool, error) {
+				asked = &ask{agentID, fromNs, toNs}
+				return own, true, ownErr
+			},
+		}
+		h := New(svc, allowAllAuthZ{}, slog.Default())
+		h.SetActivity(&fakeActivityReader{processes: map[int64]api.Process{agentRow: agentProc},
+			touches: map[int64][]visibilityapi.SessionTouch{int64(agentPID): touches}})
+		h.SetAgentSessions(&fakeSessionLister{result: sessions})
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		resp := doGet(t, srv, "/api/hosts/h1/tree?scope=session&session=47abb2a1&flatten=1")
+		defer resp.Body.Close()
+		var out api.ProcessTreeResult
+		if resp.StatusCode == http.StatusOK {
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		}
+		return resp.StatusCode, out, asked
+	}
+
+	t.Run("the agent's own processes hang under it, and the cut is reported", func(t *testing.T) {
+		t.Parallel()
+		status, out, asked := serve(nil, nil)
+		require.Equal(t, http.StatusOK, status)
+		require.Len(t, out.Agents, 1)
+		require.Len(t, out.Agents[0].Children, 1)
+		assert.Equal(t, int64(9), out.Agents[0].Children[0].ID)
+		assert.True(t, out.AgentOwnTruncated)
+		assert.Len(t, out.Roots, 1, "the session's own roots are unchanged")
+		assert.Equal(t, &ask{agentRow, 0, math.MaxInt64}, asked, "an agent that served only this session: its whole life")
+	})
+
+	t.Run("an agent that served several sessions is read for this one's span", func(t *testing.T) {
+		t.Parallel()
+		touches := []visibilityapi.SessionTouch{{SessionID: "earlier", FirstNs: 100}, {SessionID: "47abb2a1", FirstNs: 300},
+			{SessionID: "later", FirstNs: 500}}
+		status, _, asked := serve(touches, nil)
+		require.Equal(t, http.StatusOK, status)
+		assert.Equal(t, &ask{agentRow, 300, 500}, asked)
+	})
+
+	t.Run("a failed read fails the tree", func(t *testing.T) {
+		t.Parallel()
+		status, _, _ := serve(nil, errors.New("db down"))
 		assert.Equal(t, http.StatusInternalServerError, status)
 	})
 }

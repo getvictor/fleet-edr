@@ -37,6 +37,15 @@
     margin: 0 0 0.75rem;
   }
 
+  // The agent's own processes toggle (issue #1361), above the tree it opens.
+  &__own {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin: 0 0 0.75rem;
+  }
+
   // The Processes view (issue #1335): one tree in one card, the way a command's processes sit in theirs.
   &__processes {
     background: $core-fleet-white;

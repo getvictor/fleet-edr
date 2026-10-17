@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildCommands,
   buildProcessForest,
+  countOwn,
   containsHit,
   countRows,
   forkSpan,
@@ -331,6 +332,32 @@ describe("buildProcessForest", () => {
     ]);
     const [loopRoot] = buildProcessForest(createdByAgent([loop]), [agent], QUIET)[0].children;
     expect(loopRoot.children.map((r) => r.folded)).toEqual([undefined, undefined]);
+  });
+
+  // The agent's own processes (issue #1361) are the agent node's children in the read: listed under it only when asked for, marked
+  // own down their subtree, among the session's roots in fork order, and counted either way.
+  // spec:web-ui/agent-own-processes-view/the-agent-s-own-processes-are-counted-and-listed-on-request
+  it("lists the agent's own processes under it only when asked, marked as its own, and counts them", () => {
+    const snapshot = proc(9101, 5101, 1, "/bin/zsh", ["/bin/zsh", "-c", "-l", "SNAPSHOT_FILE=x"], [proc(9102, 5102, 2, "/usr/bin/env", ["env"])]);
+    const scan = proc(9103, 5103, 900_000, "/opt/homebrew/bin/rg", ["rg", "--files"]);
+    const withOwn = { ...agent, children: [snapshot, scan] };
+    expect(countOwn([withOwn])).toBe(3);
+    expect(countOwn([agent])).toBe(0);
+
+    const hidden = buildProcessForest(createdByAgent(realSession()), [withOwn], QUIET);
+    expect(countRows(hidden)).toBe(17);
+    expect(hidden[0].children.some((r) => r.own)).toBe(false);
+
+    const shown = buildProcessForest(createdByAgent(realSession()), [withOwn], QUIET, true);
+    expect(countRows(shown)).toBe(20);
+    const children = shown[0].children;
+    const forkTimes = children.map((r) => r.node.fork_time_ns);
+    expect(forkTimes).toEqual([...forkTimes].sort((a, b) => a - b));
+    const snapRow = children.find((r) => r.node.id === 9101);
+    expect(snapRow?.own).toBe(true);
+    expect(snapRow?.children[0].own).toBe(true);
+    expect(children.filter((r) => !r.own).every((r) => r.own === undefined)).toBe(true);
+    expect(children.filter((r) => r.own)).toHaveLength(2);
   });
 
   it("lists a root no listed agent created after the agents, and every root when the agent was not seen", () => {

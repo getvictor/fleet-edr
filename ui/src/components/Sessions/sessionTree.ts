@@ -25,6 +25,9 @@ export interface SessionRow {
   folded?: ProcessNode[];
   // agent is set on the agent process's own row in the Processes view (issue #1335), so the row says what it is.
   agent?: boolean;
+  // own is set on a process the agent ran for itself, with no session marker (issue #1361): a plugin scan, a shell snapshot, its
+  // fork daemon. Listed under the agent, apart from the commands the session ran.
+  own?: boolean;
 }
 
 // Command is one group: the processes a single command the agent ran started.
@@ -208,9 +211,10 @@ export function buildCommands(roots: readonly ProcessNode[], shape: RowShape): C
 
 // buildProcessForest lists every process a session ran as one tree for the Processes view (issue #1335): each agent process, with the
 // roots it created beneath it in fork order, then any root no listed agent created (a launch whose launcher was not read, a command
-// whose agent was not seen). Nothing is hidden or folded: the shape is verbose and unfolded, whatever the caller passes.
+// whose agent was not seen). Nothing is hidden or folded: the shape is verbose and unfolded, whatever the caller passes. With
+// showOwn, each agent also lists the processes it ran for itself (issue #1361), marked own, among the session's in fork order.
 export function buildProcessForest(
-  roots: readonly ProcessNode[], agents: readonly ProcessNode[], shape: RowShape,
+  roots: readonly ProcessNode[], agents: readonly ProcessNode[], shape: RowShape, showOwn = false,
 ): SessionRow[] {
   const full: RowShape = { ...shape, verbose: true, unfolded: true };
   const sorted = [...roots].sort(byForkTime);
@@ -218,12 +222,28 @@ export function buildProcessForest(
   const forest: SessionRow[] = [...agents].sort(byForkTime).map((agent) => {
     const created = sorted.filter((root) => root.parent_process_id === agent.id);
     for (const root of created) claimed.add(root.id);
-    return { node: agent, agent: true, children: created.map((root) => row(root, agent.uid, full)) };
+    const own = showOwn ? (agent.children ?? []).map((n) => markOwn(row(n, agent.uid, full))) : [];
+    const children = [...created.map((root) => row(root, agent.uid, full)), ...own]
+      .sort((a, b) => byForkTime(a.node, b.node));
+    return { node: agent, agent: true, children };
   });
   for (const root of sorted) {
     if (!claimed.has(root.id)) forest.push(row(root, undefined, full));
   }
   return forest;
+}
+
+// markOwn marks a row of the agent's own processes, and everything under it, as the agent's own.
+function markOwn(listed: SessionRow): SessionRow {
+  listed.own = true;
+  listed.children.forEach(markOwn);
+  return listed;
+}
+
+// countOwn counts the processes the session's agents ran for themselves (issue #1361): the processes under each agent node.
+export function countOwn(agents: readonly ProcessNode[]): number {
+  const count = (nodes: readonly ProcessNode[]): number => nodes.reduce((sum, n) => sum + 1 + count(n.children ?? []), 0);
+  return agents.reduce((sum, agent) => sum + count(agent.children ?? []), 0);
 }
 
 // countRows counts the processes a forest lists, folded ones included.
